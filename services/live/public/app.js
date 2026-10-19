@@ -26,10 +26,11 @@
   function sellerStyle(seller) {
     let e = logos.get(seller.key);
     if (!e) {
-      e = { img: null, ok: false, color: `hsl(${hash(seller.key) % 360} 38% 42%)` };
+      e = { img: null, ok: false, loading: false, color: `hsl(${hash(seller.key) % 360} 38% 42%)` };
       logos.set(seller.key, e);
-      if (seller.logo) { const img = new Image(); img.onload = () => { e.img = img; e.ok = img.naturalWidth > 0; const c = dominantColor(img); if (c) e.color = c; }; img.src = seller.logo; }
     }
+    // A logo can arrive on a later payment (the server publishes it once cached).
+    if (seller.logo && !e.loading) { e.loading = true; const img = new Image(); img.onload = () => { e.img = img; e.ok = img.naturalWidth > 0; const c = dominantColor(img); if (c) e.color = c; }; img.src = seller.logo; }
     return e;
   }
   function dominantColor(img) {

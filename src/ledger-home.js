@@ -312,7 +312,7 @@ ${WHY_SECTION_CSS}
           <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full screen ↗</a>
         </div>
         ${liveEmbed
-          ? `<iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:400px;border:0;background:var(--panel);"></iframe>`
+          ? `<link rel="preconnect" href="https://live.agent402.tools"><iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:400px;border:0;background:var(--panel);"></iframe>`
           : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:400px;background:var(--panel);color:var(--accent-lit);font-family:var(--font-mono);font-size:var(--fs-sm);text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
         <div class="hm-live-stats" style="padding:16px 22px 14px;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 10px;">
           <div class="ml-meta" style="grid-column:1/-1;font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-dim);"><span>whole x402 + MPP ecosystem</span><span>last hour</span><span>all sellers, not only us</span></div>

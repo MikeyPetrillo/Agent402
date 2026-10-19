@@ -4,6 +4,7 @@
 // result out to browsers over one SSE stream, and serves a static page.
 import http from "node:http";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,11 +71,28 @@ const ingest = { base: null, tempo: null };
 const shortAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const hostOf = (u) => { try { return new URL(u).host; } catch { return null; } };
 
+// A seller's logo URL is published only once the logo is cached: the route
+// answers 404 for a seller with no usable icon, and every page that asked for
+// it would log a failed request. An unknown one is fetched in the background
+// and appears on the seller's next payment.
+const sellerSource = new Map();
+function logoFor(key) {
+  const s = sellerSource.get(key);
+  if (!s || s.agent402 || !s.listed) return null;
+  const state = logos.known(key);
+  if (state === "hit") return `/logo/v2/${encodeURIComponent(key)}`;
+  if (state === null) void logos.get(key, s).catch(() => {});
+  return null;
+}
 function sellerPublic(s) {
-  return { key: s.key, name: s.name, host: hostOf(s.origin), logo: s.agent402 ? null : `/logo/v2/${encodeURIComponent(s.key)}`, agent402: s.agent402, listed: s.listed };
+  sellerSource.set(s.key, s);
+  return { key: s.key, name: s.name, host: hostOf(s.origin), agent402: s.agent402, listed: s.listed };
 }
 const sellerByKey = new Map();
-function sellerInfo(key) { return sellerByKey.get(key) || { key, name: key.split(":")[1] ? shortAddr(key.split(":")[1]) : key, host: null, logo: null, agent402: false, listed: false }; }
+function sellerInfo(key) {
+  const p = sellerByKey.get(key);
+  return p ? { ...p, logo: logoFor(key) } : { key, name: key.split(":")[1] ? shortAddr(key.split(":")[1]) : key, host: null, logo: null, agent402: false, listed: false };
+}
 
 function toPublic(ev) {
   return {
@@ -137,6 +155,16 @@ const gaHeaders = {
     .replace("connect-src 'self'", `connect-src 'self' ${GA_HOSTS}`),
 };
 
+// Text answers go out gzipped when the client accepts it: the static files
+// are compressed once, on first use; a JSON answer per request.
+const COMPRESSIBLE = /^(text\/|application\/(javascript|json)|image\/svg)/;
+const gzCache = new Map();
+const wantsGzip = (req) => /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""));
+function gzOf(path) {
+  if (!gzCache.has(path)) gzCache.set(path, gzipSync(files[path].body));
+  return gzCache.get(path);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const path = url.pathname;
@@ -145,8 +173,9 @@ const server = http.createServer(async (req, res) => {
     const headers = path === "/embed"
       ? { ...securityHeaders, "content-security-policy": securityHeaders["content-security-policy"].replace("frame-ancestors 'none'", `frame-ancestors ${EMBED_ANCESTORS}`) }
       : path === "/" && GA_ENABLED ? gaHeaders : securityHeaders;
-    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" || path === "/embed" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...headers });
-    return res.end(req.method === "HEAD" ? undefined : files[path].body);
+    const gz = COMPRESSIBLE.test(files[path].type) && wantsGzip(req);
+    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" || path === "/embed" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...(COMPRESSIBLE.test(files[path].type) ? { vary: "accept-encoding" } : {}), ...(gz ? { "content-encoding": "gzip" } : {}), ...headers });
+    return res.end(req.method === "HEAD" ? undefined : gz ? gzOf(path) : files[path].body);
   }
   if (path === "/health") {
     // Ready only once both chains have their last hour: the deploy keeps the
@@ -156,8 +185,10 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ ok: !!ready, warming: !ready, events1h: store.size(), clients: clients.size, directory: directory.status(), base: ingest.base?.status || null, tempo: ingest.tempo?.status || null }));
   }
   if (path === "/api/stats") {
-    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=10", "access-control-allow-origin": "*" });
-    return res.end(JSON.stringify(statsNow()));
+    const body = Buffer.from(JSON.stringify(statsNow()));
+    const gz = wantsGzip(req);
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=10", "access-control-allow-origin": "*", vary: "accept-encoding", ...(gz ? { "content-encoding": "gzip" } : {}) });
+    return res.end(gz ? gzipSync(body) : body);
   }
   if (path === "/events") {
     if (clients.size >= MAX_CLIENTS) { res.writeHead(503, { "retry-after": "30" }); return res.end(); }

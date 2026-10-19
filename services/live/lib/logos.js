@@ -125,5 +125,11 @@ export function makeLogoCache({ fetchImpl = fetch } = {}) {
     if (cache.size >= MAX_ENTRIES) cache.delete(cache.keys().next().value);
     cache.set(key, v);
   }
-  return { get, size: () => cache.size };
+  /** "hit", "miss" (a fresh negative answer) or null (never tried, or expired). */
+  function known(key) {
+    const hit = cache.get(key);
+    if (!hit || Date.now() - hit.at >= (hit.miss ? NEG_TTL_MS : TTL_MS)) return null;
+    return hit.miss ? "miss" : "hit";
+  }
+  return { get, known, size: () => cache.size };
 }
