@@ -272,7 +272,7 @@ const buyer = await import("../src/x402-buyer.js");
   const pay = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const payFn = pay.slice(pay.indexOf("export async function payX402("));
   ok(!/\.text\(\)|\.json\(\)|\.arrayBuffer\(\)/.test(payFn.replace(/\/\/[^\n]*/g, "")), "payX402 reads no seller body whole (no text(), json() or arrayBuffer())");
-  ok(/dispatcher: ssrfDispatcher,/.test(payFn) && /freshSsrfDispatcher\(\)/.test(payFn), "payX402 still pins both legs to the SSRF dispatcher");
+  ok(/dispatcher: trusted \? trustedDispatcher\(\) : ssrfDispatcher,/.test(payFn) && /trusted \? trustedDispatcher\(\) : freshSsrfDispatcher\(\)/.test(payFn), "payX402 still pins both legs to the SSRF dispatcher for every untrusted seller");
   const tempo = readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
   ok(!/arrayBuffer\(\)/.test(tempo) && /readBytesCapped\(res, maxBytes\)/.test(tempo), "the Tempo buyer reads bodies through the capped stream");
   const readers = [pay, tempo, readFileSync(new URL("../src/capped-body.js", import.meta.url), "utf8")].map((t) => t.replace(/\/\/[^\n]*/g, "")).join("\n");

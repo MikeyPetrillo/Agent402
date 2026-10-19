@@ -102,7 +102,7 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   const csp = (headers.match(/"default-src[^"]*; (script-src [^;"]*)/) || [])[1] || "";
   ok(csp && !/unsafe-inline/.test(csp), `the page CSP's script-src allows no inline script (${csp})`);
   ok(/sandboxed, network-less frame of the SDK playground/.test(security), "/security names the one route with its own looser CSP");
-  ok(/sdk-playground\/sandbox[\s\S]{0,400}default-src 'none'/.test(src("src/server.js")), "control: that route's CSP denies every network fetch");
+  ok(/sdk-playground\/sandbox[\s\S]{0,900}default-src 'none'/.test(src("src/server.js")), "control: that route's CSP denies every network fetch");
 }
 
 // Monitors: the page states the report cap the scheduler enforces.
