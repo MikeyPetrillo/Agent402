@@ -9,6 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { Agent as UndiciAgent } from "undici";
 
 // What a seller sees in their logs when our router buys from them. Points at
 // the same page as the crawler's string: one place that says who we are.
@@ -758,6 +759,8 @@ export function neverLeftUs(err) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
+// A fresh plain connection for a trusted URL (no address guard).
+const trustedDispatcher = () => new UndiciAgent();
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, trusted = false, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
@@ -810,7 +813,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // wouldn't re-check a redirect target. redirect:"manual" + reject any 3xx so
     // a public seller can't 302 us onto an internal host (which would relay
     // internal data or forward our signed X-PAYMENT header).
-    dispatcher: ssrfDispatcher,
+    // A trusted URL (a fixed first-party address, or a test seller on this
+    // host) skips the address guard on every leg, not only the up-front check.
+    dispatcher: trusted ? trustedDispatcher() : ssrfDispatcher,
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   };
@@ -1050,7 +1055,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // inside undici, with our signed payment never delivered). guardedLookup
     // still pins the IP, so the SSRF discipline is unchanged.
     const { freshSsrfDispatcher } = await import("./tools/fetch-guard.js");
-    const paidDispatcher = freshSsrfDispatcher();
+    const paidDispatcher = trusted ? trustedDispatcher() : freshSsrfDispatcher();
     const paidHeaders = { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" };
     // Wall-clock mark BEFORE the payment header leaves: the chain-truth check
     // after a refusal asks "did our wallet move since here".
@@ -1209,7 +1214,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
           const { freshSsrfDispatcher: freshAgain } = await import("./tools/fetch-guard.js");
-          paid = await fetch(url, { ...reqInit, dispatcher: freshAgain(), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
+          paid = await fetch(url, { ...reqInit, dispatcher: trusted ? trustedDispatcher() : freshAgain(), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);
         }

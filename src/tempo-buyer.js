@@ -29,6 +29,8 @@ import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { Agent as UndiciAgent } from "undici";
+const trustedDispatcher = new UndiciAgent();
 import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
 
 
@@ -228,8 +230,9 @@ export async function payTempo(url, {
     redirect: "manual",
     signal: AbortSignal.timeout(Math.max(1, leftMs())),
     // Pin the resolved address on every hop (the one-shot assertPublicUrl above is
-    // TOCTOU-rebindable), exactly as src/x402-buyer.js does.
-    dispatcher: ssrfDispatcher,
+    // TOCTOU-rebindable), exactly as src/x402-buyer.js does. A trusted URL (a
+    // fixed first-party address, or a test seller on this host) skips the guard.
+    dispatcher: trusted ? trustedDispatcher : ssrfDispatcher,
   });
   // 1. Bare request -> the seller's live 402 (their quote is the truth, the
   //    registry price is a hint).
