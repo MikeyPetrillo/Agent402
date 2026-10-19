@@ -30,14 +30,19 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
+/** A dollar figure exactly as priced: cents at a cent or more ($3.30, $0.50),
+ *  and every significant sub-cent digit ($0.0005, $0.0025), never rounded. */
+function exactUsd(n) {
+  const [i, f = ""] = Number(n).toFixed(6).replace(/0+$/, "").split(".");
+  return `$${i}.${f.padEnd(2, "0")}`;
+}
+
 function priceRange(prices) {
   const nums = prices.filter((n) => n > 0);
   if (!nums.length) return null;
   const lo = Math.min(...nums);
   const hi = Math.max(...nums);
-  // Cents at a cent or more ($3.30, $2.00, $0.50); a sub-cent price keeps its
-  // third decimal ($0.001, $0.005).
-  const fmt = (n) => (n >= 0.01 && Math.abs(n * 100 - Math.round(n * 100)) < 1e-9 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
+  const fmt = exactUsd;
   return lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`;
 }
 
@@ -75,7 +80,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
   const otherRails = rails.filter((r) => r.asset !== "USDC");
   const railsNote = `x402 settlements use ${[usdcRails.length ? `USDC on ${usdcRails.join(", ")}` : "", ...otherRails.map((o) => `${o.asset}${o.asset === "USDG" ? " (Global Dollar)" : ""} on ${o.name}`)].filter(Boolean).join("; plus ")}.${rails.some((r) => r.chainId) ? " Gas is sponsored by the facilitator on EVM chains - callers need only the stablecoin." : ""}`;
   // Prices named in prose are read from the price table, never typed.
-  const usdOf = (slug) => (prices && Number(prices[slug]) > 0 ? `$${Number(prices[slug]) < 0.01 ? Number(prices[slug]).toFixed(3) : Number(prices[slug]).toFixed(2)}` : null);
+  const usdOf = (slug) => (prices && Number(prices[slug]) > 0 ? exactUsd(Number(prices[slug])) : null);
   const chatFrom = usdOf("v1-chat-nano"), embedAt = usdOf("v1-embeddings");
   const gatewayPrices = [chatFrom ? `flat-priced chat from ${chatFrom}/call` : "", embedAt ? `embeddings ${embedAt}` : ""].filter(Boolean).join(", ");
   return {
