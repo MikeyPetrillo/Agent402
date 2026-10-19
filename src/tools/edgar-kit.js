@@ -541,6 +541,19 @@ export function issuerHits(hits, cik) {
   return (Array.isArray(hits) ? hits : []).filter((h) => eftsIssuerCik(h) === want);
 }
 
+/** Full-text-search hits with one entry per filing (accession), first kept. Pure; exported for tests. */
+export function dedupeByAccession(hits) {
+  const seen = new Set();
+  const out = [];
+  for (const h of Array.isArray(hits) ? hits : []) {
+    const acc = h?._source?.adsh || String(h?._id || "").split(":")[0];
+    if (acc && seen.has(acc)) continue;
+    if (acc) seen.add(acc);
+    out.push(h);
+  }
+  return out;
+}
+
 async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
   const qs = new URLSearchParams();
   if (q) qs.set("q", q);
@@ -950,13 +963,16 @@ EDGAR_TOOLS.push(
       // EFTS answers 100 hits a page; a 90-day S-1 window holds ~600. Page up
       // to `limit` so "N in the window" is not silently "the newest 100".
       const j = await eftsSearch({ forms: form, startdt, enddt });
-      let hits = j?.hits?.hits ?? [];
+      let hits = dedupeByAccession(j?.hits?.hits ?? []);
       const total = j?.hits?.total?.value ?? hits.length;
-      for (let from = hits.length; hits.length < Math.min(total, limit) && from < 1000 && hits.length > 0; from += 100) {
+      // Offset paging over a window that ends today: a filing that lands
+      // between two page reads shifts the next page by one, so the boundary
+      // filing would be listed twice. Each filing is listed once.
+      for (let from = (j?.hits?.hits ?? []).length; hits.length < Math.min(total, limit) && from < 1000 && hits.length > 0; from += 100) {
         const page = await eftsSearch({ forms: form, startdt, enddt, from });
         const more = page?.hits?.hits ?? [];
         if (!more.length) break;
-        hits = hits.concat(more);
+        hits = dedupeByAccession(hits.concat(more));
       }
       const filings = hits.slice(0, limit).map(mapEftsHit);
       return {
