@@ -54,11 +54,11 @@ const counters = { shed: 0, shedLag: 0, shedInflight: 0, discoveryBudget: 0, dis
 // recent tick, which is the stall itself for every request queued behind it.
 // Boot runs several blocking steps back to back (x402 init, warm starts), so
 // lag does not shed during a warm-up either. The in-flight ceiling still
-// applies from the start. The warm-up is short: /health holds a new
-// container out of rotation until its router worker loads, so a flood that
-// arrives after that meets a booted server and is shed like any other.
+// applies from the start. A new container keeps stalling on its own boot
+// work for well past its first request (index warm-up, lazy loads), so the
+// warm-up spans that: lag shedding sooner refused ordinary page reads.
 const STARTED_AT = Date.now();
-const LAG_WARMUP_MS = Number(process.env.SHED_LAG_WARMUP_MS ?? 20_000);
+const LAG_WARMUP_MS = Number(process.env.SHED_LAG_WARMUP_MS ?? 60_000);
 const LATE_TICKS_TO_SHED = 3;
 export function shouldShedFree({ inFlight = 0, lagMs = recentLagMs(), lateTicks = lateTicksRecent(LAG_SHED_MS / 2), now = Date.now() } = {}) {
   if (String(process.env.LOAD_SHED || "").toLowerCase() === "off") return null;

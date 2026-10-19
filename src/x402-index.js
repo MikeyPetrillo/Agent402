@@ -7493,7 +7493,7 @@ function routeIndexScheduleDrain() {
       if (!routeIndexAdvancePartial(until)) break; // out of time inside one seller
     }
     if (routeIdx.partial || routeIdx.pending.size) setImmediate(drainSlice);
-    else routeDrainScheduled = false;
+    else { routeDrainScheduled = false; routeIndexCompactIfStale(); }
   });
 }
 function routeIndexReset() {
@@ -7606,6 +7606,15 @@ function routeIndexStartShadow() {
     routeIdx.builds++;
   };
   setImmediate(step);
+}
+// Stale rows were cleared only by routeIndexSync, which only a route query on
+// this thread and the boot warm-up call. With a router worker loaded this
+// thread answers no queries, so every crawl cycle's replaced entries piled up
+// as stale rows (and the old entries they hold) until the heap ran out. The
+// drain that indexes a crawl's changes now starts the same shadow rebuild.
+function routeIndexCompactIfStale() {
+  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) routeIndexStartShadow();
 }
 function routeIndexSync({ sync = false } = {}) {
   const total = routeIdx.indexedTools + routeIdx.staleTools;
