@@ -4535,6 +4535,8 @@ jobs:
           t node scripts/test-solana-history-rpc.js
           # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
           t node scripts/test-leaderboard-log-cache.js
+          # Base board log cache at the row cap: kept rows folded by index (identical order to a full read), only changed segments re-hashed and saved, no stale digest after any invalidation, earlier state loads (offline)
+          t node scripts/test-leaderboard-log-cache-scan.js
           # Recent EVM getLogs public-first: complete-answer guard (own head, filter match), fallback on error/range cap/behind head/timeout/429, skips, rollback, ledger rows identical (offline stub RPCs)
           t node scripts/test-evm-logs-rpc.js
           # accepts[0].outputSchema on the 402: pure header rewrite + mount order (offline)
