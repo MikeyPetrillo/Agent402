@@ -27,6 +27,8 @@ import { resolveLocalRefs } from "./openapi-deref.js";
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { gzip, gunzip } from "node:zlib";
+import { promisify } from "node:util";
 import { createJsonDocument } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
@@ -5168,11 +5170,38 @@ async function fallbackBody(originUrl, path, res, opts) {
 
 async function probeDoc(originUrl, path, opts, prevParsed) {
   const res = await probePath(originUrl, path, opts);
-  if (!res.notModified) return { parsed: JSON.parse(res.html), reused: false, finalUrl: res.finalUrl || null };
-  if (prevParsed != null) return { parsed: prevParsed, reused: true, finalUrl: res.finalUrl || null };
+  if (!res.notModified) return { parsed: JSON.parse(res.html), body: res.html, reused: false, finalUrl: res.finalUrl || null };
+  // The previous document may be held packed; it is read only on a 304.
+  const prevDoc = typeof prevParsed === "function" ? await prevParsed() : prevParsed;
+  if (prevDoc != null) return { parsed: prevDoc, reused: true, finalUrl: res.finalUrl || null };
   rememberValidator(originUrl, path, null);
   const fresh = await probePath(originUrl, path, opts);
-  return { parsed: JSON.parse(fresh.html), reused: false, finalUrl: fresh.finalUrl || null };
+  return { parsed: JSON.parse(fresh.html), body: fresh.html, reused: false, finalUrl: fresh.finalUrl || null };
+}
+
+// WHAT A CRAWLED ENTRY KEEPS OF ITS MANIFEST. The parsed document is needed
+// only while the crawl derives the seller's tools from it; every later reader
+// uses the slim keys (slimManifestForMemory). Keeping the parsed object on the
+// entry held every seller's full catalogue document as heap objects for the
+// whole cycle. What the next crawl needs is the document itself, and only when
+// the origin can answer 304 (it sent a validator): then the body is kept
+// gzip-packed (`manifestBody`) and parsed again only on that 304, so the
+// derivation runs on exactly the document it ran on before.
+const gzipAsync = promisify(gzip), gunzipAsync = promisify(gunzip);
+async function packManifestBody(body) {
+  if (typeof body !== "string" || !body) return null;
+  try { return await gzipAsync(Buffer.from(body, "utf8")); } catch { return null; }
+}
+/** The previous crawl's parsed manifest, for a 304: the full document when the
+ *  entry still holds one (a synthesized manifest, an entry seeded by a test),
+ *  else its packed body, else null (probeDoc then reads the document afresh). */
+async function previousManifestDoc(prev) {
+  const m = prev?.manifest;
+  if (m && typeof m === "object" && !m.slimmed) return m;
+  if (Buffer.isBuffer(prev?.manifestBody)) {
+    try { return JSON.parse((await gunzipAsync(prev.manifestBody)).toString("utf8")); } catch { return null; }
+  }
+  return null;
 }
 
 /** The origin a document fetch was permanently redirected to, when it is a
@@ -5222,8 +5251,14 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // Throwing here drops straight into the fallback chain below, which is the
     // same path a genuine 404 takes - so coverage is identical, we just stop
     // asking a question we already know the answer to.
-    const manifestDoc = await probeDoc(originUrl, WELL_KNOWN_PATH, { maxBytes: MAX_MANIFEST_BYTES }, prev?.manifest);
+    const manifestDoc = await probeDoc(originUrl, WELL_KNOWN_PATH, { maxBytes: MAX_MANIFEST_BYTES }, () => previousManifestDoc(prev));
     const manifest = manifestDoc.parsed;
+    // Kept for the next crawl's 304 only when the origin can send one; a 304
+    // confirms the document the previous crawl kept.
+    const manifestBody = manifestDoc.reused
+      ? (prev?.manifestBody ?? null)
+      : (validatorFor(originUrl, WELL_KNOWN_PATH) ? await packManifestBody(manifestDoc.body) : null);
+    manifestDoc.body = null;
     // A manifest that arrives from ANOTHER origin (safeFetch followed a 301/308)
     // is that origin's manifest: the seller retired this hostname and pointed it
     // at the real one (2026-09-10, a seller wrote in about a Sepolia origin still
@@ -5289,7 +5324,10 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo });
 
     cache.set(originUrl, {
-      manifest,
+      // Derivation is done: the entry keeps the slim keys its readers use,
+      // and the packed document for a 304.
+      manifest: slimManifestForMemory(manifest),
+      manifestBody,
       // Kept so a 304 on the next cycle has something to reuse.
       openapiTools, openapiRoutes,
       openapiSummary: openapiTools
@@ -6207,6 +6245,16 @@ function slimManifestForPersist(m) {
     if (Number.isFinite(tools)) out.capabilities = { tools };
   }
   out.slimmed = true;
+  return out;
+}
+/** The manifest a crawled entry keeps in memory: the persisted keys, with the
+ *  description as the seller wrote it (the dossier's listing check reads it
+ *  whole on a fresh entry). */
+function slimManifestForMemory(m) {
+  // A document that parsed to a scalar is kept as it is (nothing to slim).
+  if (!m || typeof m !== "object") return m;
+  const out = slimManifestForPersist(m);
+  if (out && m.description !== undefined) out.description = m.description;
   return out;
 }
 function slimToolForPersist(t) {
@@ -8153,7 +8201,7 @@ export function _routerReplicaApply(msg) {
  *  304 path are left out (nothing a query reads is in them). */
 export function _routerReplicaEntryOf(v) {
   if (!v || typeof v !== "object") return v;
-  const { openapiTools, openapiRoutes, ...rest } = v;
+  const { openapiTools, openapiRoutes, manifestBody, ...rest } = v;
   if (rest.manifest && typeof rest.manifest === "object") rest.manifest = slimManifestForPersist(rest.manifest);
   return rest;
 }
@@ -8744,13 +8792,14 @@ export function economySectionHtml(snap, leaderboardSnap) {
 /** Counts only (no values): how much crawl data the index holds, for the
  *  operator heap read. Walks entries once; no stringify. */
 export function indexMemoryFigures() {
-  let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0;
+  let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0;
   for (const v of cache.values()) {
     if (!v || typeof v !== "object") continue;
     entries++;
     tools += Array.isArray(v.tools) ? v.tools.length : 0;
     openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
     openapiRoutes += Array.isArray(v.openapiRoutes) ? v.openapiRoutes.length : 0;
+    if (Buffer.isBuffer(v.manifestBody)) { manifestBodies++; manifestBodyBytes += v.manifestBody.length; }
     if (v.manifest?.slimmed) slimManifests++;
     else if (v.manifest && typeof v.manifest === "object") {
       fullManifests++;
@@ -8758,7 +8807,7 @@ export function indexMemoryFigures() {
       if (Array.isArray(r)) manifestResources += r.length;
     }
   }
-  return { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  return { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
 }
 export function _cacheForTests() {
   return cache;

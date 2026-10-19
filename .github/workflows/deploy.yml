@@ -2642,6 +2642,8 @@ jobs:
           t node scripts/test-index-persist-last-good.js
           # A seller without /.well-known/x402 keeps its catalog when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
           t node scripts/test-index-fallback-304.js
+          # A crawled entry keeps the slim manifest; a 304 derives the same catalogue from the packed body (offline)
+          t node scripts/test-index-slim-manifest.js
           # A seller's own payTo outranks a registry's record of an old wallet, across re-crawls (offline)
           t node scripts/test-seller-payto-precedence.js
           # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
