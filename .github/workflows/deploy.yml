@@ -2667,6 +2667,8 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # load-shed boot warm-up default is 60 s (offline)
+          t node scripts/test-load-shed-warmup.js
           # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
           t node scripts/test-worker-deploy-step.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
