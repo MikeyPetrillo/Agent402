@@ -1361,6 +1361,8 @@ jobs:
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
           t node scripts/test-email-links-pg.js
+          # email status row read at module load with the state database; a later boot reports the recorded outcome (Postgres)
+          t node scripts/test-email-status-boot-pg.js
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
