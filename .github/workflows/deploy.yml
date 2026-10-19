@@ -2667,6 +2667,8 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
+          t node scripts/test-media-input-args.js
           # safeFetch timeoutMs bounds the body read too (local trickle server, offline)
           t node scripts/test-safefetch-body-timeout.js
           # yaml-to-json refuses aliases that expand past the JSON size cap (offline)

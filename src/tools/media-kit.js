@@ -27,9 +27,39 @@ function need(input, field) {
   return v;
 }
 
+let execImpl = execFile;
+/** Test seam: replace the process runner (args are recorded, nothing spawns). */
+export function __setExecFileForTest(fn) { execImpl = fn || execFile; }
+
+/** The demuxer for a downloaded body, named from its magic bytes, or null.
+ *  Naming it stops ffmpeg from probing the body as a playlist or a concat
+ *  list, which are formats that name further inputs. */
+export function inputFormatOf(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  const b = buffer;
+  const s4 = b.subarray(0, 4).toString("latin1");
+  if (s4 === "OggS") return "ogg";
+  if (s4 === "fLaC") return "flac";
+  if (s4 === "RIFF") { const k = b.subarray(8, 12).toString("latin1"); return k === "WAVE" ? "wav" : k === "AVI " ? "avi" : null; }
+  if (s4 === "FORM") { const k = b.subarray(8, 12).toString("latin1"); return k === "AIFF" || k === "AIFC" ? "aiff" : null; }
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return "mp3";
+  if (b[0] === 0xff && (b[1] & 0xe6) === 0xe2) return "mp3";
+  if (b.subarray(4, 8).toString("latin1") === "ftyp") return "mov";
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "matroska";
+  return null;
+}
+
+/** Input arguments for a downloaded file: local file reads only, and the
+ *  demuxer named explicitly. An unrecognized body is refused before ffmpeg runs. */
+export function mediaInputArgs(buffer, inPath) {
+  const fmt = inputFormatOf(buffer);
+  if (!fmt) throw bad("media could not be processed (unrecognized container; send an audio/video file such as mp3, mp4, wav, ogg, flac or webm)", 422);
+  return ["-protocol_whitelist", "file", "-f", fmt, "-i", inPath];
+}
+
 function run(bin, args) {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execImpl(bin, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         // A missing binary is OUR configuration, never the buyer's file: say
         // so as a 503 (uncharged). The 422 wording blamed the file for a
@@ -61,9 +91,10 @@ async function withTmp(fn) {
 export async function probeMedia(buffer) {
   return withTmp(async (dir) => {
     const inPath = join(dir, "in");
+    const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
     const { stdout } = await run("ffprobe", [
-      "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", inPath,
+      "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", ...input,
     ]);
     let data;
     try { data = JSON.parse(stdout); } catch { throw bad("ffprobe returned no metadata", 422); }
@@ -88,8 +119,9 @@ export async function toMp3(buffer, { bitrate = "192k" } = {}) {
   return withTmp(async (dir) => {
     const inPath = join(dir, "in");
     const outPath = join(dir, "out.mp3");
+    const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
-    await run("ffmpeg", ["-y", "-i", inPath, "-vn", "-map_metadata", "-1", "-b:a", bitrate, outPath]);
+    await run("ffmpeg", ["-y", ...input, "-vn", "-map_metadata", "-1", "-b:a", bitrate, outPath]);
     const out = await readFile(outPath);
     return { format: "mp3", bitrate, bytes: out.length, mp3Base64: out.toString("base64") };
   });
@@ -124,7 +156,7 @@ export async function transcodePcm(buffer, format, { sampleRate = 24000 } = {}) 
     const inPath = join(dir, "in.pcm");
     const outPath = join(dir, `out.${format}`);
     await writeFile(inPath, buffer);
-    await run("ffmpeg", ["-y", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
+    await run("ffmpeg", ["-y", "-protocol_whitelist", "file", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
     return await readFile(outPath);
   } finally {
     pcmRelease();
@@ -138,10 +170,11 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
   return withTmp(async (dir) => {
     const inPath = join(dir, "in");
     const outPath = join(dir, "out.mp3");
+    const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
     // EBU R128 two-in-one: loudnorm in dynamic mode, then encode to mp3.
     await run("ffmpeg", [
-      "-y", "-i", inPath, "-vn", "-map_metadata", "-1",
+      "-y", ...input, "-vn", "-map_metadata", "-1",
       "-af", `loudnorm=I=${lufs}:TP=-1.5:LRA=11`,
       "-b:a", "192k", outPath,
     ]);
