@@ -229,6 +229,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "exa-search", "exa-answer", "exa-contents",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company", "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
+  // Browser pool (a held Chromium slot per call): browser-measure-kit.js.
+  "page-speed", "html-frames",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
