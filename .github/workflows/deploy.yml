@@ -4420,6 +4420,7 @@ jobs:
           t node scripts/test-seller-trust-lanes.js
           # USDC EIP-712 domain truth per chain: table pinned to payments.js + @x402/evm, wrong-name accepts refused (offline)
           t node scripts/test-evm-usdc-domain.js
+          t node scripts/test-direct-transfer-seller.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
           t node scripts/test-sor-payto-binding.js
           # Operator-listed shared payTo wallets credit nobody: the rule, the persisted store, and the lever on a booted free server across a restart

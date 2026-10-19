@@ -59,6 +59,19 @@ try {
   await B.persistIndexCacheAsync();
   ok((await sdb.records.get(COLLECTION, X))?.fetchedAt === 5_000, "a row fetched later than the copy being saved keeps its body (the upsert's own guard)");
 
+  // ---- a seller-requested re-read on A reaches B without a full save ------------
+  await B.pullIndexChanges();
+  A.__testSeedCache([[X, entry("/x-reread", 9_000)]]);
+  const wrote = await A.persistOriginToStateDb(X);
+  ok(wrote === true && (await sdb.records.get(COLLECTION, X))?.fetchedAt === 9_000, "a single-origin write puts the re-read in the table at once");
+  ok(!!(await sdb.records.get(COLLECTION, Y)), "and deletes nothing else");
+  await B.pullIndexChanges();
+  const bx = B.indexSnapshot(snapArgs).sellers.find((s) => s.origin === X);
+  ok(bx && (bx.fetchedAt === 9_000 || bx.lastCrawled === 9_000 || JSON.stringify(bx).includes("9000")), `B serves the re-read after one pull (${bx?.fetchedAt})`);
+  B.__testSeedCache([[X, entry("/x-older2", 8_000)]]);
+  await B.persistOriginToStateDb(X);
+  ok((await sdb.records.get(COLLECTION, X))?.fetchedAt === 9_000, "a single-origin write never replaces a newer row");
+
   // ---- a removal on A sticks on B --------------------------------------------
   const rm = A.removeOrigin(Y, { note: "test removal" });
   ok(rm.removed === true, "the operator removes Y on A");

@@ -788,7 +788,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // refusal memo below): a check whose URL the caller chose reports the
       // accept and changes no routing decision.
       if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
-      const e = bad(domain.verdict === "gateway_batched"
+      const e = bad(domain.verdict === "payment_method_unsupported"
+        ? `Seller's Base accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
+        : domain.verdict === "gateway_batched"
         ? `Seller's Base accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
         : `Seller's Base USDC accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
       e.refused = true;

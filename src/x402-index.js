@@ -1414,6 +1414,8 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // invisible until the object is replaced - a fresh spread busts the
       // memo and the pool re-decorates with what was just learned.
       cache.set(origin, { ...(cache.get(origin) || existing) });
+      // The other container reads this on its next pull.
+      if (reread || repriced) await persistOriginToStateDb(origin);
     } catch { /* listing still served */ }
     // Only a self-serve-submitted origin belongs in seller_registrations - this
     // early-return path also serves origins already known from Bazaar/registry
@@ -2606,7 +2608,26 @@ function manifestPaymentAccepts(manifest) {
 }
 
 export function normaliseManifestTools(manifest, originUrl) {
-  return scopeRowsToSeller(normaliseManifestToolsUnscoped(manifest, originUrl), originUrl);
+  const rows = normaliseManifestToolsUnscoped(manifest, originUrl);
+  // A path seller's manifest that declares its own origin WITH the prefix
+  // writes its routes relative to that origin ("/v1/reconcile" under
+  // ".../functions/v1/api"); read host-absolute they fall outside the prefix
+  // and every row is dropped. Such routes are re-anchored under the prefix.
+  const prefix = sellerPrefixOf(originUrl);
+  if (prefix && Array.isArray(rows) && manifestDeclaresPrefixedOrigin(manifest, originUrl)) {
+    for (const r of rows) {
+      if (r && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
+    }
+  }
+  return scopeRowsToSeller(rows, originUrl);
+}
+function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
+  const declared = typeof manifest?.origin === "string" ? manifest.origin : "";
+  if (!declared) return false;
+  try {
+    const a = new URL(declared), b = new URL(originUrl);
+    return a.host === b.host && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
+  } catch { return false; }
 }
 function normaliseManifestToolsUnscoped(manifest, originUrl) {
   if (!manifest || typeof manifest !== "object") return [];
@@ -5922,13 +5943,20 @@ export function heldLastGood(v) {
 function persistedEntries() {
   const out = [];
   for (const [origin, v] of cache.entries()) {
+    const e = persistedEntryOf(v);
+    if (e) out.push([origin, e]);
+  }
+  return out;
+}
+function persistedEntryOf(v) {
+  {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
     // A failure that still holds its last good catalogue is. Dropping those
     // made one failed crawl before a restart delete the listing outright,
     // and the per-operator crawl cap can take hours to bring it back
     // (2026-10-02: five path sellers on one shared host vanished this way).
-    if (v?.error && !heldLastGood(v)) continue;
-    out.push([origin, {
+    if (v?.error && !heldLastGood(v)) return null;
+    return ({
       manifest: slimManifestForPersist(v.manifest),
       tools: Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : [],
       fetchedAt: v.fetchedAt ?? null,
@@ -5941,9 +5969,31 @@ function persistedEntries() {
       history: Array.isArray(v.history) ? v.history.slice(-10) : [],
       paywall: v.paywall ?? null,
       ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
-    }]);
+    });
   }
-  return out;
+}
+
+/** One origin's row, written now: a re-read a seller asked for reaches the
+ *  other container on its next pull instead of waiting for this one's crawl
+ *  cycle. Same newer-wins rule as the full persist; never deletes. */
+export async function persistOriginToStateDb(origin) {
+  if (!stateDbEnabled()) return false;
+  const entry = persistedEntryOf(cache.get(origin));
+  if (!entry) return false;
+  try {
+    const line = JSON.stringify([origin, entry]);
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+       WHERE ${FETCHED_AT_SQL("r.body")} <= ${FETCHED_AT_SQL("EXCLUDED.body")}`,
+      [INDEX_RECORDS, origin, JSON.stringify(entry)],
+    );
+    pgOriginHashes.set(origin, lineHash(line));
+    return true;
+  } catch (e) {
+    console.warn(`[x402-index] state database write for one origin failed: ${String(e?.message || e).slice(0, 120)}`);
+    return false;
+  }
 }
 
 /** Async persist for the crawler's own cycle. Each origin is stringified ONCE,

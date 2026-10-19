@@ -32,7 +32,7 @@
 /** USDC is 6 decimals on every chain we accept. Anything else we refuse to
  *  price rather than guess - a wrong exponent is a 1000x pricing error. */
 const USDC_DECIMALS = 6;
-import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { unpackRequestContract } from "./request-contract.js";
 const USDC_NAME = /^(usdc|usd coin)$/i;
 
@@ -101,7 +101,10 @@ function isUsdc(a) {
   // address IS the identity, so the one well-known mainnet mint is
   // recognized directly. Without this, every pure-Solana catalog priced as
   // "networks only" forever (measured 2026-09-01: a seller's 128 routes).
-  return String(a?.asset || "") === SVM_USDC_MINT;
+  if (String(a?.asset || "") === SVM_USDC_MINT) return true;
+  // An EVM accept with no extra.name is still USDC when its contract is the
+  // USDC we have read from that chain: the address is the identity there too.
+  return domainTruthFor(a?.network, a?.asset)?.symbol === "USDC";
 }
 
 /**

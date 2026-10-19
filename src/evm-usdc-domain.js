@@ -124,7 +124,7 @@ export function isCircleGatewayAccept(accept) {
  *  fault. Callers that gate on payability should ask THIS, not compare to a
  *  verdict string, so a new rail cannot slip past an old === check. */
 export function unsignableByStockBuyer(verdict) {
-  return verdict?.verdict === "wrong_domain" || verdict?.verdict === "gateway_batched";
+  return verdict?.verdict === "wrong_domain" || verdict?.verdict === "gateway_batched" || verdict?.verdict === "payment_method_unsupported";
 }
 
 /** (network, asset) -> row. Built once; both parts of the key already lower-cased. */
@@ -133,6 +133,16 @@ const BY_PAIR = new Map(EVM_TOKEN_DOMAINS.map((r) => [`${r.network}|${r.asset}`,
 /** The chain truth for one accept's token, or null if we have never read it. */
 export function domainTruthFor(network, asset) {
   return BY_PAIR.get(`${String(network || "")}|${lc(asset)}`) || null;
+}
+
+/** An accept that asks for a payment the stock x402 signer cannot make: the
+ *  buyer sends a transfer first and proves it with the transaction hash,
+ *  instead of signing an authorization the facilitator settles. Only names
+ *  that say so explicitly count; any other value decides nothing. */
+const UNSIGNABLE_METHOD = /^(direct[-_ ]?transfer|tx[-_ ]?hash|transaction[-_ ]?hash|manual[-_ ]?transfer|onchain[-_ ]?transfer|push[-_ ]?transfer)$/i;
+export function unsupportedPaymentMethodOf(accept) {
+  const m = typeof accept?.paymentMethod === "string" ? accept.paymentMethod : accept?.extra?.paymentMethod;
+  return typeof m === "string" && UNSIGNABLE_METHOD.test(m.trim()) ? m.trim().slice(0, 40) : null;
 }
 
 /**
@@ -172,6 +182,8 @@ export function usdcDomainVerdict(accept, network = accept?.network) {
       ...(truth ? { chain: truth.chain, expectedName: truth.name, expectedVersion: truth.version } : {}),
     };
   }
+  const method = unsupportedPaymentMethodOf(accept);
+  if (method) return { verdict: "payment_method_unsupported", paymentMethod: method, ...(truth ? { chain: truth.chain } : {}) };
   if (!truth) return { verdict: "unknown" };
   const advertisedVersion = typeof accept?.version === "string" ? accept.version : accept?.extra?.version;
   const named = typeof advertised === "string" && advertised.trim() !== "";
@@ -201,10 +213,12 @@ export function evmDomainsOfAccepts(accepts) {
     // WITHOUT a second 402, and dropping it here is why the index could not:
     // every stored row read as { asset, name } and the rail was invisible.
     const verifyingContract = typeof a?.extra?.verifyingContract === "string" ? a.extra.verifyingContract.trim().slice(0, 42) : "";
-    if (!asset || !name) continue;
+    const paymentMethod = unsupportedPaymentMethodOf(a);
+    if (!asset || (!name && !paymentMethod)) continue;
     out[net] = {
       asset,
-      name,
+      ...(name ? { name } : {}),
+      ...(paymentMethod ? { paymentMethod } : {}),
       ...(version ? { version } : {}),
       ...(verifyingContract && verifyingContract.toLowerCase() !== asset.toLowerCase() ? { verifyingContract } : {}),
     };
@@ -213,7 +227,9 @@ export function evmDomainsOfAccepts(accepts) {
 }
 
 /** One sentence for a wrong_domain verdict, written for the seller who has to fix it. */
-export function usdcDomainMismatchDetail({ verdict, advertisedName, expectedName, chain, field, advertisedVersion, expectedVersion, verifyingContract } = {}) {
+export function usdcDomainMismatchDetail({ verdict, advertisedName, expectedName, chain, field, advertisedVersion, expectedVersion, verifyingContract, paymentMethod } = {}) {
+  if (verdict === "payment_method_unsupported")
+    return `the ${chain || "chain"} accept asks for paymentMethod ${JSON.stringify(paymentMethod)}: the buyer sends a transfer and proves it afterwards, which a stock x402 buyer (this router included) does not do - it signs an authorization for the facilitator to settle - so no stock buyer can pay this route`;
   // The Gateway rail is a different sentence with a different addressee: there
   // is nothing here for the seller to fix, and saying otherwise is a false
   // accusation against a seller that settles fine through its own facilitator.

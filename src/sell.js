@@ -101,6 +101,7 @@ const NEW_SELLER_VERDICTS = [
   ["price_unknown", "Answer a bare unpaid request to every paid route with its 402, before you validate input. A route that needs a query parameter or a body still has to return its 402 to the crawler's empty probe, or no price can be read and the router never spends against an unknown one."],
   ["network_unknown", "Same fix: the paid route answered the probe with something other than a 402, so no chain was learned."],
   ["usdc_domain_mismatch", "Advertise the token's own EIP-712 name in the accept's extra (\"USD Coin\" for Base USDC). Until then no stock buyer can pay you, ours included."],
+  ["payment_method_unsupported", "Offer the standard exact scheme, where the buyer signs a USDC authorization and the facilitator settles it. A 402 that asks the buyer to send a transfer and prove it afterwards cannot be paid by a stock x402 buyer, ours included."],
   ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
   ["settlement_self_funded", "Payments made with USDC your own paid wallet sent the payer are netted out. Only buyers' own money counts."],
