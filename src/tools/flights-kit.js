@@ -97,6 +97,10 @@ function fillBody(body, params) {
 }
 
 const todayUtc = (now) => new Date(now).toISOString().slice(0, 10);
+// The earliest calendar date anywhere on Earth (UTC-12). A traveler searching
+// today's flights in their own zone is never told the date is past, whatever
+// the hour in UTC.
+export const earliestLocalToday = (now) => todayUtc(now - 12 * 3_600_000);
 
 export function validateSearch(input, now = Date.now()) {
   const from = String(input?.from ?? "").trim().toUpperCase();
@@ -105,7 +109,7 @@ export function validateSearch(input, now = Date.now()) {
   if (from === to) throw bad('"from" and "to" are the same airport');
   const date = String(input?.date ?? "").trim();
   if (!DATE.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) throw bad('"date" is the outbound date as YYYY-MM-DD');
-  if (date < todayUtc(now)) throw bad('"date" is in the past');
+  if (date < earliestLocalToday(now)) throw bad('"date" is in the past');
   if (Date.parse(`${date}T00:00:00Z`) - now > 330 * 86_400_000) throw bad('"date" is more than 330 days out; airlines do not sell that far ahead');
   let ret = null;
   if (input?.return != null && input.return !== "") {
