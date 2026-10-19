@@ -1608,6 +1608,8 @@ jobs:
           t node scripts/test-capped-body-reads.js
           # Hidden page content (comments, display:none, white-on-white, zero-width text) is reported by every HTML-to-text tool and quoted when it reads as an instruction to an AI; the default leaves output unchanged.
           t node scripts/test-hidden-content.js
+          # HTML parsing runs in the worker pool: the main thread stays available during a slow parse, a parse past the limit is stopped with a 503 and the pool recovers, a full queue is a 503, large pages run one at a time (offline)
+          t node scripts/test-html-pool.js
 
   test-unit-a4:
     # The second half of test-unit-a2 (2026-08-25, split by the seconds each item
