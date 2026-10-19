@@ -11,6 +11,7 @@
 // Covered by scripts/test-html-kit.js.
 import { loadJsdom } from "./lazy-deps.js";
 import { compileUserRegex, testUserRegex } from "./safe-regex.js";
+import { scrubHidden, hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -188,7 +189,7 @@ export const HTML_TOOLS = [
     route: "POST /api/html-strip", name: "HTML strip to text", slug: "html-strip",
     category: "web", price: "$0.001",
     description:
-      "Strip all HTML tags and return plain text. Preserves block-level structure (paragraphs and headings become newline-separated). Faster and more predictable than running extract on a raw HTML string when you already have it.",
+      "Strip all HTML tags and return plain text. Preserves block-level structure (paragraphs and headings become newline-separated). hiddenContent reports text a reader cannot see (HTML comments, display:none or aria-hidden elements, white-on-white or off-screen text, zero-width characters) and quotes any of it that reads as an instruction to an AI; send hidden: \"drop\" to leave it out of the text. Faster and more predictable than running extract on a raw HTML string when you already have it.",
     tags: ["html", "strip", "tags", "plaintext", "text"],
     discovery: {
       bodyType: "json",
@@ -197,18 +198,23 @@ export const HTML_TOOLS = [
         properties: {
           html: { type: "string", description: "Raw HTML string to strip (max 5MB)" },
           selector: { type: "string", description: "Optional CSS selector - strip only within this element (default: whole document)" },
+          hidden: HIDDEN_INPUT_SCHEMA,
         },
         required: ["html"],
       },
-      output: { example: { text: "Title\n\nFirst paragraph.\n\nSecond.", chars: 30 } },
+      output: { example: { text: "Title\n\nFirst paragraph.\n\nSecond.", chars: 32, hiddenContent: HIDDEN_OUTPUT_EXAMPLE } },
     },
     handler: async (i) => {
       const html = need(i, "html");
       const selector = i.selector ? String(i.selector) : null;
+      const mode = hiddenMode(i);
       if (selector) await validateSelector(selector);
       const doc = (await parseHtml(html)).window.document;
+      // Hidden text is found across the whole document (a stylesheet rule can
+      // hide an element anywhere), before the selector narrows the root.
+      const hiddenContent = scrubHidden(doc, { mode });
       const root = selector ? doc.querySelector(selector) : doc.body || doc.documentElement;
-      if (!root) return { text: "", chars: 0 };
+      if (!root) return { text: "", chars: 0, hiddenContent };
       // Remove <script> and <style> - their contents aren't visible text.
       root.querySelectorAll("script, style, noscript").forEach((el) => el.remove());
       // Block-level newlines: insert a marker after every block element so
@@ -221,7 +227,7 @@ export const HTML_TOOLS = [
         .replace(/\n{3,}/g, "\n\n")
         .split("\n").map((l) => l.trim()).join("\n")
         .trim();
-      return { text, chars: text.length };
+      return { text, chars: text.length, hiddenContent };
     },
   },
   // -------------------------------------------------------------------------

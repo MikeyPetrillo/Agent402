@@ -37,6 +37,7 @@
 import { gunzipSync } from "node:zlib";
 import { isIP } from "node:net";
 import { loadJsdom, loadReadability, loadTurndown, lazyImport } from "./lazy-deps.js";
+import { scrubHidden } from "./hidden-content.js";
 import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp } from "./fetch-guard.js";
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -417,6 +418,9 @@ export async function pageContent(html, url, format) {
   const dom = new JSDOM(html, { url });
   const doc = dom.window.document;
   const title = titleOf(doc, html);
+  // Hidden text (comments, display:none, white-on-white, zero-width
+  // characters) is reported on the page; the content itself is unchanged.
+  const hiddenContent = scrubHidden(doc, { mode: "keep" });
   let container = null;
   let usedReadability = false;
   try {
@@ -439,7 +443,7 @@ export async function pageContent(html, url, format) {
     // the markdown reads as a document.
     if (usedReadability && title && !content.toLowerCase().includes(title.toLowerCase())) content = `# ${title}\n\n${content}`;
   }
-  return { title, content };
+  return { title, content, hiddenContent };
 }
 
 // ---------------------------------------------------------------------------
@@ -645,10 +649,12 @@ async function siteCrawlRun(input) {
     let title = null;
     let content = "";
     let links = [];
+    let hiddenContent = null;
     if (HTML_TYPES.test(r.contentType || "") || /<html|<body|<a\b/i.test(r.text.slice(0, 4096))) {
       const pc = await pageContent(r.text, r.finalUrl, format);
       title = pc.title;
       content = pc.content;
+      hiddenContent = pc.hiddenContent;
       links = extractLinks(r.text, r.finalUrl, CRAWL_LINKS_PER_PAGE_QUEUE);
     } else {
       content = cleanText(r.text);
@@ -658,6 +664,8 @@ async function siteCrawlRun(input) {
     const internal = links.filter((l) => { const h = new URL(l).hostname; return hostPolicy(h) && !isPrivateLiteral(h); });
     const page = { url: r.finalUrl, status: r.status, title, depth, content, contentChars: content.length, links: internal.slice(0, CRAWL_LINKS_PER_PAGE_OUT) };
     if (contentTruncated) page.contentTruncated = true;
+    // Present only when the page hid something, so clean pages stay lean.
+    if (hiddenContent?.total) page.hiddenContent = hiddenContent;
     if (r.redirects) page.redirectedFrom = url;
     pages.push(page);
     for (const l of links) consider(l, depth + 1);

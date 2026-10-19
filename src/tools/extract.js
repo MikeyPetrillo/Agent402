@@ -1,4 +1,5 @@
 import { loadJsdom, loadReadability, loadTurndown, lazyImport } from "./lazy-deps.js";
+import { scrubHidden } from "./hidden-content.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markUntrusted } from "./provenance.js";
 
@@ -19,6 +20,11 @@ const turndownInstance = lazyImport(async () => {
 export async function htmlToArticle(html, finalUrl) {
   const [JSDOM, Readability, turndown] = await Promise.all([loadJsdom(), loadReadability(), turndownInstance()]);
   const dom = new JSDOM(html, { url: finalUrl });
+  // Text the page hides from a person (comments, display:none, white-on-white,
+  // zero-width characters) is reported, quoting any of it that reads as an
+  // instruction to an AI. The page is left as is: what extraction returns is
+  // unchanged (Readability keeps its own visibility rules).
+  const hiddenContent = scrubHidden(dom.window.document, { mode: "keep" });
   const article = new Readability(dom.window.document).parse();
   if (!article || !article.content) {
     const err = new Error("Could not extract readable content from this page");
@@ -37,6 +43,7 @@ export async function htmlToArticle(html, finalUrl) {
     lang: article.lang || null,
     wordCount: markdown.split(/\s+/).filter(Boolean).length,
     markdown,
+    hiddenContent,
   });
 }
 

@@ -11,6 +11,7 @@ import { lookup } from "node:dns/promises";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import { loadJsdom, loadTurndown } from "./lazy-deps.js";
+import { scrubHidden, hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
 // Named imports, not a default import: js-yaml v5 dropped the default export
 // ("does not provide an export named 'default'", which broke the v5 bump on
 // CI). Named imports resolve on both v4 (synthesized from the CJS build) and
@@ -845,16 +846,16 @@ const dataTools = [
     slug: "html-to-markdown",
     category: "conversion",
     price: "$0.001",
-    description: "Convert an HTML fragment or document you already have into clean markdown. (To fetch + convert a live URL, use /api/extract.)",
+    description: "Convert an HTML fragment or document you already have into clean markdown. hiddenContent reports text a reader cannot see (HTML comments, display:none or aria-hidden elements, white-on-white or off-screen text, zero-width characters) and quotes any of it that reads as an instruction to an AI; send hidden: \"drop\" to leave it out of the markdown. (To fetch + convert a live URL, use /api/extract.)",
     tags: ["html", "markdown", "convert"],
     discovery: {
       bodyType: "json",
       input: { html: "<h1>Hi</h1><p><b>bold</b></p>" },
       inputSchema: {
-        properties: { html: { type: "string", description: "HTML text (max 100KB)" } },
+        properties: { html: { type: "string", description: "HTML text (max 100KB)" }, hidden: HIDDEN_INPUT_SCHEMA },
         required: ["html"],
       },
-      output: { example: { markdown: "# Hi\n\n**bold**" } },
+      output: { example: { markdown: "# Hi\n\n**bold**", hiddenContent: HIDDEN_OUTPUT_EXAMPLE } },
     },
     handler: async (input) => {
       // Accept html under several common aliases; agents frequently call this
@@ -864,9 +865,14 @@ const dataTools = [
         throw bad('Missing "html". Send {"html":"<h1>Hi</h1>..."} - alternate fields body/content/text are also accepted.');
       }
       const text = capText(raw, 100_000, "html");
-      const TurndownService = await loadTurndown();
+      const mode = hiddenMode(input);
+      const [TurndownService, JSDOM] = await Promise.all([loadTurndown(), loadJsdom()]);
+      const doc = new JSDOM(text, { contentType: "text/html" }).window.document;
+      const hiddenContent = scrubHidden(doc, { mode });
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-      return { markdown: td.turndown(text) };
+      // keep (the default) converts the original string, so the markdown is
+      // exactly what this tool returned before hiddenContent existed.
+      return { markdown: td.turndown(mode === "drop" ? (doc.body || doc.documentElement) : text), hiddenContent };
     },
   },
   {

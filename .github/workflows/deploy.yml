@@ -1606,6 +1606,8 @@ jobs:
           t node scripts/test-router-paid-outcomes.js
           # Seller-written and caller-chosen bodies are read as capped streams: reading stops at the cap instead of buffering the whole body first (offline, pull-counted streams)
           t node scripts/test-capped-body-reads.js
+          # Hidden page content (comments, display:none, white-on-white, zero-width text) is reported by every HTML-to-text tool and quoted when it reads as an instruction to an AI; the default leaves output unchanged.
+          t node scripts/test-hidden-content.js
 
   test-unit-a4:
     # The second half of test-unit-a2 (2026-08-25, split by the seconds each item
