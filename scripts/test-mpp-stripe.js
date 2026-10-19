@@ -20,7 +20,7 @@ import { Challenge, Credential, Method } from "mppx";
 import { stripe as stripeMethods } from "mppx/server";
 import {
   stripeEnabled, mintStripeChallenge, checkStripeCredentialBinding,
-  createStripeGate, createStripeChallengeAppender, validateStripeCredential,
+  createStripeGate, createStripeChallengeAppender, validateStripeCredential, checkGrantedToken,
 } from "../src/mpp-stripe.js";
 
 let pass = 0;
@@ -58,7 +58,7 @@ ok(/card minimum/.test(checkStripeCredentialBinding(credFor(), { secretKey: SECR
 
 // ---- gate end to end (injected validate/settle) ----
 const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r({ s, url: `http://127.0.0.1:${s.address().port}` })); });
-const GATE = { secretKey: SECRET, realm: REALM, priceFor };
+const GATE = { secretKey: SECRET, realm: REALM, priceFor, checkToken: async () => ({ ok: true }) };
 
 // A) valid credential + 200 handler -> settled, receipt attached, ordering.
 {
@@ -225,6 +225,52 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor };
   ok(noSpt.ok === false && /Shared Payment Token/.test(noSpt.reason), "validate: a credential without an SPT id is refused");
   const junk = await validateStripeCredential("Payment not-a-credential");
   ok(junk.ok === false, "validate: an undecodable credential is refused, never thrown");
+}
+
+// ---- the payment token is checked with Stripe BEFORE the handler runs ----
+// A string that merely looks like a token used to run the paid handler (and
+// spend upstream) before the capture failed.
+{
+  let paidAs = null, settleCalled = false;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, validate: async () => ({ ok: true, validation: { spt: "spt_fake" } }), checkToken: async () => ({ ok: false, reason: "Stripe does not know this payment token" }), settle: async () => { settleCalled = true; return { ok: true, receipt: {} }; } }));
+  // Stands in for the paywall after the gate: it serves only a request the gate accepted as card-paid.
+  app.post("/paid", (req, res) => { paidAs = req.mppStripeCredential === true || req.stripeSettling === true; res.status(paidAs ? 200 : 402).json({}); });
+  const { s, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } });
+  ok(paidAs === false && !settleCalled && res.status === 402, `token check: an unknown token is never accepted as card payment (status ${res.status}, accepted ${paidAs})`);
+  s.close();
+}
+{
+  let handlerRan = false;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, validate: async () => ({ ok: true, validation: { spt: "spt_x" } }), checkToken: async () => ({ ok: false, unavailable: true, reason: "Stripe could not be reached" }) }));
+  app.post("/paid", (req, res) => { handlerRan = true; res.status(200).json({ result: "ok" }); });
+  const { s, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } });
+  ok(!handlerRan && res.status >= 400, `token check: no answer from Stripe fails closed (status ${res.status})`);
+  s.close();
+}
+{
+  const NOW = Date.parse("2026-10-19T12:00:00Z");
+  const tokenRes = (body, status = 200) => async (url, init) => { seen.url = url; seen.init = init; return new Response(JSON.stringify(body), { status }); };
+  const seen = {};
+  const good = { id: "spt_1", deactivated_at: null, deactivated_reason: null, usage_limits: { currency: "usd", expires_at: NOW / 1000 + 3600, max_amount: 1000 }, usage_details: { amount_captured: { value: 200, currency: "usd" } } };
+  let r = await checkGrantedToken("spt_1", 500, { fetchImpl: tokenRes(good), secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === true, "token check: an active token with room under its limit passes");
+  ok(/\/v1\/shared_payment\/granted_tokens\/spt_1$/.test(seen.url) && /^Bearer /.test(seen.init.headers.Authorization) && /preview/.test(seen.init.headers["Stripe-Version"]), "token check: reads the granted token with the preview API version");
+  r = await checkGrantedToken("spt_1", 900, { fetchImpl: tokenRes(good), secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === false && /remaining limit/.test(r.reason), "token check: a price above the remaining limit is refused");
+  r = await checkGrantedToken("spt_1", 100, { fetchImpl: tokenRes({ ...good, deactivated_reason: "revoked", deactivated_at: 1 }), secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === false && /no longer active/.test(r.reason), "token check: a revoked token is refused");
+  r = await checkGrantedToken("spt_1", 100, { fetchImpl: tokenRes({ ...good, usage_limits: { ...good.usage_limits, expires_at: NOW / 1000 - 1 } }), secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === false && /expired/.test(r.reason), "token check: an expired token is refused");
+  r = await checkGrantedToken("spt_nope", 100, { fetchImpl: tokenRes({ error: {} }, 404), secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === false && !r.unavailable, "token check: a token Stripe does not know is refused");
+  r = await checkGrantedToken("spt_1", 100, { fetchImpl: async () => { throw new TypeError("fetch failed"); }, secretKey: "sk_test_x", now: NOW });
+  ok(r.ok === false && r.unavailable === true, "token check: a network failure fails closed and says so");
+  r = await checkGrantedToken("spt_1", 100, { fetchImpl: tokenRes(good), secretKey: "", now: NOW });
+  ok(r.ok === false, "token check: with no secret key nothing passes");
 }
 
 console.log(`\n${pass} passed, 0 failed`);
