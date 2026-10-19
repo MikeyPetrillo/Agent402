@@ -96,7 +96,7 @@ try {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const route = src.slice(src.indexOf('app.post("/api/index/register"'), src.indexOf("// MPP self-serve listing"));
   ok(/const ip = limiterKey\(req\.ip/.test(route), "the register route keys its per-IP limit through limiterKey (IPv6 /64)");
-  ok(/!result\.reverify\.documentsReread && !result\.reverify\.routesRechecked[\s\S]{0,120}regGlobal\.splice/.test(route),
+  ok(/!result\.reverify\.documentsReread && !result\.reverify\.routesRechecked[\s\S]{0,120}regLimiter\.giveBackGlobal\(slot\)/.test(route),
     "a re-registration that fetched nothing returns its global-cap slot");
   const { limiterKey } = await import("../src/rate-limit.js");
   ok(limiterKey("2001:db8:1:2:aaaa::1") === limiterKey("2001:db8:1:2:bbbb::9"), "two addresses in one /64 share a key");

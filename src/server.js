@@ -561,6 +561,7 @@ import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, sto
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -7221,11 +7222,9 @@ app.get("/api/index", (req, res) => {
 // per-route parser here would be a no-op — the global one already parsed the
 // body by the time this handler runs).
 const REG_WINDOW_MS = 3600_000;
-const regByIp = new Map(); // ip -> [timestamps]; global cap is regGlobal below
 // F21: keep the per-IP maps from growing without bound between the periodic
 // sweeps when a burst of unique IPs arrives.
 const RL_MAP_MAX_KEYS = 5000;
-let regGlobal = [];
 // The backstop, not the fairness rule: per-IP (5/hour) is what stops one actor,
 // and this exists only so the endpoint cannot become a fetch amplifier at
 // scale. It was 30/hour, low enough that ordinary adoption hit it - each new
@@ -7233,27 +7232,26 @@ let regGlobal = [];
 // Env-overridable so it can be raised without a deploy.
 const REG_GLOBAL_MAX = Math.max(30, Number(process.env.INDEX_REGISTER_GLOBAL_MAX || 300));
 let regGlobalTripped = 0;
+// Both limits are counted across every replica (src/registration-limits.js:
+// shared-limits windows, with this process's own counts as the floor).
+const regLimiter = createRegistrationLimiter({ name: "x402", perIpMax: 5, globalMax: REG_GLOBAL_MAX, windowMs: REG_WINDOW_MS, maxKeys: RL_MAP_MAX_KEYS });
 // F21: evict stale keys from the one-time-IP rate map so distributed input
 // can't grow it without bound (the per-IP prune only fires when the SAME IP
 // returns). Mirrors the powChallengeHits / operatorSessions sweeps; the inline
 // size backstop covers bursts between ticks.
-setInterval(() => {
-  const now = Date.now();
-  sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
-}, 60_000);
+setInterval(() => { regLimiter.sweep(); }, 60_000).unref?.();
 app.post("/api/index/register", async (req, res) => {
   const now = Date.now();
   // An IPv6 client is keyed on its /64: one host is routinely assigned a whole
   // /64, so a full-address key gave it a fresh 5/hour per address.
   const ip = limiterKey(req.ip || "?");
-  if (regByIp.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
-  const mine = (regByIp.get(ip) || []).filter((t) => now - t < REG_WINDOW_MS);
-  if (mine.length >= 5) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!(await regLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
   if (v.error) return res.status(400).json({ error: v.error });
   if (isRemovedOrigin(v.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
-  regGlobal = regGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (regGlobal.length >= REG_GLOBAL_MAX) {
+  const taken = await regLimiter.take(ip, now);
+  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok) {
     // A global cap is a backstop, not the fairness mechanism - the per-IP cap
     // above is. At 30/hour it did the second job badly: one actor spending 5
     // from each of six addresses exhausted the budget for every seller on earth
@@ -7264,12 +7262,12 @@ app.post("/api/index/register", async (req, res) => {
     // of a known origin that fetches nothing (inside both of that origin's
     // windows) gives its slot back below, so such calls cannot fill this cap.
     if (!regGlobalTripped || now - regGlobalTripped > 600_000) {
-      console.warn(`[index-register] GLOBAL cap hit (${regGlobal.length}/${REG_GLOBAL_MAX} in the last hour) - NEW sellers are being refused`);
+      console.warn(`[index-register] GLOBAL cap hit (${REG_GLOBAL_MAX} in the last hour across replicas) - NEW sellers are being refused`);
       regGlobalTripped = now;
     }
     return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   }
-  mine.push(now); regByIp.set(ip, mine); regGlobal.push(now);
+  const slot = taken.slot;
   // Optional succession: a seller moving off a throwaway host to a permanent
   // domain keeps how long we have known them, when BOTH origins advertise the
   // same Base payTo. Validated like any other origin input - it is a caller-
@@ -7288,10 +7286,7 @@ app.post("/api/index/register", async (req, res) => {
     // The removal list has not been read yet (the state database is down):
     // nothing was fetched or listed, so the call gives back both of its
     // slots and answers 503 with when to try again.
-    const gi = regGlobal.lastIndexOf(now);
-    if (gi >= 0) regGlobal.splice(gi, 1);
-    const mi = mine.lastIndexOf(now);
-    if (mi >= 0) mine.splice(mi, 1);
+    regLimiter.giveBack(slot);
     return res.status(503).set("Retry-After", "30").json(result);
   }
   // Verification outlasted the registration's deadline: answered now (202),
@@ -7301,31 +7296,23 @@ app.post("/api/index/register", async (req, res) => {
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
   // per-IP count stands - that is the caller's own limit.)
-  if (!replaces && result?.reverify && !result.reverify.documentsReread && !result.reverify.routesRechecked) {
-    const i = regGlobal.lastIndexOf(now);
-    if (i >= 0) regGlobal.splice(i, 1);
-  }
+  if (!replaces && result?.reverify && !result.reverify.documentsReread && !result.reverify.routesRechecked) regLimiter.giveBackGlobal(slot);
   res.json(result);
 });
 // MPP self-serve listing: same shape/limits as /api/index/register above -
 // validate + rate-limit here, all probing happens inside the crawler behind
 // assertPublicUrl/ssrfDispatcher (src/mpp-index.js).
-const mppRegByIp = new Map();
-let mppRegGlobal = [];
-setInterval(() => {
-  sweepStaleTsMap(mppRegByIp, REG_WINDOW_MS, Date.now());
-}, 60_000);
+const mppRegLimiter = createRegistrationLimiter({ name: "mpp", perIpMax: 5, globalMax: REG_GLOBAL_MAX, windowMs: REG_WINDOW_MS, maxKeys: RL_MAP_MAX_KEYS });
+setInterval(() => { mppRegLimiter.sweep(); }, 60_000).unref?.();
 app.post("/api/mpp-index/register", async (req, res) => {
   const now = Date.now();
-  const ip = req.ip || "?";
-  if (mppRegByIp.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(mppRegByIp, REG_WINDOW_MS, now);
-  const mine = (mppRegByIp.get(ip) || []).filter((t) => now - t < REG_WINDOW_MS);
-  if (mine.length >= 5) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  const ip = limiterKey(req.ip || "?");
+  if (!(await mppRegLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateMppOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
   if (v.error) return res.status(400).json({ error: v.error });
-  mppRegGlobal = mppRegGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (mppRegGlobal.length >= REG_GLOBAL_MAX) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
-  mine.push(now); mppRegByIp.set(ip, mine); mppRegGlobal.push(now);
+  const taken = await mppRegLimiter.take(ip, now);
+  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
   const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
