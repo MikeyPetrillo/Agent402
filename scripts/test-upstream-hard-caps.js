@@ -33,7 +33,7 @@ const T0 = Date.parse("2026-10-19T12:00:00Z");
   const r = [1, 2, 3, 4, 5].map(() => hardCapRefusalForHost(host, T0));
   ok(r.slice(0, 3).every((x) => x === null), "calls under the ceiling go ahead");
   ok(r[3]?.statusCode === 503 && r[4]?.statusCode === 503, "calls past the ceiling are refused with 503");
-  ok(/Nothing was charged/.test(r[3].message) && !/brave/i.test(r[3].message), "the refusal says nothing was charged and does not name the upstream");
+  ok(/This call is not charged on x402\./.test(r[3].message) && !/Nothing was charged/.test(r[3].message) && !/brave/i.test(r[3].message), "the refusal scopes the charge to x402 and does not name the upstream");
   const s = hardCapStatus(T0);
   ok(s.status === "capped" && s.upstreams.brave.refusedToday === 2 && s.upstreams.brave.usedToday === 3, "status reads capped and counts the refusals");
   ok(hardCapRefusalForHost(host, T0 + 86_400_000) === null, "a new UTC day starts the count again");
