@@ -314,6 +314,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
       title: bundle.title || rec.target, report: bundle.report,
       sources: Array.isArray(bundle.sources) ? bundle.sources : [], tables: Array.isArray(bundle.tables) ? bundle.tables : [],
       ...(typeof bundle.disclaimer === "string" && bundle.disclaimer ? { disclaimer: bundle.disclaimer } : {}),
+      ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
       at, reason, changes,
     };
     st.lastFullAt = now(); st.lastReportId = id; st.failures = 0; st.nextAttemptAt = null; st.lastError = null;
@@ -710,6 +711,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     return {
       status: "done", kind: r.kind, title: r.title, report: r.report, sources: r.sources, tables: r.tables, at: r.at,
       ...(r.disclaimer ? { disclaimer: r.disclaimer } : {}),
+      ...(r.groundingNote ? { groundingNote: r.groundingNote } : {}),
       monitor: { label: r.label, target: r.target, reason: r.reason, changes: r.changes || [] },
     };
   }

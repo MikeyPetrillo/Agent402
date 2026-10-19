@@ -136,6 +136,9 @@
     var text = modelNoteText(s), out = "";
     if (text) out += '<p class="rpt-note" id="model-note">' + esc(text) + "</p>";
     if (s && typeof s.disclaimer === "string" && s.disclaimer.trim()) out += '<p class="rpt-note" id="report-disclaimer">' + esc(s.disclaimer.trim()) + "</p>";
+    // The grounding check's sentence (src/report-grounding.js), when a figure
+    // in the report could not be traced to the data it was written from.
+    if (s && typeof s.groundingNote === "string" && s.groundingNote.trim()) out += '<p class="rpt-note" id="grounding-note">' + esc(s.groundingNote.trim()) + "</p>";
     return out;
   }
   function slugify(s) { return String(s || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "report"; }
@@ -364,6 +367,7 @@
       var bundle = { title: s.title, product: productLabel(s.kind), generatedAt: s.at };
       if (modelNoteText(s)) bundle.notice = modelNoteText(s);
       if (typeof s.disclaimer === "string" && s.disclaimer.trim()) bundle.disclaimer = s.disclaimer.trim();
+      if (typeof s.groundingNote === "string" && s.groundingNote.trim()) bundle.groundingNote = s.groundingNote.trim();
       bundle.report = s.report; bundle.sources = sources; bundle.tables = tables; bundle.images = images;
       download(base + "-bundle.json", JSON.stringify(bundle, null, 2), "application/json");
     });

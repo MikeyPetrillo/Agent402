@@ -22,6 +22,7 @@
 // the package to paste, never posts.
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { makeResearchHandler } from "./research-deep-kit.js";
 import { IMAGES_FAST_TOOLS } from "./llm-images-fast-kit.js";
 import { runImageOffThread } from "./image-pool.js";
@@ -176,6 +177,9 @@ ${sourceBlock}`;
     const sd = await d.synthesize({ model: SYNTH, messages: [{ role: "user", content: prompt }], max_tokens: t.synthMaxTokens, response_format: { type: "json_object" }, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
     spent += costOf(sd);
     const art = parseArticleJson(textOf(sd));
+    // Every number the model wrote (headlines, subtitle, article, takeaways,
+    // companion post), traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding([art.headlines.join("\n"), art.subtitle, art.body, art.takeaways.join("\n"), art.post].join("\n\n"), prompt);
 
     // 3) IMAGES: one generation per brief, then every LinkedIn size for the slot.
     const wanted = art.briefs.filter((b) => (b.slot === "cover" ? p.cover : p.inlineN > 0)).slice(0, t.maxImages);
@@ -228,7 +232,7 @@ ${sourceBlock}`;
       report, title: art.headlines[0],
       article: { headline: art.headlines[0], headlines: art.headlines, subtitle: art.subtitle, body_markdown: art.body, key_takeaways: art.takeaways, word_count: wordCount },
       post: { caption: art.post, hashtags: art.hashtags, chars: art.post.length },
-      images, sources, tables: [], meta,
+      images, sources, tables: [], meta, grounding,
     };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(t) });
     return out;

@@ -20,6 +20,7 @@
 // cached. Synthesis gated on OPENROUTER_API_KEY.
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
@@ -311,6 +312,8 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
     spent += costOf(sd);
     const prose = textOf(sd);
     if (!prose) throw bad("Token risk synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
     const report = prose;
 
     // 5) DATA APPENDIX.
@@ -337,7 +340,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
       synthesis_model: SYNTH,
       disclaimer: "Evidence-based on-chain risk signals only. Not financial advice, not a guarantee, not exhaustive. On-chain analysis cannot detect off-chain or social scams.",
     };
-    const out = { report, address, chain, sources, tables, meta };
+    const out = { report, address, chain, sources, tables, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { infoBlock, verifyBlock, holderBlock, scanBlock, webBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(TOKEN_RISK_TIERS[tierSlug]) });
     return out;
