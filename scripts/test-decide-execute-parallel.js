@@ -133,6 +133,19 @@ function setup(plan, { ledgerWrap = (l) => l, runStopSignal, runBudgetMs = () =>
   ok(out.spentUsd === 0.03, `the run spent each step once (${out.spentUsd})`);
 }
 
+// ---- an internal error in one step closes the run with what siblings spent ----
+{
+  const finishes = [];
+  const wrap = (l) => { const f = l.finishRun.bind(l); l.finishRun = (a) => { finishes.push(a); return f(a); }; return l; };
+  const { h, run } = setup([{ step: 1, tool: tool("a"), fallbacks: [null], dependsOn: [] }, { step: 2, tool: tool("b"), dependsOn: [] }], { ledgerWrap: wrap });
+  h.behave.a = "fail";
+  let err = null;
+  try { await run(); } catch (e) { err = e; }
+  ok(err && !err.statusCode, `the internal error reaches the caller as itself (${err?.message})`);
+  const f = finishes.at(-1);
+  ok(f && f.status === "failed" && f.spentUsd === 0.01 && f.steps.some((s) => s.step === 2 && s.status === "ok"), `the run is closed as failed with the sibling's spend (${JSON.stringify(f && { status: f.status, spentUsd: f.spentUsd })})`);
+}
+
 // ---- the cap bounds a run's fan-out ----
 {
   const { h, run } = setup(["a", "b", "c", "d", "e"].map((s, i) => ({ step: i + 1, tool: tool(s), dependsOn: [] })));

@@ -765,7 +765,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       pump();
     });
     stop?.removeEventListener?.("abort", onStop);
-    if (defect) throw defect;
+    if (defect) {
+      // An internal error in one step, after its siblings may have spent: the
+      // run is closed as failed with what was spent (best effort, so the
+      // error the buyer gets stays the original one), and a credit is given
+      // back only when nothing was spent at all.
+      const closed = d.plan.map((p, i) => entries[i]).filter(Boolean).map(({ result, ...r }) => r);
+      try { await finish({ runId, status: "failed", spentUsd: pool.spent, steps: closed, now: now() }); } catch { /* the defect is the answer */ }
+      if (redeemed && pool.spent === 0 && !mayHaveSpentOutside) { try { await restore(input.creditToken, runId); } catch { /* likewise */ } }
+      throw defect;
+    }
     if (refusedBy && pool.spent === 0 && !mayHaveSpentOutside && okCount === 0) {
       await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
       if (redeemed) await restore(input.creditToken, runId);
