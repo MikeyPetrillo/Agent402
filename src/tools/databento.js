@@ -205,9 +205,18 @@ export const RANGE_REFRESH_MS = envMs("DATABENTO_RANGE_REFRESH_MS", 15 * 60_000)
 const rangeMaxAgeMs = () => envMs("DATABENTO_RANGE_MAX_AGE_MS", 60 * 60_000);
 let rangeState = { end: null, at: 0, dataset: null };
 let rangeInflight = null;
+// Every read here is the daily-bar schema, and its end trails the dataset's
+// own end whenever another schema (instrument definitions, statistics) runs
+// ahead of the last settled session, as over a weekend: bounding a read by the
+// dataset's end then asks for days the bars do not have yet, and both datasets
+// refuse it. The bar schema's own end is the boundary when the answer has one.
+export const BAR_SCHEMA = "ohlcv-1d";
+export function rangeEndOf(r) {
+  return String(r?.schema?.[BAR_SCHEMA]?.end ?? r?.end ?? r?.end_date ?? "").slice(0, 10);
+}
 async function readRangeOf(dataset) {
   const r = await get("metadata.get_dataset_range", { dataset });
-  const end = String(r.end ?? r.end_date ?? "").slice(0, 10);
+  const end = rangeEndOf(r);
   if (!end) throw datasetFailure(bad("Market data upstream did not report its available range.", 502));
   return end;
 }
@@ -343,7 +352,7 @@ export async function dailyBarsRead({ symbol, start, end, maxUsd }) {
 }
 
 async function dailyBarsOf(dataset, { symbol, start, end, maxUsd }) {
-  const params = { dataset, symbols: String(symbol).toUpperCase(), schema: "ohlcv-1d", start, end };
+  const params = { dataset, symbols: String(symbol).toUpperCase(), schema: BAR_SCHEMA, start, end };
   const key = barsKey(params);
   const hit = barsCache.get(key);
   if (hit) {
@@ -506,7 +515,7 @@ async function auditQuotePrice(end) {
   if (!spendBackground()) return;
   quotePriceAudit = { end, at: Date.now(), ok: null, dataset };
   try {
-    const usd = await priceOf({ dataset, symbols: QUOTE_AUDIT_SYMBOL, schema: "ohlcv-1d", ...quoteWindow(end) });
+    const usd = await priceOf({ dataset, symbols: QUOTE_AUDIT_SYMBOL, schema: BAR_SCHEMA, ...quoteWindow(end) });
     // No number: the session is not audited, and the next tick tries again.
     if (!Number.isFinite(usd)) { quotePriceAudit.end = null; return; }
     quotePriceAudit.ok = usd <= DEFAULT_MAX_QUERY_USD;
@@ -548,7 +557,7 @@ export async function warmTick() {
   const dataset = datasetOrder()[0];
   for (const symbol of warmSymbols()) {
     const { start } = quoteWindow(end);
-    const params = { dataset, symbols: symbol, schema: "ohlcv-1d", start, end };
+    const params = { dataset, symbols: symbol, schema: BAR_SCHEMA, start, end };
     if (barsCache.has(barsKey(params))) continue;
     // Read by another replica: copy it here, no upstream call.
     if (await adoptSharedBars(barsKey(params))) { warm.adopted++; continue; }
