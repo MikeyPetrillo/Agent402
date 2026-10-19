@@ -58,6 +58,8 @@ const GITHUB_ICON_SVG = `<svg width="19" height="19" viewBox="0 0 16 16" fill="c
 
 export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist-500-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/geist-600-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/geist-700-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/instrument-serif-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
@@ -88,8 +90,9 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.wof
 /* Instrument Serif fallback: Georgia scaled to the same advance width and
    vertical box (measured in Chromium from the woff2 against Georgia), so the
    display headline does not reflow when the web font swaps in. */
-@font-face{font-family:'Instrument Serif Fallback';src:local('Georgia'),local('Times New Roman');size-adjust:76.09%;ascent-override:130.11%;descent-override:40.74%;line-gap-override:0%}
-@font-face{font-family:'Geist Fallback';src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:128.4531%;ascent-override:78.2387%;descent-override:22.9656%;line-gap-override:0%}
+@font-face{font-family:'Instrument Serif Fallback';src:local('Georgia'),local('Times New Roman');size-adjust:75.6255%;ascent-override:130.9092%;descent-override:40.9902%;line-gap-override:0%}
+@font-face{font-family:'Geist Fallback';font-weight:100 500;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:102.4523%;ascent-override:98.0945%;descent-override:28.7939%;line-gap-override:0%}
+@font-face{font-family:'Geist Fallback';font-weight:600;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}@font-face{font-family:'Geist Fallback';font-weight:700;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}
 @font-face{font-family:'Geist Mono Fallback';src:local('Courier New'),local('Courier'),local('Roboto Mono');size-adjust:99.9837%;ascent-override:100.5164%;descent-override:29.5048%;line-gap-override:0%}
 </style>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
