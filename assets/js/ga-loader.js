@@ -8,6 +8,9 @@
   // non-blocking choice strip; until they accept, Google receives only
   // cookieless pings. Everyone else starts granted. Ad storage, ad user data
   // and ad personalization are always denied, and Google signals are off.
+  // A browser that sends Global Privacy Control stays denied and is not asked.
+  // Any visitor can reopen the strip from the footer's "analytics choices"
+  // button (rendered hidden; this loader shows it).
   //
   // Internal traffic: opening any page with ?internal=1 marks this browser
   // (localStorage), and its events carry traffic_type=internal for GA's
@@ -34,8 +37,10 @@
   // (and Asia/Famagusta), and the outermost regions sit in other zones.
   var EU_OTHER = ["Atlantic/Reykjavik", "Atlantic/Canary", "Atlantic/Madeira", "Atlantic/Azores", "Asia/Nicosia", "Asia/Famagusta", "America/Guadeloupe", "America/Martinique", "America/Cayenne", "America/Marigot", "Indian/Reunion", "Indian/Mayotte"];
   var europe = /^Europe\//.test(tz) || EU_OTHER.indexOf(tz) !== -1;
+  var gpc = false;
+  try { gpc = navigator.globalPrivacyControl === true; } catch (e) { /* no navigator */ }
   var choice = store.get("a402-analytics-consent"); // "granted" | "denied" | null
-  var granted = choice ? choice === "granted" : !europe;
+  var granted = gpc ? false : (choice ? choice === "granted" : !europe);
 
   window.dataLayer = window.dataLayer || [];
   function gtag() { window.dataLayer.push(arguments); }
@@ -56,9 +61,21 @@
   s.src = "https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(cfg.id);
   document.head.appendChild(s);
 
-  if (!europe || choice) return;
+  if (gpc) return;
+  // Withdrawing removes the measurement cookies already set (_ga, _ga_<id>),
+  // on this host and on the parent domain GA writes them to.
+  function dropCookies() {
+    var host = location.hostname.replace(/^www\./, "");
+    document.cookie.split(";").forEach(function (c) {
+      var name = c.split("=")[0].trim();
+      if (!/^_ga(_|$)/.test(name)) return;
+      ["", "; domain=" + host, "; domain=." + host].forEach(function (d) { document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/" + d; });
+    });
+  }
   // The choice strip: built node by node from text, closes on either answer.
+  var open = null;
   function strip() {
+    if (open) return;
     var bar = document.createElement("div");
     bar.setAttribute("role", "region");
     bar.setAttribute("aria-label", "Analytics choice");
@@ -78,8 +95,10 @@
       b.style.cssText = "font:500 var(--fs-sm) Geist,system-ui,sans-serif;border-radius:var(--radius);padding:7px 14px;cursor:pointer;border:1px solid var(--hairline);" + (primary ? "background:var(--ink);color:var(--paper);" : "background:transparent;color:inherit;");
       b.addEventListener("click", function () {
         store.set("a402-analytics-consent", value);
-        if (value === "granted") gtag("consent", "update", { analytics_storage: "granted" });
+        gtag("consent", "update", { analytics_storage: value });
+        if (value === "denied") dropCookies();
         bar.remove();
+        open = null;
       });
       return b;
     }
@@ -87,6 +106,20 @@
     bar.appendChild(btn("No thanks", false, "denied"));
     bar.appendChild(btn("Allow", true, "granted"));
     document.body.appendChild(bar);
+    open = bar;
   }
-  if (document.body) strip(); else document.addEventListener("DOMContentLoaded", strip);
+  function ready() {
+    var links = document.querySelectorAll("[data-analytics-choices]");
+    for (var i = 0; i < links.length; i++) {
+      links[i].hidden = false;
+      links[i].addEventListener("click", function () {
+        store.set("a402-analytics-consent", null);
+        strip();
+        var first = open && open.querySelector("button");
+        if (first) first.focus();
+      });
+    }
+    if (europe && !choice) strip();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready); else ready();
 })();

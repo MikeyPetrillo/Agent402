@@ -111,6 +111,18 @@ function withPostalFooter(html, text) {
   };
 }
 
+// Caller headers as a plain {name: value} object of strings, or null when
+// there are none. Names are header tokens; values lose control characters.
+function mimeHeaders(headers) {
+  if (!headers || typeof headers !== "object") return null;
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(k) || v == null) continue;
+    out[k] = String(v).replace(/[\r\n\x00-\x1f\x7f]/g, " ");
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // One provider attempt: true on 2xx. Records the outcome either way.
 async function sendVia(provider, { from, to, subject, html, text, headers }) {
   try {
@@ -120,6 +132,7 @@ async function sendVia(provider, { from, to, subject, html, text, headers }) {
       // token; accept both. from must be a verified ZeptoMail sender address.
       const tok = key("ZEPTOMAIL_TOKEN");
       const auth = /^Zoho-enczapikey/i.test(tok) ? tok : `Zoho-enczapikey ${tok}`;
+      const mh = mimeHeaders(headers);
       res = await fetch(ZEPTO_URL(), {
         method: "POST",
         headers: { Authorization: auth, "Content-Type": "application/json", Accept: "application/json" },
@@ -127,6 +140,9 @@ async function sendVia(provider, { from, to, subject, html, text, headers }) {
           from: { address: from, name: key("EMAIL_FROM_NAME") || "Agent402" },
           to: [{ email_address: { address: to } }],
           subject, htmlbody: html, textbody: text,
+          // Custom headers (List-Unsubscribe and List-Unsubscribe-Post) ride in
+          // ZeptoMail's mime_headers object, string keys to string values.
+          ...(mh ? { mime_headers: mh } : {}),
         }),
         signal: AbortSignal.timeout(12_000),
       });
