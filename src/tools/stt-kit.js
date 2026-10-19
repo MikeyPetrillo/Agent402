@@ -166,6 +166,20 @@ export async function assertWithinDurationCap(buf, filename, tierSlug) {
   return durationSec;
 }
 
+const BILLING_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "billing_not_active", "billing_limit_reached"]);
+/** Does an upstream refusal mean our own account hit its billing limit? Pure; exported for tests. */
+export function isOurBillingLimit(status, bodyText) {
+  if (status !== 429 && status !== 400 && status !== 402 && status !== 403) return false;
+  let err = null;
+  try { err = JSON.parse(String(bodyText || "")).error || null; } catch {}
+  const code = String(err?.code || err?.type || "").toLowerCase();
+  return BILLING_CODES.has(code) || (status === 402);
+}
+/** The refusal for our billing limit: names our side, no upstream name. */
+export function ourBillingLimit() {
+  return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input; you were not charged. Retry later.", 503), { noRetry: true });
+}
+
 async function callOpenAI(audioBuffer, filename, model, language, probedDuration = null) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
@@ -190,6 +204,10 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
 
   const text = await res.text();
   if (!res.ok) {
+    // Our account's spending or billing limit (a 429 or 400 whose code says
+    // quota or billing) is this server's own limit, not the buyer's request
+    // and not a rate limit worth an immediate retry.
+    if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
     if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
     if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);
     if (res.status >= 500) throw bad(`OpenAI upstream error (HTTP ${res.status})`, 502);
@@ -250,8 +268,8 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     const safe = redactSecrets(text);
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
+    if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
     if (res.status === 429) throw bad("Transcription upstream rate-limited - retry shortly", 503);
-    if (res.status === 402) throw bad("Transcription gateway temporarily unavailable - retry shortly", 503);
     if (res.status >= 500 || res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
     throw bad(`Transcription upstream rejected the request: ${msg}`, 400);
   }
