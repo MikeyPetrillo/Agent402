@@ -29,6 +29,16 @@ function normalize(s) {
   return ` ${String(s || "").slice(0, NORM_MAX).toLowerCase().replace(/[\u2019']/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
 }
 
+// A cheaper gate first, on the raw text: lowercased, apostrophes dropped and
+// cut exactly as normalize() does, with no word boundaries. normalize() only
+// turns other characters into spaces, which splits words and never joins
+// them, so text holding none of these stems cannot pass PREFILTER either, and
+// most routes skip the Unicode pass altogether.
+const RAW_STEMS = /people|person|individual|someone|somebody|background|skip|reverse|white|criminal|arrest|conviction|mugshot|inmate|offender|tenant|renter|applicant|employ|relative|associate|live|reside|enrich|caller|cnam|finder|linkedin|prospect|lead/;
+function rawGate(s) {
+  return RAW_STEMS.test(String(s || "").slice(0, NORM_MAX).toLowerCase().replace(/[\u2019']/g, ""));
+}
+
 // A cheap gate: no pattern below can match text that carries none of these.
 const PREFILTER = /\b(?:people|person|persons|individual|individuals|someone|somebody|someones|background|skip|reverse|white ?pages|criminal|arrest|conviction|convictions|mugshots?|inmate|inmates|offender|offenders|tenant|tenants|renter|applicant|applicants|employment|employee|employees|relatives|associates|lives|lived|resides|enrich|enrichment|caller|cnam|finder|linkedin|prospect|prospects|leads?)\b/;
 
@@ -92,7 +102,9 @@ export function routeTextOf(row) {
 
 /** The id of the first personal-data pattern the route's own text matches, or null. */
 export function personalDataMatch(row) {
-  const t = normalize(typeof row === "string" ? row : routeTextOf(row));
+  const raw = typeof row === "string" ? row : routeTextOf(row);
+  if (!rawGate(raw)) return null;
+  const t = normalize(raw);
   if (!PREFILTER.test(t)) return null;
   for (const p of PERSONAL_DATA_PATTERNS) {
     if (!p.re.test(t)) continue;
@@ -108,6 +120,9 @@ export function personalDataMatch(row) {
  * routeQuery (in-thread and in the router worker, which imports the same
  * index module) and route-execute's candidate filter for every chain.
  */
+/** Both gates, for the test that holds the raw one to be a superset. */
+export const __routeCategoryGatesForTests = Object.freeze({ rawGate, prefilter: (s) => PREFILTER.test(normalize(s)), prefilterSource: PREFILTER.source });
+
 export function routeExcludedCategory(row) {
   return personalDataMatch(row) ? "personal_data" : null;
 }
