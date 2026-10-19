@@ -12,6 +12,7 @@
 import { loadJsdom } from "./lazy-deps.js";
 import { compileUserRegex, testUserRegex } from "./safe-regex.js";
 import { scrubHidden, hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
+import { runHtml } from "./html-pool.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -69,7 +70,7 @@ function resolveHref(href, base) {
   try { return new URL(href, base).href; } catch { return href; }
 }
 
-export const HTML_TOOLS = [
+const HTML_TOOL_DEFS = [
   // -------------------------------------------------------------------------
   {
     route: "POST /api/html-select", name: "HTML select", slug: "html-select",
@@ -390,3 +391,14 @@ export const HTML_TOOLS = [
     },
   },
 ];
+
+// The handlers by slug: the HTML worker runs these (./html-worker-ops.js).
+export const HTML_TOOL_HANDLERS = Object.fromEntries(HTML_TOOL_DEFS.map((t) => [t.slug, t.handler]));
+
+// Catalog entries: every call parses in the HTML worker (./html-pool.js), so a
+// document that is slow to parse holds a worker until its time limit, never
+// the event loop. Same inputs, outputs, errors and status codes as the handler.
+export const HTML_TOOLS = HTML_TOOL_DEFS.map((t) => ({
+  ...t,
+  handler: (input) => runHtml("tool", { slug: t.slug, input }, Buffer.byteLength(String(input?.html ?? ""))),
+}));

@@ -30,14 +30,14 @@
 // once at least one page succeeded, exhaustion answers 200 with
 // truncated:true and the partial result.
 //
-// Deterministic end to end: no LLM anywhere. Markdown conversion is the same
-// turndown configuration src/tools/extract.js uses; robots.txt parsing is
-// kit.js's parseRobots/robotsAllows. Covered by scripts/test-crawl-kit.js.
+// Deterministic end to end: no LLM anywhere. Pages are parsed and converted in
+// the HTML worker (src/tools/html-parse-ops.js pageContentFromHtml); robots.txt
+// parsing is kit.js's parseRobots/robotsAllows. Covered by scripts/test-crawl-kit.js.
 
 import { gunzipSync } from "node:zlib";
 import { isIP } from "node:net";
-import { loadJsdom, loadReadability, loadTurndown, lazyImport } from "./lazy-deps.js";
-import { scrubHidden } from "./hidden-content.js";
+import { runHtml } from "./html-pool.js";
+import { cleanText } from "./html-parse-ops.js";
 import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp } from "./fetch-guard.js";
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -63,12 +63,11 @@ const CONFIG = {
   CRAWL_TOTAL_MS: 25_000,
   CRAWL_FETCH_MS: 8_000,
   CRAWL_TOTAL_BYTES: 4 * 1024 * 1024,
-  // Per-page byte cap. JSDOM parsing is SYNCHRONOUS, so this number is an
-  // event-loop budget, not a bandwidth one: a 2 MB page measured ~1 s of blocked
-  // main thread (parse + clone + Readability + turndown), and this handler is
-  // reachable by any paying caller. 300 KB keeps a page under ~150 ms, which is
-  // the same reasoning that moved the image tools off the main thread. Anything
-  // larger is truncated, never refused.
+  // Per-page byte cap. Parsing runs in the HTML worker (src/tools/html-pool.js),
+  // so this bounds worker time and memory per page, not the event loop: a 2 MB
+  // page measured ~1 s (parse + clone + Readability + turndown), and 300 KB
+  // keeps a page under ~150 ms so a crawl's pages share the workers fairly.
+  // Anything larger is truncated, never refused.
   CRAWL_PAGE_BYTES: 300 * 1024,
 };
 // Global in-flight cap across ALL concurrent site-crawl callers (per process).
@@ -88,15 +87,6 @@ const CRAWL_LINKS_PER_PAGE_OUT = 100; // links listed per page in the response
 const CRAWL_LINKS_PER_PAGE_QUEUE = 300; // links considered for the queue per page
 const MAX_PATTERNS = 20;
 const MAX_PATTERN_LEN = 200;
-
-// turndown loads with the first page that needs markdown (./lazy-deps.js); one
-// configured instance is shared after that.
-const turndownInstance = lazyImport(async () => {
-  const TurndownService = await loadTurndown();
-  const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
-  td.remove(["script", "style", "noscript", "template", "iframe", "svg"]);
-  return td;
-});
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -399,51 +389,11 @@ export function extractLinks(html, baseUrl, cap = 2000) {
   return out;
 }
 
-function titleOf(doc, html) {
-  const t = doc?.querySelector?.("title")?.textContent;
-  if (t && t.trim()) return t.trim().replace(/\s+/g, " ").slice(0, 300);
-  const m = String(html).match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return m ? m[1].replace(/\s+/g, " ").trim().slice(0, 300) : null;
-}
-
-function cleanText(s) {
-  return String(s || "").replace(/\r/g, "").replace(/[ \t\f\v]+/g, " ").replace(/\n[ \t]+/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-// HTML -> { title, content } in markdown or text. Readability's main-content
-// extraction when it parses (articles, docs pages), the cleaned <body> when it
-// does not (home pages, indexes), so every HTML page yields SOMETHING.
+// HTML -> { title, content, hiddenContent } in markdown or text, parsed in the
+// HTML worker (./html-parse-ops.js pageContentFromHtml): Readability's main
+// content when it parses, the cleaned <body> when it does not.
 export async function pageContent(html, url, format) {
-  const [JSDOM, Readability, turndown] = await Promise.all([loadJsdom(), loadReadability(), format === "text" ? null : turndownInstance()]);
-  const dom = new JSDOM(html, { url });
-  const doc = dom.window.document;
-  const title = titleOf(doc, html);
-  // Hidden text (comments, display:none, white-on-white, zero-width
-  // characters) is reported on the page; the content itself is unchanged.
-  const hiddenContent = scrubHidden(doc, { mode: "keep" });
-  let container = null;
-  let usedReadability = false;
-  try {
-    const article = new Readability(doc.cloneNode(true), { charThreshold: 200 }).parse();
-    if (article && article.content && article.textContent && article.textContent.trim().length >= 80) {
-      container = new JSDOM(article.content, { url }).window.document.body;
-      usedReadability = true;
-    }
-  } catch { /* fall through to the body */ }
-  if (!container) {
-    for (const el of doc.querySelectorAll("script,style,noscript,template,iframe,svg,canvas")) el.remove();
-    container = doc.body || doc.documentElement;
-  }
-  let content;
-  if (format === "text") {
-    content = cleanText(container.textContent);
-  } else {
-    try { content = cleanText(turndown.turndown(container.innerHTML || "")); } catch { content = cleanText(container.textContent); }
-    // Readability drops the page's own heading; put the title back on top so
-    // the markdown reads as a document.
-    if (usedReadability && title && !content.toLowerCase().includes(title.toLowerCase())) content = `# ${title}\n\n${content}`;
-  }
-  return { title, content, hiddenContent };
+  return runHtml("pageContent", { html, url, format }, Buffer.byteLength(String(html ?? "")));
 }
 
 // ---------------------------------------------------------------------------
@@ -565,9 +515,10 @@ async function siteMapHandler(input) {
 // site-crawl
 // ---------------------------------------------------------------------------
 async function siteCrawlHandler(input) {
-  // Global gate: JSDOM parsing is synchronous, so N concurrent crawls block the
-  // event loop N times over. Overflow is a 503 (capacity), never a 400, and a
-  // >= 400 cancels settlement so the caller is not charged for it.
+  // Global gate: each crawl fetches and parses many pages, and its parses share
+  // the HTML workers with every other HTML tool, so concurrent crawls are capped.
+  // Overflow is a 503 (capacity), never a 400, and a >= 400 cancels settlement
+  // so the caller is not charged for it.
   if (crawlInFlight >= CRAWL_GLOBAL_MAX) {
     const e = new Error("Crawler is at capacity right now, retry in a few seconds. You were not charged.");
     e.statusCode = 503; throw e;

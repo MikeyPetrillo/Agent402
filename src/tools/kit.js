@@ -10,8 +10,9 @@ import tls from "node:tls";
 import { lookup } from "node:dns/promises";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
-import { loadJsdom, loadTurndown } from "./lazy-deps.js";
-import { scrubHidden, hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
+import { loadJsdom } from "./lazy-deps.js";
+import { hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
+import { runHtml } from "./html-pool.js";
 // Named imports, not a default import: js-yaml v5 dropped the default export
 // ("does not provide an export named 'default'", which broke the v5 bump on
 // CI). Named imports resolve on both v4 (synthesized from the CJS build) and
@@ -866,13 +867,9 @@ const dataTools = [
       }
       const text = capText(raw, 100_000, "html");
       const mode = hiddenMode(input);
-      const [TurndownService, JSDOM] = await Promise.all([loadTurndown(), loadJsdom()]);
-      const doc = new JSDOM(text, { contentType: "text/html" }).window.document;
-      const hiddenContent = scrubHidden(doc, { mode });
-      const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-      // keep (the default) converts the original string, so the markdown is
-      // exactly what this tool returned before hiddenContent existed.
-      return { markdown: td.turndown(mode === "drop" ? (doc.body || doc.documentElement) : text), hiddenContent };
+      // Parsed and converted in the HTML worker (./html-pool.js): deeply
+      // nested markup holds a worker until its time limit, never the event loop.
+      return runHtml("markdown", { text, mode }, Buffer.byteLength(text));
     },
   },
   {
