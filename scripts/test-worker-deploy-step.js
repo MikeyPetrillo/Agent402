@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";
-import { workerDeployPaths, touchesWorker } from "./worker-deploy-paths.js";
+import { workerDeployPaths, touchesWorker, lastDeployedBase } from "./worker-deploy-paths.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -25,6 +25,24 @@ ok(!touchesWorker([""]), "an empty diff leaves it alone");
 const cli = (input) => spawnSync(process.execPath, [new URL("./worker-deploy-paths.js", import.meta.url).pathname, "--check"], { input, encoding: "utf8" }).stdout.trim();
 ok(cli("src/server.js\nsrc/tools/media-kit.js\n") === "yes" && cli("src/server.js\n") === "no", "the --check CLI answers yes/no from stdin");
 
+// The diff base is the last SUCCESSFUL deploy run's head, never the push's
+// `before`: a deploy that failed before the worker step left its worker change
+// unshipped, and the next push must still see that change in its diff.
+const sha = (c) => c.repeat(40);
+const RUNS = [
+  { databaseId: 300, headSha: sha("c"), conclusion: "success" }, // the current run (skipped)
+  { databaseId: 200, headSha: sha("b"), conclusion: "failure" }, // failed before the worker step
+  { databaseId: 100, headSha: sha("a"), conclusion: "success" },
+];
+ok(lastDeployedBase(RUNS, 300) === sha("a"), "after a failed deploy the base is the last successful run's head, so the failed push's worker change is in the diff");
+ok(lastDeployedBase(RUNS, "300") === sha("a"), "the current run id matches as a string too");
+ok(lastDeployedBase([{ databaseId: 1, headSha: "not-a-sha", conclusion: "success" }], 9) === "", "a malformed head is no base (fail-open)");
+ok(lastDeployedBase(null, 1) === "" && lastDeployedBase([], 1) === "", "no runs is no base (fail-open)");
+const baseCli = (input, id) => spawnSync(process.execPath, [new URL("./worker-deploy-paths.js", import.meta.url).pathname, "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
+ok(baseCli(JSON.stringify(RUNS), 300) === sha("a") && baseCli("not json", 300) === "", "the --base CLI reads gh run list JSON and prints nothing on bad input");
+const changedSince = (base) => (base === sha("a") ? ["README.md", "worker/server.js"] : ["README.md"]);
+ok(touchesWorker(changedSince(lastDeployedBase(RUNS, 300))), "a worker change in the failed push still selects the worker on the next push");
+
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
 const steps = wf.jobs.deploy.steps;
 const idx = steps.findIndex((s) => /railway" up --service agent402-worker --environment production --project "\$RAILWAY_PROJECT_ID" --ci/.test(String(s.run || "")));
@@ -32,6 +50,9 @@ ok(idx >= 0, "the deploy job has the worker redeploy step");
 const step = steps[idx] || {};
 const run = String(step.run || "");
 ok(/node scripts\/worker-deploy-paths\.js --check/.test(run), "the step selects on worker-deploy-paths.js");
+ok(!/github\.event\.before/.test(JSON.stringify(step)), "the step does not diff from the push's before");
+ok(/gh run list [^\n]*--workflow deploy\.yml[^\n]*--branch main[^\n]*--status success/.test(run) && /worker-deploy-paths\.js --base "\$GITHUB_RUN_ID"/.test(run), "the step takes its base from the last successful deploy run on main");
+ok(wf.jobs.deploy.permissions?.actions === "read" && wf.jobs.deploy.permissions?.contents === "read" && Object.keys(wf.jobs.deploy.permissions).length === 2, "the deploy job can read runs (actions: read) and nothing more than contents: read besides");
 ok(/sha256sum -c -/.test(run) && /^[0-9a-f]{64}$/.test(String(step.env?.RAILWAY_CLI_SHA256 || "")) && /^\d+\.\d+\.\d+$/.test(String(step.env?.RAILWAY_CLI_VERSION || "")), "the CLI is a pinned version checked against its sha256");
 ok(!/npm (i|install|ci)\b/.test(run), "no package install in the step");
 const waitIdx = steps.findIndex((s) => /Wait for the NEW deployment/.test(String(s.name || "")));
