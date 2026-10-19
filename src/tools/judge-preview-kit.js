@@ -35,7 +35,7 @@ export const LONG_PRICE_USD = 0.02;
 export const PREVIEW_LIMITS = {
   images: 4,
   imageBytes: 4 * 1024 * 1024,           // decoded, each; the upstream allows 16 MiB
-  minSide: 256, maxSide: 1568,           // the upstream's own bounds; images are refused, never resized
+  minSide: 280, maxSide: 1568,           // the upstream's own bounds (docs.typesafe.ai/images); images are refused, never resized
   minPixels: 78_400, maxPixels: 2_458_624,
   targets: 4,                            // locate: things to find in one image
   longStateBytes: 900_000,               // under the upstream's 262k-token long-context window at one token per 3.4 bytes

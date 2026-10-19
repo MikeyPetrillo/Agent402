@@ -41,6 +41,13 @@ ok(Object.entries(MEASURED).every(([k, n]) => { const [w, h] = k.split("x").map(
 
 // --- refusals before any call -------------------------------------------------
 await refuses(() => K.validateVisionRequest({ images: { pic: { format: "png", data_base64: png(200, 200) } }, questions: Q }), 400, /200x200/, "an image under the upstream's minimum is refused, not resized");
+// The upstream's minimum is 280 px on each side. A narrow image with enough
+// total pixels (279x400 = 111,600, above the 78,400 floor) must still be
+// refused here with our 400, not sent upstream to be refused there.
+await refuses(() => K.validateVisionRequest({ images: { pic: { format: "png", data_base64: png(279, 400) } }, questions: Q }), 400, /279x400/, "a side under 280 px is refused even when the total pixel count is above the floor");
+let edgeOk = true;
+try { K.validateVisionRequest({ images: { pic: { format: "png", data_base64: png(280, 280) } }, questions: Q }); K.validateVisionRequest({ images: { pic: { format: "png", data_base64: png(280, 400) } }, questions: Q }); } catch (e) { edgeOk = false; }
+ok(edgeOk, "280x280 and 280x400 are accepted at the minimum");
 await refuses(() => K.validateVisionRequest({ images: { pic: { format: "gif", data_base64: "R0lG" } }, questions: Q }), 400, /png.*jpeg/, "a GIF is refused");
 await refuses(() => K.validateVisionRequest({ images: { pic: { format: "png", data_base64: "data:image/png;base64,AAAA" } }, questions: Q }), 400, /no data: prefix/, "a data: URL is refused");
 await refuses(() => K.validateVisionRequest({ images: { pic: IMG }, questions: { q: { type: "noul", instructions: "Is it grey?" } } }), 400, /names no image/, "a question that names no image is refused");
