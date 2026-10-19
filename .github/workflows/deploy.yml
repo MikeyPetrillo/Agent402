@@ -1417,7 +1417,11 @@ jobs:
           t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
+          # The forgiveness budget holds across replicas: one reservation script over every window on REAL redis (needs this lane's Redis).
+          t node scripts/test-hangup-forgiveness-redis.js
           t node scripts/test-external-spend-guard-pg.js
+          # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
+          t node scripts/test-external-spend-guard-redis.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
           # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
@@ -1432,6 +1436,8 @@ jobs:
           t node scripts/test-human-checkout-crosscontainer-pg.js
           # A paid subscription recorded while the database is away survives a true restart (the next container lands it by its boot replay); reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
+          # A report read that fails answers a fixed message; the driver's text goes to the log.
+          t node scripts/test-session-read-error-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;
           # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
@@ -1541,6 +1547,10 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
+          t node scripts/test-async-jobs-body-loss.js
+          # A settle failure's PAYMENT-RESPONSE carries a code and a fixed message, never the facilitator's raw text (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-settle-failure-header.js
           # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap

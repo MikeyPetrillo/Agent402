@@ -8,7 +8,10 @@
 //     the row is not owed, no owed listing shows it, a send cannot claim it;
 //   - A's debt and B's void race on the database (many hashes at once):
 //     none ends owed, whichever statement ran first;
-//   - control: A's debt lands first, then B voids: the row is void.
+//   - control: A's debt lands first, then B voids: the row is void;
+//   - a refund send on A and a claim hold on B race for the same owed debts
+//     (each container's mirror read before the race): every debt is either
+//     served or sent, never both.
 // The dead-letter here is A's local disk (no REDIS_URL); with the journals in
 // Redis the same void tombstone holds (test-ledger-journal-redis-pg.js).
 // Requires STATE_DATABASE_URL (CI fails without it).
@@ -24,7 +27,7 @@ import { startPgRelay } from "./lib/pg-relay.js";
 const SELF = fileURLToPath(import.meta.url);
 delete process.env.REDIS_URL; // A's journal is its local disk; B inherits this environment
 const debtsOf = (rl, createTempoPushDebts) => createTempoPushDebts({
-  recordOwed: rl.recordRefundOwed, voidOnClaim: rl.voidOwedOnClaim, renoteOwed: rl.renoteOwedRefund,
+  recordOwed: rl.recordRefundOwed, voidOnClaim: rl.voidOwedOnClaim, voidForServe: rl.voidOwedForServe, reopenHeld: rl.reopenHeldClaim, renoteVoid: rl.renoteVoidRefund, renoteOwed: rl.renoteOwedRefund,
   refundByEvidence: rl.refundByEvidence, promoteToHangup: rl.promoteOwedToHangup,
   restateHandlerFailure: rl.restateOwedAsHandlerFailure, recordChargedFailure: () => {}, slugOf: () => "dns-lookup",
 });
@@ -40,7 +43,10 @@ if (process.argv[2] === "child") {
   const hashes = process.argv.slice(3);
   const at = Number(process.env.XC_START_AT) || 0;
   if (at) await new Promise((r) => setTimeout(r, Math.max(0, at - Date.now())));
-  const voided = await Promise.all(hashes.map((h) => debts.served({ mppTempoPushHash: h, tempoSettled: true }, { statusCode: 200 })));
+  const hold = process.env.XC_MODE === "hold";
+  const voided = await Promise.all(hashes.map((h) => (hold
+    ? debts.claimForServe({ mppTempoPushHash: h, tempoSettled: true })
+    : debts.served({ mppTempoPushHash: h, tempoSettled: true }, { statusCode: 200 }))));
   await rl.refundLedgerFlush();
   console.log(JSON.stringify({ voided }));
   await sdb.closeStateDb();
@@ -114,6 +120,43 @@ try {
     ok((await statusOf(h)) === "owed", `control: A's debt lands owed (${await statusOf(h)})`);
     const b = await runB([h]);
     ok(b.voided[0] === true && (await statusOf(h)) === "void", `control: B's void finds the row and voids it (void ${b.voided[0]}, row ${await statusOf(h)})`);
+  }
+
+  // ---- 4. a refund send (A) and a claim hold (B) race for the same debts ------
+  {
+    const hs = Array.from({ length: 24 }, hash);
+    await Promise.all(hs.map((h) => refused(h)));
+    await rl.refundLedgerFlush();
+    const ids = hs.map((h) => rl.refundByEvidence(h)?.id);
+    ok(ids.every(Boolean), "race (send vs hold): every debt is owed on A before the race");
+    const at = Date.now() + 2500;
+    const bP = runB(hs, { XC_START_AT: String(at), XC_MODE: "hold" });
+    await new Promise((r) => setTimeout(r, Math.max(0, at - Date.now())));
+    // A sends from the last debt back, B holds from the first on: they meet in the middle.
+    const sent = (await Promise.all([...ids].reverse().map((id) => rl.claimRefundForSend(id, "refund-run: claimed before broadcast")))).reverse();
+    const b = await bP;
+    const both = hs.filter((_, i) => sent[i] === true && b.voided[i] === true).length;
+    const neither = hs.filter((_, i) => sent[i] !== true && b.voided[i] !== true).length;
+    ok(both === 0, `race (send vs hold): no debt is both sent and served (${both} of ${hs.length}; sent ${sent.filter(Boolean).length}, served ${b.voided.filter(Boolean).length})`);
+    ok(neither === 0, `race (send vs hold): every debt is one or the other (${neither} neither)`);
+  }
+
+  // ---- 5. a held claim reopens on a disconnect; a served one never does --------
+  {
+    const h = hash();
+    await refused(h);
+    const req = { mppTempoPushHash: h, tempoSettled: true };
+    ok((await debts.claimForServe(req)) === true && (await statusOf(h)) === "void", "hold: the owed debt is void before the handler");
+    ok((await debts.hungUp(h, "no ticket")) === true, "hold: a disconnect reopens it");
+    const row = rl.refundByEvidence(h);
+    ok(row?.status === "owed" && row.httpStatus === 499 && (await statusOf(h)) === "owed", `hold: owed again as a disconnect (${row?.status} ${row?.httpStatus})`);
+    ok((await rl.claimRefundForSend(row.id, "test")) === true, "hold: a refund send can claim the reopened debt");
+    const h2 = hash();
+    await refused(h2);
+    const req2 = { mppTempoPushHash: h2, tempoSettled: true };
+    await debts.claimForServe(req2);
+    ok((await debts.served(req2, { statusCode: 200 })) === true && /served$/.test(rl.refundByEvidence(h2)?.note || ""), "hold: a served claim is noted served");
+    ok((await debts.handlerFailed(h2, 502)) === false && (await statusOf(h2)) === "void", "hold: a served claim is never reopened");
   }
 } finally {
   relay.heal();

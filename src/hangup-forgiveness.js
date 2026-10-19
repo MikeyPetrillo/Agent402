@@ -59,8 +59,10 @@
 // across replicas as it is spent: every granted ticket is an entry in a shared
 // in-flight window under each of its keys and under the service, every
 // abandoned run an entry in a shared abandoned window for the budget window,
-// and a reservation reads those windows (one round trip) and decides on the
-// larger of the shared and this process's own figures. Without Redis the
+// and a reservation checks and adds in one script on Redis
+// (reserveSharedTicket) against the larger of the shared and this process's
+// own figures, so two replicas never both spend the last of a budget.
+// Without Redis the
 // reservation is synchronous as before; with it, it returns a promise of the
 // ticket (the dispatcher awaits it). A shared store that does not answer
 // leaves the decision to this process's own records, never a wider budget.
@@ -71,7 +73,8 @@ import { writeFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { stateDbEnabled, trackStoreReady } from "./state-db.js";
-import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
+import { getSharedRedisClient } from "./shared-limit.js";
 
 const MICRO = 1_000_000;
 const MAX_KEYS = 20_000;
@@ -184,6 +187,71 @@ async function readSharedBudget(keys, now, windowMs) {
   all.forEach((k, i) => { inflight.set(k, r.results[2 * i]?.sum || 0); abandoned.set(k, r.results[2 * i + 1]?.sum || 0); });
   return { inflight, abandoned };
 }
+// The reservation on the shared store is ONE script over every window the
+// ticket is bounded by (the service and each of its keys): prune, sum
+// in-flight plus abandoned, check each budget against the larger of that sum
+// and this process's own figures, and add the ticket to every in-flight
+// window only when all of them have room. Two replicas granting at once
+// queue on Redis instead of passing on the same reading (a read followed by
+// separate adds let each replica spend the remaining budget once more). A
+// store that does not answer leaves the decision to the read-then-grant path
+// (readSharedBudget). Entries are encoded as shared-limits.js encodes them
+// (`<micro>|<member>`), so its reads and removals see the same rows.
+// KEYS: per window i (0 = service): hf-in, hf-ab.
+// ARGV: inCutoff, abCutoff, inWindowMs, encodedMember, score, micro, then per
+// window i: cap, floorIn, floorAb.
+const TICKET_RESERVE = `
+local function wsum(key, cutoff)
+  redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+  local items = redis.call('ZRANGE', key, 0, -1)
+  local s = 0
+  for i = 1, #items do s = s + (tonumber(string.match(items[i], '^(%-?%d+)|')) or 1) end
+  return s
+end
+local n = #KEYS / 2
+local micro = tonumber(ARGV[6])
+for i = 1, n do
+  local inSum = wsum(KEYS[2 * i - 1], ARGV[1])
+  local abSum = wsum(KEYS[2 * i], ARGV[2])
+  local base = 6 + (i - 1) * 3
+  local used = math.max(inSum, tonumber(ARGV[base + 2])) + math.max(abSum, tonumber(ARGV[base + 3]))
+  if used + micro > tonumber(ARGV[base + 1]) then return { 0, i } end
+end
+for i = 1, n do
+  redis.call('ZADD', KEYS[2 * i - 1], ARGV[5], ARGV[4])
+  redis.call('PEXPIRE', KEYS[2 * i - 1], ARGV[3])
+end
+return { 1, 0 }`;
+/** Grant on the shared store in one step: `{ granted: true }`, `{ granted:
+ *  false, index }` (0 = the service, else the ticket key at index - 1), or
+ *  null when the store did not answer. */
+async function reserveSharedTicket(ticket, cfg, now) {
+  let c = null;
+  try { c = await getSharedRedisClient(); } catch { c = null; }
+  if (!c) { noteSharedLimitsDegraded(CONTROL, { ok: false, error: "redis unavailable" }); return null; }
+  const windows = [GLOBAL_KEY, ...ticket.keys];
+  globalAbandoned = prune(globalAbandoned, now, cfg.windowMs);
+  const keys = [], perWindow = [];
+  for (const k of windows) {
+    keys.push(sharedKeyOf("hf-in", k), sharedKeyOf("hf-ab", k));
+    if (k === GLOBAL_KEY) perWindow.push(cfg.globalMicro, globalInflight, sumOf(globalAbandoned));
+    else perWindow.push(cfg.keyMicro, inflightByKey.get(k) || 0, abandonedMicro(k, now, cfg.windowMs));
+  }
+  const inMs = INFLIGHT_WINDOW_MS();
+  let timer = null;
+  try {
+    const bound = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("shared-limits: command timed out")), OP_MS()); timer.unref?.(); });
+    const r = await Promise.race([c.eval(TICKET_RESERVE, {
+      keys,
+      arguments: [now - inMs, now - cfg.windowMs, Math.max(1, Math.round(inMs)), `${Math.trunc(ticket.micro)}|${ticket.id}`, now, ticket.micro, ...perWindow].map(String),
+    }), bound]);
+    if (Number(r?.[0]) === 1) return { granted: true };
+    return { granted: false, index: Math.max(0, (Number(r?.[1]) || 1) - 1) };
+  } catch (e) {
+    noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
+    return null;
+  } finally { if (timer) clearTimeout(timer); }
+}
 function sharedGrant(ticket, now) {
   for (const k of [GLOBAL_KEY, ...ticket.keys]) void sharedWrite(CONTROL, shared.windowAdd("hf-in", k, { windowMs: INFLIGHT_WINDOW_MS(), member: ticket.id, weight: ticket.micro, now }));
 }
@@ -278,7 +346,33 @@ export function reserveHangupForgiveness(req, { keys = [], priceUsd = 0, slug = 
   // about) a spent service-wide budget.
   if (micro > cfg.keyMicro) { ticket.reason = "over per-key budget"; return store(ticket); }
   if (!SHARED) return store(decideTicket(ticket, cfg, now, null));
-  return readSharedBudget(uniq, now, cfg.windowMs).then((view) => store(decideTicket(ticket, cfg, now, view)));
+  return reserveSharedTicket(ticket, cfg, now).then((r) => {
+    // The store did not answer: the read-then-grant path on what it can read.
+    if (r === null) return readSharedBudget(uniq, now, cfg.windowMs).then((view) => store(decideTicket(ticket, cfg, now, view)));
+    if (!r.granted) {
+      if (r.index === 0) { ticket.reason = "global budget"; noteGlobalExhausted(now); }
+      else ticket.reason = String(uniq[r.index - 1] || "").startsWith("ip:") ? "ip budget" : "payer budget";
+      return store(ticket);
+    }
+    // Granted on the shared store (its in-flight entries are written): book it here.
+    return store(grantTicket(ticket, now, { sharedDone: true }));
+  });
+}
+function noteGlobalExhausted(now) {
+  if (now - lastExhaustedLog > 60_000) {
+    lastExhaustedLog = now;
+    console.warn("[hangup] forgiveness budget for the whole service is spent for this window: a buyer who leaves before the answer is charged and the charge booked as owed until it clears");
+  }
+}
+/** Book a granted ticket in this process (and on the shared store unless the
+ *  reservation script already did). */
+function grantTicket(ticket, now, { sharedDone = false } = {}) {
+  for (const k of ticket.keys) inflightByKey.set(k, (inflightByKey.get(k) || 0) + ticket.micro);
+  globalInflight += ticket.micro;
+  ticket.granted = true;
+  ticket.state = "inflight";
+  if (SHARED && !sharedDone) sharedGrant(ticket, now);
+  return ticket;
 }
 /** The budget decision. `view` is the shared figures (or null): each budget
  *  is checked against the larger of this process's figure and the shared one,
@@ -290,10 +384,7 @@ function decideTicket(ticket, cfg, now, view) {
   const gAb = Math.max(sumOf(globalAbandoned), view?.abandoned.get(GLOBAL_KEY) || 0);
   if (gIn + gAb + micro > cfg.globalMicro) {
     ticket.reason = "global budget";
-    if (now - lastExhaustedLog > 60_000) {
-      lastExhaustedLog = now;
-      console.warn("[hangup] forgiveness budget for the whole service is spent for this window: a buyer who leaves before the answer is charged and the charge booked as owed until it clears");
-    }
+    noteGlobalExhausted(now);
     return ticket;
   }
   for (const k of ticket.keys) {
@@ -304,12 +395,7 @@ function decideTicket(ticket, cfg, now, view) {
       return ticket;
     }
   }
-  for (const k of ticket.keys) inflightByKey.set(k, (inflightByKey.get(k) || 0) + micro);
-  globalInflight += micro;
-  ticket.granted = true;
-  ticket.state = "inflight";
-  if (SHARED) sharedGrant(ticket, now);
-  return ticket;
+  return grantTicket(ticket, now);
 }
 
 /**

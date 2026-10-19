@@ -25,7 +25,7 @@ process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CUR;
 
 const { createTempoGate, PUSH_SENDER_WAIT_MS } = await import("../src/mpp-tempo.js");
-const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
 const { isRepeatHangup, isLastingEffectHangup, HANGUP_STATUS } = await import("./refund-run.js");
 const ledger = await import("../src/refund-ledger.js");
 const { createReplayGuard } = await import("../src/replay-guard.js");
@@ -38,9 +38,11 @@ const REALM = "test.local";
 const SENDER = "0x5555555555555555555555555555555555555555";
 const priceFor = (_m, path) => (path === "/paid" ? { priceUsd: 0.05 } : null);
 let n = 0;
+let credSeq = 0;
 const hashFor = (i) => `0x${i.toString(16).padStart(64, "0")}`;
 function pushCred(hash) {
-  const challenge = Challenge.from({ realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "50000", currency: CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: SECRET });
+  // A distinct expiry per credential: two challenges minted in one millisecond would share an id (and a replay key).
+  const challenge = Challenge.from({ realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000 + (++credSeq) * 1000), request: { amount: "50000", currency: CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: SECRET });
   return Credential.serialize({ challenge, payload: { hash, type: "hash" }, source: "did:pkh:eip155:4217:0x1111111111111111111111111111111111111111" });
 }
 
@@ -49,7 +51,7 @@ const sales = [];
 let synthetic = false;
 let failNext = null;
 const debts = createTempoPushDebts({
-  recordOwed: ledger.recordRefundOwed, voidOnClaim: ledger.voidOwedOnClaim, renoteOwed: ledger.renoteOwedRefund, promoteToHangup: ledger.promoteOwedToHangup, restateHandlerFailure: ledger.restateOwedAsHandlerFailure, refundByEvidence: ledger.refundByEvidence,
+  recordOwed: ledger.recordRefundOwed, voidOnClaim: ledger.voidOwedOnClaim, voidForServe: ledger.voidOwedForServe, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, renoteOwed: ledger.renoteOwedRefund, promoteToHangup: ledger.promoteOwedToHangup, restateHandlerFailure: ledger.restateOwedAsHandlerFailure, refundByEvidence: ledger.refundByEvidence,
   recordChargedFailure: (slug, status) => failures.push({ slug, status }),
   isSynthetic: () => synthetic,
   slugOf: () => "paid-tool",
@@ -60,7 +62,24 @@ app.use(express.json());
 // sale, and a served push claim voids its debt.
 // served() is called on EVERY finish here (server.js calls it on a 200 only):
 // its own guard must refuse to void anything that was not a served claim.
-app.use((req, res, next) => { res.on("finish", () => { if (res.statusCode === 200 && req.tempoSettled) sales.push(req.mppTempoPushHash); debts.served(req, res); }); next(); });
+// A claimed push that ends >= 400 books its debt on the hash; when the hash
+// already carries a row, handlerFailed restates or reopens it (as server.js).
+let handlerRuns = 0;
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (res.statusCode === 200 && req.tempoSettled) sales.push(req.mppTempoPushHash);
+    debts.served(req, res);
+    if (req.tempoSettled && res.statusCode >= 400 && !req.tempoPushRefunded) {
+      const h = req.mppTempoPushHash;
+      const made = ledger.recordRefundOwed({ slug: "paid-tool", network: "tempo", payer: SENDER, priceUsd: 0.05, tx: h, httpStatus: res.statusCode, synthetic: false, wire: "mpp-tempo" });
+      if (!made) debts.handlerFailed(h, res.statusCode);
+    }
+  });
+  next();
+});
+// A refund send claims the debt in the moment after the gate's check and
+// before the handler (another container's refund run), when armed.
+let claimInWindow = null;
 app.use(createTempoGate({
   secretKey: SECRET, realm: REALM, priceFor, replayGuard: createReplayGuard(),
   preValidate: (req) => (req.body?.text ? null : { status: 400, body: { error: "Missing required parameter: text" } }),
@@ -69,10 +88,21 @@ app.use(createTempoGate({
   pushSender: async () => SENDER,
   onPushNotClaimed: (req, info) => debts.notClaimed(req, info),
   onPushInputRefused: (req, info) => debts.inputRefused(req, info),
-  pushClaimAllowed: (hash) => !["sending", "paid"].includes(ledger.refundByEvidence(hash)?.status),
+  pushClaimAllowed: (hash) => {
+    const allowed = !["sending", "paid"].includes(ledger.refundByEvidence(hash)?.status);
+    if (claimInWindow === hash) { claimInWindow = null; ledger.claimRefundForSend(ledger.refundByEvidence(hash).id, "refund-run: claimed before broadcast"); }
+    return allowed;
+  },
 }));
+// server.js's claim hold, mounted right after the gate.
+app.use(async (req, res, next) => {
+  if (!req.tempoSettled || !req.mppTempoPushHash) return next();
+  if (await debts.claimForServe(req)) return next();
+  req.tempoPushRefunded = true;
+  return res.status(402).json({ details: { reason: "refunded", transferClaimed: true } });
+});
 app.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
-app.post("/paid", (req, res) => (req.body?.text === "boom" ? res.status(500).json({ error: "handler failed" }) : res.json({ ok: true })));
+app.post("/paid", (req, res) => { handlerRuns++; return req.body?.text === "boom" ? res.status(500).json({ error: "handler failed" }) : res.json({ ok: true }); });
 const server = app.listen(0);
 await new Promise((r) => server.once("listening", r));
 const url = `http://127.0.0.1:${server.address().port}/paid`;
@@ -166,6 +196,42 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(ledger.claimRefundForSend(row.id, "test"), "setup: the debt is claimed for sending");
   const r = await post(cred, { text: "fixed" });
   ok(r.status === 402 && r.body.details?.reason === "refunded" && sales.every((s) => s !== h) && rowsFor(h)[0].status === "sending", `a transfer being refunded is refused, not claimed and served (${r.status} ${JSON.stringify(r.body.details)})`);
+}
+
+// A refund send claims the debt AFTER the gate's check and before the
+// handler: the claim hold finds the row being sent, so the run is not served
+// (the buyer is refunded), and the row stays with the send.
+{
+  const h = hashFor(30);
+  const cred = pushCred(h);
+  await post(cred, {});
+  ok(rowsFor(h)[0]?.status === "owed", "setup: the input-refused debt is owed");
+  claimInWindow = h;
+  const before = handlerRuns;
+  const r = await post(cred, { text: "fixed" });
+  ok(r.status === 402 && r.body.details?.reason === "refunded" && handlerRuns === before && sales.every((s) => s !== h),
+    `claimed by a refund send in the window: not served, the handler never ran (${r.status}, handler runs ${handlerRuns - before})`);
+  ok(rowsFor(h).length === 1 && rowsFor(h)[0].status === "sending" && failures.length === 2, `...the row stays with the send and no charged failure is counted (${rowsFor(h)[0]?.status})`);
+}
+
+// The hold, served: the row is void and says it was served, so no later
+// reopen can turn it back to owed. Held, then the buyer hangs up: owed again.
+{
+  const h = hashFor(31);
+  const cred = pushCred(h);
+  await post(cred, {});
+  const r = await post(cred, { text: "fixed" });
+  ok(r.status === 200 && rowsFor(h)[0].status === "void" && rowsFor(h)[0].note.endsWith(PUSH_SERVED_NOTE), `held and served: void, noted served ("${rowsFor(h)[0].note}")`);
+  ok((await debts.hungUp(h, "no ticket")) === false && (await debts.handlerFailed(h, 502)) === false && rowsFor(h)[0].status === "void", "a served hold is never reopened");
+  const h2 = hashFor(32);
+  await post(pushCred(h2), {});
+  const req = { tempoSettled: true, mppTempoPushHash: h2 };
+  ok((await debts.claimForServe(req)) === true && rowsFor(h2)[0].status === "void", "claimForServe voids the owed debt before the handler");
+  ok(ledger.claimRefundForSend(rowsFor(h2)[0].id, "refund-run") === false, "...and a refund send can no longer claim it");
+  ok((await debts.hungUp(h2, "payer budget")) === true, "a disconnect reopens the held row");
+  const [row] = rowsFor(h2);
+  ok(row.status === "owed" && row.httpStatus === 499 && row.hangupReason === "payer budget" && row.note.includes(PUSH_HANGUP_AFTER_CLAIM_NOTE) && isRepeatHangup(row), `...as the disconnect it is (${JSON.stringify(row)})`);
+  ok(ledger.claimRefundForSend(row.id, "refund-run") === true, "...which a refund send can claim");
 }
 
 // Refused on input, then the corrected retry is claimed and the buyer hangs up
@@ -296,6 +362,9 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/tx: req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\|/.test(hang), "a push disconnect is keyed on the credential's (lowercased) hash, the evidence the input-refused row used");
   ok(/if \(!made && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) void tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it (on the write's verdict)");
   ok(/promoteToHangup: promoteOwedToHangup/.test(src), "server.js wires the promotion to the refund ledger");
+  ok(/voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund/.test(src), "server.js wires the claim hold, its reopen and its served note to the refund ledger");
+  ok(/app\.use\(tempoGate\);[\s\S]{0,900}await tempoPushDebts\.claimForServe\(req\)/.test(src), "server.js holds the claim right after the Tempo gate, before any handler");
+  ok(/res\.statusCode >= 400 && !req\.tempoPushRefunded\)/.test(src), "a push refused as refunded books no second debt or charged failure");
   ok(/const tx = req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\| tempoTxFromReceiptHeader/.test(src), "a push handler failure is keyed on the same hash too, so a mixed-case relay reference cannot book a second row for one transfer");
 }
 

@@ -8,8 +8,10 @@
 //     claimable, so the buyer may present the same credential again with a
 //     corrected body; until then (and forever, if they never do) we hold their
 //     money for nothing, so it is booked as owed at refusal. A later claim
-//     that is SERVED (final 200) voids that row: never both served and
-//     refunded.
+//     voids that row BEFORE its handler runs (claimForServe, one statement a
+//     refund send's claim cannot interleave with) and is served only if it
+//     did, or there was no owed row; a run that is then not served reopens
+//     it. Never both served and refunded.
 //   - finalize itself was refused (not because the hash was already claimed).
 //     Booked as owed, and counted as a charged failure: the buyer paid and got
 //     a 402. Our own synthetic traffic is booked (flagged) but not counted.
@@ -18,6 +20,7 @@
 export const PUSH_INPUT_REFUSED_NOTE = "push unclaimed: input refused";
 export const PUSH_FINALIZE_REFUSED_NOTE = "push unclaimed: finalize refused";
 export const PUSH_CLAIMED_NOTE = "claimed on retry";
+export const PUSH_SERVED_NOTE = "served";
 export const PUSH_HANGUP_AFTER_CLAIM_NOTE = "claimed on retry, then disconnected";
 export const PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE = "claimed on retry, then the handler failed";
 // The charged_failures table reads status 402 as a settlement rejection (the
@@ -26,7 +29,10 @@ export const PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE = "claimed on retry, then the 
 // moved. It is recorded as 502 (the claim failed on our side of the relay).
 export const PUSH_FINALIZE_FAILURE_STATUS = 502;
 
-export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refundByEvidence, promoteToHangup = () => false, restateHandlerFailure = () => false, recordChargedFailure, isSynthetic = () => false, slugOf = () => "unknown" }) {
+export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = null, reopenHeld = () => false, renoteVoid = () => false, renoteOwed, refundByEvidence, promoteToHangup = () => false, restateHandlerFailure = () => false, recordChargedFailure, isSynthetic = () => false, slugOf = () => "unknown" }) {
+  // The note a held claim leaves on an input-refused row (the void appends
+  // PUSH_CLAIMED_NOTE to it); reopenHeld matches it exactly.
+  const HELD_NOTE = `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_CLAIMED_NOTE}`;
   const base = (req, { hash, payer, amountUsd }) => ({
     slug: slugOf(req) || "unknown",
     network: "tempo",
@@ -61,7 +67,9 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refu
      *  never touched. True when the row changed. */
     async hungUp(hash, hangupReason) {
       if (typeof hash !== "string" || !hash) return false;
-      return (await promoteToHangup(hash, { from: PUSH_INPUT_REFUSED_NOTE, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE })) === true;
+      if ((await promoteToHangup(hash, { from: PUSH_INPUT_REFUSED_NOTE, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE })) === true) return true;
+      // The claim was held (the row voided before the handler): owed again.
+      return (await reopenHeld(hash, { held: HELD_NOTE, httpStatus: 499, hangupReason, note: `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_HANGUP_AFTER_CLAIM_NOTE}` })) === true;
     },
     /** A claimed push whose handler then answered >= 400 (not a disconnect)
      *  on a hash that already carries an OWED input-refused row: the row takes
@@ -70,7 +78,22 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refu
      *  touched. True when the row changed. */
     async handlerFailed(hash, httpStatus) {
       if (typeof hash !== "string" || !hash) return false;
-      return (await restateHandlerFailure(hash, { from: PUSH_INPUT_REFUSED_NOTE, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE })) === true;
+      if ((await restateHandlerFailure(hash, { from: PUSH_INPUT_REFUSED_NOTE, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE })) === true) return true;
+      return (await reopenHeld(hash, { held: HELD_NOTE, httpStatus, note: `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE}` })) === true;
+    },
+    /** BEFORE the handler, for a claimed push: may this run serve it? The
+     *  transfer's owed debt (if any) is voided first, in one statement that a
+     *  refund send's claim cannot interleave with, so the debt is either
+     *  voided here (serve) or already being sent or paid (do not serve: the
+     *  buyer is refunded). No debt, or one already void: serve. A run that
+     *  then does not end in a served 200 reopens the row (hungUp,
+     *  handlerFailed). Without voidForServe it answers from the mirror. */
+    async claimForServe(req) {
+      const hash = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
+      if (!req.tempoSettled || typeof hash !== "string" || !hash) return true;
+      if (typeof voidForServe === "function" && (await voidForServe(hash, PUSH_CLAIMED_NOTE)) === true) return true;
+      const row = refundByEvidence(hash);
+      return !(row && (row.status === "sending" || row.status === "paid"));
     },
     /** At finish: a push credential that was claimed AND served voids its debt. */
     async served(req, res) {
@@ -79,6 +102,9 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, renoteOwed, refu
       const voided = await voidOnClaim(hash, PUSH_CLAIMED_NOTE);
       if (!voided) {
         const row = refundByEvidence(hash);
+        // Held before the handler (claimForServe) and now served: say so, so a
+        // later reopen (hungUp, handlerFailed) never turns it back to owed.
+        if (row && row.status === "void" && row.note === HELD_NOTE) return (await renoteVoid(hash, HELD_NOTE, `${HELD_NOTE}; ${PUSH_SERVED_NOTE}`)) === true;
         if (row && (row.status === "sending" || row.status === "paid")) console.error(`[mpp-tempo] REFUNDED-AND-SERVED: push transfer ${hash} was claimed and served while its debt was already ${row.status}; review refund #${row.id}`);
       }
       return voided;
