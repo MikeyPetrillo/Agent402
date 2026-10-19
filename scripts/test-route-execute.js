@@ -470,6 +470,14 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const st = await cachedSpendingWalletStatus();
     ok(st?.status === "unconfigured" && Date.now() - t0 < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
   }
+  // A seller that answers the unpaid request with a 200 was never paid: the
+  // receipt books no underlying spend and the payer's ceiling is given back.
+  {
+    const free = async () => ({ result: { ok: 1 }, quote: null, receipt: null });
+    const { r } = await run({ list: [cand("free.example")], pay: free });
+    ok(r && r.receipt.underlyingPriceUsd === 0 && r.receipt.sellerPaid === false && r.receipt.settleTx === null, `a free 200 is booked as unpaid (got ${JSON.stringify(r && r.receipt && { u: r.receipt.underlyingPriceUsd, p: r.receipt.sellerPaid })})`);
+    ok(guard.walletDailySpentUsd("base") === 0, `nothing is booked against the Base wallet's day (got ${guard.walletDailySpentUsd("base")})`);
+  }
   // A Base spending wallet that reads low: refused before anything is signed.
   {
     const { e, calls } = await run({ list: [cand("a.example")], pay: good, wallet: async () => ({ status: "low" }) });
