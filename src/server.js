@@ -4078,7 +4078,7 @@ if (humanCheckoutEnabled()) {
 // Mounted with or without Stripe, so the answer is the same either way.
 const manageLinkIpLimiter = createRateLimiter("manage-link", { perMin: 6, perHour: 40 });
 // Keyed on the ADDRESS (hashed), so rotating IPs cannot flood one inbox.
-const manageLinkEmailLimiter = createRateLimiter("manage-link-email", { perMin: 2, perHour: 5 });
+const manageLinkEmailLimiter = createRateLimiter("manage-link-email", { perMin: 1, perHour: 2 });
 app.post("/monitors/manage-link", express.urlencoded({ extended: false, limit: "4kb" }), createManageLinkHandler({
   findSubs: (email) => (_subs ? _subs.findManageableByEmail(email) : Promise.resolve([])),
   send: faSendEmail,
