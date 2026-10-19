@@ -2010,7 +2010,20 @@ function priceRank(p) {
 const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));
 function normalizeNetwork(n) {
   if (typeof n !== "string") return n;
-  return NETWORK_SHORTHAND.get(n.toLowerCase()) || n;
+  const exact = NETWORK_SHORTHAND.get(n.toLowerCase());
+  if (exact) return exact;
+  // Display names for a mainnet ("Algorand MainNet", "Base Mainnet",
+  // "solana-mainnet-beta") fold onto the same chain; a testnet never does.
+  if (!n.includes(":")) {
+    const folded = n.toLowerCase().trim().replace(/[\s_-]*main[\s_-]*net([\s_-]*beta)?$/, "").replace(/[\s_-]+/g, "");
+    if (folded !== n.toLowerCase() && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
+  }
+  return n;
+}
+/** A network a row can carry: a CAIP-2 id, or a lowercase slug (the x402 v1
+ *  form). Free text that names no chain we know reads as nothing. */
+function isNetworkId(n) {
+  return typeof n === "string" && (n.includes(":") || /^[a-z0-9][a-z0-9-]*$/.test(n));
 }
 
 /**
@@ -2208,13 +2221,24 @@ export function bazaarItemToTool(item, originUrl) {
  *  to the first usable entry. Relative server URLs ("/api") are honoured too. */
 export function openapiBasePath(openapi, originUrl) {
   const servers = Array.isArray(openapi?.servers) ? openapi.servers : [];
-  let origin = null;
-  try { origin = new URL(originUrl).origin; } catch { /* originUrl may be a bare host */ }
+  let origin = null, hostKey = null;
+  try { const u = new URL(originUrl); origin = u.origin; hostKey = openapiHostKey(u.hostname); } catch { /* originUrl may be a bare host */ }
   const candidates = servers.map((s) => (typeof s === "string" ? s : s?.url)).filter((u) => typeof u === "string" && u);
+  const urlOf = (u) => { try { return new URL(u); } catch { return null; } };
+  const sameHost = (u) => { const p = urlOf(u); return !!(p && hostKey && openapiHostKey(p.hostname) === hostKey); };
+  // A server that is not a public host (a development or placeholder entry,
+  // or a templated URL that does not parse) names no other seller.
+  const notPublic = (u) => { const p = urlOf(u); return !p || /[{}]|%7b|%7d/i.test(p.hostname) || isDevServerHost(p.hostname); };
   const pick =
-    (origin && candidates.find((u) => { try { return new URL(u).origin === origin; } catch { return false; } })) ||
+    (origin && candidates.find((u) => urlOf(u)?.origin === origin)) ||
+    candidates.find(sameHost) ||
     candidates.find((u) => u.startsWith("/")) ||
-    candidates[0];
+    candidates.find(notPublic);
+  // Every server the document names is another public host: its paths are
+  // that host's endpoints, not this seller's. Filing them under this origin
+  // lists routes that do not exist here, so the document contributes no rows
+  // (the other host is indexed on its own account).
+  if (!pick && candidates.length) return null;
   // A path seller whose document names no server: its paths are relative to
   // the prefix it is served under (the rows are then scoped back to it). A
   // document naming another server is honoured and scoped as usual.
@@ -2228,12 +2252,22 @@ export function openapiBasePath(openapi, originUrl) {
   return path === "/" ? "" : path;
 }
 
+/** Host identity for an OpenAPI server: case-insensitive, `www.` folded. */
+function openapiHostKey(h) { return String(h || "").toLowerCase().replace(/^www\./, ""); }
+/** A loopback, private-range or local-suffix host: a development server. */
+function isDevServerHost(h) {
+  const host = String(h || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "::1" || host === "0.0.0.0"
+    || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+}
+
 export function normaliseOpenapiTools(openapi, originUrl) {
   return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
 }
 function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return [];
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
   logUnknownPaymentKeys(openapi, originUrl);
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
@@ -3167,6 +3201,7 @@ export function openapiOperationPayment(op) {
   const addNetwork = (raw) => {
     if (typeof raw !== "string" || !raw.trim()) return null;
     const n = normalizeNetwork(raw.trim());
+    if (!isNetworkId(n)) return null;
     if (n && !out.networks.includes(n)) out.networks.push(n);
     return n;
   };
@@ -3349,6 +3384,7 @@ export function openapiAllOperationRoutes(openapi, originUrl) {
 function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return [];
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
