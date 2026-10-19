@@ -26,7 +26,7 @@ ok(cli("src/server.js\nsrc/tools/media-kit.js\n") === "yes" && cli("src/server.j
 
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
 const steps = wf.jobs.deploy.steps;
-const idx = steps.findIndex((s) => /railway" up --service agent402-worker --environment production --project "\$RAILWAY_PROJECT_ID" --detach/.test(String(s.run || "")));
+const idx = steps.findIndex((s) => /railway" up --service agent402-worker --environment production --project "\$RAILWAY_PROJECT_ID" --ci/.test(String(s.run || "")));
 ok(idx >= 0, "the deploy job has the worker redeploy step");
 const step = steps[idx] || {};
 const run = String(step.run || "");

@@ -6397,7 +6397,7 @@ jobs:
           curl -fsSL --max-time 120 -o "$CLI_DIR/cli.tgz" "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           echo "$RAILWAY_CLI_SHA256  $CLI_DIR/cli.tgz" | sha256sum -c -
           tar -xzf "$CLI_DIR/cli.tgz" -C "$CLI_DIR"
-          "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --detach
+          "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --ci
 
       # The decide service (DECIDE_MODE=true, same image) builds from the same
       # commit, AFTER the main app is verified: its index syncs from the main
