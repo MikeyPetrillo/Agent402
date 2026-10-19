@@ -1016,7 +1016,9 @@ export function stateStoresLoaded() {
 export async function stateStoresReady({ timeoutMs = 15_000 } = {}) {
   const all = Promise.all([...readyPromises]);
   let timer;
-  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); timer.unref?.(); });
+  // Not unref'd: during boot this timer is what keeps the process alive while every
+  // store retries on unref'd timers; it is cleared as soon as the race settles.
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); });
   const r = await Promise.race([all.then(() => "settled"), deadline]);
   clearTimeout(timer);
   bootWaitDone = true;
