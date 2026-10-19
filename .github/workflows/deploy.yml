@@ -2669,6 +2669,16 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # IPO filings list each accession once across pages (offline)
+          t node scripts/test-ipo-dedupe.js
+          # 13F amendments apply oldest first (offline)
+          t node scripts/test-13f-amendment-order.js
+          # Insider reports keep only Form 4 filings whose issuer is the company (offline)
+          t node scripts/test-insider-issuer-filter.js
+          # EDGAR financials pick ~3- and ~12-month periods; fallback tags labeled as what they measure (offline)
+          t node scripts/test-edgar-period-pick.js
+          # 13G cover: an empty or absent tag falls through and reads as unknown, never 0 (offline)
+          t node scripts/test-13g-cover-fallback.js
           # S3 wire for backup and dataset snapshot: list not HEAD, per-segment path signed as sent, no content-length on a Buffer PUT (stubbed fetch, offline)
           t node scripts/test-backup-s3-wire.js
           # load-shed boot warm-up default is 60 s (offline)
