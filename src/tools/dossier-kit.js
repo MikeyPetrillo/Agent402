@@ -13,7 +13,7 @@
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
-import { EDGAR_TOOLS, fetchXmlText } from "./edgar-kit.js";
+import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
 
 // Per-buyer OpenRouter `user` id (OpenRouter abuse isolation); never throws.
@@ -223,6 +223,18 @@ export function extractFilingExcerpts(text, { maxChars = 6_000, perTerm = 2, ext
   return out;
 }
 
+/** The latest annual fact and the most recent fact for one concept's rows.
+ *  The annual pick is a ~12-month row from a 10-K (a 10-K also reports
+ *  quarter-length rows); the most recent is an instant, a ~3-month 10-Q row
+ *  or an annual row, so a year-to-date total is never shown as the latest
+ *  period. Pure; exported for tests. */
+export function pickDossierPeriods(arr) {
+  const sorted = (Array.isArray(arr) ? arr : []).filter((x) => x && x.end).sort((a, b) => String(a.end).localeCompare(String(b.end)));
+  const annual = [...sorted].reverse().find((x) => (x.form === "10-K" || x.fp === "FY") && isAnnualPeriod(x)) || null;
+  const latest = [...sorted].reverse().find((x) => periodMonths(x) === null || (x.form === "10-Q" && isQuarterPeriod(x)) || ((x.form === "10-K" || x.fp === "FY") && isAnnualPeriod(x))) || null;
+  return { annual, latest };
+}
+
 async function pullFinancials(ticker, edgarConcept) {
   const results = await Promise.all(FIN_CONCEPTS.map(([tag, label]) =>
     settle(edgarConcept, { ticker, taxonomy: "us-gaap", tag }, DATA_TIMEOUT_MS).then((r) => ({ tag, label, r }))));
@@ -238,13 +250,12 @@ async function pullFinancials(ticker, edgarConcept) {
     if (!Array.isArray(arr) || !arr.length) continue;
     seen.add(label);
     const isShares = /shares/i.test(unitKey || "");
-    const sorted = [...arr].filter((x) => x && x.end).sort((a, b) => String(a.end).localeCompare(String(b.end)));
-    const annual = [...sorted].reverse().find((x) => x.form === "10-K" || x.fp === "FY");
-    const latest = sorted[sorted.length - 1];
+    const { annual, latest } = pickDossierPeriods(arr);
     const val = (x) => isShares ? String(x.val) : fmtUsd(x.val);
+    const span = (x) => { const m = periodMonths(x); return m == null ? "as of" : `${m} months ending`; };
     const parts = [];
     if (annual) parts.push(`latest annual ${val(annual)} (${annual.fp || "FY"}${annual.fy ? " " + annual.fy : ""}, ${annual.form || "?"} filed ${annual.filed || "?"})`);
-    if (latest && latest !== annual) parts.push(`most recent ${val(latest)} (period ending ${latest.end}, ${latest.form || "?"})`);
+    if (latest && latest !== annual) parts.push(`most recent ${val(latest)} (${span(latest)} ${latest.end}, ${latest.form || "?"})`);
     if (parts.length) lines.push(`- ${label}: ${parts.join("; ")}`);
     // Structured row for the downloadable data appendix (same figures the prose
     // is grounded in, machine-readable for a spreadsheet).
@@ -253,7 +264,7 @@ async function pullFinancials(ticker, edgarConcept) {
       latestAnnual: annual ? val(annual) : "",
       annualPeriod: annual ? `${annual.fp || "FY"}${annual.fy ? " " + annual.fy : ""} ${annual.form || ""} filed ${annual.filed || "?"}`.trim() : "",
       mostRecent: (latest && latest !== annual) ? val(latest) : "",
-      recentPeriod: (latest && latest !== annual) ? `${latest.end} (${latest.form || "?"})` : "",
+      recentPeriod: (latest && latest !== annual) ? `${span(latest)} ${latest.end} (${latest.form || "?"})` : "",
     });
   }
   const bridgeText = bridgeLines(bridge);
