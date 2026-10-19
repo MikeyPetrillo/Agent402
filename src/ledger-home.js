@@ -297,8 +297,8 @@ ${WHY_SECTION_CSS}
           </div>
           <a href="/guides/agent-hosts" style="align-self:flex-start;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);white-space:nowrap;">Claude, Cursor, Codex and more &rarr;</a>
         </div>
-        <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:10px;"><span class="ml-dot"></span>${railCountLabel}</span>
+        <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 12px;align-items:center;">
+          <span style="display:inline-flex;align-items:center;gap:10px;flex-basis:100%;"><span class="ml-dot"></span>${railCountLabel}</span>
           <a href="/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">status</a>
           <a href="/api/reliability" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">reliability</a>
           <a href="${REPO_URL}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">open source</a>
