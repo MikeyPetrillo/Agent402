@@ -552,7 +552,7 @@ export const MACRO_TOOLS = [
           country: { type: "string", description: "ISO-2 or ISO-3 country code (e.g. US, USA, DE)" },
           indicator: { type: "string", description: "World Bank indicator code, e.g. NY.GDP.MKTP.CD (nominal GDP USD)" },
           startYear: { type: "number", description: "First year (default 2018)" },
-          endYear: { type: "number", description: "Last year (default 2023)" },
+          endYear: { type: "number", description: `Last year (default: the previous calendar year, ${worldBankDefaultEndYear()} when this catalog was built)` },
         },
         required: ["country", "indicator"],
       },
@@ -564,7 +564,7 @@ export const MACRO_TOOLS = [
       if (!/^[A-Z]{2,3}$/.test(country)) throw bad('"country" must be a 2- or 3-letter ISO country code');
       if (!/^[A-Z0-9.]{3,40}$/.test(indicator)) throw bad('"indicator" must look like a World Bank indicator code (e.g. NY.GDP.MKTP.CD)');
       const startYear = Math.min(Math.max(parseInt(i.startYear, 10) || 2018, 1960), 2100);
-      const endYear = Math.min(Math.max(parseInt(i.endYear, 10) || 2023, startYear), 2100);
+      const endYear = Math.min(Math.max(parseInt(i.endYear, 10) || worldBankDefaultEndYear(), startYear), 2100);
       const url = `https://api.worldbank.org/v2/country/${country}/indicator/${indicator}?format=json&date=${startYear}:${endYear}&per_page=200`;
       // The World Bank API routinely takes 15-25 s on a cold indicator: the
       // nightly corpus 504'd this at the 15 s default on two of three nights
@@ -646,6 +646,21 @@ export const MACRO_TOOLS = [
 // ---------------------------------------------------------------------------
 
 const FRED_BASE = "https://api.stlouisfed.org/fred";
+
+/** World Bank annual data lags a year; the default window ends at the
+ *  previous calendar year. One value feeds the handler and the description. */
+export function worldBankDefaultEndYear(now = new Date()) {
+  return now.getUTCFullYear() - 1;
+}
+
+/** The calendar window FRED reads: dates in America/Chicago, where FRED
+ *  publishes, from today there through `days` later. */
+export function fredCalendarWindow(days, now = Date.now()) {
+  const fmt = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+  const start = fmt(now);
+  const end = new Date(Date.parse(`${start}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  return { start, end };
+}
 
 function requireFredKey() {
   // GitHub Secrets sometimes pick up a trailing newline when pasted; URLSearchParams
@@ -871,12 +886,12 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/fred-release-calendar", name: "FRED economic release calendar", slug: "fred-release-calendar", category: "data", price: "$0.005",
     description:
-      "Upcoming and very-recent US economic data release dates - CPI, employment, GDP, FOMC minutes, Treasury auctions, etc. Useful for scheduling agents around event-driven moves. ?days=14 (default 14, range 1-90). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Upcoming and very-recent US economic data release dates - CPI, employment, GDP, FOMC minutes, Treasury auctions, etc. Useful for scheduling agents around event-driven moves. The window starts at today's date in US Central time (America/Chicago, FRED's zone). ?days=14 (default 14, range 1-90). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "calendar", "releases", "cpi", "jobs", "gdp", "fomc", "macro", "economic-data"],
     discovery: {
       input: { days: 14 },
       inputSchema: {
-        properties: { days: { type: "number", description: "Window in days from today (1-90, default 14)" } },
+        properties: { days: { type: "number", description: "Window in days from today, today being the date in US Central time (America/Chicago, FRED's zone) (1-90, default 14)" } },
       },
       output: { example: { days: 14, count: 12, releases: [{ releaseId: 10, releaseName: "Consumer Price Index", date: "2026-06-12" }] } },
     },
@@ -886,15 +901,13 @@ MACRO_TOOLS.push(
       // must keep 503ing, never serve a snapshot it couldn't have fetched.
       const key = requireFredKey();
       return withStaleFallback(releaseCalLastGood, days, async () => {
-        const today = new Date();
-        const end = new Date(today.getTime() + days * 86400 * 1000);
-        const fmt = (d) => d.toISOString().slice(0, 10);
+        const { start: startDay, end: endDay } = fredCalendarWindow(days);
         // include_release_dates_with_no_data=true is essential — without it FRED
         // hides scheduled-but-not-yet-published releases, which is exactly the
         // forward-looking calendar callers want.
         const qs = new URLSearchParams({
           api_key: key, file_type: "json",
-          realtime_start: fmt(today), realtime_end: fmt(end),
+          realtime_start: startDay, realtime_end: endDay,
           include_release_dates_with_no_data: "true",
           order_by: "release_date", sort_order: "asc",
           limit: "1000",
@@ -939,22 +952,27 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", price: "$0.005",
     description:
-      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U) plus the trailing 12 months of YoY readings - the headline inflation number. Source: FRED CPIAUCSL with pc1 transformation. No params.",
+      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Source: FRED CPIAUCSL with pc1 transformation. No params.",
     tags: ["cpi", "inflation", "yoy", "consumer-price-index", "macro", "fred", "bls", "headline-inflation"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { date: "2026-05-01", inflationYoYPct: 3.4, trailing12mo: [{ date: "2025-06-01", value: 3.0 }], source: "FRED CPIAUCSL (BLS)" } },
+      output: { example: { date: "2026-05-01", inflationYoYPct: 3.4, trailing12mo: [{ date: "2025-06-01", value: 3.0 }], source: "FRED CPIAUCSL (BLS)", missingDates: [] } },
     },
     handler: async () => {
       const obs = await fredObservations({ seriesId: "CPIAUCSL", units: "pc1", limit: 13, latest: true });
       if (!obs.length) throw bad("FRED CPIAUCSL returned no observations", 502);
       const last = obs[obs.length - 1];
+      const trailing = obs.slice(-12);
+      // A month FRED marks as unpublished is reported, never dropped silently.
+      const missing = obs.missing.filter((d) => !trailing.length || d >= trailing[0].date);
       return {
         date: last.date,
         inflationYoYPct: Number(last.value.toFixed(2)),
-        trailing12mo: obs.slice(-12).map((o) => ({ date: o.date, value: Number(o.value.toFixed(2)) })),
+        trailing12mo: trailing.map((o) => ({ date: o.date, value: Number(o.value.toFixed(2)) })),
         source: "FRED CPIAUCSL with year-over-year transform (Bureau of Labor Statistics)",
+        missingDates: missing,
+        ...(missing.length ? { note: `No value was published for ${missing.join(", ")}, so trailing12mo has ${trailing.length} readings.` } : {}),
       };
     },
   },
