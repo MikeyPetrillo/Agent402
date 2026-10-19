@@ -1363,6 +1363,8 @@ jobs:
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
+          # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
+          t node scripts/test-lease-failopen-replicas.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
           t node scripts/test-lease-fencing-pg.js
           # A paid monitor run is claimed on its record; saves merge, never erase.
