@@ -4258,6 +4258,9 @@ jobs:
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
 
+      - name: Static asset caching (versioned /js immutable, other /js short; fonts immutable woff2 behind an allowlist)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-static-asset-cache.js
+
       - name: SDK playground sandbox runs code only for the page that frames it (real browser, cross-origin opener and frame)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-sdk-sandbox-origin.js
 
