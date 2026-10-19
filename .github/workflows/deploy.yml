@@ -1565,6 +1565,8 @@ jobs:
           t node scripts/test-seller-delivery-memory.js
           # Refusal and delivery memos reach the other replica through the shared store
           t node scripts/test-seller-memo-shared.js
+          # Re-registration cooldowns per origin hold across replicas (shared store)
+          t node scripts/test-register-cooldown-shared.js
           # "External spend guard (per-payer debt ceiling: an UNSETTLED upstream spend keeps counting, so verify-then-fail-to-settle cannot drain the wallet — offline)"
           t node scripts/test-external-spend-guard.js
           # H-01/H-03: one halt reaches every signing path; the daily ceiling survives a restart

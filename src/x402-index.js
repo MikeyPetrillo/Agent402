@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createJsonDocument } from "./json-document.js";
+import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 // Each store is one JSON document: on the volume, or in the state database
@@ -1501,6 +1502,8 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
+      // The windows another container opened for this origin count here too.
+      await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
         noteForcedCrawl(origin);
         clearOriginProbeState(origin);
@@ -4771,8 +4774,42 @@ export function noteForcedCrawl(originUrl, now = Date.now()) {
     if (forcedCrawlAt.size > 2000) forcedCrawlAt.clear();
   }
   forcedCrawlAt.set(originUrl, now);
+  cooldownShare(() => shared.flagSet(COOL_FORCED, originUrl, now + FORCED_CRAWL_COOLDOWN_MS, { now }), COOL_FORCED, originUrl);
 }
-export function __resetForcedCrawlForTest() { forcedCrawlAt.clear(); repriceAt.clear(); repriceSpend.clear(); }
+export function __resetForcedCrawlForTest() {
+  forcedCrawlAt.clear(); repriceAt.clear(); repriceSpend.clear();
+  for (const nk of coolKeys) { const [n, k] = nk.split("\u0000"); void sharedWrite("index-cooldown", n === COOL_SPEND ? shared.windowClear(n, k) : shared.flagSet(n, k, 0)); }
+  coolKeys.clear();
+}
+
+// THE COOLDOWNS ARE SHARED BETWEEN CONTAINERS (src/shared-limits.js): each
+// window is a flag per origin and each re-price spend a weighted window entry,
+// so a re-registration landing on the other container honours them. The local
+// maps stay the floor: a store that does not answer leaves each container
+// deciding on its own counters, as with one container.
+const COOL_FORCED = "index-forced-crawl", COOL_REPRICE = "index-reprice", COOL_SPEND = "index-reprice-spend";
+const coolKeys = new Set(); // "name\u0000origin" written by this process (test reset only)
+let coolSeq = 0;
+function cooldownShare(op, name, origin) {
+  if (coolKeys.size < 5000) coolKeys.add(`${name}\u0000${origin}`);
+  void sharedWrite("index-cooldown", op());
+}
+/** Fold the shared cooldowns for one origin into the local maps. Never throws. */
+async function refreshOriginCooldowns(originUrl, now = Date.now()) {
+  if (coolShift) await coolShift;
+  try {
+    const [f, r, w] = await Promise.all([
+      shared.flagGet(COOL_FORCED, originUrl, { now }),
+      shared.flagGet(COOL_REPRICE, originUrl, { now }),
+      shared.windowRead(COOL_SPEND, originUrl, { windowMs: HOUR_MS, now }),
+    ]);
+    if (f?.ok && f.until > now) { const at = f.until - FORCED_CRAWL_COOLDOWN_MS; if (!(forcedCrawlAt.get(originUrl) >= at)) forcedCrawlAt.set(originUrl, at); }
+    if (r?.ok && r.until > now) { const at = r.until - REPRICE_COOLDOWN_MS; if (!(repriceAt.get(originUrl) >= at)) repriceAt.set(originUrl, at); }
+    if (w?.ok && Number(w.sum) > spentThisHour(originUrl, now)) {
+      repriceSpend.set(originUrl, Array.isArray(w.entries) && w.entries.length ? w.entries.map((e) => ({ at: Number(e.score), n: Number(e.weight) || 0 })) : [{ at: now, n: Number(w.sum) }]);
+    }
+  } catch (e) { noteSharedLimitsDegraded("index-cooldown", { error: e?.message }); }
+}
 
 // The same bound for the re-registration's live-402 re-price: a window per
 // origin, and an hourly allowance of route probes per origin across calls.
@@ -4787,10 +4824,28 @@ function trimMap(map, keep) {
   for (const [k, v] of map) if (!keep(v)) map.delete(k);
   if (map.size > 2000) map.clear();
 }
+let coolShift = null;
 export function __shiftRecheckClocksForTest(ms) {
   for (const [k, t] of repriceAt) repriceAt.set(k, t - ms);
   for (const [k, t] of forcedCrawlAt) forcedCrawlAt.set(k, t - ms);
   for (const rows of repriceSpend.values()) for (const r of rows) r.at -= ms;
+  // The shared copies move with them (read by the next refresh, which waits).
+  const keys = [...coolKeys];
+  coolShift = (async () => {
+    const now = Date.now();
+    for (const nk of keys) {
+      const [n, k] = nk.split("\u0000");
+      if (n === COOL_SPEND) {
+        const w = await shared.windowRead(n, k, { windowMs: HOUR_MS + ms, now });
+        await shared.windowClear(n, k);
+        for (const e of w?.entries || []) if (now - (e.score - ms) < HOUR_MS) await shared.windowAdd(n, k, { windowMs: HOUR_MS, member: e.member, weight: e.weight, now, score: e.score - ms });
+      } else {
+        const f = await shared.flagGet(n, k, { now });
+        if (f?.until) await shared.flagSet(n, k, f.until - ms, { now });
+      }
+    }
+  })().catch(() => {});
+  return coolShift;
 }
 export function repriceDue(originUrl, now = Date.now()) {
   const at = repriceAt.get(originUrl);
@@ -4799,6 +4854,7 @@ export function repriceDue(originUrl, now = Date.now()) {
 function noteReprice(originUrl, now = Date.now()) {
   trimMap(repriceAt, (t) => now - t < REPRICE_COOLDOWN_MS);
   repriceAt.set(originUrl, now);
+  cooldownShare(() => shared.flagSet(COOL_REPRICE, originUrl, now + REPRICE_COOLDOWN_MS, { now }), COOL_REPRICE, originUrl);
 }
 function spentThisHour(originUrl, now = Date.now()) {
   const rows = (repriceSpend.get(originUrl) || []).filter((r) => now - r.at < HOUR_MS);
@@ -4814,6 +4870,7 @@ function spendRepriceAllowance(originUrl, n, now = Date.now()) {
   const rows = repriceSpend.get(originUrl) || [];
   rows.push({ at: now, n });
   repriceSpend.set(originUrl, rows);
+  cooldownShare(() => shared.windowAdd(COOL_SPEND, originUrl, { windowMs: HOUR_MS, member: `${process.pid}:${++coolSeq}:${now}`, weight: n, now }), COOL_SPEND, originUrl);
 }
 // What the register answer says about the re-check it did (or did not) run,
 // so a seller whose call landed inside a window knows when to try again
