@@ -62,6 +62,7 @@
 
 import { isPaymentVerdictReason } from "./payment-reject.js";
 import { paymentHeaderOf } from "./payer.js";
+import { shared, sharedLimitsEnabled, sharedWrite } from "./shared-limits.js";
 
 const PATCHED = Symbol.for("agent402.avmSubcentGate");
 export const ALGORAND_PREFIX = "algorand:";
@@ -308,7 +309,56 @@ export function noteAvmSettleRefusal({ network, payTo, reason, errorReason, now 
   s.heldLogged = false; // a new refusal is a new hold, logged again once
   s.detail = "a settlement came back subcent_quota_exceeded";
   reconcile(payTo, now);
+  // Every container withdraws the accept: the refusal is a shared flag that
+  // lives for the hold window; the others read it (syncSharedSubcentPause).
+  if (sharedLimitsEnabled()) void sharedWrite("avm-subcent", shared.flagSet(SHARED_FLAG, String(payTo), now + REFUSAL_HOLD_MS, { now }));
   return true;
+}
+
+// ---- the refusal shared across containers ---------------------------------------
+// shared-limits flag `avm-subcent-refusal:<payTo>`, value refusedAt + REFUSAL_HOLD_MS.
+// Read in the background (never on a 402's path): on a timer, and kicked by
+// the gate when it builds an offer, at most every AVM_SUBCENT_SHARED_SYNC_MS.
+const SHARED_FLAG = "avm-subcent-refusal";
+export const SHARED_SYNC_MS = num(process.env.AVM_SUBCENT_SHARED_SYNC_MS, 5_000);
+const syncedAt = new Map(); // payTo -> last read started
+const syncing = new Set();
+/** Apply a refusal another container recorded. Returns true when it paused here. */
+export function applySharedSubcentRefusal(payTo, refusedAt, now = Date.now()) {
+  if (!avmSubcentGateEnabled() || !payTo || !(refusedAt > 0)) return false;
+  if (now - refusedAt >= REFUSAL_HOLD_MS || utcMonthOf(refusedAt) !== utcMonthOf(now)) return false;
+  const s = entry(payTo);
+  if (s.exhausted && s.source === "settle-refusal" && s.evidenceAt >= refusedAt) return false; // already known
+  s.exhausted = true;
+  // A status read here after that refusal keeps the pause fresh, as a held read would.
+  if (s.evidenceAt > refusedAt) s.heldAt = Math.max(s.heldAt || 0, s.evidenceAt);
+  s.evidenceAt = refusedAt;
+  s.source = "settle-refusal";
+  s.heldLogged = false;
+  s.detail = "a settlement came back subcent_quota_exceeded (recorded by another container)";
+  reconcile(payTo, now);
+  return true;
+}
+/** Read the shared refusal flags for these payTos and apply any newer one. Resolves how many paused. */
+export async function syncSharedSubcentPause(payTos, { now = Date.now } = {}) {
+  if (!sharedLimitsEnabled() || !avmSubcentGateEnabled()) return 0;
+  let n = 0;
+  for (const p of new Set((payTos || []).map((x) => String(x || "").trim()).filter(Boolean))) {
+    if (syncing.has(p)) continue;
+    syncing.add(p);
+    syncedAt.set(p, now());
+    try {
+      const r = await shared.flagGet(SHARED_FLAG, p, { now: now() });
+      if (r?.ok && r.until > 0 && applySharedSubcentRefusal(p, r.until - REFUSAL_HOLD_MS, now())) n++;
+    } catch { /* the next read tries again */ } finally { syncing.delete(p); }
+  }
+  return n;
+}
+function kickSharedSync(requirements) {
+  if (!sharedLimitsEnabled() || !Array.isArray(requirements)) return;
+  const t = Date.now();
+  const due = requirements.filter((r) => isAvmSubcentRequirement(r) && r.payTo && t - (syncedAt.get(String(r.payTo)) || 0) >= SHARED_SYNC_MS).map((r) => r.payTo);
+  if (due.length) void syncSharedSubcentPause(due);
 }
 
 /** Record what a route OFFERED this request, before the gate filtered it.
@@ -395,6 +445,7 @@ export function installAvmSubcentGate(ResourceServerClass) {
     try {
       // @x402/express hands the core { adapter } with the Express request on it.
       rememberOfferedRequirements(context?.adapter?.req, requirements);
+      kickSharedSync(requirements);
       return withoutPausedSubcentAvm(requirements);
     } catch { return requirements; }
   };
@@ -436,7 +487,10 @@ export function startAvmSponsorshipRefresher({ facilitatorUrl, payTos, intervalM
   const every = setInterval(tick, intervalMs);
   first.unref?.();
   every.unref?.();
-  return () => { clearTimeout(first); clearInterval(every); };
+  // Another container's refusal reaches this one within one sync interval.
+  const sync = sharedLimitsEnabled() ? setInterval(() => { void syncSharedSubcentPause(list); }, SHARED_SYNC_MS) : null;
+  sync?.unref?.();
+  return () => { clearTimeout(first); clearInterval(every); if (sync) clearInterval(sync); };
 }
 
 /** For /api/rails: status words and times only - never a payTo, never the counts. */
@@ -473,6 +527,7 @@ export function railsReportSubcentPause(rails) {
  *  itself is process-wide and cannot be undone). */
 export function _resetAvmSponsorshipForTest({ logger, installed } = {}) {
   state.clear();
+  syncedAt.clear();
   log = logger || ((msg) => console.warn(msg));
   if (typeof installed === "boolean") gateInstalled = installed;
 }
