@@ -28,6 +28,11 @@
 //     digest; a segment that does not match it (a save that did not land)
 //     discards the whole cache, and the next scan is a full read (the old
 //     behavior), never a gap or a double count.
+//   * A scan folds kept rows by index (TransferView), never one object per
+//     kept row, and persist serializes and hashes only the segments that
+//     changed: a clean segment is named in the meta by the digest it was
+//     loaded or saved with, and any change to its rows forgets that digest
+//     (touch()).
 //   * LEADERBOARD_LOG_CACHE=off turns the cache off: every scan is a full
 //     read, exactly as before.
 import { createHash } from "node:crypto";
@@ -102,10 +107,20 @@ export function createLogCacheStore({ prefix, dir = null } = {}) {
 // ---- in-memory state ------------------------------------------------------
 // A segment holds parallel arrays (wallet, payer, micro, block, logIndex);
 // address strings are interned so a wallet's string is held once.
+//
+// A segment's rows change in exactly two places, addRow (appends) and
+// dropWallets (replaces each array with a filtered copy), and both go through
+// touch(): it marks the segment dirty, forgets its digest and bumps `rev`.
+// No array element is ever written in place, so a scan's transfer view (which
+// holds the arrays it read and their length at the time) stays exact after
+// later mutations. `digest` is the digest of the segment's body as stored; it
+// is set only when the segment is clean (loaded and verified, or saved at an
+// unchanged rev), so persist never names a stale digest in the meta.
 const intern = new Map();
 const I = (s) => { if (s == null) return null; let v = intern.get(s); if (v === undefined) { intern.set(s, s); v = s; } return v; };
-const newSeg = (start) => ({ start, w: [], p: [], m: [], b: [], li: [], dirty: true });
+const newSeg = (start) => ({ start, w: [], p: [], m: [], b: [], li: [], dirty: true, digest: null, rev: 0 });
 const segRows = (s) => s.w.length;
+const touch = (s) => { s.dirty = true; s.digest = null; s.rev++; };
 
 function serializeSeg(s) {
   const wallets = [], payers = [], wi = new Map(), pi = new Map(), rows = [];
@@ -129,7 +144,64 @@ function parseSeg(body) {
   }
   return s;
 }
+// One segment's share of a scan, in chain order. `sel` indexes the kept rows
+// the scan folds (row order); `extra` holds the rows the scan read whose block
+// falls in this segment (backfill, then head). Positions run kept rows first,
+// then extras, which is the order the old single array held them in, and a
+// tie on (block, logIndex) keeps that order, exactly as the old stable sort
+// did. Segments cover disjoint block ranges, so sorting each one and walking
+// them by start is the same order as sorting every row together.
+function orderPart(part) {
+  const { sel, extra, base, b, li } = part;
+  const L = sel.length + extra.length;
+  const order = new Uint32Array(L);
+  for (let q = 0; q < sel.length; q++) order[q] = sel[q];
+  for (let j = 0; j < extra.length; j++) order[sel.length + j] = base + j;
+  if (L > 1) {
+    const kb = new Float64Array(L), kl = new Float64Array(L), perm = new Uint32Array(L);
+    for (let q = 0; q < L; q++) {
+      const k = order[q];
+      if (k < base) { kb[q] = b[k]; kl[q] = li[k]; } else { const t = extra[k - base]; kb[q] = t.block; kl[q] = t.logIndex; }
+      perm[q] = q;
+    }
+    perm.sort((x, y) => kb[x] - kb[y] || kl[x] - kl[y] || x - y);
+    const sorted = new Uint32Array(L);
+    for (let q = 0; q < L; q++) sorted[q] = order[perm[q]];
+    return { ...part, order: sorted, sel: null };
+  }
+  return { ...part, order, sel: null };
+}
+
+/**
+ * A scan's transfers in chain order: iterable, with a `length`. A kept row is
+ * turned into a { wallet, payer, micro, block, logIndex } object only when the
+ * iterator reaches it, so a scan over a large cache holds one index per row
+ * instead of one object per row. It reads the segment arrays it was built
+ * from, which later mutations never write in place (see touch()).
+ */
+export class TransferView {
+  constructor(parts) {
+    this.parts = parts;
+    let n = 0; for (const part of parts) n += part.order.length;
+    this.length = n;
+  }
+  *[Symbol.iterator]() {
+    for (const { order, base, w, p, m, b, li, extra } of this.parts) {
+      for (let q = 0; q < order.length; q++) {
+        const k = order[q];
+        yield k < base ? { wallet: w[k], payer: p[k], micro: m[k], block: b[k], logIndex: li[k] } : extra[k - base];
+      }
+    }
+  }
+}
+
 const digestOf = (body) => createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
+// A stored segment's digest, over its keys in the order serializeSeg writes
+// them. A store may hand a body back with its keys in another order (the state
+// database keeps documents as jsonb, which orders keys by length), and the
+// digest of that reordered text never matched the meta, so every load from it
+// was discarded. Bodies serializeSeg wrote hash the same either way.
+const storedDigestOf = (body) => digestOf({ v: body.v, start: body.start, wallets: body.wallets, payers: body.payers, rows: body.rows });
 
 /**
  * One chain's log window cache.
@@ -163,9 +235,10 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     for (const [key, want] of Object.entries(m.segs || {})) {
       let r;
       try { r = await store.read(key); } catch { r = { ok: false }; }
-      if (!r.ok || !r.body || digestOf(r.body) !== want.digest) { reset(`segment ${key} does not match the meta`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
+      if (!r.ok || !r.body || storedDigestOf(r.body) !== want.digest) { reset(`segment ${key} does not match the meta`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
       const s = parseSeg(r.body);
       if (!s || segRows(s) !== want.rows || s.b.some((b) => b > m.cursor || segStartOf(b) !== s.start)) { reset(`segment ${key} is malformed`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
+      s.digest = want.digest;
       segs.set(s.start, s);
     }
     state = { cursor: m.cursor, covered: new Map(Object.entries(m.covered || {}).map(([w, b]) => [I(w), Number(b)])), segs };
@@ -176,12 +249,19 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     let okAll = true;
     const metaSegs = {};
     for (const [k, s] of state.segs) {
+      // A clean segment is named by the digest it was loaded or saved with:
+      // only a dirty one is serialized (and hashed) again.
+      if (!s.dirty && s.digest) { metaSegs[k] = { rows: segRows(s), digest: s.digest }; continue; }
+      const rev = s.rev, rows = segRows(s);
       const body = serializeSeg(s);
+      const digest = digestOf(body);
       if (s.dirty) {
         const saved = await store.save(String(k), body).catch(() => false);
-        if (!saved) okAll = false; else s.dirty = false;
-      }
-      metaSegs[k] = { rows: segRows(s), digest: digestOf(body) };
+        if (!saved) okAll = false;
+        // Clean only if nothing changed the segment while the save was in flight.
+        else if (s.rev === rev) { s.dirty = false; s.digest = digest; }
+      } else if (s.rev === rev) s.digest = digest;
+      metaSegs[k] = { rows, digest };
     }
     for (const k of deleted) { if (!state.segs.has(Number(k))) await store.del(String(k)).catch(() => false); }
     deleted.clear();
@@ -197,14 +277,14 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     const k = segStartOf(t.block);
     let s = state.segs.get(k);
     if (!s) { s = newSeg(k); state.segs.set(k, s); deleted.delete(k); }
-    s.w.push(I(t.wallet)); s.p.push(I(t.payer)); s.m.push(t.micro); s.b.push(t.block); s.li.push(t.logIndex); s.dirty = true;
+    s.w.push(I(t.wallet)); s.p.push(I(t.payer)); s.m.push(t.micro); s.b.push(t.block); s.li.push(t.logIndex); touch(s);
   }
   function dropWallets(set) {
     for (const s of state.segs.values()) {
       if (!s.w.some((w) => set.has(w))) continue;
       const keep = (_, i) => !set.has(s.w[i]);
       s.p = s.p.filter(keep); s.m = s.m.filter(keep); s.b = s.b.filter(keep); s.li = s.li.filter(keep); s.w = s.w.filter((w) => !set.has(w));
-      s.dirty = true;
+      touch(s);
     }
   }
   function prune(start) {
@@ -217,6 +297,8 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
    *   readLogs(from, to, paddedWallets) -> decoded transfers [{ wallet, payer, micro, block, logIndex }]; throws on failure
    *   chunkBlocks, walletChunk, pad   the scan's own chunking
    * Returns { transfers (chain order, every wallet), calls, failedCalls, failedFromByWallet, mode }.
+   * `transfers` is an iterable with a `length` (a TransferView): each kept
+   * row becomes an object only as the fold reads it.
    */
   async function scan({ wallets, start, latest, chunkBlocks, walletChunk, pad, readLogs, onError = null }) {
     await load();
@@ -257,19 +339,30 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     const head = cursor < latest ? await readRange(cursor + 1, latest, ws, "head") : { out: [], failed: false };
 
     // The fold: kept rows (covered wallets, inside the window), the new
-    // wallets' rows and the head, in chain order.
-    const rows = [];
+    // wallets' rows and the head, in chain order. Kept rows are selected by
+    // index, not copied into objects (see TransferView).
+    const foldable = new Set();
+    for (const w of ws) if (!freshSet.has(w) && state.covered.get(w) <= start) foldable.add(w);
+    const parts = new Map();
     for (const s of state.segs.values()) {
       if (s.start + segmentBlocks - 1 < start) continue;
-      for (let i = 0; i < s.w.length; i++) {
-        const w = s.w[i];
-        if (s.b[i] < start || s.b[i] > cursor || !wsSet.has(w) || freshSet.has(w) || !(state.covered.get(w) <= start)) continue;
-        rows.push({ wallet: w, payer: s.p[i], micro: s.m[i], block: s.b[i], logIndex: s.li[i] });
+      const n = s.w.length, sel = new Uint32Array(n);
+      let c = 0;
+      for (let i = 0; i < n; i++) {
+        if (s.b[i] < start || s.b[i] > cursor || !foldable.has(s.w[i])) continue;
+        sel[c++] = i;
       }
+      parts.set(s.start, { start: s.start, w: s.w, p: s.p, m: s.m, b: s.b, li: s.li, base: n, sel: sel.subarray(0, c), extra: [] });
     }
-    for (const t of back.out) if (t.block >= start && t.block <= cursor) rows.push(t);
-    for (const t of head.out) if (t.block > cursor && t.block <= latest) rows.push(t);
-    rows.sort((x, y) => x.block - y.block || x.logIndex - y.logIndex);
+    const extraPart = (t) => {
+      const k = segStartOf(t.block);
+      let part = parts.get(k);
+      if (!part) { part = { start: k, w: null, p: null, m: null, b: null, li: null, base: 0, sel: new Uint32Array(0), extra: [] }; parts.set(k, part); }
+      part.extra.push(t);
+    };
+    for (const t of back.out) if (t.block >= start && t.block <= cursor) extraPart(t);
+    for (const t of head.out) if (t.block > cursor && t.block <= latest) extraPart(t);
+    const rows = new TransferView([...parts.values()].sort((x, y) => x.start - y.start).map(orderPart));
 
     // Keep what this scan read in full.
     if (cold) {
