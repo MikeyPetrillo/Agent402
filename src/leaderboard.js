@@ -1667,7 +1667,24 @@ export function leaderboardLogCacheStatus() {
 
 // Under a lease (see src/state-db.js): the old and the new container of a
 // deploy never scan at once, so the seller-funding cursors advance once.
-const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
+const refreshOnceLeased = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
+// The container that does not hold the lease skips the scan, and used to keep
+// its boot snapshot for good: router evidence then differed by container. A
+// skipped tick adopts the snapshot the other container saved, when newer.
+async function refreshOnce(opts) {
+  const r = await refreshOnceLeased(opts);
+  if (r && r.skipped) await adoptPeerLeaderboardSnapshot().catch(() => {});
+  return r;
+}
+export async function adoptPeerLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_FILE) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return false;
+  const r = await d.read({ quiet: true });
+  const s = r?.ok && r.exists ? wellFormedSnapshot(r.body) : null;
+  if (!s || !(String(s.asOf || "") > String(cached.snapshot?.asOf || ""))) return false;
+  cached.snapshot = { ...s, adoptedFromPeer: true };
+  return true;
+}
 async function refreshOnceUnleased(opts) {
   if (cached.warming) return; // overlapping refreshes would just rate-limit each other
   cached.warming = true;
@@ -1909,3 +1926,6 @@ export function _resetLeaderboardCacheForTests() {
   configureSellerFunding({});
   stopLeaderboardRefresh();
 }
+// Test seams: a scan's save, and one refresh tick through the lease.
+export const __persistLeaderboardSnapshotForTest = (snap) => persistLeaderboardSnapshot(snap);
+export const __refreshTickForTest = (opts = {}) => refreshOnce(opts);

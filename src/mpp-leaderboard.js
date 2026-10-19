@@ -336,7 +336,22 @@ function _loadPersistedMppLeaderboard(file = MPP_LB_CACHE_FILE) {
  *  reads). On failure the previous snapshot stays, marked stale + lastError. */
 let feedState = null; // Tempo transfer-feed state (null until first load/sync)
 let feedStandIn = false; // feedState was started while the stored copy was unreadable
-export const refreshMppLeaderboard = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000, failOpen: true }, refreshMppLeaderboardUnleased);
+const refreshMppLeaderboardLeased = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000, failOpen: true }, refreshMppLeaderboardUnleased);
+// The container without the lease adopts the board the other one saved, when newer.
+export async function refreshMppLeaderboard(opts = {}) {
+  const r = await refreshMppLeaderboardLeased(opts);
+  if (r && r.skipped) await adoptPeerMppLeaderboard().catch(() => {});
+  return r;
+}
+export async function adoptPeerMppLeaderboard(file = MPP_LB_CACHE_FILE) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return false;
+  const r = await d.read({ quiet: true });
+  const j = r?.ok && r.exists ? r.body : null;
+  if (!wellFormedBoard(j) || !(j.generatedAt > Number(current?.generatedAt || 0))) return false;
+  current = j;
+  return true;
+}
 function refreshMppLeaderboardUnleased(opts = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
