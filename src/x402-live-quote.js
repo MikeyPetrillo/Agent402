@@ -102,8 +102,10 @@ function isUsdc(a) {
   // recognized directly. Without this, every pure-Solana catalog priced as
   // "networks only" forever (measured 2026-09-01: a seller's 128 routes).
   if (String(a?.asset || "") === SVM_USDC_MINT) return true;
-  // An EVM accept with no extra.name is still USDC when its contract is the
+  // An EVM accept with NO extra.name is still USDC when its contract is the
   // USDC we have read from that chain: the address is the identity there too.
+  // A name that is not USDC's is never overridden by the address.
+  if (String(a?.extra?.name || "").trim()) return false;
   return domainTruthFor(a?.network, a?.asset)?.symbol === "USDC";
 }
 
