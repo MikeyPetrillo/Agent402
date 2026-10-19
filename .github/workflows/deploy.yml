@@ -1381,6 +1381,8 @@ jobs:
           t node scripts/test-leaderboard-peer-adopt-pg.js
           # The seller-funding operator switch set on one container applies on the other after one re-read.
           t node scripts/test-seller-funding-switch-pg.js
+          # Two containers, one MPP index: registrations reach the other by its pull, saves merge by origin, a skipped crawl saves nothing.
+          t node scripts/test-mpp-index-replicas-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
