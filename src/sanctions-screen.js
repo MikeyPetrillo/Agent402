@@ -1,7 +1,9 @@
 // Payment-party screen: EVM-format addresses on the US Treasury OFAC
-// Specially Designated Nationals (SDN) list, for the Tempo rail's direct mode
-// (src/mpp-tempo.js, TEMPO_RELAY=off), which checks every payment party here
-// before any money moves.
+// Specially Designated Nationals (SDN) list. Two readers: the Tempo rail's
+// direct mode (src/mpp-tempo.js, TEMPO_RELAY=off), which checks every payment
+// party here before any money moves, and the x402 payer screen
+// (src/x402-payer-screen.js), which checks an x402 payment's EVM payer after
+// verification and before the paid handler.
 //
 // SOURCE. OFAC's SDN list in its legacy XML format (SDN.XML), downloaded and
 // parsed by src/ofac-sdn.js: the same parser, and the same in-memory parse,
@@ -27,7 +29,8 @@
 //
 // STATUS. fresh (fetched within two refresh periods), stale (older; still
 // screens against the last good set), missing (never loaded: every screen
-// answers unavailable, and direct mode offers no tempo challenge).
+// answers unavailable; direct mode offers no tempo challenge, and the x402
+// payer screen serves unscreened).
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
@@ -162,16 +165,25 @@ function schedule(opts) {
 }
 
 /** Start the screen: read the stored set (registered as a state store), then
- *  refresh when due and on the timer. Idempotent. Resolves when the stored set
- *  has been read (the first fetch runs in the background). */
+ *  refresh when due and on the timer. Idempotent: the first caller's options
+ *  apply. Resolves when the stored set has been read (the first fetch runs in
+ *  the background). `firstTickDelayMs` holds the first tick back (the x402
+ *  start passes the sanctions tools' boot warm-up delay, so both readers ask
+ *  for the list together and share one download). */
 export function startSanctionsScreen(opts = {}) {
   if (ready) return ready;
+  const { firstTickDelayMs = 0, ...tickOpts } = opts;
   ready = trackStoreReady(loadStoredSanctionsScreen(), "sanctions-screen");
-  ready.then(() => { sanctionsScreenTick(opts).catch(() => {}).finally(() => schedule(opts)); });
+  ready.then(() => {
+    const first = () => { sanctionsScreenTick(tickOpts).catch(() => {}).finally(() => schedule(tickOpts)); };
+    if (!(firstTickDelayMs > 0)) return first();
+    timer = setTimeout(first, firstTickDelayMs);
+    timer.unref?.();
+  });
   return ready;
 }
 
-/** Whether startSanctionsScreen ran in this process (direct mode's gate is mounted). */
+/** Whether startSanctionsScreen ran in this process (Tempo direct mode or x402 payments). */
 export function sanctionsScreenStarted() { return !!ready; }
 
 /** fresh | stale | missing */
