@@ -316,5 +316,27 @@ async function reloads(store, latest, wallets = W) {
   ok([...Object.keys(FIXTURE)].every((k) => fresh.docs.get(k) === FIXTURE[k]) && fresh.docs.size === 3, "a cold scan now writes the same bytes the earlier implementation wrote");
 }
 
+// ---- a store that hands bodies back with their keys reordered -------------
+{
+  // The state database keeps documents as jsonb, which returns object keys
+  // ordered by length, then bytewise; the digest must not depend on it.
+  const jsonbOrder = (v) => {
+    if (Array.isArray(v)) return v.map(jsonbOrder);
+    if (!v || typeof v !== "object") return v;
+    const out = {};
+    for (const k of Object.keys(v).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))) out[k] = jsonbOrder(v[k]);
+    return out;
+  };
+  const store = memStore();
+  const read = store.read;
+  store.read = async (k) => { const r = await read(k); return { ...r, body: r.body && jsonbOrder(r.body) }; };
+  const c = newSmall(store);
+  await smallScan(c, 1_000); await c.persist();
+  const k0 = Object.keys(metaOf(store).segs)[0];
+  ok(JSON.stringify((await store.read(k0)).body).startsWith('{"v":1,"rows":'), "the double reorders keys the way jsonb does");
+  const re = await reloads(store, 1_010);
+  ok(re.resets === 0 && re.mode === "incremental" && re.same, `a body read back with reordered keys still loads (${re.reason || "loaded"})`);
+}
+
 console.log(`\n${fail ? "FAIL" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

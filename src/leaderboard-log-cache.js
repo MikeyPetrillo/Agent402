@@ -196,6 +196,12 @@ export class TransferView {
 }
 
 const digestOf = (body) => createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
+// A stored segment's digest, over its keys in the order serializeSeg writes
+// them. A store may hand a body back with its keys in another order (the state
+// database keeps documents as jsonb, which orders keys by length), and the
+// digest of that reordered text never matched the meta, so every load from it
+// was discarded. Bodies serializeSeg wrote hash the same either way.
+const storedDigestOf = (body) => digestOf({ v: body.v, start: body.start, wallets: body.wallets, payers: body.payers, rows: body.rows });
 
 /**
  * One chain's log window cache.
@@ -229,7 +235,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     for (const [key, want] of Object.entries(m.segs || {})) {
       let r;
       try { r = await store.read(key); } catch { r = { ok: false }; }
-      if (!r.ok || !r.body || digestOf(r.body) !== want.digest) { reset(`segment ${key} does not match the meta`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
+      if (!r.ok || !r.body || storedDigestOf(r.body) !== want.digest) { reset(`segment ${key} does not match the meta`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
       const s = parseSeg(r.body);
       if (!s || segRows(s) !== want.rows || s.b.some((b) => b > m.cursor || segStartOf(b) !== s.start)) { reset(`segment ${key} is malformed`); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
       s.digest = want.digest;
