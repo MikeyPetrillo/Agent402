@@ -31,7 +31,6 @@ Each report is a `POST` with a JSON body; the price is the whole outcome, not a 
 | `POST /v1/domain-audit/pro` | $0.85 | same | Plus attack surface from Certificate Transparency logs, detected tech stack and registration data |
 | `POST /v1/recall-report` | $0.60 | `{ query, scope? }` | FDA recall report across the drug, food and device enforcement feeds (openFDA): firm, class, status, reason, distribution, date, with a records appendix |
 | `POST /v1/insider-report` | $0.60 | `{ ticker \| cik, days? }` | Insider flow: every Form 4 in the window with the transactions parsed from the filings, open-market buys and sells separated from awards, exercises and withholding, per insider and net |
-| `POST /v1/token-brief` | $0.60 | `{ mint }` | Solana token due-diligence brief: authorities, liquidity, holder concentration, pairs and market context from live on-chain and market probes |
 | `POST /v1/token-risk` | $0.60 | `{ address, chain, format? }` | Token and contract risk report from on-chain evidence: source verification, holder concentration (pools and contracts told apart from wallets), supply and market context. Evidence, never a "safe" verdict |
 | `POST /v1/token-risk/pro` | $0.85 | same | Plus a deterministic static-pattern scan of the verified source and a web reputation check |
 | `POST /v1/linkedin-article` | $1.10 | `{ topic, angle?, audience?, tone?, author?, cta?, length?, images?, hashtags? }` | LinkedIn article package, ready to publish: grounded web research with cited sources, three headline options, a hook-first body under subheads with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images delivered at LinkedIn's own sizes (article cover 1920x1080, link-share 1200x627, feed square and portrait, in-article 16:9). It delivers the package; it never posts |
@@ -51,7 +50,7 @@ Over the MCP connector, `catalog.find` resolves a task like "audit example.com's
 
 ## Reports for people (`/reports`)
 
-[`/reports`](https://agent402.tools/reports) sells the same products by card through Stripe Checkout: pick a product, type the input (a question, a ticker, a fund, a domain, a recall term, an article topic), pay, and the report renders at a private link `/r/<session>` (also emailed when the instance has email configured). The card price is derived from the agent price: **$2** for the base tier (research, fund report, domain audit, token brief, recall report, insider report), **$3** for the pro tier (research pro, market brief, dossier, fund report deep, domain audit pro, filing report), **$4** for the max tier (research max, dossier max, LinkedIn article) and **$5** for the ticker pack.
+[`/reports`](https://agent402.tools/reports) sells the same products by card through Stripe Checkout: pick a product, type the input (a question, a ticker, a fund, a domain, a recall term, an article topic), pay, and the report renders at a private link `/r/<session>` (also emailed when the instance has email configured). The card price is derived from the agent price: **$2** for the base tier (research, fund report, domain audit, recall report, insider report), **$3** for the pro tier (research pro, market brief, dossier, fund report deep, domain audit pro, filing report), **$4** for the max tier (research max, dossier max, LinkedIn article) and **$5** for the ticker pack.
 
 The card price includes payment processing. An agent paying per call over x402 or MPP pays the lower tool price in the table above for the same report. The token-risk and IPO reports are agent-facing routes and are not on the card page.
 
@@ -72,7 +71,6 @@ A monitor is a Stripe subscription that keeps one report fresh for one target. T
 | FDA recall watch (`recall-monitor`) | a drug, food, brand or device | Daily probe of the drug, food and device recall feeds; a fresh cited report the moment a new recall number appears |
 | Insider flow watch (`insider-monitor`) | a US ticker | Daily probe for new Form 4 filings; a fresh insider-flow report on each new accession |
 | SEC filing watch (`filing-monitor`) | a US ticker or CIK | Daily probe of the company's EDGAR submissions; a fresh filing report the moment a new filing lands |
-| Solana token safety watch (`token-monitor`) | a Solana mint | Daily free safety probe; a fresh brief only when the safety facts change |
 | Research question watch (`research-monitor`) | a research question | A fresh research report every 7 days, inside the per-subscription paid-run cap |
 | IPO pipeline watch (`ipo-monitor`) | a keyword, or `all` | Weekly digest of 424B4 pricings and new S-1 / F-1 registrations; no email on an empty week |
 

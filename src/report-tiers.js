@@ -16,6 +16,7 @@ import { RECALL_TIERS } from "./tools/recall-report-kit.js";
 import { INSIDER_TIERS } from "./tools/insider-flow-kit.js";
 import { TOKEN_RISK_TIERS } from "./tools/token-risk-kit.js";
 import { TOKEN_BRIEF_TIERS } from "./tools/token-brief-kit.js";
+import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { FILING_TIERS } from "./tools/filing-watch-kit.js";
 import { TICKER_PACK_TIERS } from "./tools/ticker-pack-kit.js";
 import { LINKEDIN_TIERS } from "./tools/linkedin-article-kit.js";
@@ -72,7 +73,7 @@ export function reportLadderProse({ humanProducts = null, monitorProducts = null
     tiers("FDA recall", ["recall-report"]),
     tiers("insider flow", ["insider-report"]),
     tiers("market brief", ["market-brief"]),
-    tiers("token brief", ["token-brief"]),
+    ...(rugcheckEnabled() ? [tiers("token brief", ["token-brief"])] : []),
     tiers("token risk", ["token-risk", "token-risk-pro"]),
   ].filter((p) => /\$/.test(p));
 

@@ -187,6 +187,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("ticker", "ticker-pack", "Get the pack")}
         <div class="note" style="margin-top:10px;">${sampleLink("ticker-pack")}<a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
+${R["token-brief"] ? `
       <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
         <h3>Is this Solana token safe to touch</h3>
@@ -197,7 +198,7 @@ export function humanReportsPage(baseUrl) {
         ${buyBtn("token", "token-brief", "Get the brief")}
         <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
-      <div class="pcard receipt" data-kind="fund">
+` : ""}      <div class="pcard receipt" data-kind="fund">
         <div class="k">Fund tracker</div>
         <h3>Follow the smart money</h3>
         <p>What a fund holds, and what it bought, added, trimmed and exited last quarter, from SEC 13F filings, cited.</p>
@@ -266,7 +267,7 @@ ${ledgerFooterCompact()}
 <script src="/js/reports.js"></script>`;
   return ledgerShell({
     title: "Agent402 Reports: research, 13F, insider flow, audits",
-    description: `Cited reports, $${cardLo} to $${cardHi} by card and $${agentLo} to $${agentHi} for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, Solana token safety, FDA recalls.`,
+    description: `Cited reports, $${cardLo} to $${cardHi} by card and $${agentLo} to $${agentHi} for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, ${R["token-brief"] ? "Solana token safety, " : ""}FDA recalls.`,
     canonical: `${baseUrl}/reports`, baseUrl, activePath: "/reports", extraCss: REPORTS_CSS, body,
     jsonLd: { "@context": "https://schema.org", "@type": "ItemList", "@id": `${baseUrl}/reports#products`, name: "Agent402 reports", itemListElement: Object.entries(R).map(([key, p], i) => ({ "@type": "ListItem", position: i + 1, item: { "@type": "Product", name: p.label, image: `${baseUrl}/tools/${p.slug}/card.png`, url: `${baseUrl}/reports`, brand: { "@type": "Brand", name: "Agent402" }, offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: `${baseUrl}/reports`, seller: { "@type": "Organization", name: "Havok Holdings LLC" } } } })) },
   });

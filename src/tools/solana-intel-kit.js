@@ -35,6 +35,8 @@ import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
 import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
+export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
 // no cap of its own, so a broken or hostile upstream could push an unbounded
@@ -1186,10 +1188,6 @@ underBudgetAll(SOLANA_INTEL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
 // an unlisted route is honest where a listed one quotes a price it cannot
 // serve. The handlers stay exported in SOLANA_INTEL_TOOLS, so the token brief
 // keeps probing them (each probe is non-fatal there) and the unit tests run.
-export const RUGCHECK_SLUGS = Object.freeze(new Set(["sol-token-safety", "sol-token-report", "sol-token-holders"]));
-export function rugcheckEnabled(env = process.env) {
-  return String(env.RUGCHECK_TOOLS || "").trim().toLowerCase() === "on";
-}
 export function solanaIntelToolsEnabled(env = process.env) {
   return rugcheckEnabled(env) ? SOLANA_INTEL_TOOLS : SOLANA_INTEL_TOOLS.filter((t) => !RUGCHECK_SLUGS.has(t.slug));
 }

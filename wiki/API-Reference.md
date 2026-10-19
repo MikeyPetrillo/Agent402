@@ -141,7 +141,7 @@ behavior and the honest scope of the check.
 
 ### Report products (`/v1`)
 
-Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-brief` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports and Monitors|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
+Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports and Monitors|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
 
 ### Card front door and credits
 

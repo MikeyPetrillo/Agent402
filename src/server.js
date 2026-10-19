@@ -404,7 +404,7 @@ import { RESEARCH_DEEP_TOOLS } from "./tools/research-deep-kit.js";
 import { FUND_TOOLS } from "./tools/fund-report-kit.js";
 import { DOMAIN_AUDIT_TOOLS } from "./tools/domain-audit-kit.js";
 import { RECALL_TOOLS, probeRecalls, normRecallQuery } from "./tools/recall-report-kit.js";
-import { TOKEN_BRIEF_TOOLS, probeTokenBrief, describeTokenChanges } from "./tools/token-brief-kit.js";
+import { TOKEN_BRIEF_TOOLS as TOKEN_BRIEF_TOOLS_ALL, probeTokenBrief, describeTokenChanges } from "./tools/token-brief-kit.js";
 import { LINKEDIN_TOOLS } from "./tools/linkedin-article-kit.js";
 import { IPO_TOOLS, probeIpos, normIpoKeyword } from "./tools/ipo-report-kit.js";
 import { INSIDER_TOOLS, probeInsiderFilings } from "./tools/insider-flow-kit.js";
@@ -475,9 +475,12 @@ import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
-import { solanaIntelToolsEnabled } from "./tools/solana-intel-kit.js";
+import { solanaIntelToolsEnabled, rugcheckEnabled } from "./tools/solana-intel-kit.js";
 // Env-gated on RUGCHECK_TOOLS=on for the three RugCheck-backed tools.
 const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
+// The token brief's safety and holder facts are RugCheck reads, so it is
+// listed under the same switch.
+const TOKEN_BRIEF_TOOLS = rugcheckEnabled() ? TOKEN_BRIEF_TOOLS_ALL : [];
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";

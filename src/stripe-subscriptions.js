@@ -18,11 +18,12 @@ import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, stateDbSchema } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
+import { rugcheckEnabled } from "./rugcheck-switch.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
 // `slug` = the paid report handler the scheduler runs; price in cents, monthly.
-export const MONITOR_PRODUCTS = {
+export const MONITOR_PRODUCTS_ALL = {
   "domain-monitor": {
     label: "Domain security monitor", price: 500, kind: "domain", slug: "domain-audit",
     inputField: "domain", inputLabel: "a domain, e.g. example.com",
@@ -64,6 +65,10 @@ export const MONITOR_PRODUCTS = {
     blurb: "A weekly digest of every IPO that priced (424B4) and every new S-1 registration on SEC EDGAR, filtered to your keyword or the whole market. Filing facts only, no guessing.",
   },
 };
+// What is sold today. The token watch needs the RugCheck reads
+// (RUGCHECK_TOOLS=on); while they are off it takes no new subscribers, and
+// existing ones stay active and are looked up in MONITOR_PRODUCTS_ALL.
+export const MONITOR_PRODUCTS = Object.fromEntries(Object.entries(MONITOR_PRODUCTS_ALL).filter(([k]) => k !== "token-monitor" || rugcheckEnabled()));
 
 export function subscriptionsEnabled() {
   return Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
@@ -338,7 +343,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       createdAt: existing?.createdAt || new Date().toISOString(),
     };
     await upsert(subId, rec);
-    const p = MONITOR_PRODUCTS[rec.product];
+    const p = MONITOR_PRODUCTS_ALL[rec.product];
     return { status, subId, customer: rec.customer, product: rec.product, label: p?.label || "monitor", target: rec.target };
   }
 
@@ -464,7 +469,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   function listActive(kind) {
     const out = [];
     for (const rec of store.values()) {
-      if (rec.status === "active" && (!kind || MONITOR_PRODUCTS[rec.product]?.kind === kind)) out.push(rec);
+      if (rec.status === "active" && (!kind || MONITOR_PRODUCTS_ALL[rec.product]?.kind === kind)) out.push(rec);
     }
     return out;
   }

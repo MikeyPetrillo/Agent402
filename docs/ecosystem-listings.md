@@ -49,12 +49,11 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   `/v1/research/market-brief`, company dossier `/v1/dossier` (+ `/max`), ticker
   pack `/v1/ticker-pack`, 13F fund report `/v1/fund` (+ `/max`), SEC filing report
   `/v1/filing-report`, domain audit `/v1/domain-audit` (+ `/pro`), FDA recall
-  `/v1/recall-report`, insider flow `/v1/insider-report`, Solana token brief
-  `/v1/token-brief`, token risk `/v1/token-risk` (+ `/pro`) - $0.60 to $2.00 per
+  `/v1/recall-report`, insider flow `/v1/insider-report`, token risk `/v1/token-risk` (+ `/pro`) - $0.60 to $2.00 per
   call for an agent, $2 to $5 by card; current per-route prices at
   https://agent402.tools/pricing.
 - **Monitors** ($5/month each, card, https://agent402.tools/monitors): domain
-  security, SEC filings, Solana token safety, 13F fund, FDA recall, insider flow,
+  security, SEC filings, 13F fund, FDA recall, insider flow,
   IPO pipeline and a research question. Most watch with a free daily probe and
   send a full paid re-run only when something changes; the research watch
   re-runs weekly.
