@@ -62,5 +62,21 @@ ok(normalizePayerAddress(ALGO.toLowerCase()) !== ALGO, "lowercased Algorand addr
 ok(payerFromRequest(req({ "x-payment": enc(ALGO) })) === null,
   "payerFromRequest rejects an Algorand address — that path is EIP-3009/EVM-only by design");
 
+// A Permit2 payment is verified on permit2Authorization; an `authorization`
+// block riding beside it is unsigned there and must never name the payer.
+{
+  const SIGNER = "0x1111111111111111111111111111111111111111", VICTIM = "0x2222222222222222222222222222222222222222";
+  const p2 = (payload) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload })).toString("base64");
+  const permit = { from: SIGNER, permitted: { token: SIGNER, amount: "1" }, spender: SIGNER, nonce: "1", deadline: "1" };
+  ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit, authorization: { from: VICTIM } }) })) === null,
+    "a Permit2 payment naming a different authorization.from has no payer (the forged identity is refused)");
+  ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit }) })) === SIGNER,
+    "a Permit2 payment's payer is the Permit2 signer");
+  ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit, authorization: { from: SIGNER.toUpperCase().replace("0X", "0x") } }) })) === SIGNER,
+    "a matching authorization.from beside Permit2 is the same payer");
+  ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: { permitted: {} }, authorization: { from: VICTIM } }) })) === null,
+    "a Permit2 block with no signer names nobody");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
