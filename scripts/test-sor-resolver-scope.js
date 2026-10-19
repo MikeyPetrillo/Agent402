@@ -43,7 +43,7 @@ ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerSe
 // wording leaves it outside the result window (2026-10-01: a planned,
 // router-eligible gas seller read as "no seller matched"). Both legs search
 // through routeRows, which retries only for a pinned URL that was missed.
-ok(/const routeRows = async \(args\) =>/.test(fn) && /if \(!onlyUrl \|\| \(r\.results \|\| \[\]\)\.some\(\(x\) => sameUrl\(x\.url\)\)\) return r;/.test(fn) && (fn.match(/await routeRows\(\{ query: task/g) || []).length === 2 && !/await routeQueryAsync\(\{ query: task/.test(fn),
+ok(/const routeRows = async \(args\) =>/.test(fn) && /if \(!onlyUrl \|\| \(r\.results \|\| \[\]\)\.some\(\(x\) => sameUrl\(x\.url\)\)\) (?:return r;|\{ noteExcluded\(r\.categoryExcluded \|\| 0\); return r; \})/.test(fn) && (fn.match(/await routeRows\(\{ query: task/g) || []).length === 2 && !/await routeQueryAsync\(\{ query: task/.test(fn),
   "a pinned endpoint the wording missed is searched again by its own host and path (both legs)");
 const rx = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
 ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel(?: \}|, \.\.\.\(target \? \{ onlyUrl: target \} : \{\}\) \})/.test(rx),
