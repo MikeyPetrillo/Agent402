@@ -345,7 +345,7 @@ function pageSpeedObserver() {
  * timings, Web Vitals read from the page's own PerformanceObserver entries,
  * transfer bytes and request count from the browser's network events, the
  * heaviest resources, render-blocking resources and console errors.
- * A single lab measurement, not field data and not a Lighthouse score.
+ * A single lab measurement, not field data.
  */
 export async function measurePageSpeed(rawUrl, { device = "mobile", signal } = {}) {
   const profile = PAGE_SPEED_DEVICES[device];
@@ -455,7 +455,7 @@ export const PAGE_SPEED_MEASUREMENT = Object.freeze({
   source: "one load in a headless Chromium from one server location, on shared infrastructure, with no network or CPU throttling",
   fieldData: false,
   lighthouseScore: false,
-  note: "A single measurement from one server location under shared load. It is not field data from real users and not a Lighthouse score; repeat the call and compare runs before drawing conclusions.",
+  note: "A single measurement from one server location under shared load. It is a single lab measurement, not field data from real users; repeat the call and compare runs before drawing conclusions.",
 });
 
 // ---- html-frames: render a self-contained document at given times ---------

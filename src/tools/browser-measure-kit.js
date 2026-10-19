@@ -77,7 +77,7 @@ export const BROWSER_MEASURE_TOOLS = [
   {
     route: "POST /api/page-speed", name: "Page speed (one lab measurement)", slug: "page-speed", category: "web", price: "$0.01",
     description:
-      "Load one public URL once in headless Chromium and report what that load measured: navigation timings (TTFB, DOMContentLoaded, load), Web Vitals read from the page's own performance entries (LCP, FCP, CLS, total blocking time from long tasks), total transfer bytes, request count, the 5 heaviest resources, render-blocking scripts and styles, and console errors. Mobile or desktop viewport. This is a single measurement from one server location under shared load, with no throttling: it is not field data from real users and not a Lighthouse score, and the answer says so in its measurement field. Deterministic code, no model. Body: {\"url\":\"https://…\",\"device\":\"mobile\"|\"desktop\"?}.",
+      "Load one public URL once in headless Chromium and report what that load measured: navigation timings (TTFB, DOMContentLoaded, load), Web Vitals read from the page's own performance entries (LCP, FCP, CLS, total blocking time from long tasks), total transfer bytes, request count, the 5 heaviest resources, render-blocking scripts and styles, and console errors. Mobile or desktop viewport. This is a single measurement from one server location under shared load, with no throttling: it is a single lab measurement, not field data from real users, and the answer says so in its measurement field. Deterministic code, no model. Body: {\"url\":\"https://…\",\"device\":\"mobile\"|\"desktop\"?}.",
     tags: ["browser", "performance", "web-vitals", "lcp", "cls", "page-speed", "ttfb", "audit"],
     discovery: {
       bodyType: "json",
