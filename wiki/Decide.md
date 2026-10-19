@@ -34,7 +34,7 @@ Each step names its tool, endpoint, seller, price, input params and fallbacks, a
 
 **Chained steps.** When a later step needs something an earlier step produces (an address an ENS lookup resolved, say), the plan writes `{{step N}}` for it and lists the earlier step in `dependsOn`. An agent replaces it with the matching field from that step's response. When the plan runs through `/api/decide/execute`, Agent402 fills it in itself: from a field with the parameter's name, or the one address or IP the earlier step returned. If the value cannot be named without guessing, the step is skipped and nothing is paid for it.
 
-**Running a free sketch.** A multi-step task sent to `/api/find` or `/api/route` gets a free sketch (one tool per step, keyword-matched, no model) that carries an `execute` body. `POST /api/decide/execute` with `steps` (the slugs in order, no `decisionId`) and `params` for step 1 runs it at list price; each later step takes its one required input from the step before. The run is kept as a settled decision of depth `sketch`, so it can be repeated and given feedback like a paid one.
+**Running a free sketch.** A multi-step task sent to `/api/find` or `/api/route` gets a free sketch (one tool per step, keyword-matched, no model) that carries an `execute` body. `POST /api/decide/execute` with `steps` (the slugs in order, no `decisionId`) and `params` for step 1 runs it at list price; a later step whose tool has one required input takes it from the step before. A sketch step's `dependsOn` lists only the steps whose output it uses, so steps that take only your params list none. The run is kept as a settled decision of depth `sketch`, so it can be repeated and given feedback like a paid one.
 
 ## How tools are ranked
 

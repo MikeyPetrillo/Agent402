@@ -47,7 +47,13 @@ const p = buildPlanSketch("hash the text with sha256, then base64 encode it, the
 ok(p && p.kind === "sketch" && p.stepCount === 3, "a three-step task gets a three-step sketch");
 ok(p.steps.map((s) => s.tool?.slug).join(",") === "hash,base64,qr", `each step ranks its own tool (${p.steps.map((s) => s.tool?.slug)})`);
 ok(p.steps.every((s) => s.match === "strong"), "clear steps match strongly");
-ok(p.steps[0].dependsOn === undefined && p.steps[1].dependsOn?.[0] === 1 && p.steps[2].dependsOn?.[0] === 2, "each step after the first depends on the one before it");
+ok(JSON.stringify(p.steps.map((s) => s.dependsOn)) === "[[],[1],[2]]", `a later single-input step depends on the step before, the one execute feeds it from (${JSON.stringify(p.steps.map((s) => s.dependsOn))})`);
+const indep = buildPlanSketch("compute rsi; then compute a moving average; then compute the correlation of two series", { rank });
+ok(indep.steps.map((s) => s.tool?.slug).join(",") === "rsi,moving-average,correlation" && indep.steps.every((s) => Array.isArray(s.dependsOn) && s.dependsOn.length === 0), `steps that take no single input from the step before depend on nothing (${JSON.stringify(indep.steps.map((s) => [s.tool?.slug, s.dependsOn]))})`);
+const mid = buildPlanSketch("convert 5 miles to km, then format as json, finally hash it", { rank });
+ok(JSON.stringify(mid.steps.map((s) => s.dependsOn)) === "[[],[1],[2]]" && mid.steps[0].tool.required.length > 1, "a multi-input first step still feeds a single-input second step");
+const gap = buildPlanSketch("hash the text then order me a pizza", { rank });
+ok(gap.steps[1].tool && gap.steps[1].tool.required.length === 0 && gap.steps[1].dependsOn.length === 0, "a step whose tool takes no input carries no edge");
 ok(p.estimatedCostUsd === 0 && p.estimatedCostIsFloor === false, "free (proof-of-work) steps add nothing to the total");
 ok(p.upgrade === upgrade, "the paid decide upgrade is passed through unchanged");
 ok(/no model/.test(p.builtBy), "the sketch says how it was built");

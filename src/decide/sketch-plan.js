@@ -9,7 +9,12 @@
 // field takes it from the step before ("{{step N}}", resolved at run time by
 // the same rules a judged plan uses). The run reports a placeholder as "pass
 // params for this step" and never sends a guessed value to a paid tool.
+//
+// dependsOn lists exactly the steps a step's params reference, so a step that
+// takes nothing from an earlier one depends on none: the plan is a graph, not
+// a chain, and a reader may treat steps with no path between them as parallel.
 import { localToolRow } from "./tool-rows.js";
+import { STEP_REF } from "./step-refs.js";
 
 export const SKETCH_MIN_STEPS = 2;
 export const SKETCH_MAX_STEPS = 5;
@@ -25,6 +30,16 @@ const slugOf = (raw) => {
 };
 
 const bySlug = (catalog) => new Map(Object.values(catalog || {}).filter((d) => d && typeof d.slug === "string").map((d) => [d.slug, d]));
+
+/** The earlier steps a step's params reference ("{{step N}}"), ascending. */
+export function referencedSteps(params) {
+  const out = new Set();
+  for (const v of Object.values(params || {})) {
+    const m = typeof v === "string" ? STEP_REF.exec(v) : null;
+    if (m) out.add(Number(m[1]));
+  }
+  return [...out].sort((a, b) => a - b);
+}
 
 const listPrice = (def) => {
   const n = Number(String(def?.price ?? "").replace(/^\$/, ""));
@@ -70,7 +85,7 @@ export function sketchPlan(steps, { catalog, refuse = () => null, baseUrl = "htt
     const params = Object.fromEntries(required.map((k) => [k, `<${k}>`]));
     if (n > 1 && required.length === 1) params[required[0]] = `{{step ${n - 1}}}`;
     row.exampleParams = params;
-    plan.push({ step: n, purpose: row.name, tool: row, fallbacks: [], dependsOn: n > 1 ? [n - 1] : [], source: "sketch" });
+    plan.push({ step: n, purpose: row.name, tool: row, fallbacks: [], dependsOn: referencedSteps(params).filter((d) => d >= 1 && d < n), source: "sketch" });
     cost += row.priceUsd;
   }
   return { ok: true, plan, costUsd: Math.round(cost * 1e6) / 1e6 };

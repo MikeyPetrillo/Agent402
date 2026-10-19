@@ -364,6 +364,25 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(d.plan.length === 2 && d.plan[1].dependsOn.join() === "1", `dependsOn is renumbered when an earlier step becomes a gap (${JSON.stringify(d.plan.map((p) => p.dependsOn))})`);
 }
 
+// ---- latency follows the dependency graph: parallel branches take the max, a chain the sum ----
+{
+  const latencyOf = { btcprice: 700, ethprice: 1100 };
+  const plan = async (dependsOn) => {
+    const { idx } = buildIndex();
+    const llm = stubLlm([
+      { steps: [{ purpose: "bitcoin price", query: "bitcoin price", dependsOn: [] }, { purpose: "ethereum price", query: "ethereum price", dependsOn }] },
+      (s, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0 : /bitcoin/i.test(st.purpose) && /bitcoin/.test(c.description) ? 0.9 : /ethereum/i.test(st.purpose) && /ethereum/.test(c.description) ? 0.9 : 0; return { fits }; },
+      { params: { "1": { coin: "bitcoin" }, "2": { coin: "ethereum" } } },
+    ]);
+    const reliability = (id) => { const slug = Object.keys(latencyOf).find((k) => id === mk(k).id); return slug ? { successes: 5, failures: 0, latency_p95_ms: latencyOf[slug] } : null; };
+    return buildDecision({ task: "bitcoin price and ethereum price", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, reliability, cfg, now: NOW, deadline: Date.now() + 10_000 });
+  };
+  const par = await plan([]);
+  ok(par.plan.map((p) => p.tool.slug).join() === "btcprice,ethprice" && par.plan.every((p) => p.dependsOn.length === 0) && par.estimatedLatencyMs === 1100, `independent steps: latency is the slowest branch, not the sum (${par.estimatedLatencyMs}, deps ${JSON.stringify(par.plan.map((p) => p.dependsOn))})`);
+  const seq = await plan([1]);
+  ok(seq.plan[1].dependsOn.join() === "1" && seq.estimatedLatencyMs === 1800, `a step that depends on another adds its latency to that step's (${seq.estimatedLatencyMs})`);
+}
+
 // ---- budget constraint ----
 {
   const { idx } = buildIndex();
