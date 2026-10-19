@@ -9,7 +9,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
 const { url } = requireTestPg({ label: "test-x402-removals-pg" });
@@ -66,6 +66,22 @@ try {
   xi.__resetRoutableSummaryMemoForTest();
   ok(xi.routableSellerSummaries().some((s) => s.origin === SELLER), "the router offers the outside seller again once the list is read");
   ok(xi.routeQuery(q).results.length > 0, "routeQuery offers outside sellers again");
+
+  // ---- a save adopts what the row already holds -------------------------------
+  // The list is loaded here. Another container then records a removal straight
+  // into the row; this container's next removal merges it into the write, and
+  // once that write lands the other container's removal is in this container's
+  // listing too (not only after a later periodic re-read).
+  const OTHER = "https://other-container.example", MINE = "https://mine.example";
+  const CUR = basename(process.env.REMOVED_ORIGINS_FILE); // the row the module now reads and writes
+  const before = (await sdb.documents.get(CUR))?.body || [];
+  await sdb.documents.put(CUR, [...before, { origin: OTHER, removedAt: 5, note: "other container" }]);
+  ok(!xi.listRemovedOrigins().some((x) => x.origin === OTHER), "the other container's removal is not known here before any read");
+  xi.removeOrigin(MINE, { note: "this container" });
+  await xi.__sideStoresSettledForTest();
+  const rowNow = new Set(((await sdb.documents.get(CUR))?.body || []).map((x) => x.origin));
+  ok(rowNow.has(OTHER) && rowNow.has(MINE), "the write kept the other container's removal and added this one");
+  ok(xi.listRemovedOrigins().some((x) => x.origin === OTHER), "once the write lands, the listing shows the removal the row already held");
 } finally {
   relay.heal();
   await sdb.__dropStateSchema().catch(() => {});

@@ -109,16 +109,35 @@ function sideMergeSave(file, adapter) {
   for (const k of del) next.delete(k);
   sideSynced.set(file, next);
   const prev = sideChains.get(file) || Promise.resolve();
+  // Entries the row holds that this container does not (another container's,
+  // or the stored list when this save runs before the first load lands). The
+  // write keeps them; once it lands they are adopted into memory too, so what
+  // this container serves matches what it just wrote.
+  let adopt = [];
+  const delSet = new Set(del);
   const run = prev.then(() => d.update((b) => {
     const m = new Map(adapter.entries(b));
+    adopt = [...m].filter(([k]) => !local.has(k) && !delSet.has(k));
     for (const k of set) m.set(k, values.get(k));
     for (const k of del) m.delete(k);
     return adapter.body([...m]);
   }, { fallback: adapter.body([]) })).then((r) => {
     // Not written: forget the agreement so the next save offers every key again.
-    if (!r?.ok) sideSynced.set(file, base);
+    if (!r?.ok) { sideSynced.set(file, base); return; }
+    // A newer save was queued since this one started: memory may have changed
+    // (a restore deletes and saves), so adoption is left to the next re-read.
+    if (sideChains.get(file) !== chained) return;
+    const held = jsonMap(adapter.local());
+    const agreed = sideSynced.get(file) || new Map();
+    for (const [k, v] of adopt) {
+      if (held.has(k)) continue; // set here since the save started: the local value stands
+      adapter.set(k, v);
+      agreed.set(k, JSON.stringify(v));
+    }
+    sideSynced.set(file, agreed);
   }, () => sideSynced.set(file, base));
-  sideChains.set(file, run.finally(() => { if (sideChains.get(file) === run) sideChains.delete(file); }));
+  const chained = run.finally(() => { if (sideChains.get(file) === chained) sideChains.delete(file); });
+  sideChains.set(file, chained);
 }
 /** The row as loaded becomes the agreement a later merge is measured from. */
 function sideNoteLoaded(file, adapter, body) {
