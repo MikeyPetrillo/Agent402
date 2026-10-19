@@ -113,7 +113,7 @@ const MPP_ROW = { recipient: "0xrecip", sellers: ["https://seller.example"], int
   ok(Object.keys(UNFILLABLE_HERE).length >= 2, "and they are named, so the omission is reviewable rather than forgotten");
 
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
-  const persist = /function persistedEntries[\s\S]*?\n\}/.exec(idx)?.[0] || "";
+  const persist = /function persistedEntryOf[\s\S]*?\n\}/.exec(idx)?.[0] || "";
   ok(/discoveryPath/.test(persist), "discoveryPath survives persistence: it is published by /api/index and every warm start dropped it, so prod served null for every seller");
   ok(/"payment"/.test(idx.match(/const MANIFEST_PERSIST_KEYS = \[[^\]]*\]/)?.[0] || ""), "manifest.payment survives persistence - primaryNetwork lives in it and /api/index publishes it as `network`");
 }
