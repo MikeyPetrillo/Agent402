@@ -38,9 +38,9 @@
 // are LOCKED (4 s, 720p, no audio, on the listed per-second SKU) so the
 // price is a constant; aspect ratio (16:9 / 9:16) is free to choose. Measured
 // 40 s end to end; the handler waits up to VIDEOS_MAX_WAIT_MS and answers 504
-// past it (not charged on our side; the upstream job may still complete and
-// bill us - bounded at one clip, the same accepted class as a flex timeout on
-// the chat tiers). Content is fetched with our key (the unsigned URLs 401
+// past it (not charged on our side). The upstream job keeps running, so it is
+// parked for VIDEO_PARK_MS and an identical retry collects that clip instead
+// of starting a new one; uncollected, it is bounded at one clip. Content is fetched with our key (the unsigned URLs 401
 // without it - measured) and returned inline as base64, never as a URL that
 // would expose our job ids.
 import { parseMultipartFile } from "../multipart.js";
@@ -48,6 +48,8 @@ import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
 import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
+import { createHash } from "node:crypto";
+import { shared } from "../shared-limits.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -422,16 +424,42 @@ const videoTransientStatus = (s) => s === 429 || s >= 500;
 const videoTransientError = (e) => e?.statusCode === 504;
 const videoContentBackoffMs = (attempt) => Math.min(VIDEOS_POLL_MS(), 1_000) * (attempt + 1);
 
+// Parked video jobs: one upstream job per identical request (same buyer, same
+// locked body), kept for VIDEO_PARK_MS on the shared store so a retry on
+// either replica resumes it. The key is a hash; the job id is never returned.
+const VIDEO_PARK_MS = () => Math.max(60_000, parseInt(process.env.VIDEO_PARK_MS || "1800000", 10) || 1_800_000);
+const videoParkKey = (body) => createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 32);
+async function parkedVideoJob(key) {
+  try {
+    const r = await shared.windowRead("video-park", key, { windowMs: VIDEO_PARK_MS() });
+    const last = r?.ok && Array.isArray(r.entries) && r.entries.length ? r.entries[r.entries.length - 1] : null;
+    return last && typeof last.member === "string" && last.member ? last.member : null;
+  } catch { return null; }
+}
+async function parkVideoJob(key, id) {
+  try { await shared.windowAdd("video-park", key, { windowMs: VIDEO_PARK_MS(), member: id }); } catch { /* best effort */ }
+}
+async function unparkVideoJob(key, id) {
+  try { await shared.windowRemove("video-park", key, { member: id }); } catch { /* best effort */ }
+}
+
 async function videosHandler(input, req) {
   if (videosWorstCaseUsd() == null) throw bad("/v1/videos is temporarily unavailable.", 503);
   const user = userOf(req);
   const { prompt, aspect_ratio } = validateVideosRequest(input);
   const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false, ...(user ? { user } : {}) };
   const started = Date.now();
-  const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
-  if (!res.ok) await throwUpstreamError(res);
-  let job;
-  try { job = JSON.parse(await res.text()); } catch { throw bad("Upstream returned non-JSON", 502); }
+  // A job that outlived the last identical request is picked up again rather
+  // than paid for twice: the retry the 504 asks for collects the same clip.
+  const parkKey = videoParkKey(body);
+  let job = null;
+  const parkedId = await parkedVideoJob(parkKey);
+  if (parkedId) job = { id: parkedId, status: "pending" };
+  else {
+    const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
+    if (!res.ok) await throwUpstreamError(res);
+    try { job = JSON.parse(await res.text()); } catch { throw bad("Upstream returned non-JSON", 502); }
+  }
   const id = typeof job?.id === "string" ? job.id : "";
   if (!id) throw bad("Upstream accepted no video job", 502);
   // Only ever poll OUR upstream with our key - never a URL the response named
@@ -442,10 +470,12 @@ async function videosHandler(input, req) {
   while (status !== "completed") {
     if (status === "failed") {
       const why = typeof st?.error === "string" ? st.error : (st?.error?.message || "");
+      void unparkVideoJob(parkKey, id);
       throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""} - not charged`, 502);
     }
     if (Date.now() - started > VIDEOS_MAX_WAIT_MS()) {
-      throw bad(`Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s - not charged; retry`, 504);
+      await parkVideoJob(parkKey, id);
+      throw bad(`Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s - not charged; send the same request again within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip`, 504);
     }
     await sleep(VIDEOS_POLL_MS());
     // A transient poll failure (5xx, 429, network, timeout, garbled body)
@@ -490,6 +520,7 @@ async function videosHandler(input, req) {
   }
   const bytes = Buffer.from(await c.arrayBuffer());
   if (!bytes.length) throw bad("Upstream returned an empty clip - retry", 502);
+  void unparkVideoJob(parkKey, id);
   const mediaType = (c.headers?.get?.("content-type") || "video/mp4").split(";")[0].trim() || "video/mp4";
 
   const rawUsage = st?.usage && typeof st.usage === "object" ? st.usage : null;
