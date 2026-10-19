@@ -68,6 +68,9 @@ export function clientGoneSignal() {
 }
 
 export function inAbortableScope() { return scope.getStore()?.abortable === true; }
+/** The process-wide drain signal (aborted by shutdown()), for a caller that
+ *  schedules work of its own and must stop starting it once draining. */
+export function drainSignal() { return controller.signal; }
 export function activeAbortableScopes() { return active; }
 
 /** Called by shutdown(): every composite in flight is cut off now. Returns how many were running. */

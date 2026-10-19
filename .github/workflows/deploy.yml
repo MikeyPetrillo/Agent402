@@ -2625,6 +2625,8 @@ jobs:
           t node scripts/test-decide-index.js
           t node scripts/test-decide-planner.js
           t node scripts/test-decide-execute.js
+          # Execute runs independent plan steps at once: one run budget reserved per leg, deadline and drain on every step (offline)
+          t node scripts/test-decide-execute-parallel.js
           t node scripts/test-decide-feedback.js
           t node scripts/test-decide-site.js
           t node scripts/test-decide-cost.js
