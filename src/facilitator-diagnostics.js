@@ -26,6 +26,7 @@
 // never swallows an error, and never fails a request - a logger that can break
 // settlement would be worse than the blindness it cures.
 
+import { FACILITATOR_BILLING_REFUSAL } from "./payment-reject.js";
 /** Response headers worth having when an edge refuses us. Cloudflare's ray id
  *  and `cf-mitigated` identify a block; `retry-after` identifies a rate limit;
  *  `server` says whose edge answered at all. */
@@ -263,4 +264,70 @@ export function installFacilitatorDiagnostics(urls = [], { log = console.error, 
     console.log(`[facilitator-diag] active - non-JSON facilitator errors will be diagnosed, not quoted`);
   }
   return wrapped;
+}
+
+// ---- the settle-failure receipt a buyer sees ---------------------------------
+// A settle that fails puts its error into the PAYMENT-RESPONSE header the
+// buyer receives (errorReason / errorMessage, built by the x402 middleware
+// from what the facilitator client threw). That text is ours to read, not
+// the buyer's: it can carry a facilitator's label and its raw response body.
+// The header a buyer gets keeps the receipt's fields (success, network,
+// payer, transaction), a reason only when it is a short machine code, and a
+// fixed message; a billing refusal keeps just the matched phrase, so every
+// reader that classifies the receipt (src/payment-reject.js,
+// src/avm-sponsorship.js) reads the same verdict from it. The raw text goes
+// to the operator log.
+
+const SETTLE_RECEIPT_HEADERS = new Set(["payment-response", "x-payment-response"]);
+const CODE_SHAPED = /^[A-Za-z][A-Za-z0-9_.:-]{0,79}$/;
+export const GENERIC_SETTLE_FAILURE_MESSAGE = "The payment could not be settled.";
+
+/** The buyer-facing form of a PAYMENT-RESPONSE value. Unchanged unless it
+ *  decodes to a failed receipt whose reason or message is not plain code. */
+export function sanitizeSettleReceiptHeader(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string" || !raw) return { value, changed: false, raw: null };
+  let receipt;
+  try { receipt = JSON.parse(Buffer.from(raw, "base64").toString("utf8")); } catch { return { value, changed: false, raw: null }; }
+  if (!receipt || typeof receipt !== "object" || receipt.success !== false) return { value, changed: false, raw: null };
+  const reason = typeof receipt.errorReason === "string" ? receipt.errorReason : "";
+  const message = typeof receipt.errorMessage === "string" ? receipt.errorMessage : "";
+  const codeReason = CODE_SHAPED.test(reason) ? reason : "";
+  const billing = FACILITATOR_BILLING_REFUSAL.exec(`${reason} ${message}`)?.[0] || "";
+  const clean = {
+    ...receipt,
+    errorReason: codeReason || "settlement_failed",
+    errorMessage: billing ? `Settlement refused: ${billing}` : (message && message === codeReason ? message : GENERIC_SETTLE_FAILURE_MESSAGE),
+  };
+  if (clean.errorReason === receipt.errorReason && clean.errorMessage === receipt.errorMessage) return { value, changed: false, raw: null };
+  return { value: Buffer.from(JSON.stringify(clean)).toString("base64"), changed: true, raw: { errorReason: reason, errorMessage: message } };
+}
+
+/** Middleware: every PAYMENT-RESPONSE set on this response is the
+ *  buyer-facing form; the raw reason and message are logged (redacted,
+ *  bounded) once per response. Mounted before every payment gate. */
+export function settleReceiptHeaderGuard({ log = console.warn } = {}) {
+  return function settleReceiptHeaderGuardMw(req, res, next) {
+    const orig = res.setHeader;
+    let logged = false;
+    res.setHeader = function guardedSetHeader(name, value) {
+      if (typeof name === "string" && SETTLE_RECEIPT_HEADERS.has(name.toLowerCase())) {
+        try {
+          const s = sanitizeSettleReceiptHeader(value);
+          if (s.changed) {
+            if (!logged) {
+              logged = true;
+              const text = textFromHtml(`${s.raw.errorReason} | ${s.raw.errorMessage}`)
+                .replace(/\b(?:0x)?[0-9a-fA-F]{32,}\b/g, "[redacted]")
+                .replace(/\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g, "[redacted]");
+              log(`[settle-failure] ${req.method} ${req.path} raw: ${text.slice(0, 400)}`);
+            }
+            return orig.call(this, name, s.value);
+          }
+        } catch { /* the original value: never break the response */ }
+      }
+      return orig.call(this, name, value);
+    };
+    next();
+  };
 }

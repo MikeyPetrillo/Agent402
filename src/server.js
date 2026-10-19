@@ -244,6 +244,7 @@ function hangupForgivenessKeys(req) {
   return [who, `ip:${clientIp(req)}`];
 }
 import { mppProblem, sendMppProblem } from "./mpp-problem.js";
+import { settleReceiptHeaderGuard } from "./facilitator-diagnostics.js";
 import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
 import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
@@ -4056,7 +4057,11 @@ if (humanCheckoutEnabled()) {
     app.get("/api/r/:sessionId", async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
       try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
-      catch (e) { res.status(500).json({ status: "error", error: String(e?.message || e).slice(0, 200) }); }
+      catch (e) {
+        // The detail (a database or driver message) is for the operator log only.
+        console.warn("[human-checkout] report read failed:", String(e?.message || e).slice(0, 200));
+        res.status(500).set("Cache-Control", "no-store").json({ status: "error", error: "The report could not be read right now. Please retry in a moment." });
+      }
     });
   }
 }
@@ -8568,6 +8573,10 @@ if (!FREE_MODE) {
   // Arrival stamp for the per-phase timing of paid calls
   // (src/paid-phase-timing.js); before every gate, so gate time is measured.
   app.use(phaseArrivalMiddleware());
+  // A settle-failure PAYMENT-RESPONSE carries a short reason code and a fixed
+  // message to the buyer; the facilitator's own text goes to this log
+  // (src/facilitator-diagnostics.js). Before every payment gate.
+  app.use(settleReceiptHeaderGuard());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
