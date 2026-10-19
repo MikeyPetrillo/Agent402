@@ -131,6 +131,19 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   on a push, and keeps one issue open while it fails; its output is redacted before log or issue.
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
 
+## Splitting work across agents
+- Fan out only where steps are independent: a step that does not read another step's output
+  runs beside it. Two steps that write the same file, store or wallet are not independent.
+- Give each parallel agent its own worktree and branch, and merge the branches into the batch
+  in one place; never let two agents edit one checkout.
+- Reduce in code where possible (counts, diffs, exit codes) and keep what returns to the
+  parent short, so the merge step never has to hold every agent's full output.
+- Verify with fresh context: before a batch PR, a reviewer that did not write the change reads
+  the full diff against `main` and runs the suites the change touches. The author's own
+  passing run is not that review.
+- Anchor every claim of done on something outside the agent: a test exit code, a CI run, a
+  live read of production.
+
 ## Testing (run locally)
 - Free-mode boot: `FREE_MODE=true PORT=3000 node src/server.js`, then
   `TARGET_URL=http://localhost:3000 node scripts/test-all.js` and `scripts/test-mcp-all.js`.
