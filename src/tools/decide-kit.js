@@ -21,6 +21,7 @@ import { dispatchable } from "./route-execute.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
 import { resolveStepRefs, STEP_REF } from "../decide/step-refs.js";
+import { hasLastingEffect } from "../hangup-forgiveness.js";
 import { sketchPlan, sketchListPriceUsd, SKETCH_MIN_STEPS, SKETCH_MAX_STEPS } from "../decide/sketch-plan.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -278,6 +279,10 @@ function paramSetsOf(step, overrides) {
  * an integer, a dependsOn that is not a list, or that names a step that is not
  * earlier in the plan: unknown, itself, later, or a cycle) runs in plan order,
  * one step at a time, as every plan did before.
+ * A step whose tool (or any fallback) leaves state behind (hasLastingEffect:
+ * the memory writers, attest, feedback, ...) is a barrier: it waits for every
+ * earlier step and every later step waits for it, so a write and a read of the
+ * same state keep plan order even when the plan names no edge between them.
  * @returns {{ parallel: boolean, deps: number[][], why?: string }}
  */
 export function planSchedule(plan, overrides) {
@@ -305,9 +310,13 @@ export function planSchedule(plan, overrides) {
         if (j !== undefined && j < i) set.add(j);
       }
     }
-    deps.push([...set].sort((a, b) => a - b));
+    deps.push(set);
   }
-  return { parallel: true, deps };
+  const barrier = steps.map((p) => [p?.tool, ...(Array.isArray(p?.fallbacks) ? p.fallbacks : [])].some((t) => hasLastingEffect(t?.slug)));
+  for (let i = 0; i < steps.length; i++) {
+    for (let j = 0; j < i; j++) if (barrier[i] || barrier[j]) deps[i].add(j);
+  }
+  return { parallel: true, deps: deps.map((s) => [...s].sort((a, b) => a - b)) };
 }
 
 /**

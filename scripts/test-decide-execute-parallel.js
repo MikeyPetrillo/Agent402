@@ -90,6 +90,15 @@ function setup(plan, { ledgerWrap = (l) => l, runStopSignal, runBudgetMs = () =>
   ok(!planSchedule([{ step: 1, dependsOn: [1] }]).parallel, "a step that depends on itself falls back to plan order");
   ok(!planSchedule([{ step: 1, dependsOn: [] }, { step: 1, dependsOn: [] }]).parallel, "repeated step numbers fall back to plan order");
   ok(!planSchedule([{ step: 1 }, { step: 2, dependsOn: [] }]).parallel, "a step with no dependsOn list falls back to plan order");
+  const W = (slug, extra = {}) => ({ dependsOn: [], tool: { slug, exampleParams: {} }, ...extra });
+  const wr = planSchedule([{ step: 1, ...W("memory-write") }, { step: 2, ...W("memory-read") }, { step: 3, ...W("dns-lookup") }]);
+  ok(wr.parallel && JSON.stringify(wr.deps) === "[[],[0],[0]]", `a step that leaves state behind runs before every later step (${JSON.stringify(wr.deps)})`);
+  const rw = planSchedule([{ step: 1, ...W("memory-read") }, { step: 2, ...W("dns-lookup") }, { step: 3, ...W("memory-write") }, { step: 4, ...W("memory-read") }]);
+  ok(JSON.stringify(rw.deps) === "[[],[],[0,1],[2]]", `...and after every earlier step (${JSON.stringify(rw.deps)})`);
+  const fb = planSchedule([{ step: 1, ...W("dns-lookup", { fallbacks: [{ slug: "memory-incr" }] }) }, { step: 2, ...W("memory-read") }]);
+  ok(JSON.stringify(fb.deps) === "[[],[0]]", "a fallback that leaves state behind makes its step a barrier too");
+  const reads = planSchedule([{ step: 1, ...W("memory-read") }, { step: 2, ...W("memory-read") }]);
+  ok(JSON.stringify(reads.deps) === "[[],[]]", "two steps that only read still run at once");
   ok(maxParallelSteps({ execute: { maxParallelSteps: 3 } }) === 3 && maxParallelSteps({ execute: {} }) === 3 && maxParallelSteps({ execute: { maxParallelSteps: 0 } }) === 3 && maxParallelSteps({ execute: { maxParallelSteps: 99 } }) === 8, "the cap defaults to 3 and is clamped to 1..8");
 }
 
