@@ -369,7 +369,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // route: after the last gate (the x402 dispatcher) and before any handler -
   // the memory family, the hand-written URL tools and the generic binder.
   const reserve = server.indexOf("reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });");
-  const x402At = server.indexOf("return x402mw(req, res, next);");
+  const x402At = server.indexOf("return x402mw(req, res, ");
   const firstHandler = Math.min(...['app.post("/api/extract"', 'app.post("/api/memory"', "for (const tool of ALL_KIT) {\n  const [method, path] = tool.route.split"].map((s) => server.indexOf(s)).filter((i) => i >= 0));
   ok(reserve > 0 && x402At > 0 && reserve > x402At && reserve < firstHandler, "the ticket is reserved after every payment gate and before every paid handler");
   const mw = server.slice(server.lastIndexOf("app.use((req, res, next) => {", reserve), reserve);

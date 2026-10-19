@@ -3,10 +3,11 @@
 //
 // READERS. src/tools/sanctions-kit.js (the sanctions-wallet and sanctions-name
 // tools, and screenAddressForPayment, the router's check before it pays a
-// seller) and src/sanctions-screen.js (Tempo direct mode's payment-party
-// screen, which keeps only the EVM-format addresses). Both read the list
-// through parseSdnXml below, so they can never read it differently, and both
-// load it through loadSdnList, so one fetch feeds both.
+// seller) and src/sanctions-screen.js (the payment-party screen of Tempo
+// direct mode and of x402 payers, which keeps only the EVM-format
+// addresses). Both read the list through parseSdnXml below, so they can never
+// read it differently, and both load it through loadSdnList, so one fetch
+// feeds both.
 //
 // SOURCE. The SDN list in OFAC's legacy XML format, published by the Sanctions
 // List Service:

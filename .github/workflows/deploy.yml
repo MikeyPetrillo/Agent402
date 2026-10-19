@@ -3049,6 +3049,8 @@ jobs:
           t node scripts/test-mppx-store.js
           # Tempo direct mode screens every payment party against the OFAC SDN list before money moves (fixture list, offline)
           t node scripts/test-sanctions-screen.js
+          # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-x402-payer-screen.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)

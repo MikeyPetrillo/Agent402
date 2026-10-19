@@ -340,6 +340,7 @@ import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppO
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
+import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -3312,11 +3313,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
-    // Tempo direct mode's payment-party screen (src/sanctions-screen.js):
-    // fresh / stale / missing, only while direct mode's gate is mounted. One word
-    // publicly; counts and the last load time for the operator.
-    ...(sanctionsScreenStarted() && tempoSettlementMode() === "direct"
-      ? { sanctionsScreen: (() => { try { return full ? sanctionsScreenOperatorView() : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+    // The payment-party screen (src/sanctions-screen.js) of Tempo direct
+    // mode and of x402 payers (src/x402-payer-screen.js): fresh / stale /
+    // missing, while either is on. One word publicly; counts and the last
+    // load time for the operator.
+    ...(sanctionsScreenStarted()
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView() } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
@@ -8874,6 +8876,14 @@ if (FREE_MODE) {
       )
     ),
   });
+  // x402 payer screen (src/x402-payer-screen.js): called as the x402
+  // middleware's `next`, so it runs after verification and before every paid
+  // handler; a refusal is a 403 and cancels settlement. The list is shared
+  // with Tempo direct mode (started there first when that mode is on); the
+  // first tick waits for the sanctions tools' boot warm-up so one download
+  // feeds both.
+  startSanctionsScreen({ firstTickDelayMs: 15_000 });
+  const x402PayerScreen = createX402PayerScreen();
   // Payment-nonce replay guard (M3, defends "Five Attacks on x402" Attack II).
   // Defense-in-depth over settle-before-grant: rejects a duplicate payment
   // authorization before it reaches the facilitator and closes the concurrent-
@@ -9310,7 +9320,7 @@ if (FREE_MODE) {
         } catch { /* unreadable header: leave it exactly as sent */ }
       }
     }
-    return x402mw(req, res, next);
+    return x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next)));
   });
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }
