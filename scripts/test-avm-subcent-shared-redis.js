@@ -44,8 +44,13 @@ const b0 = await container(`async (m) => { const n = await m.syncSharedSubcentPa
 ok(b0.n === 0 && b0.paused === false && b0.kept === 2, `before any refusal B offers the sub-cent Algorand accept (${JSON.stringify(b0)})`);
 
 // ---- A records a refusal ---------------------------------------------------------
-const a = await container(`async (m) => { const p = m.noteAvmSettleRefusal({ network: "algorand:mainnet", payTo: ${JSON.stringify(PAYTO)}, errorReason: "subcent_quota_exceeded" }); await new Promise((r) => setTimeout(r, 200)); return { p, paused: m.isSubcentPaused(${JSON.stringify(PAYTO)}) }; }`);
+// The refusal's shared write is fire-and-forget (the settle path never waits on
+// Redis), so this container stays up until the flag is readable rather than for
+// a fixed time: a cold Redis connection can take longer than any fixed sleep.
+const SL = JSON.stringify(new URL("../src/shared-limits.js", import.meta.url).href);
+const a = await container(`async (m) => { const p = m.noteAvmSettleRefusal({ network: "algorand:mainnet", payTo: ${JSON.stringify(PAYTO)}, errorReason: "subcent_quota_exceeded" }); const { shared } = await import(${SL}); let landed = false; for (let i = 0; i < 100 && !landed; i++) { const r = await shared.flagGet("avm-subcent-refusal", ${JSON.stringify(PAYTO)}); landed = !!(r?.ok && r.until > 0); if (!landed) await new Promise((r) => setTimeout(r, 100)); } return { p, landed, paused: m.isSubcentPaused(${JSON.stringify(PAYTO)}) }; }`);
 ok(a.p === true && a.paused === true, `A pauses on its own refusal (${JSON.stringify(a)})`);
+ok(a.landed === true, "A's refusal reaches the shared store");
 
 // ---- B, a separate process, reads it --------------------------------------------
 const b1 = await container(`async (m) => { const before = m.isSubcentPaused(${JSON.stringify(PAYTO)}); const n = await m.syncSharedSubcentPause([${JSON.stringify(PAYTO)}]); const reqs = [${R}, { ...${R}, network: "eip155:8453" }]; return { before, n, paused: m.isSubcentPaused(${JSON.stringify(PAYTO)}), kept: m.withoutPausedSubcentAvm(reqs).map((r) => r.network), rails: m.avmSubcentOfferStatus().length }; }`);
@@ -60,7 +65,9 @@ const b3 = await container(`async (m) => {
   m.installAvmSubcentGate(RS);
   const rs = new RS();
   const first = (await rs.buildPaymentRequirementsFromOptions([], {})).length;
-  await new Promise((r) => setTimeout(r, 300));
+  // The first build only kicks the read; wait for that read to apply (bounded),
+  // not for a fixed time, since the first read also opens the connection.
+  for (let i = 0; i < 100 && !m.isSubcentPaused(${JSON.stringify(PAYTO)}); i++) await new Promise((r) => setTimeout(r, 100));
   const second = (await rs.buildPaymentRequirementsFromOptions([], {})).map((r) => r.network);
   return { first, second };
 }`);
