@@ -884,8 +884,12 @@ export function paymentWindowTimeoutMs(req, defaultMs) {
  *  such attempts a chain walk ends with a 504 (not charged) instead of
  *  starting another. */
 export const MAX_TIMED_OUT_ATTEMPTS = () => Math.max(1, parseInt(process.env.LLM_MAX_TIMED_OUT_ATTEMPTS || "2", 10) || 2);
+// `upstreamTimeout` marks an attempt our own timer ended: a connect timeout (a
+// 504) or a stream that sent only keep-alives until its first-frame deadline (a
+// 502). Any other 504 counts when it ran out (nearly) the whole timeout.
 export function timedOutAttempt(e, startedMs, timeoutMs, now = Date.now()) {
-  return e?.statusCode === 504 && (e.upstreamTimeout === true || now - startedMs >= timeoutMs * 0.95);
+  if (e?.upstreamTimeout === true) return true;
+  return e?.statusCode === 504 && now - startedMs >= timeoutMs * 0.95;
 }
 export function timedOutBudget() {
   let n = 0;
@@ -2422,10 +2426,18 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   // is never cut short and charged.
   const ctrl = new AbortController();
   const startedAt = Date.now();
-  let timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  // Set only when the first-frame deadline fires before the stream commits:
+  // the attempt may have generated upstream, so it counts in timedOutBudget.
+  let firstFrameTimedOut = false;
+  let committed = false;
+  let timer = setTimeout(() => { if (!committed) firstFrameTimedOut = true; ctrl.abort(); }, timeoutMs);
   res.on?.("close", () => ctrl.abort());
   try {
-    const upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url });
+    let upstream;
+    try { upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url }); } catch (e) {
+      if (firstFrameTimedOut && e && typeof e === "object" && e.statusCode === 504) e.upstreamTimeout = true;
+      throw e;
+    }
     if (!upstream.ok) await throwUpstreamError(upstream, { refusal: true, model: body?.model });
     // The 200 is NOT committed until the first `data:` frame arrives. Measured
     // live (paid canary 2026-08-27 20:06:42Z): OpenRouter answered a nano
@@ -2437,7 +2449,6 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     // catches (`!res.headersSent`) and which cancels settlement end to end.
     // Comment-only prelude is bounded so a comment flood cannot buffer forever.
     const scrub = createSseUsageScrubber({ onUsage });
-    let committed = false;
     let pending = "";
     const commit = () => {
       res.writeHead(200, {
@@ -2470,7 +2481,11 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       // cause is logged either way - a bare catch hid a relay-side throw for a
       // day (2026-08-27: every Messages stream read as "no data frame").
       console.warn(`[gateway] stream relay ${committed ? "dropped mid-stream" : "failed before the first data frame"}: ${e?.message || e}`);
-      if (!committed) throw bad("Upstream stream ended before producing any data frame", 502);
+      if (!committed) {
+        const err = bad("Upstream stream ended before producing any data frame", 502);
+        if (firstFrameTimedOut) err.upstreamTimeout = true;
+        throw err;
+      }
     }
     if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
     res.end();

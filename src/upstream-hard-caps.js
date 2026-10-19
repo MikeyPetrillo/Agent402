@@ -90,7 +90,7 @@ export function hardCapRefusalForHost(host, now = Date.now()) {
 }
 
 export function hardCapError() {
-  const e = new Error("This tool's upstream has reached today's usage limit - retry after 00:00 UTC. Nothing was charged for this request.");
+  const e = new Error("This tool's upstream has reached today's usage limit - retry after 00:00 UTC. This call is not charged on x402.");
   e.statusCode = 503;
   e.hardCap = true;
   return e;

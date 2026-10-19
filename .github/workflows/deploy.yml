@@ -967,6 +967,8 @@ jobs:
           t node scripts/test-trial.js
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
+          # Timed-out attempt budget on chat, Messages and Responses, plain and streamed (offline)
+          t node scripts/test-llm-timed-out-budget.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js
@@ -1337,6 +1339,8 @@ jobs:
           t node scripts/test-settle-onchain-proof.js
           # The CoinGecko minute and day caps are one budget across two servers on one Redis; an answer cached on A serves B with no upstream call; a store that does not answer, or no Redis, leaves each server its RATE_LIMIT_REPLICAS share.
           t node scripts/test-coingecko-shared.js
+          # The hard daily upstream ceilings are one count across two containers on one Redis: A spends the ceiling, B refuses after its sync.
+          t node scripts/test-upstream-hard-caps-redis.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
