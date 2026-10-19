@@ -507,7 +507,9 @@ a { color: inherit; }
 /* --- home hero (settled-calls proof, spec strip, staggered load) --- */
 @keyframes ml-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes ml-rise { to { opacity: 1; transform: none; } }
-.ml-stagger > * { opacity: 0; transform: translateY(8px); animation: ml-rise .6s ease forwards; }
+/* Starts at 1% rather than 0: a fully transparent element is not a paint, so the
+   largest-paint measure would wait on the animation (and on a busy main thread). */
+.ml-stagger > * { opacity: .01; transform: translateY(8px); animation: ml-rise .6s ease forwards; }
 .ml-stagger > *:nth-child(1) { animation-delay: .02s; }
 .ml-stagger > *:nth-child(2) { animation-delay: .10s; }
 .ml-stagger > *:nth-child(3) { animation-delay: .18s; }
@@ -523,7 +525,7 @@ a { color: inherit; }
    applied by JS only (see a402InitReveal in ledgerShell's head script), never
    baked in here as a default-hidden state: a JS failure must leave the page
    fully visible, not blank. Class added by JS, transition lives in CSS. */
-.ml-reveal { opacity: 0; transform: translateY(18px); transition: opacity .75s cubic-bezier(.22,.61,.36,1), transform .75s cubic-bezier(.22,.61,.36,1); }
+.ml-reveal { opacity: .01; transform: translateY(18px); transition: opacity .75s cubic-bezier(.22,.61,.36,1), transform .75s cubic-bezier(.22,.61,.36,1); }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
 /* A breadcrumb link is told apart from the plain crumbs by more than color
    (WCAG 1.4.1): an underline, whatever the page's inline style says. */

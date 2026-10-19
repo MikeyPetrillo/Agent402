@@ -53,7 +53,9 @@ ok(/prefers-reduced-motion/.test(src), "prefers-reduced-motion still short-circu
 // The CSS hidden state (opacity 0, translateY) must still exist and only
 // apply via the JS-added .ml-reveal class, never baked into a bare selector -
 // a throw/no-run must leave every section visible, not stuck invisible.
-ok(html.includes(".ml-reveal { opacity: 0"), "the hidden state is scoped to the JS-added .ml-reveal class");
+// Near zero, not zero: a fully transparent element is not a paint, so the
+// largest-paint measure would wait on the reveal.
+ok(html.includes(".ml-reveal { opacity: .01"), "the hidden state is scoped to the JS-added .ml-reveal class (1%, so its first paint counts)");
 ok(!/^\s*\[data-reveal\]\s*\{[^}]*opacity:\s*0/m.test(html), "no bare [data-reveal] selector defaults content to invisible in CSS");
 
 console.log(`\n${pass} passed, ${fail} failed`);
