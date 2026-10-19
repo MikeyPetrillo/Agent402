@@ -284,7 +284,7 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     const sourceList = sources.map((s) => `[${s.n}] ${s.title}${s.body ? "" : " (excerpt only)"} - ${s.url}`).join("\n");
     const report = sourceList ? `${prose}\n\n## Sources\n${sourceList}` : prose;
 
-    const meta = { disclaimer: "Research assembled from public sources and summarised by a model. Not investment, legal or professional advice. Check the cited sources before relying on any figure.", tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
+    const meta = { disclaimer: "Research assembled from public sources and summarized by a model. Not investment, legal or professional advice. Check the cited sources before relying on any figure.", tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
       citations_stripped: audit.stripped, unverified_numeric_claims: audit.unverified.length, ...(audit.unverified.length ? { unverified_numeric_claims_detail: audit.unverified } : {}), synthesis_model: synthModel };
     // Cost is NEVER returned to the buyer (same rule as the gateway).
     const pubSources = sources.map(({ body, bodyTruncated, bodyChars, ...rest }) => ({ ...rest, fullText: !!body, ...(bodyChars ? { bodyChars } : {}) }));
