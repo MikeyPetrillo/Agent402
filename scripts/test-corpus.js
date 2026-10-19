@@ -45,6 +45,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { METERED_SLUGS } from "./test-non-metered-examples.js";
 import { getFreePort } from "./lib/free-port.js";
+import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS_DIR = path.join(HERE, "corpus");
@@ -284,6 +285,14 @@ async function main() {
           // retired or renamed tool, which is exactly what this check is for.
           if (c.requires && c.requires !== "payer" && !process.env[c.requires]) {
             results.push({ ...c, kind: "skipped", note: `needs ${c.requires} (kit not listed on this boot)` });
+            counts.skipped++;
+            continue;
+          }
+          // The RugCheck-backed tools are listed only while their data-source
+          // switch is on (src/rugcheck-switch.js); off, they are configuration,
+          // not a retired or renamed tool.
+          if (RUGCHECK_SLUGS.has(c.slug) && !rugcheckEnabled()) {
+            results.push({ ...c, kind: "skipped", note: "RUGCHECK_TOOLS is off on this boot (tool not listed)" });
             counts.skipped++;
             continue;
           }

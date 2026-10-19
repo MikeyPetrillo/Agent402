@@ -66,6 +66,10 @@ jobs:
           # while this is unset - so the corpus can never certify a table it
           # did not see. Four reads a night.
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+          # The RugCheck-backed tools are listed only with RUGCHECK_TOOLS=on
+          # (src/rugcheck-switch.js). Production serves them, so the nightly
+          # boots the same way and checks them; with it off the cases skip.
+          RUGCHECK_TOOLS: "on"
         run: |
           set +e
           # --server-log keeps the booted server's own stdout/stderr: a kit's
