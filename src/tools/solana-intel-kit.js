@@ -1180,3 +1180,16 @@ for (const t of SOLANA_INTEL_TOOLS) {
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(SOLANA_INTEL_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+// The tools whose answer is a RugCheck read. They are listed only while
+// RUGCHECK_TOOLS=on: with the upstream unreachable each one can only fail, and
+// an unlisted route is honest where a listed one quotes a price it cannot
+// serve. The handlers stay exported in SOLANA_INTEL_TOOLS, so the token brief
+// keeps probing them (each probe is non-fatal there) and the unit tests run.
+export const RUGCHECK_SLUGS = Object.freeze(new Set(["sol-token-safety", "sol-token-report", "sol-token-holders"]));
+export function rugcheckEnabled(env = process.env) {
+  return String(env.RUGCHECK_TOOLS || "").trim().toLowerCase() === "on";
+}
+export function solanaIntelToolsEnabled(env = process.env) {
+  return rugcheckEnabled(env) ? SOLANA_INTEL_TOOLS : SOLANA_INTEL_TOOLS.filter((t) => !RUGCHECK_SLUGS.has(t.slug));
+}

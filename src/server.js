@@ -475,7 +475,9 @@ import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
-import { SOLANA_INTEL_TOOLS } from "./tools/solana-intel-kit.js";
+import { solanaIntelToolsEnabled } from "./tools/solana-intel-kit.js";
+// Env-gated on RUGCHECK_TOOLS=on for the three RugCheck-backed tools.
+const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";

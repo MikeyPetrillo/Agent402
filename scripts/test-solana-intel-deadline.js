@@ -29,7 +29,7 @@ const SLACK_MS = 3000;
 const [port] = await getFreePorts(1);
 const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
   cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", JUPITER_API_BASE: "", POSTHOG_API_KEY: "", SOLANA_RPC_URL: "" },
+  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", JUPITER_API_BASE: "", POSTHOG_API_KEY: "", SOLANA_RPC_URL: "", RUGCHECK_TOOLS: "on" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";

@@ -107,7 +107,15 @@ function workerEnv() {
   env.X402_INDEX_CRAWL = "off";
   env.ROUTER_WORKERS = "0";
   env.AGENT402_ROUTER_WORKER = "1";
+  // A module the worker imports must never refuse to load for lack of a
+  // durable store: production has no /data volume, and the worker is denied
+  // the state database above, so a module-level "no persistent volume" guard
+  // (pow, stats, memory) would process.exit the worker on import, every time,
+  // and queries would run on the main thread forever. The worker serves no
+  // request, so none of those stores holds anything here.
   env.STATS_ALLOW_EPHEMERAL = "true";
+  env.POW_ALLOW_EPHEMERAL = "true";
+  env.MEMORY_ALLOW_EPHEMERAL = "true";
   if (!scratchDir) { try { scratchDir = mkdtempSync(join(tmpdir(), "a402-router-worker-")); } catch { scratchDir = tmpdir(); } }
   env.STATS_DB_DIR = scratchDir;
   return env;
