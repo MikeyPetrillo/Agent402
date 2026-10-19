@@ -261,6 +261,7 @@ const INDEX_ROW_CAP = 100;
 // that quote the cadence read the same constants without importing this file.
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
+import { routeExcludedCategory } from "./route-category.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -7688,6 +7689,12 @@ function toolStatics(t) {
     // be a bug worth seeing rather than an exception worth granting.
     // scripts/test-discovery-note.js asserts no local tool trips it.
     injected: looksLikeListingInjection(hay),
+    // A route in a category the router lists but never buys (personal data
+    // about individuals, src/route-category.js): it stays in the index and on
+    // /api/index?seller= with its category_excluded verdict, and is never
+    // ranked here, so neither this thread nor the router worker (which runs
+    // this same module) can hand it to route-execute.
+    excluded: routeExcludedCategory(t) !== null,
     priceRank: priceRank(t.price),
     // Curated alternate names a tool answers to, scored exactly like the slug
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
@@ -8254,6 +8261,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const memoKey = scoredMemo ? JSON.stringify([q, inc, wantNet, !!strictNetwork, baseUrl, cacheVersion, circular.version]) : null;
   const memoHit = !!scoredMemo && scoredMemo.key === memoKey && scoredMemo.local === localRef;
   const scored = memoHit ? scoredMemo.scored : [];
+  // Rows that matched the query and were left out for their category, counted
+  // so the answer says so (categoryExcluded) instead of reading as "no match".
+  let categoryExcluded = memoHit ? (scoredMemo.categoryExcluded || 0) : 0;
   // The four text-match rules, per row. Same rules and weights as before the
   // candidate index; the index only decides which rows are worth asking.
   const scoreRow = (t) => {
@@ -8288,6 +8298,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // routing decision learns nothing from silence; "matched on description
     // only" tells them to fix their slug, and it makes the neutrality claim
     // checkable by anyone instead of merely stated (asked for in #645).
+    if (score > 0 && st.excluded) { categoryExcluded++; return; }
     if (score > 0) {
       const isLocal = t.seller === LOCAL_SELLER;
       scored.push([score, t, { slug: mSlug, name: mName, text: mText }, st.priceRank, isLocal, isLocal ? selfQuality : payersOf(t.seller), isLocal ? selfCurated : curatedOf(t.seller)]);
@@ -8397,7 +8408,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // published order byte-identical; the sort is a few ms of the query.
   if (!memoHit) {
     scored.sort((a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
-    if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef });
+    if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef, categoryExcluded });
   }
 
   // Per-seller diversity cap (M6, "Five Attacks on x402" Attack IV — Sybil /
@@ -8557,6 +8568,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // `count` and `sellers` keep their exact meaning and their exact values -
     // renaming a live field is a second, worse break. These ride alongside.
     ...partialFields(scored.length, results.length),
+    // Matching routes the router lists but never buys (src/route-category.js),
+    // absent when there are none.
+    ...(categoryExcluded ? { categoryExcluded } : {}),
     ...clampFields(top, ROUTE_TOP_MAX, "top"),
     sellersMatched: sellersScored.size,
     ...(diversityCapped ? {

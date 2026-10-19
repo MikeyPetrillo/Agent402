@@ -106,6 +106,7 @@ const NEW_SELLER_VERDICTS = [
   ["gateway_rail_unsupported", "Nothing to fix: your batched rail works for buyers that speak it. To be routable today as well, add a second accept on the same chain signed under the token's own EIP-712 domain."],
   ["payment_method_unsupported", "Offer the standard exact scheme, where the buyer signs a USDC authorization and the facilitator settles it. A 402 that asks the buyer to send a transfer and prove it afterwards cannot be paid by a stock x402 buyer, ours included."],
   ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
+  ["category_excluded", "Nothing to fix: the route stays listed, buyers can still call it directly, and your other routes are judged on their own."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
   ["settlement_self_funded", "Payments made with USDC your own paid wallet sent the payer are netted out. Only buyers' own money counts."],
   ["delivery_failing", "The router's last paid call to you did not deliver. It retries once that memo expires; fix the failing route first."],

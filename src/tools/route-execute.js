@@ -414,6 +414,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (!candidateList.length && gatedOut > 0) {
             throw bad(`No external seller is eligible for this task on ${chain} right now: ${gatedOut} matched it and all of them are below our settlement gate. Nothing was spent and nothing is charged.`, 409);
           }
+          // Routes the router lists but never buys (src/route-category.js).
+          const excludedOut = Number(drops.byReason?.category_excluded || 0);
+          if (!candidateList.length && excludedOut > 0) {
+            throw bad(`${excludedOut} outside route(s) matched that task on ${chain}, and the router does not buy them: routes that sell personal data about individuals are listed but not bought by the router. Nothing was spent and nothing is charged.`, 404);
+          }
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
           // Nothing is signed from a Base wallet that reads low (a cached
           // reading, never awaited on the network).
