@@ -1413,7 +1413,11 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // (remotePoolMemo), so prices learned into the existing entry are
       // invisible until the object is replaced - a fresh spread busts the
       // memo and the pool re-decorates with what was just learned.
-      cache.set(origin, { ...(cache.get(origin) || existing) });
+      // A change made outside a crawl carries a new revision, so the upsert
+      // takes it and the other container's pull folds it (fetchedAt alone did
+      // not move on a re-price).
+      const cur = cache.get(origin) || existing;
+      cache.set(origin, { ...cur, ...(reread || repriced ? { updatedAt: nextRev(cur) } : {}) });
       // The other container reads this on its next pull.
       if (reread || repriced) await persistOriginToStateDb(origin);
     } catch { /* listing still served */ }
@@ -6039,6 +6043,9 @@ function persistedEntryOf(v) {
       history: Array.isArray(v.history) ? v.history.slice(-10) : [],
       paywall: v.paywall ?? null,
       ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
+      // Stamped by a change made outside a crawl (a re-price): with fetchedAt
+      // it is the entry's revision, what the pull and the upsert compare.
+      ...(Number(v.updatedAt) > 0 ? { updatedAt: Number(v.updatedAt) } : {}),
     });
   }
 }
@@ -6055,7 +6062,7 @@ export async function persistOriginToStateDb(origin) {
     await stateQuery(
       `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-       WHERE ${FETCHED_AT_SQL("r.body")} <= ${FETCHED_AT_SQL("EXCLUDED.body")}`,
+       WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
       [INDEX_RECORDS, origin, JSON.stringify(entry)],
     );
     pgOriginHashes.set(origin, lineHash(line));
@@ -6152,6 +6159,9 @@ const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
 // An entry's fetchedAt as a number in SQL, 0 when absent or not numeric.
 const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'fetchedAt')::numeric ELSE 0 END)`;
+const UPDATED_AT_SQL = (col) => `(CASE WHEN (${col}->>'updatedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'updatedAt')::numeric ELSE 0 END)`;
+// The revision in SQL (entryRev): newer wins on the later of the two stamps.
+const REV_SQL = (col) => `GREATEST(${FETCHED_AT_SQL(col)}, ${UPDATED_AT_SQL(col)})`;
 
 // ---- two containers, one index (2026-10-15) --------------------------------
 // Each container holds the whole index in memory. A seller registered, or an
@@ -6163,6 +6173,13 @@ const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\
 // removed on the other container leaves this one before it could be saved.
 const INDEX_PULL_MS = Number(process.env.INDEX_PULL_MS) || 30_000;
 const entryFetchedAt = (e) => { const n = Number(e?.fetchedAt); return Number.isFinite(n) ? n : 0; };
+/** An entry's revision: the later of its crawl stamp and its last change made
+ *  outside a crawl. What decides which of two copies is newer. */
+export const entryRev = (e) => { const u = Number(e?.updatedAt); return Math.max(entryFetchedAt(e), Number.isFinite(u) ? u : 0); };
+/** The next revision for an entry changed outside a crawl. */
+const nextRev = (e, now = Date.now()) => Math.max(now, entryRev(e) + 1);
+/** The persisted hash of an origin's entry as a save would write it. */
+const persistedHashOf = (origin, v) => { const e = persistedEntryOf(v); return e ? lineHash(JSON.stringify([origin, e])) : null; };
 let pullWatermark = null;
 let pullInFlight = null;
 export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) {
@@ -6188,8 +6205,10 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         pullWatermark = stamp;
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
-        if (held && entryFetchedAt(held) >= entryFetchedAt(body)) continue;
+        if (held && entryRev(held) >= entryRev(body)) continue;
         cache.set(id, held ? { ...held, ...body } : { ...body, warmStarted: true });
+        // Held as stored, so this container's next save does not write it back.
+        pgOriginHashes.set(id, persistedHashOf(id, cache.get(id)));
         if (!held) discoveredSeeds.add(id);
         folded++;
       }
@@ -6255,7 +6274,7 @@ async function persistIndexCacheToStateDb(entries, lines) {
         `INSERT INTO ${recordsTable()} AS r (collection, id, body)
          SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
          ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-         WHERE ${FETCHED_AT_SQL("r.body")} <= ${FETCHED_AT_SQL("EXCLUDED.body")}`,
+         WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
         [INDEX_RECORDS, ids, bodies],
       );
       for (const id of ids) pgOriginHashes.set(id, changed.get(id));
@@ -6352,8 +6371,10 @@ async function warmStartIndexOnce() {
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
-        pgOriginHashes.set(id, null);
-        if (foldWarmEntry(id, body)) n++;
+        // A row read at boot is held as stored: the first save writes only
+        // what this container changed, never every row over a peer's newer one.
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); }
+        else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
       pages++;

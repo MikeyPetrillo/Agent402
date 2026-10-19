@@ -1378,6 +1378,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
+          t node scripts/test-index-reprice-replicas-pg.js
           t node scripts/test-leaderboard-peer-adopt-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
