@@ -833,3 +833,36 @@ console.log("openapi-fallback tests passed");
   ok(allPayToPrices("eip155:137").get(W)?.has(3000), "the network argument selects that network's payTo");
   console.log("ok - allPayToPrices reads each wallet's listed prices from the crawl");
 }
+
+// ---- An OpenAPI document whose servers[] are all other hosts ----------------
+// Its paths are the other host's endpoints. Filed under the origin serving the
+// document they are routes that do not exist there, so the document gives no
+// rows; a same-host, relative or development server still sets the base path.
+{
+  const { openapiBasePath, openapiAllOperationRoutes } = await import("../src/x402-index.js");
+  const doc = { openapi: "3.1.0", servers: [{ url: "https://rail-a.other.example" }, { url: "https://rail-b.other.example" }],
+    paths: { "/vendor/v1/lookup": { get: { summary: "Lookup", "x-price": "$0.10" } } } };
+  ok(openapiBasePath(doc, "https://api.seller.example") === null, "servers naming only other hosts read as another host's document");
+  ok(normaliseOpenapiTools(doc, "https://api.seller.example").length === 0, "no rows are filed under the serving origin for another host's paths");
+  ok(openapiAllOperationRoutes(doc, "https://api.seller.example").length === 0, "no declared routes either");
+  const mixedCase = { ...doc, servers: [{ url: "https://API.Seller.example/v2" }] };
+  ok(openapiBasePath(mixedCase, "https://api.seller.example") === "/v2", "the same host in another case is this seller");
+  ok(openapiBasePath({ ...doc, servers: [{ url: "https://www.api.seller.example/v2" }] }, "https://api.seller.example") === "/v2", "a www. server is this seller");
+  ok(openapiBasePath({ ...doc, servers: [{ url: "http://localhost:8080/api" }] }, "https://api.seller.example") === "/api", "a development server still gives the base path");
+  ok(openapiBasePath({ ...doc, servers: [{ url: "https://rail-a.other.example" }, { url: "/api" }] }, "https://api.seller.example") === "/api", "a relative server wins over another host");
+  ok(openapiBasePath({ ...doc, servers: [{ url: "https://{env}.seller.example/api" }] }, "https://api.seller.example") !== null, "an unparseable templated server is not another host");
+  console.log("ok - an OpenAPI document naming only other hosts gives this origin no rows");
+}
+
+// ---- Display names for a mainnet fold onto its chain id ---------------------
+{
+  const { openapiOperationPayment } = await import("../src/x402-index.js");
+  const p = openapiOperationPayment({ "x-payment-info": { price: "$0.01", network: "Algorand MainNet", payTo: "ALGOADDR" } });
+  ok(p.networks.length === 1 && p.networks[0].startsWith("algorand:wGHE2Pwd"), `"Algorand MainNet" reads as the Algorand mainnet id (got ${p.networks})`);
+  ok(p.payToByNetwork[p.networks[0]] === "ALGOADDR", "the payTo is keyed by the folded id");
+  ok(openapiOperationPayment({ "x-payment-info": { price: "$0.01", network: "Solana Mainnet-Beta" } }).networks[0]?.startsWith("solana:5eykt"), "Solana Mainnet-Beta folds onto Solana mainnet");
+  const unk = openapiOperationPayment({ "x-payment-info": { price: "$0.01", network: "Some Private Chain", payTo: "X" } });
+  ok(unk.networks.length === 0 && Object.keys(unk.payToByNetwork).length === 0, "an unknown display name is dropped, not kept as a network");
+  ok(openapiOperationPayment({ "x-payment-info": { price: "$0.01", network: "Base Sepolia" } }).networks.length === 0, "a testnet display name never folds onto a mainnet");
+  console.log("ok - mainnet display names fold, unknown names drop");
+}

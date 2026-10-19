@@ -212,7 +212,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     filing: `New 13F filing: ${t}`,
     problem: `We could not complete your ${lbl} for ${t}`,
     recall: `New FDA recall activity: ${t}`,
-    "safety-change": `Token safety changed: ${t}`,
+    "safety-change": `Token risk changed: ${t}`,
     "filing-new": `New SEC filing: ${t}`,
     digest: `${lbl}: this week's filings${t && t !== "all" ? ` for ${t}` : ""}`,
   };

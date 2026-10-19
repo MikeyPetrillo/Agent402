@@ -308,5 +308,18 @@ __setCrawlFetchForTest(null);
   ok(sellerRouteUrl("https://h.example", "https://evil.example/x") === null, "an absolute URL as a route is refused");
   ok(sellerRouteUrl("https://h.example/app/one", "/../two/x") === null, "dot segments that climb out of the prefix are refused");
 }
+// Re-anchoring under the prefix applies to refs written host-relative; an
+// absolute URL outside the prefix names another path on the host and stays out.
+{
+  const { normaliseManifestTools } = await import("../src/x402-index.js");
+  const KEY = "https://anchor.example/functions/v1/api";
+  const rows = normaliseManifestTools({ origin: KEY, resources: [
+    { resource: "/v1/reconcile", method: "POST", price: "$0.01" },
+    { resource: "https://anchor.example/v1/elsewhere", method: "POST", price: "$0.01" },
+  ] }, KEY);
+  const routes = rows.map((r) => r.route).sort();
+  ok(routes.includes("/v1/reconcile"), `a host-relative ref is re-anchored under the prefix (got ${routes})`);
+  ok(!routes.includes("/v1/elsewhere"), `an absolute out-of-prefix URL stays dropped (got ${routes})`);
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

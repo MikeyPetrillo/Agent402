@@ -967,6 +967,8 @@ jobs:
           t node scripts/test-trial.js
           # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
           t node scripts/test-llm-gateway.js
+          # Timed-out attempt budget on chat, Messages and Responses, plain and streamed (offline)
+          t node scripts/test-llm-timed-out-budget.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js
@@ -979,6 +981,9 @@ jobs:
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js
       - name: Live visualizer tests (services/live, offline)
         run: node services/live/test.js
+
+      - name: Live visualizer outbound guard and per-address stream cap (services/live, offline)
+        run: node services/live/test-guard.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1337,6 +1342,12 @@ jobs:
           t node scripts/test-settle-onchain-proof.js
           # The CoinGecko minute and day caps are one budget across two servers on one Redis; an answer cached on A serves B with no upstream call; a store that does not answer, or no Redis, leaves each server its RATE_LIMIT_REPLICAS share.
           t node scripts/test-coingecko-shared.js
+          # The hard daily upstream ceilings are one count across two containers on one Redis: A spends the ceiling, B refuses after its sync.
+          t node scripts/test-upstream-hard-caps-redis.js
+          # A sub-cent Algorand settle refusal in one process withdraws that accept in another after one shared read.
+          t node scripts/test-avm-subcent-shared-redis.js
+          # Seller registration limits (x402 and MPP, per IP and global) are one count across two servers on one Redis, with each process's own count as the floor.
+          t node scripts/test-registration-limits-redis.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
@@ -1358,9 +1369,13 @@ jobs:
           t node scripts/test-overlap-stores-pg.js
           # A signed email link for a record the other container made works here.
           t node scripts/test-email-links-pg.js
+          # email status row read at module load with the state database; a later boot reports the recorded outcome (Postgres)
+          t node scripts/test-email-status-boot-pg.js
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
+          # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
+          t node scripts/test-lease-failopen-replicas.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
           t node scripts/test-lease-fencing-pg.js
           # A paid monitor run is claimed on its record; saves merge, never erase.
@@ -1378,6 +1393,15 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
+          t node scripts/test-index-reprice-replicas-pg.js
+          # Index side stores merge per key and fold the other container's changes on the pull
+          t node scripts/test-index-side-stores-pg.js
+          t node scripts/test-leaderboard-peer-adopt-pg.js
+          # The seller-funding operator switch set on one container applies on the other after one re-read.
+          t node scripts/test-seller-funding-switch-pg.js
+          # Two containers, one MPP index: registrations reach the other by its pull, saves merge by origin, a skipped crawl saves nothing.
+          t node scripts/test-mpp-index-replicas-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
@@ -1402,7 +1426,11 @@ jobs:
           t node scripts/test-tempo-push-void-crosscontainer-pg.js
           t node scripts/test-mcp-tasks-pg.js
           t node scripts/test-hangup-forgiveness-pg.js
+          # The forgiveness budget holds across replicas: one reservation script over every window on REAL redis (needs this lane's Redis).
+          t node scripts/test-hangup-forgiveness-redis.js
           t node scripts/test-external-spend-guard-pg.js
+          # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
+          t node scripts/test-external-spend-guard-redis.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
           # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
@@ -1415,8 +1443,10 @@ jobs:
           t node scripts/test-human-checkout-failures-pg.js
           # Another container never takes over a claim whose owner still beats, nor refunds one marked generated.
           t node scripts/test-human-checkout-crosscontainer-pg.js
-          # A paid subscription recorded while the database is away survives a restart; reload shows another container's.
+          # A paid subscription recorded while the database is away survives a true restart (the next container lands it by its boot replay); reload shows another container's.
           t node scripts/test-stripe-subscriptions-pg.js
+          # A report read that fails answers a fixed message; the driver's text goes to the log.
+          t node scripts/test-session-read-error-pg.js
           t node scripts/test-wish-pg.js
           # A first load that failed is retried until it lands; DDL from two boots never races;
           # a failed write is kept and retried; a stats batch whose COMMIT reply was lost counts once.
@@ -1526,6 +1556,10 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
+          t node scripts/test-async-jobs-body-loss.js
+          # A settle failure's PAYMENT-RESPONSE carries a code and a fixed message, never the facilitator's raw text (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-settle-failure-header.js
           # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
@@ -1558,6 +1592,10 @@ jobs:
           t node scripts/test-seller-verification.js
           # Delivery-failure memory: a seller whose PAID call 5xx'd with no receipt (or never answered) stops being ranked and stops being labelled callable, until a call to it succeeds
           t node scripts/test-seller-delivery-memory.js
+          # Refusal and delivery memos reach the other replica through the shared store
+          t node scripts/test-seller-memo-shared.js
+          # Re-registration cooldowns per origin hold across replicas (shared store)
+          t node scripts/test-register-cooldown-shared.js
           # "External spend guard (per-payer debt ceiling: an UNSETTLED upstream spend keeps counting, so verify-then-fail-to-settle cannot drain the wallet — offline)"
           t node scripts/test-external-spend-guard.js
           # H-01/H-03: one halt reaches every signing path; the daily ceiling survives a restart
@@ -1722,6 +1760,7 @@ jobs:
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
           t node scripts/test-router-worker.js
           t node scripts/test-router-worker-prod-boot.js
+          t node scripts/test-route-index-compaction.js
           t node scripts/test-health-router-warming.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
@@ -2663,6 +2702,42 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # transcribe's refusal for our own billing limit names our side and no vendor (offline)
+          t node scripts/test-stt-billing-limit.js
+          # rwa-asset joins only the requested asset's market row (offline)
+          t node scripts/test-rwa-asset-own-row.js
+          # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
+          t node scripts/test-filing-watch-older-files.js
+          # cpi-yoy lists unpublished months; world-bank default end year is last year; release calendar uses the Chicago date (offline)
+          t node scripts/test-macro-dates.js
+          # flight-search refuses a date as past only before today's date in UTC-12 (offline)
+          t node scripts/test-flights-local-date.js
+          # weather tools keep a missing precipitation value as null, never 0 mm (offline)
+          t node scripts/test-weather-null-precip.js
+          # IPO filings list each accession once across pages (offline)
+          t node scripts/test-ipo-dedupe.js
+          # 13F amendments apply oldest first (offline)
+          t node scripts/test-13f-amendment-order.js
+          # Insider reports keep only Form 4 filings whose issuer is the company (offline)
+          t node scripts/test-insider-issuer-filter.js
+          # EDGAR financials pick ~3- and ~12-month periods; fallback tags labeled as what they measure (offline)
+          t node scripts/test-edgar-period-pick.js
+          # 13G cover: an empty or absent tag falls through and reads as unknown, never 0 (offline)
+          t node scripts/test-13g-cover-fallback.js
+          # S3 wire for backup and dataset snapshot: list not HEAD, per-segment path signed as sent, no content-length on a Buffer PUT (stubbed fetch, offline)
+          t node scripts/test-backup-s3-wire.js
+          # load-shed boot warm-up default is 60 s (offline)
+          t node scripts/test-load-shed-warmup.js
+          # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
+          t node scripts/test-worker-deploy-step.js
+          # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
+          t node scripts/test-deploy-has-status.js
+          # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
+          t node scripts/test-media-input-args.js
+          # safeFetch timeoutMs bounds the body read too (local trickle server, offline)
+          t node scripts/test-safefetch-body-timeout.js
+          # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
+          t node scripts/test-yaml-alias-cap.js
 
   test-unit-d:
     # The second half of test-unit-b (2026-08-25). That lane was 200 steps
@@ -2812,6 +2887,7 @@ jobs:
           t node scripts/test-stripe-shadow-ledger.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
+          t node scripts/test-ssrf-literal-ip.js
           t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
@@ -4237,6 +4313,12 @@ jobs:
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
 
+      - name: Static asset caching (versioned /js immutable, other /js short; fonts immutable woff2 behind an allowlist)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-static-asset-cache.js
+
+      - name: SDK playground sandbox runs code only for the page that frames it (real browser, cross-origin opener and frame)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-sdk-sandbox-origin.js
+
       - name: Focus-visible on search/demo inputs (real browser check - inline style can silently defeat a stylesheet :focus rule)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-focus-visible.js
 
@@ -4420,6 +4502,7 @@ jobs:
           t node scripts/test-seller-trust-lanes.js
           # USDC EIP-712 domain truth per chain: table pinned to payments.js + @x402/evm, wrong-name accepts refused (offline)
           t node scripts/test-evm-usdc-domain.js
+          t node scripts/test-direct-transfer-seller.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
           t node scripts/test-sor-payto-binding.js
           # Operator-listed shared payTo wallets credit nobody: the rule, the persisted store, and the lever on a booted free server across a restart
@@ -6208,18 +6291,23 @@ jobs:
           # deploy job, so it checks the PREVIOUS build's homepage — a fix to
           # these surfaces goes green on the run AFTER the one that ships it.
           FAILS=0
-          ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING"; FAILS=$((FAILS+1)); fi; }
-          HTML=$(curl -s "$PROD/")
-          ck "FAQPage JSON-LD"            'echo "$HTML" | grep -q "\"FAQPage\""'
+          # Each surface is fetched whole, then searched, and a miss is retried
+          # (this runs while the deploy's old and new containers overlap, when
+          # a cold container can briefly refuse a page); a final miss names the
+          # HTTP status it got. Only a 2xx answer counts: an error page that
+          # happens to contain the needle is still a miss.
+          has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; case "$code" in 2??) grep -qF -- "$2" <<<"$body" && return 0 ;; esac; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep "${HAS_RETRY_SLEEP:-10}"; done; return 1; }
+          ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
+          ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
           # The ledger homepage renders the FAQ section with a "$ GET /faq"
           # kicker (its h2 is styled, so the old <h2>FAQ</h2> literal is gone).
-          ck "visible FAQ"               'echo "$HTML" | grep -q "GET /faq"'
-          ck "AggregateOffer"            'echo "$HTML" | grep -q AggregateOffer'
-          ck "robots welcomes AI crawlers" 'curl -s "$PROD/robots.txt" | grep -q GPTBot'
-          ck "MCP connector on landing"  'echo "$HTML" | grep -q agent402-mcp'
-          ck "MCP connector in llms.txt" 'curl -s "$PROD/llms.txt" | grep -q agent402-mcp'
-          ck "unit-convert tool page"    'curl -s "$PROD/tools/unit-convert" | grep -q "Unit convert"'
-          ck "guides with TechArticle JSON-LD" 'curl -s "$PROD/guides/x402-in-5-minutes" | grep -q TechArticle'
+          ck "visible FAQ"               'has "$PROD/" "GET /faq"'
+          ck "AggregateOffer"            'has "$PROD/" AggregateOffer'
+          ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
+          ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
+          ck "MCP connector in llms.txt" 'has "$PROD/llms.txt" agent402-mcp'
+          ck "unit-convert tool page"    'has "$PROD/tools/unit-convert" "Unit convert"'
+          ck "guides with TechArticle JSON-LD" 'has "$PROD/guides/x402-in-5-minutes" TechArticle'
           [ "$FAILS" -eq 0 ] || { echo "$FAILS production surface(s) regressed"; exit 1; }
           echo "=== proof-of-work tier live on production (no wallet) ==="
           node --input-type=module -e '
@@ -6273,6 +6361,44 @@ jobs:
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+
+      # The render/media worker (agent402-worker) is its own Railway service,
+      # built from Dockerfile.worker by an upload of this checkout; nothing
+      # else rebuilds it, so a merge that changes the worker's code reaches it
+      # only through this step. It runs when the pushed range touches a file
+      # scripts/worker-deploy-paths.js lists (the image inputs plus
+      # worker/server.js's import closure). FAIL-OPEN: an unreadable diff or no
+      # diff base redeploys. The CLI is a pinned release binary checked
+      # against its published sha256 (no package install, no lifecycle scripts).
+      - name: Redeploy the render worker when its code changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIFF_BASE: ${{ github.event.before }}
+          RAILWAY_CLI_VERSION: "5.63.1"
+          RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+        run: |
+          set -euo pipefail
+          RUN=yes
+          if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
+            if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
+              if [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check)" = "yes" ]; then
+                echo "worker files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker"
+              else
+                echo "no worker file changed in $DIFF_BASE...$GITHUB_SHA - agent402-worker keeps its build"
+                RUN=no
+              fi
+            else
+              echo "could not read the diff $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker (fail-open)"
+            fi
+          else
+            echo "no diff base for this event - redeploying agent402-worker (fail-open)"
+          fi
+          [ "$RUN" = "yes" ] || exit 0
+          CLI_DIR=$(mktemp -d)
+          curl -fsSL --max-time 120 -o "$CLI_DIR/cli.tgz" "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "$RAILWAY_CLI_SHA256  $CLI_DIR/cli.tgz" | sha256sum -c -
+          tar -xzf "$CLI_DIR/cli.tgz" -C "$CLI_DIR"
+          "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --ci
 
       # The decide service (DECIDE_MODE=true, same image) builds from the same
       # commit, AFTER the main app is verified: its index syncs from the main

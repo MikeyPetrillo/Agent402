@@ -104,12 +104,15 @@ const ageClaim = (id, { claimMs, beatMs = null, takeovers }) => pgDirect(
 function containerA({ dir = mkdtempSync(join(tmpdir(), "hc-xc-A-")) } = {}) {
   const st = { gens: 0, refunds: [], cut: false, dir };
   st.hc = createHumanCheckout({ stripe: stripeOf(st.refunds), baseUrl: "https://example.test", storeDir: dir, log: () => {},
-    generate: async () => { st.gens++; await wait(450); if (st.cut) relay.cut(); return { report: "# A delivered", title: "t", sources: [], tables: [] }; } });
+    // The job runs until its heartbeat is in the row (not a fixed time: a slow
+    // runner can take longer than a few beat intervals to land the first one).
+    generate: async () => { st.gens++; await wait(450); for (let i = 0; i < 50 && st.cut; i++) { const r = await rowOf(st.current).catch(() => null); if (Number(r?.beatAt) > Number(r?.claimedAt)) break; await wait(100); } if (st.cut) relay.cut(); return { report: "# A delivered", title: "t", sources: [], tables: [] }; } });
   return st;
 }
 // A generates while connected, the database goes away as the report is made; A keeps it on its disk and answers "generating".
 async function generateThenLoseDb(a, id) {
   a.cut = true;
+  a.current = id;
   await a.hc.fulfill(id);
   for (let i = 0; i < 80 && !(existsSync(join(a.dir, "_pending-finals.ndjson")) && readFileSync(join(a.dir, "_pending-finals.ndjson"), "utf8").includes(id)); i++) await wait(50);
   const p = await a.hc.peek(id).catch(() => null);

@@ -61,5 +61,13 @@ ok(FILING_ALERT_FORMS.every((x) => ALERT_KINDS.filing.cta("TST").includes(x)), "
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/probes:\s*makeFreeAlertProbes\(/.test(src), "server.js does not build the alert probes through makeFreeAlertProbes");
 
+// A baseline taken before the probe began reading older filing files holds a
+// shorter list; the version must differ from that one so each alert
+// re-baselines silently instead of mailing older filings as new.
+{
+  const probes = makeFreeAlertProbes({ probeInsider: async () => ({}), probeFilings: async () => ({ keys: [], filings: [] }), resolveManager: async () => null, latest13f: async () => null, probeDomain: async () => ({}), probeRecalls: async () => ({}) });
+  ok(probes.filing.version !== "forms:10-K,10-Q,8-K" && /older/.test(probes.filing.version), `the filing probe version moved past the pre-change baselines (${probes.filing.version})`);
+}
+
 console.log(`test-free-alert-probes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

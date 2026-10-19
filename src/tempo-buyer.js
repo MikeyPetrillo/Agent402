@@ -29,7 +29,28 @@ import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { Agent as UndiciAgent } from "undici";
+const trustedDispatcher = new UndiciAgent();
 import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
+
+
+/** The tempo/charge challenge this wallet pays: the first one it CAN pay (USDC.e,
+ *  Tempo mainnet or no chain named, no split recipients), else the first
+ *  tempo/charge one so the refusal names what was offered. An unpayable entry
+ *  listed ahead of a payable one never decides the purchase. Pure; exported
+ *  for tests. */
+export function pickTempoChallenge(challenges) {
+  const charges = (Array.isArray(challenges) ? challenges : []).filter((c) => c?.method === "tempo" && c?.intent === "charge");
+  const payable = (c) => {
+    const req = c.request || {};
+    if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) return false;
+    const chainId = req.methodDetails?.chainId;
+    if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) return false;
+    const splits = req.methodDetails?.splits;
+    return splits === undefined || splits === null || (Array.isArray(splits) && splits.length === 0);
+  };
+  return charges.find(payable) || charges[0] || null;
+}
 
 export const TEMPO_CHAIN_ID = 4217;
 export const TEMPO_CAIP2 = "eip155:4217";
@@ -209,8 +230,9 @@ export async function payTempo(url, {
     redirect: "manual",
     signal: AbortSignal.timeout(Math.max(1, leftMs())),
     // Pin the resolved address on every hop (the one-shot assertPublicUrl above is
-    // TOCTOU-rebindable), exactly as src/x402-buyer.js does.
-    dispatcher: ssrfDispatcher,
+    // TOCTOU-rebindable), exactly as src/x402-buyer.js does. A trusted URL (a
+    // fixed first-party address, or a test seller on this host) skips the guard.
+    dispatcher: trusted ? trustedDispatcher : ssrfDispatcher,
   });
   // 1. Bare request -> the seller's live 402 (their quote is the truth, the
   //    registry price is a hint).
@@ -222,7 +244,7 @@ export async function payTempo(url, {
   const { Challenge } = await import("mppx");
   let challenges;
   try { challenges = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": www })); } catch { throw bad("Seller's MPP challenge did not parse", 502); }
-  const ch = challenges.find((c) => c.method === "tempo" && c.intent === "charge");
+  const ch = pickTempoChallenge(challenges);
   if (!ch) throw bad(`Seller offers no tempo/charge method (offered: ${challenges.map((c) => `${c.method}/${c.intent}`).join(", ") || "none"})`, 409);
   const req = ch.request || {};
   // 2. ASSET PIN + chain + margin guard, all before any signing.

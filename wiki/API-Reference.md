@@ -129,19 +129,19 @@ receipt and transaction, a slice of the response body, and how long each leg
 took. Up to $0.02 of the seller's price per check. Point it at your own endpoint
 before you launch.
 
-### SQL execution certificates
+### Signed SQL check results
 
 `POST /api/sql-guard` ($0.004) reviews one SQL statement an agent is about to run
 and returns a verdict (`pass` / `warn` / `block`) with the risks named; on `pass`
-it also returns an Ed25519 certificate binding that verdict to the SHA-256 of the
-exact statement. `POST /api/sql-cert-verify` ($0.001) is the gate your database
+it also returns an Ed25519-signed check result (the `certificate` field) binding
+that verdict to the SHA-256 of the exact statement. `POST /api/sql-cert-verify` ($0.001) is the gate your database
 layer calls before it obeys the agent, checking the signature, the version, the
 expiry, and that the statement hash matches. See [[Tool Catalog]] for the full
 behavior and the honest scope of the check.
 
 ### Report products (`/v1`)
 
-Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports and Monitors|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
+Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85, `/max` $1.10, `/market-brief` $0.85), `POST /v1/dossier` ($0.85; `/max` $1.10), `POST /v1/ticker-pack` ($2.00), `POST /v1/fund` ($0.60; `/max` $0.85), `POST /v1/filing-report` ($0.85), `POST /v1/domain-audit` ($0.60; `/pro` $0.85), `POST /v1/recall-report` ($0.60), `POST /v1/insider-report` ($0.60), `POST /v1/token-brief` ($0.60), `POST /v1/token-risk` ($0.60; `/pro` $0.85), `POST /v1/linkedin-article` ($1.10), `POST /v1/ipo-report` ($0.05, deterministic). JSON bodies and inputs are on [[Reports and Monitors|Reports-and-Monitors]]; all are wallet-only (x402 / MPP / prepaid credits), never proof-of-work, never cached.
 
 ### Card front door and credits
 
@@ -243,7 +243,7 @@ curl -X POST https://agent402.tools/v1/research \
 curl https://agent402.tools/api/jobs/<jobId>   # free; poll until completed or failed
 ```
 
-The call runs on the server with your payment and **settles only when the answer is ready**: a failed run is not charged, and a refused payment ends the job with its `402`. A completed job carries the route's answer in `result.body` and its payment receipt in `result.headers`. The link is the job's only key and expires after one hour; a client may run four jobs at once. Without the header, or without a payment, the route behaves exactly as before.
+The call runs on the server with your payment and **settles only when the answer is ready**: a failed run is not charged on x402, and a refused payment ends the job with its `402`. A completed job carries the route's answer in `result.body` and its payment receipt in `result.headers`. The link is the job's only key and expires after one hour; a client may run four jobs at once. Without the header, or without a payment, the route behaves exactly as before.
 
 ## Rate limits
 

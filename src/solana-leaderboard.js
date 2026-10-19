@@ -368,7 +368,25 @@ export function __resetSolanaLeaderboardForTest() { current = emptyBoard(); }
 export function _stateForTest() { return current.state; }
 
 /** Rebuild: list payTos, scan incrementally against the persisted per-payTo state, prime the gate, persist. Deduped in flight. */
-export const refreshSolanaLeaderboard = leased("solana-leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshSolanaLeaderboardUnleased);
+const refreshSolanaLeaderboardLeased = leased("solana-leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshSolanaLeaderboardUnleased);
+// The container without the lease skips the scan; it adopts the board the
+// other container saved (when newer) and primes its own gate from it, so both
+// containers hold the same evidence.
+export async function refreshSolanaLeaderboard(opts = {}) {
+  const r = await refreshSolanaLeaderboardLeased(opts);
+  if (r && r.skipped) await adoptPeerSolanaLeaderboard({ prime: opts.prime }).catch(() => {});
+  return r;
+}
+export async function adoptPeerSolanaLeaderboard({ prime, file = SOLANA_LB_CACHE_FILE } = {}) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return false;
+  const r = await d.read({ quiet: true });
+  const j = r?.ok && r.exists ? r.body : null;
+  if (!j || !Array.isArray(j.rows) || !(Number(j.at) > Number(current.at || 0))) return false;
+  current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true };
+  if (typeof prime === "function") for (const row of current.rows) if (!row.unreadable && !row.stale) { try { prime(row.payTo, row.credits); } catch { /* priming is a nicety */ } }
+  return true;
+}
 async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168 } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {

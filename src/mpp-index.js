@@ -24,7 +24,7 @@
 // one discovery source (not four), no Bazaar-style pagination, no per-path
 // backoff matrix (one representative endpoint per seller, not four candidate
 // manifest paths) - grow this only if a second real MPP registry surfaces.
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
@@ -145,12 +145,23 @@ function applySubmittedSeeds(arr) {
 }
 
 let submittedUnsaved = false;
+const seedOriginOf = (row) => (typeof row === "string" ? row : row && typeof row.origin === "string" ? row.origin : null);
+/** The stored list with this container's submissions merged in: a seed (or
+ *  hint) another container stored is kept, never replaced by this one's set. */
+export function mergeSubmittedSeedRows(stored, local) {
+  const out = new Map();
+  for (const row of Array.isArray(stored) ? stored : []) { const o = seedOriginOf(row); if (o && !out.has(o)) out.set(o, row); }
+  for (const row of local) { const o = seedOriginOf(row); if (!o) continue; if (!out.has(o) || typeof row !== "string") out.set(o, row); }
+  return [...out.values()];
+}
 function persistSubmittedSeeds() {
   try {
     const rows = [...submittedSeeds].map((origin) => (submittedHints.has(origin) ? { origin, ...submittedHints.get(origin) } : origin));
     const d = docFor(MPP_SUBMITTED_SEEDS_FILE);
     if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) { submittedUnsaved = true; return; }
-    void d.save(rows);
+    // A read-modify-write of the row: two containers taking submissions at
+    // once each keep the other's.
+    void d.update((stored) => mergeSubmittedSeedRows(stored, rows), { fallback: [] }).then((r) => { if (!r.ok) submittedUnsaved = true; else applySubmittedSeeds(r.body); });
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -555,6 +566,9 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
     submittedSeeds.add(origin);
     discoveredSeeds.add(origin);
     persistSubmittedSeeds();
+    // The listing itself reaches the other container's pull now, not after
+    // the next crawl (merged by origin: nothing the other one stored is lost).
+    void persistMppIndexCacheMerged();
     return { listed: true, origin, seller: mppSellerSummary(cache.get(origin)) };
   }
   return { listed: false, origin, error: entry?.lastProbeError || "no MPP challenge (WWW-Authenticate: Payment) found on the probed endpoint" };
@@ -610,15 +624,66 @@ async function runMppCrawlUnleased() {
 // ---------------------------------------------------------------------------
 export const MPP_INDEX_CACHE_FILE = process.env.MPP_INDEX_CACHE_FILE || "/data/mpp-index-cache.json";
 
-export function persistMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
-  try {
-    if (cache.size === 0) return false;
-    const out = [...cache.entries()].filter(([, v]) => v.verified);
-    if (!out.length) return false;
-    void docFor(file).save({ savedAt: Date.now(), entries: out });
-    return true;
-  } catch { return false; }
+// Two containers share the stored listing. A save is a merge by origin, the
+// newer probe winning (lastProbeAt): an origin only the other container has is
+// kept, and a newer probe that failed drops the stored verified copy. Only the
+// container whose leased crawl ran saves after a crawl; the other pulls.
+const probeStamp = (v) => (Number.isFinite(Number(v?.lastProbeAt)) ? Number(v.lastProbeAt) : Number.isFinite(Number(v?.verifiedAt)) ? Number(v.verifiedAt) : 0);
+/** Merge this container's entries into a stored body. Pure; exported for tests. */
+export function mergeMppIndexEntries(stored, local) {
+  const out = new Map();
+  for (const e of Array.isArray(stored?.entries) ? stored.entries : []) if (Array.isArray(e) && typeof e[0] === "string" && e[1]) out.set(e[0], e[1]);
+  for (const [origin, v] of local) {
+    const prev = out.get(origin);
+    if (prev && probeStamp(prev) > probeStamp(v)) continue;
+    if (v?.verified) out.set(origin, v); else if (prev) out.delete(origin);
+  }
+  return { savedAt: Date.now(), entries: [...out.entries()] };
 }
+export function persistMppIndexCacheMerged(file = MPP_INDEX_CACHE_FILE) {
+  try {
+    if (cache.size === 0) return Promise.resolve(false);
+    const local = [...cache.entries()];
+    if (!local.some(([, v]) => v.verified)) return Promise.resolve(false);
+    const d = docFor(file);
+    if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) return Promise.resolve(false);
+    return d.update((stored) => {
+      const next = mergeMppIndexEntries(stored, local);
+      return next.entries.length ? next : SKIP_UPDATE;
+    }, { fallback: null }).then((r) => r.ok).catch(() => false);
+  } catch { return Promise.resolve(false); }
+}
+/** Save after a crawl. Returns false without saving when the crawl did not
+ *  run here (another container holds its lease): this copy is older. */
+export function persistMppIndexCache(file = MPP_INDEX_CACHE_FILE, crawlResult = undefined) {
+  if (crawlResult && typeof crawlResult === "object" && crawlResult.skipped) return false;
+  if (cache.size === 0 || ![...cache.values()].some((v) => v.verified)) return false;
+  void persistMppIndexCacheMerged(file);
+  return true;
+}
+/** Pull what the other container stored: newer entries and submitted seeds. Resolves the count taken. */
+export async function pullMppIndexChanges(file = MPP_INDEX_CACHE_FILE) {
+  let n = 0;
+  try {
+    const r = await docFor(file).read({ quiet: true });
+    if (r.ok && r.exists) {
+      for (const e of Array.isArray(r.body?.entries) ? r.body.entries : []) {
+        if (!Array.isArray(e) || typeof e[0] !== "string" || !e[1]) continue;
+        const [origin, v] = e;
+        const cur = cache.get(origin);
+        if (cur && probeStamp(cur) >= probeStamp(v)) continue;
+        cache.set(origin, cur ? { ...v } : { ...v, warmStarted: true });
+        discoveredSeeds.add(origin);
+        n++;
+      }
+    }
+    const s = await docFor(MPP_SUBMITTED_SEEDS_FILE).read({ quiet: true });
+    if (s.ok && s.exists) { const before = submittedSeeds.size; applySubmittedSeeds(s.body); n += submittedSeeds.size - before; }
+  } catch { /* the next pull tries again */ }
+  return n;
+}
+const MPP_PULL_INTERVAL_MS = Math.max(5_000, Number(process.env.MPP_INDEX_PULL_MS) || 60_000);
+let pullTimer = null;
 
 export function loadPersistedMppIndexCache(file = MPP_INDEX_CACHE_FILE) {
   return timedSync("MPP index warm-start", file, () => _loadPersistedMppIndexCache(file));
@@ -655,8 +720,12 @@ export function startMppCrawler() {
   loadSubmittedSeeds();
   const warmed = loadPersistedMppIndexCache();
   if (warmed) console.log(`[mpp-index] warm-started ${warmed} sellers from ${MPP_INDEX_CACHE_FILE}`);
-  Promise.all([discoverMppRegistry(), discoverMppScan()]).then(() => runMppCrawl()).then(() => persistMppIndexCache());
-  crawlerTimer = setInterval(() => { runMppCrawl().then(() => persistMppIndexCache()).catch(() => {}); }, MPP_CRAWL_INTERVAL_MS);
+  Promise.all([discoverMppRegistry(), discoverMppScan()]).then(() => runMppCrawl()).then((r) => persistMppIndexCache(MPP_INDEX_CACHE_FILE, r)).catch(() => {});
+  crawlerTimer = setInterval(() => { runMppCrawl().then((r) => persistMppIndexCache(MPP_INDEX_CACHE_FILE, r)).catch(() => {}); }, MPP_CRAWL_INTERVAL_MS);
+  if (docFor(MPP_INDEX_CACHE_FILE).backend === "pg") {
+    pullTimer = setInterval(() => { void pullMppIndexChanges(); }, MPP_PULL_INTERVAL_MS);
+    pullTimer.unref?.();
+  }
   discoveryTimer = setInterval(() => { discoverMppRegistry(); discoverMppScan(); }, MPP_DISCOVERY_INTERVAL_MS);
   if (typeof crawlerTimer.unref === "function") crawlerTimer.unref();
   if (typeof discoveryTimer.unref === "function") discoveryTimer.unref();
@@ -666,6 +735,7 @@ export function startMppCrawler() {
 export function stopMppCrawler() {
   if (crawlerTimer) { clearInterval(crawlerTimer); crawlerTimer = null; }
   if (discoveryTimer) { clearInterval(discoveryTimer); discoveryTimer = null; }
+  if (pullTimer) { clearInterval(pullTimer); pullTimer = null; }
 }
 
 /** Test-only: fully reset in-memory state between test cases. */

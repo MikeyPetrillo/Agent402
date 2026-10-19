@@ -50,6 +50,7 @@ import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { createHash } from "node:crypto";
 import { shared } from "../shared-limits.js";
+import { payerFromRequest } from "../payer.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -426,9 +427,15 @@ const videoContentBackoffMs = (attempt) => Math.min(VIDEOS_POLL_MS(), 1_000) * (
 
 // Parked video jobs: one upstream job per identical request (same buyer, same
 // locked body), kept for VIDEO_PARK_MS on the shared store so a retry on
-// either replica resumes it. The key is a hash; the job id is never returned.
+// either replica resumes it. Only a request with a signed payer identity
+// (payerFromRequest) parks or resumes: without one, two buyers sending the same
+// prompt would share a key. The key is a hash; the job id is never returned.
+// A retry CLAIMS the parked id before polling it (an atomic counter on the
+// shared store: the first claimant gets 1), so two concurrent identical retries
+// cannot both collect one clip; the loser submits its own job. Every terminal
+// error releases the id; only another timeout parks it again.
 const VIDEO_PARK_MS = () => Math.max(60_000, parseInt(process.env.VIDEO_PARK_MS || "1800000", 10) || 1_800_000);
-const videoParkKey = (body) => createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 32);
+const videoParkKey = (payer, body) => createHash("sha256").update(JSON.stringify({ payer, body })).digest("hex").slice(0, 32);
 async function parkedVideoJob(key) {
   try {
     const r = await shared.windowRead("video-park", key, { windowMs: VIDEO_PARK_MS() });
@@ -436,8 +443,19 @@ async function parkedVideoJob(key) {
     return last && typeof last.member === "string" && last.member ? last.member : null;
   } catch { return null; }
 }
+async function claimParkedVideoJob(key, id) {
+  try {
+    const r = await shared.counterAdd("video-park-claim", `${key}:${id}`, 1, VIDEO_PARK_MS());
+    if (!r?.ok || r.value !== 1) return false;
+    await shared.windowRemove("video-park", key, { member: id });
+    return true;
+  } catch { return false; }
+}
 async function parkVideoJob(key, id) {
-  try { await shared.windowAdd("video-park", key, { windowMs: VIDEO_PARK_MS(), member: id }); } catch { /* best effort */ }
+  try {
+    await shared.counterClear("video-park-claim", `${key}:${id}`);
+    await shared.windowAdd("video-park", key, { windowMs: VIDEO_PARK_MS(), member: id });
+  } catch { /* best effort */ }
 }
 async function unparkVideoJob(key, id) {
   try { await shared.windowRemove("video-park", key, { member: id }); } catch { /* best effort */ }
@@ -451,10 +469,11 @@ async function videosHandler(input, req) {
   const started = Date.now();
   // A job that outlived the last identical request is picked up again rather
   // than paid for twice: the retry the 504 asks for collects the same clip.
-  const parkKey = videoParkKey(body);
+  const payer = payerFromRequest(req);
+  const parkKey = payer ? videoParkKey(payer, body) : null;
   let job = null;
-  const parkedId = await parkedVideoJob(parkKey);
-  if (parkedId) job = { id: parkedId, status: "pending" };
+  const parkedId = parkKey ? await parkedVideoJob(parkKey) : null;
+  if (parkedId && await claimParkedVideoJob(parkKey, parkedId)) job = { id: parkedId, status: "pending" };
   else {
     const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
     if (!res.ok) await throwUpstreamError(res);
@@ -466,16 +485,18 @@ async function videosHandler(input, req) {
   // on some other host.
   const pollUrl = typeof job.polling_url === "string" && job.polling_url.startsWith(`${OPENROUTER_VIDEOS_URL}/`) ? job.polling_url : `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}`;
 
-  let status = job.status || "pending", st = job, pollFailures = 0;
+  let status = job.status || "pending", st = job, pollFailures = 0, c;
+  try {
   while (status !== "completed") {
     if (status === "failed") {
       const why = typeof st?.error === "string" ? st.error : (st?.error?.message || "");
-      void unparkVideoJob(parkKey, id);
-      throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""} - not charged`, 502);
+      throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""}. This call is not charged on x402`, 502);
     }
     if (Date.now() - started > VIDEOS_MAX_WAIT_MS()) {
+      const waited = `Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s. This call is not charged on x402`;
+      if (!parkKey) throw bad(`${waited}; send the request again to start a new clip`, 504);
       await parkVideoJob(parkKey, id);
-      throw bad(`Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s - not charged; send the same request again within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip`, 504);
+      throw Object.assign(bad(`${waited}; send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip`, 504), { videoParked: true });
     }
     await sleep(VIDEOS_POLL_MS());
     // A transient poll failure (5xx, 429, network, timeout, garbled body)
@@ -505,7 +526,6 @@ async function videosHandler(input, req) {
   }
 
   const contentUrl = `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}/content?index=0`;
-  let c;
   for (let attempt = 0; ; attempt++) {
     const canRetry = attempt < VIDEOS_CONTENT_RETRIES && Date.now() - started < VIDEOS_MAX_WAIT_MS();
     try {
@@ -518,9 +538,14 @@ async function videosHandler(input, req) {
     if (canRetry && videoTransientStatus(c.status)) { await c.text().catch(() => ""); await sleep(videoContentBackoffMs(attempt)); continue; }
     await throwUpstreamError(c);
   }
+  } catch (e) {
+    // Any end other than a fresh park releases the id: a terminal poll or
+    // content error, the poll-failure limit, or "failed".
+    if (parkKey && !e?.videoParked) void unparkVideoJob(parkKey, id);
+    throw e;
+  }
   const bytes = Buffer.from(await c.arrayBuffer());
   if (!bytes.length) throw bad("Upstream returned an empty clip - retry", 502);
-  void unparkVideoJob(parkKey, id);
   const mediaType = (c.headers?.get?.("content-type") || "video/mp4").split(";")[0].trim() || "video/mp4";
 
   const rawUsage = st?.usage && typeof st.usage === "object" ? st.usage : null;
@@ -622,7 +647,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.200",
     description:
-      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes); a failed or timed-out generation is never charged.",
+      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402, and a wallet payer whose request timed out can send it again unchanged to collect the same clip.",
     tags: ["video-generation", "video", "videos", "text-to-video", "generate", "generate-video", "create-video", "clip", "animation", "veo", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

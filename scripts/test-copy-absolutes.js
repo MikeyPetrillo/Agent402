@@ -90,6 +90,25 @@ const FORBIDDEN = [
     exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
   },
   {
+    // The same class in its "not charged" form, which the rule above missed:
+    // "a failed or timed-out generation is never charged" (a word between the
+    // adjective and the noun) and "a failed call is not charged and the receipt
+    // proves it" (no rail named) were both served. The rail must be named IN
+    // THE SAME SENTENCE: a line that says "over x402" in its first sentence and
+    // "never charged" in its third is not scoped.
+    re: /\b(?:failed|failing|errored|timed-out)\b(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job)s?\s+(?:is|are|was|were)\s+(?:not|never)\s+charged\b/i,
+    why: "unscoped: a Tempo push payment is final before the call runs; name the rail where it holds (x402, card, credits)",
+    scopedBy: /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b/i,
+    scopeSentence: true,
+  },
+  {
+    // A rating or an assurance someone could rely on, not evidence: a token
+    // "safe to touch", a "safety watch", a "graded safety read", or a page that
+    // "meets WCAG". Say what the output contains or what was checked instead.
+    re: /\bsafe to (?:touch|trade|buy|hold)\b|\btoken safety (?:watch|check)\b|\bgraded safety read\b|\b(?:meets?|meeting|conforms? to|complian(?:t|ce) with)\s+WCAG\b/i,
+    why: "a rating or conformance claim; describe the evidence returned or the checks made",
+  },
+  {
     re: new RegExp(`\\bUSDC on (?!${USDC_RAILS}\\b)\\d+ chains\\b|\\bUSDC on Base \\+ (?!${USDC_RAILS - 1}\\b)\\d+ more chains\\b|\\b(?!${ALL_RAILS}\\b)\\d+ chains total\\b`, "i"),
     why: `src/rails.js lists ${USDC_RAILS} USDC chains and ${ALL_RAILS} chains in all; derive the figure from RAILS or drop it`,
     exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
@@ -254,21 +273,36 @@ const FORBIDDEN = [
   },
 ];
 
+// The one sentence holding a match: from the last ". " (or "; ") before it to
+// the first one after it.
+function sentenceAround(text, at, len) {
+  const before = text.slice(0, at);
+  const start = Math.max(before.lastIndexOf(". "), before.lastIndexOf("; "), before.lastIndexOf("? ")) + 1;
+  const rest = text.slice(at + len);
+  const ends = [rest.indexOf(". "), rest.indexOf("; "), rest.indexOf("? ")].filter((x) => x >= 0);
+  const end = ends.length ? at + len + Math.min(...ends) : text.length;
+  // Within the sentence, a scope word counts only near the claim: "...by card"
+  // closing a long list is about something else.
+  return text.slice(Math.max(start, at - 80), Math.min(end, at + len + 80));
+}
+
 function sweep(entries) {
   const found = [];
   for (const [rel, text] of entries) {
     if (text == null) continue;
     const lines = text.split("\n");
-    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0 } of FORBIDDEN) {
+    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false } of FORBIDDEN) {
       if (exempt?.has(rel)) continue;
       for (let i = 0; i < lines.length; i++) {
         const sentence = `${lines[i]} ${lines[i + 1] || ""}`;
         const m = sentence.match(re);
         if (!m) continue;
         if (requires && !requires.test(sentence)) continue;      // a different subject entirely
-        const near = scopeWindow
-          ? lines.slice(Math.max(0, i - scopeWindow), i + 2).join(" ")
-          : sentence;
+        const near = scopeSentence
+          ? sentenceAround(sentence, m.index, m[0].length)
+          : scopeWindow
+            ? lines.slice(Math.max(0, i - scopeWindow), i + 2).join(" ")
+            : sentence;
         if (scopedBy?.test(near)) continue;                      // scoped in its own sentence
         found.push(`${rel} carries "${m[0].trim()}" (${why})`);
         break;
@@ -290,9 +324,13 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."],
                        ["<control>", "Pay in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total)."],
                        ["<control>", "over x402 (USDC on 12 chains) or MPP"],
-                       ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"]]);
-const CONTROL_EXPECTED = 13;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 11 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
+                       ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"],
+                       ["<control>", "Text-to-video over x402 - one clip. The call returns when ready; a failed or timed-out generation is never charged."],
+                       ["<control>", "Why pay here (a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, or a report by card)"],
+                       ["<control>", "<h3>Is this Solana token safe to touch</h3>"],
+                       ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."]]);
+const CONTROL_EXPECTED = 18;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 15 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);

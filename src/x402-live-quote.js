@@ -32,7 +32,7 @@
 /** USDC is 6 decimals on every chain we accept. Anything else we refuse to
  *  price rather than guess - a wrong exponent is a 1000x pricing error. */
 const USDC_DECIMALS = 6;
-import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { unpackRequestContract } from "./request-contract.js";
 const USDC_NAME = /^(usdc|usd coin)$/i;
 
@@ -101,7 +101,12 @@ function isUsdc(a) {
   // address IS the identity, so the one well-known mainnet mint is
   // recognized directly. Without this, every pure-Solana catalog priced as
   // "networks only" forever (measured 2026-09-01: a seller's 128 routes).
-  return String(a?.asset || "") === SVM_USDC_MINT;
+  if (String(a?.asset || "") === SVM_USDC_MINT) return true;
+  // An EVM accept with NO extra.name is still USDC when its contract is the
+  // USDC we have read from that chain: the address is the identity there too.
+  // A name that is not USDC's is never overridden by the address.
+  if (String(a?.extra?.name || "").trim()) return false;
+  return domainTruthFor(a?.network, a?.asset)?.symbol === "USDC";
 }
 
 /**
@@ -133,8 +138,10 @@ export function quoteFromAccepts(accepts) {
   const decimals = Number.isInteger(a$(preferred?.extra?.decimals)) ? a$(preferred.extra.decimals)
     : isUsdc(preferred) ? USDC_DECIMALS
       : null;
-  if (decimals != null && preferred?.amount != null) {
-    const n = Number(preferred.amount);
+  // x402 v1 names the amount `maxAmountRequired`; v2 renamed it `amount`.
+  const atomic = preferred?.amount ?? preferred?.maxAmountRequired;
+  if (decimals != null && atomic != null) {
+    const n = Number(atomic);
     // A negative or non-finite amount is corrupt, not free.
     if (Number.isFinite(n) && n >= 0) price = n / 10 ** decimals;
   }

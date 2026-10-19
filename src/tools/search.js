@@ -777,6 +777,11 @@ export const SEARCH_TOOLS = [
         fetched.set(q, results);
       }));
       settled.forEach((r, n) => { if (r.status === "rejected") failed.set(unique[n], r.reason); });
+      // A query the daily usage ceiling refused answers the ceiling's 503 for
+      // the whole call: a partial 200 would be charged for searches we chose
+      // not to run.
+      const capped = [...failed.values()].find((e) => e?.hardCap);
+      if (capped) throw capped;
       if (unique.length && failed.size === unique.length) throw settled[0].reason;
       const searches = normalized.map((q) => {
         if (!q) return { query: "", count: 0, results: [], error: "empty query skipped" };

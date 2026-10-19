@@ -37,8 +37,11 @@ const server = http.createServer((req, res) => {
 <link rel="stylesheet" href="/blocking.css">
 <script src="/blocking.js"></script>
 </head><body><h1 id="h">Fixture page</h1><div id="box" style="height:10px"></div>
-<p style="height:300px;background:silver">Shifted block</p><img src="/big.bin" width="10" height="10">
+<p style="height:300px;background:silver">Shifted block</p>
 <script>
+// The big file is read to its end: served to an <img> as non-image bytes,
+// the browser may stop the download part way, and the totals depend on when.
+fetch("/big.bin").then((r) => r.arrayBuffer());
 console.error("fixture console error");
 // After first paint: a layout shift, then a long task (both only count after FCP).
 setTimeout(() => {
@@ -82,7 +85,7 @@ try {
     const r = await tool("page-speed").handler({ url: `${BASE}/`, device: "desktop" });
     ok(r.status === 200 && r.device === "desktop" && r.viewport.width === 1350, "desktop profile and the document status are reported");
     ok(r.measurement?.kind === "lab-single-run" && r.measurement.runs === 1 && r.measurement.fieldData === false && r.measurement.lighthouseScore === false, "measurement field says one lab run, not field data, not a Lighthouse score");
-    ok(/not field data/i.test(r.measurement.note) && /not a Lighthouse score/i.test(r.measurement.note), "measurement note states the limits in words");
+    ok(/not field data/i.test(r.measurement.note) && /single lab measurement/i.test(r.measurement.note), "measurement note states the limits in words");
     ok(Number.isFinite(r.timings.ttfbMs) && r.timings.domContentLoadedMs >= r.timings.ttfbMs && r.timings.loadMs >= r.timings.domContentLoadedMs, `navigation timings are ordered (${JSON.stringify(r.timings)})`);
     ok(r.webVitals.fcpMs > 0 && r.webVitals.lcpMs > 0, `FCP and LCP are measured (${r.webVitals.fcpMs}, ${r.webVitals.lcpMs})`);
     ok(r.webVitals.cls > 0, `the layout shift is counted in CLS (${r.webVitals.cls})`);

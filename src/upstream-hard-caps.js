@@ -90,7 +90,7 @@ export function hardCapRefusalForHost(host, now = Date.now()) {
 }
 
 export function hardCapError() {
-  const e = new Error("This tool's upstream has reached today's usage limit - retry after 00:00 UTC. Nothing was charged for this request.");
+  const e = new Error("This tool's upstream has reached today's usage limit - retry after 00:00 UTC. This call is not charged on x402.");
   e.statusCode = 503;
   e.hardCap = true;
   return e;
@@ -127,7 +127,10 @@ export function hardCapStatus(now = Date.now()) {
   for (const c of HARD_CAPS) {
     const s = rowOf(c, now);
     const cap = hardCapOf(c);
-    const status = cap === null ? "disabled" : (s.refused > 0 ? "capped" : "ok");
+    // From the day's total, not this process's own refusals: with two
+    // replicas each answering the status in turn, a per-process refusal count
+    // made the word (and the heartbeat issue) flip on every read.
+    const status = cap === null ? "disabled" : (seenToday(s) >= cap ? "capped" : "ok");
     if (status === "capped") worst = "capped";
     rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, status, shared: s.store.enabled };
   }

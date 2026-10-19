@@ -440,7 +440,7 @@ export async function prepareEvm(row, accepts, { clientFor = evmClientFor } = {}
   return { client, account, token, amount, data, gas, native, need };
 }
 
-async function sendEvm(row, accepts, prep) {
+export async function sendEvm(row, accepts, prep) {
   const p = prep?.client ? prep : await prepareEvm(row, accepts);
   const { client, token, data, gas } = p;
   // Build and sign first: a failure here never left this process, so it is
@@ -456,11 +456,15 @@ async function sendEvm(row, accepts, prep) {
   let hash;
   try { hash = await client.sendRawTransaction({ serializedTransaction: serialized }); }
   catch (e) { throw isPreBroadcastFailure(e) ? markPreBroadcast(e) : e; }
-  // Wait for it to land before the next send picks a nonce: a load-balanced
-  // public RPC can hand back a stale pending nonce. A slow receipt is not a
-  // failure; the hash is broadcast and goes in the ledger either way.
-  try { await client.waitForTransactionReceipt({ hash, timeout: 60_000 }); }
-  catch (e) { console.warn(`      receipt wait for a sent refund: ${(e?.message || String(e)).slice(0, 120)}`); }
+  // Wait for it to land before the next send picks a nonce (a load-balanced
+  // public RPC can hand back a stale pending nonce), and before the row can be
+  // marked paid: a reverted transfer, or one with no receipt in time, is not a
+  // repayment. Either throws past the claim, so the row stays `sending` for a
+  // human with the hash in the log, never `paid`.
+  let receipt;
+  try { receipt = await client.waitForTransactionReceipt({ hash, timeout: 120_000 }); }
+  catch (e) { throw Object.assign(new Error(`refund ${hash} sent but no receipt yet: ${(e?.message || String(e)).slice(0, 120)}`), { refundTx: hash }); }
+  if (receipt?.status !== "success") throw Object.assign(new Error(`refund ${hash} reverted on chain (status ${receipt?.status ?? "unknown"})`), { refundTx: hash });
   return hash;
 }
 

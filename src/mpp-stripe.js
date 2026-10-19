@@ -183,6 +183,38 @@ export async function validateStripeCredential(authorizationHeader) {
   }
 }
 
+/** Before the handler runs: ask Stripe whether this Shared Payment Token
+ *  exists, is still active, and has at least `amountCents` left under its
+ *  limits. The structural check above cannot tell a real token from any
+ *  string that starts with "spt_", and the charge itself only happens after
+ *  the paid handler has run, so without this a made-up token ran the handler
+ *  (and spent upstream) before the capture failed. Read-only on Stripe's side.
+ *  Fails closed: no answer from Stripe refuses the call, uncharged. */
+const SPT_API_VERSION = "2026-07-29.preview"; // the version mppx's stripe method uses for SPTs
+export async function checkGrantedToken(spt, amountCents, { fetchImpl = fetch, secretKey = stripeSecretKey(), now = Date.now() } = {}) {
+  if (!secretKey) return { ok: false, reason: "card payments are not configured" };
+  let res;
+  try {
+    res = await fetchImpl(`https://api.stripe.com/v1/shared_payment/granted_tokens/${encodeURIComponent(spt)}`, {
+      headers: { Authorization: `Bearer ${secretKey}`, "Stripe-Version": SPT_API_VERSION },
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch { return { ok: false, unavailable: true, reason: "Stripe could not be reached to check the payment token" }; }
+  if (res.status === 404) return { ok: false, reason: "Stripe does not know this payment token" };
+  if (!res.ok) return { ok: false, unavailable: res.status >= 500 || res.status === 429, reason: `Stripe refused the payment token check (HTTP ${res.status})` };
+  let t;
+  try { t = await res.json(); } catch { return { ok: false, unavailable: true, reason: "Stripe returned an unreadable payment token" }; }
+  if (t?.deactivated_at || t?.deactivated_reason) return { ok: false, reason: `the payment token is no longer active (${String(t.deactivated_reason || "deactivated").slice(0, 20)})` };
+  const lim = t?.usage_limits || {};
+  if (Number.isFinite(lim.expires_at) && lim.expires_at * 1000 <= now) return { ok: false, reason: "the payment token has expired" };
+  if (lim.currency && String(lim.currency).toLowerCase() !== "usd") return { ok: false, reason: "the payment token is not in USD" };
+  if (Number.isFinite(lim.max_amount)) {
+    const used = Number(t?.usage_details?.amount_captured?.value) || 0;
+    if (lim.max_amount - used < amountCents) return { ok: false, reason: "the payment token's remaining limit is below this price" };
+  }
+  return { ok: true };
+}
+
 /** Terminal — settles the card via a Stripe PaymentIntent (mppx stripe method's
  *  broadcast -> createPaymentIntent with the SPT). Call ONLY after a <400
  *  handler response. Returns { ok, receipt } or { ok:false, error }. */
@@ -239,7 +271,7 @@ export function createStripeChallengeAppender({ realm, secretKey, priceFor } = {
 // INBOUND: settle a stripe/charge credential. Same buffer-then-decide
 // discipline as the tempo gate. Refuses to mount without a secret + priceFor.
 // ---------------------------------------------------------------------------
-export function createStripeGate({ validate = validateStripeCredential, settle = settleStripeCredential, replayGuard, secretKey, realm, priceFor } = {}) {
+export function createStripeGate({ validate = validateStripeCredential, settle = settleStripeCredential, checkToken = checkGrantedToken, replayGuard, secretKey, realm, priceFor } = {}) {
   if (!stripeEnabled()) return null;
   if (typeof priceFor !== "function") {
     console.error("[mpp-stripe] REFUSING to mount the Stripe gate: priceFor is required to bind credentials to route prices");
@@ -266,6 +298,14 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       if (!v.ok) {
         console.warn(`[mpp-stripe] credential rejected by validate(): ${v.error || "(no error detail)"}`);
         markMppProblem(req, res, mppProblem("verification-failed", `Payment verification failed: ${String(v.reason || "the Stripe credential was rejected").slice(0, 160)}`));
+        return next();
+      }
+      // Stripe confirms the token can pay this price before anything runs.
+      const tok = await checkToken(v.validation?.spt, binding.amountCents);
+      if (!tok.ok) {
+        console.warn(`[mpp-stripe] payment token refused before the handler: ${tok.reason}`);
+        if (tok.unavailable) return sendMppProblem(res, mppProblem("verification-failed", "Payment verification failed: the card payment could not be checked right now. Nothing was charged; retry shortly."));
+        markMppProblem(req, res, mppProblem("verification-failed", `Payment verification failed: ${String(tok.reason).slice(0, 160)}.`));
         return next();
       }
       req.mppStripeCredential = true;

@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createJsonDocument } from "./json-document.js";
+import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 // Each store is one JSON document: on the volume, or in the state database
@@ -58,9 +59,10 @@ function noteDeleted(file, key) {
  * after a background re-read) and saving the merge when memory changed in the
  * meantime. `keyOf(entry)` names a body entry for the deleted-key filter.
  */
-function loadMerging(file, { apply, persist, keyOf }) {
+function loadMerging(file, { apply, persist, keyOf, adapter = null }) {
   const d = docFor(file);
   const onLoad = (body) => {
+    if (adapter) sideNoteLoaded(file, adapter, body);
     const u = unsaved.get(file);
     unsaved.delete(file);
     let b = body;
@@ -69,10 +71,84 @@ function loadMerging(file, { apply, persist, keyOf }) {
       else if (b && typeof b === "object") b = Object.fromEntries(Object.entries(b).filter(([k, v]) => !u.deleted.has(keyOf([k, v]))));
     }
     apply(b);
-    if (u && (u.dirty || u.deleted.size)) persist();
+    // With an adapter the save is a merge measured from the row as loaded, so
+    // it can always run: it writes only what memory holds beyond the row.
+    if (adapter || (u && (u.dirty || u.deleted.size))) persist();
   };
   return trackStoreReady(d.load(null, { onLoad }));
 }
+
+// SIDE STORES SHARED BY TWO CONTAINERS (successions, gone-route marks,
+// submitted seeds, removed origins). Each is one document, and a whole-body
+// save from one container replaced the other's entries. With a database a
+// save is now a MERGE: the keys this container set or deleted since it last
+// agreed with the row are applied to the row as stored (json-document
+// update(), conditional on the row version), and nothing else is touched. A
+// re-read on the pull timer folds the other container's changes in the same
+// terms: a key the row changed or dropped since we last agreed is applied
+// here, while a local change not yet written stays and is written next.
+// `adapter`: entries(body) -> [[key, value]], body(entries) -> body,
+// local() -> [[key, value]], set(key, value), del(key).
+const sideSynced = new Map(); // file -> Map(key -> JSON of the value the row held)
+const sideChains = new Map(); // file -> the in-flight merge, so merges run in order
+const sideAdapters = new Map(); // file -> adapter
+const jsonMap = (entries) => new Map(entries.map(([k, v]) => [k, JSON.stringify(v)]));
+function sideMergeSave(file, adapter) {
+  sideAdapters.set(file, adapter);
+  const d = docFor(file);
+  if (d.backend !== "pg") { saveOrHold(file, adapter.body(adapter.local())); return; }
+  const base = sideSynced.get(file) || new Map();
+  const localEntries = adapter.local();
+  const local = jsonMap(localEntries);
+  const values = new Map(localEntries);
+  const set = [...local].filter(([k, j]) => base.get(k) !== j).map(([k]) => k);
+  const del = [...base.keys()].filter((k) => !local.has(k));
+  if (!set.length && !del.length) return;
+  const next = new Map(base);
+  for (const k of set) next.set(k, local.get(k));
+  for (const k of del) next.delete(k);
+  sideSynced.set(file, next);
+  const prev = sideChains.get(file) || Promise.resolve();
+  const run = prev.then(() => d.update((b) => {
+    const m = new Map(adapter.entries(b));
+    for (const k of set) m.set(k, values.get(k));
+    for (const k of del) m.delete(k);
+    return adapter.body([...m]);
+  }, { fallback: adapter.body([]) })).then((r) => {
+    // Not written: forget the agreement so the next save offers every key again.
+    if (!r?.ok) sideSynced.set(file, base);
+  }, () => sideSynced.set(file, base));
+  sideChains.set(file, run.finally(() => { if (sideChains.get(file) === run) sideChains.delete(file); }));
+}
+/** The row as loaded becomes the agreement a later merge is measured from. */
+function sideNoteLoaded(file, adapter, body) {
+  sideAdapters.set(file, adapter);
+  sideSynced.set(file, jsonMap(adapter.entries(body)));
+}
+/** Fold the other container's changes to one side store into memory. */
+async function sideRefresh(file) {
+  const adapter = sideAdapters.get(file);
+  const d = docFor(file);
+  if (!adapter || d.backend !== "pg" || !sideSynced.has(file)) return;
+  await (sideChains.get(file) || Promise.resolve()).catch(() => {});
+  const r = await d.read({ quiet: true }).catch(() => null);
+  if (!r?.ok) return;
+  const remoteEntries = r.exists ? adapter.entries(r.body) : [];
+  const remote = jsonMap(remoteEntries);
+  const values = new Map(remoteEntries);
+  const base = sideSynced.get(file) || new Map();
+  const local = jsonMap(adapter.local());
+  for (const [k, j] of remote) if (base.get(k) !== j && local.get(k) !== j) adapter.set(k, values.get(k));
+  for (const k of base.keys()) if (!remote.has(k) && local.has(k) && local.get(k) === base.get(k)) adapter.del(k);
+  // Local changes not yet written stay pending against the row as now read.
+  sideSynced.set(file, remote);
+}
+/** Re-read every side store (the pull timer). */
+export async function refreshIndexSideStores() {
+  for (const file of [...sideAdapters.keys()]) { try { await sideRefresh(file); } catch { /* the next pull tries again */ } }
+}
+/** Test seam: wait for every queued side-store merge. */
+export async function __sideStoresSettledForTest() { await Promise.all([...sideChains.values()].map((p) => p.catch(() => {}))); }
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
 // F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
@@ -94,7 +170,7 @@ import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
-import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
@@ -549,14 +625,21 @@ export function loadSubmittedSeeds() {
       if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
     }
   };
-  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o });
+  if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o, adapter: SUBMITTED_ADAPTER });
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
   return Promise.resolve();
 }
 
+const SUBMITTED_ADAPTER = {
+  entries: (b) => (Array.isArray(b) ? b.filter((o) => typeof o === "string").map((o) => [o, 1]) : []),
+  body: (es) => es.map(([k]) => k),
+  local: () => [...submittedSeeds].map((o) => [o, 1]),
+  set: (o) => { if (submittedSeeds.size < submittedSeedsCap && !isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
+  del: (o) => { submittedSeeds.delete(o); },
+};
 function persistSubmittedSeeds() {
   try {
-    saveOrHold(SUBMITTED_SEEDS_FILE, [...submittedSeeds]);
+    sideMergeSave(SUBMITTED_SEEDS_FILE, SUBMITTED_ADAPTER);
   } catch { /* best-effort — no volume in local/dev */ }
 }
 
@@ -584,7 +667,7 @@ const successions = new VersionedMap(); // old origin -> { to: new origin, at: r
 
 export function loadSuccessions() {
   const d = docFor(SUCCESSIONS_FILE);
-  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k });
+  if (d.backend === "pg") return loadMerging(SUCCESSIONS_FILE, { apply: applySuccessions, persist: persistSuccessions, keyOf: ([k]) => k, adapter: SUCCESSIONS_ADAPTER });
   applySuccessions(d.loadSync(null));
   return Promise.resolve();
 }
@@ -609,9 +692,19 @@ function persistSuccessions() {
   // truncated file here reads as "no successions", silently restoring every
   // duplicate this exists to hide.
   try {
-    saveOrHold(SUCCESSIONS_FILE, Object.fromEntries(successions));
+    sideMergeSave(SUCCESSIONS_FILE, SUCCESSIONS_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
+const SUCCESSIONS_ADAPTER = {
+  // Normalized as memory holds them, so an unchanged entry compares equal.
+  entries: (b) => (b && typeof b === "object" && !Array.isArray(b) ? Object.entries(b) : [])
+    .map(([k, v]) => [k, typeof v === "string" ? { to: v, at: 0 } : (v && typeof v.to === "string" ? { to: v.to, at: Number(v.at) || 0 } : null)])
+    .filter(([k, v]) => typeof k === "string" && v),
+  body: (es) => Object.fromEntries(es),
+  local: () => [...successions],
+  set: (k, v) => applySuccessions({ [k]: v }),
+  del: (k) => { successions.delete(k); },
+};
 
 // What decides that a listed route exists. A seller's listing is merged from
 // their own documents (well-known manifest, OpenAPI, agents.json, llms.txt),
@@ -642,7 +735,7 @@ const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").
 
 export function loadGoneRoutes() {
   const d = docFor(GONE_ROUTES_FILE);
-  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k });
+  if (d.backend === "pg") return loadMerging(GONE_ROUTES_FILE, { apply: applyGoneRoutes, persist: persistGoneRoutes, keyOf: ([k]) => k, adapter: GONE_ADAPTER });
   applyGoneRoutes(d.loadSync(null));
   return Promise.resolve();
 }
@@ -655,9 +748,18 @@ function applyGoneRoutes(obj) {
   } catch { /* absent file / no volume - in-memory only */ }
 }
 
+const GONE_ADAPTER = {
+  entries: (b) => (b && typeof b === "object" && !Array.isArray(b) ? Object.entries(b) : [])
+    .filter(([, v]) => v && Number(v.at) > 0)
+    .map(([k, v]) => [k, { at: Number(v.at), kind: ["410", "miss", "pending"].includes(v.kind) ? v.kind : "miss" }]),
+  body: (es) => Object.fromEntries(es),
+  local: () => [...goneRoutes],
+  set: (k, v) => applyGoneRoutes({ [k]: v }),
+  del: (k) => { goneRoutes.delete(k); },
+};
 function persistGoneRoutes() {
   try {
-    saveOrHold(GONE_ROUTES_FILE, Object.fromEntries(goneRoutes));
+    sideMergeSave(GONE_ROUTES_FILE, GONE_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -884,7 +986,7 @@ export function loadRemovedOrigins() {
     // still take effect: purge whatever is already held.
     for (const k of removedOrigins.keys()) purgeOrigin(k);
   };
-  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin) }); return removedOrigins.size; }
+  if (d.backend === "pg") { loadMerging(removedFile(), { apply, persist: persistRemovedOrigins, keyOf: (r) => strictOriginKey(r?.origin), adapter: REMOVED_ADAPTER }); return removedOrigins.size; }
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume - in-memory only */ }
   return removedOrigins.size;
 }
@@ -893,9 +995,23 @@ function persistRemovedOrigins() {
   // tmp+rename: a truncated file here reads as "nothing removed", which would
   // quietly bring every removed origin back on the next boot.
   try {
-    saveOrHold(removedFile(), [...removedOrigins.values()]);
+    sideMergeSave(removedFile(), REMOVED_ADAPTER);
   } catch { /* best-effort - no volume in local/dev */ }
 }
+// A removal another container records purges here; a restore it records
+// lifts the removal here too.
+const REMOVED_ADAPTER = {
+  entries: (b) => (Array.isArray(b) ? b.map((r) => [strictOriginKey(r?.origin), r]).filter(([k]) => k)
+    .map(([k, r]) => [k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" }]) : []),
+  body: (es) => es.map(([, v]) => v),
+  local: () => [...removedOrigins],
+  set: (k, r) => {
+    if (!removedOrigins.has(k) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return;
+    removedOrigins.set(k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" });
+    purgeOrigin(k);
+  },
+  del: (k) => { removedOrigins.delete(k); },
+};
 
 // Drop every piece of state keyed on this origin. Returns what was held.
 function purgeOrigin(key) {
@@ -1386,6 +1502,8 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
+      // The windows another container opened for this origin count here too.
+      await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
         noteForcedCrawl(origin);
         clearOriginProbeState(origin);
@@ -1413,7 +1531,13 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // (remotePoolMemo), so prices learned into the existing entry are
       // invisible until the object is replaced - a fresh spread busts the
       // memo and the pool re-decorates with what was just learned.
-      cache.set(origin, { ...(cache.get(origin) || existing) });
+      // A change made outside a crawl carries a new revision, so the upsert
+      // takes it and the other container's pull folds it (fetchedAt alone did
+      // not move on a re-price).
+      const cur = cache.get(origin) || existing;
+      cache.set(origin, { ...cur, ...(reread || repriced ? { updatedAt: nextRev(cur) } : {}) });
+      // The other container reads this on its next pull.
+      if (reread || repriced) await persistOriginToStateDb(origin);
     } catch { /* listing still served */ }
     // Only a self-serve-submitted origin belongs in seller_registrations - this
     // early-return path also serves origins already known from Bazaar/registry
@@ -2008,7 +2132,20 @@ function priceRank(p) {
 const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));
 function normalizeNetwork(n) {
   if (typeof n !== "string") return n;
-  return NETWORK_SHORTHAND.get(n.toLowerCase()) || n;
+  const exact = NETWORK_SHORTHAND.get(n.toLowerCase());
+  if (exact) return exact;
+  // Display names for a mainnet ("Algorand MainNet", "Base Mainnet",
+  // "solana-mainnet-beta") fold onto the same chain; a testnet never does.
+  if (!n.includes(":")) {
+    const folded = n.toLowerCase().trim().replace(/[\s_-]*main[\s_-]*net([\s_-]*beta)?$/, "").replace(/[\s_-]+/g, "");
+    if (folded !== n.toLowerCase() && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
+  }
+  return n;
+}
+/** A network a row can carry: a CAIP-2 id, or a lowercase slug (the x402 v1
+ *  form). Free text that names no chain we know reads as nothing. */
+function isNetworkId(n) {
+  return typeof n === "string" && (n.includes(":") || /^[a-z0-9][a-z0-9-]*$/.test(n));
 }
 
 /**
@@ -2083,6 +2220,28 @@ export function sellerPayToByNetwork(tools) {
  * the same cost. Sharing the derivation is what keeps a manifest row and a
  * Bazaar row describing one endpoint from disagreeing about what it costs.
  */
+// USDC by its identity per chain family, for an accept that states no decimals.
+const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const AVM_USDC_ASA = "31566704";
+const STELLAR_USDC_SAC = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+/** The decimals an accept's amount is denominated in, or null when its asset
+ *  is one we cannot scale. An accept naming no asset is read as USDC (the
+ *  x402 default every annotation dialect without an asset means). */
+export function acceptDecimals(a) {
+  const stated = a?.extra?.decimals ?? a?.decimals;
+  if (Number.isInteger(stated) && stated >= 0 && stated <= 36) return stated;
+  if (typeof stated === "string" && /^\d{1,2}$/.test(stated.trim())) return Number(stated.trim());
+  const asset = a?.asset == null ? "" : String(a.asset).trim();
+  const net = String(a?.network || "");
+  if (!asset || /^usdc$/i.test(asset)) return 6;
+  if (net.startsWith("eip155:")) { const t = domainTruthFor(net, asset); if (t) return t.symbol === "USDC" ? 6 : null; }
+  if (net.startsWith("solana") && asset === SVM_USDC_MINT) return 6;
+  if (net.startsWith("algorand") && asset === AVM_USDC_ASA) return 6;
+  if (net.startsWith("stellar") && asset === STELLAR_USDC_SAC) return 7;
+  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test(String(a?.extra?.name || "").trim())) return 6;
+  return null;
+}
+
 export function paymentFieldsFromAccepts(rawAccepts) {
   // Normalized ONCE here so every downstream read (the `preferred` accept
   // below, `networks:`, `stellarPayTo`, `algorandPayTo`, `payToByNetwork`)
@@ -2102,10 +2261,18 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   // first left those rows priceless AND cost the live-402 probe that would
   // have learned the figure the origin already declared.
   const amount = preferred?.amount ?? preferred?.maxAmountRequired;
-  if (amount != null) {
-    // amount is an atomic-units string; USDC has 6 decimals.
+  // Atomic units of the accept's own asset: its stated decimals, or a USDC we
+  // know. An asset we cannot scale is left unpriced rather than read as USDC.
+  const decimals = preferred ? acceptDecimals(preferred) : null;
+  if (amount != null && decimals != null) {
     const n = Number(amount);
-    if (Number.isFinite(n)) price = n / 1e6;
+    if (Number.isFinite(n)) price = n / 10 ** decimals;
+  }
+  // payTo per network, the priced accept's own address first: the address a
+  // row names on a chain is the one its price was quoted for.
+  const payToByNetwork = {};
+  for (const a of [preferred, ...accepts]) {
+    if (typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo && !payToByNetwork[a.network]) payToByNetwork[a.network] = a.payTo;
   }
   return {
     price,
@@ -2127,11 +2294,7 @@ export function paymentFieldsFromAccepts(rawAccepts) {
     // strkey-validated fields above; this covers the EVM chains + Solana, whose
     // /base, /polygon, /arbitrum, /solana pages had no per-seller address to
     // scope to. Shape is validated by getActivityForChain before any RPC call.
-    payToByNetwork: Object.fromEntries(
-      accepts
-        .filter((a) => typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo)
-        .map((a) => [a.network, a.payTo])
-    ),
+    payToByNetwork,
     // The EIP-712 domain each EVM accept advertises (asset + extra.name). A
     // Base accept naming "USDC" where the token signs under "USD Coin" is a
     // challenge no stock buyer can pay; the router label reads this to say so
@@ -2143,9 +2306,10 @@ export function paymentFieldsFromAccepts(rawAccepts) {
 export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
-  if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
+  if (typeof resource !== "string") return null;
   // A segment boundary after the key: "https://host" must not own
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
+  // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
@@ -2206,13 +2370,24 @@ export function bazaarItemToTool(item, originUrl) {
  *  to the first usable entry. Relative server URLs ("/api") are honoured too. */
 export function openapiBasePath(openapi, originUrl) {
   const servers = Array.isArray(openapi?.servers) ? openapi.servers : [];
-  let origin = null;
-  try { origin = new URL(originUrl).origin; } catch { /* originUrl may be a bare host */ }
+  let origin = null, hostKey = null;
+  try { const u = new URL(originUrl); origin = u.origin; hostKey = openapiHostKey(u.hostname); } catch { /* originUrl may be a bare host */ }
   const candidates = servers.map((s) => (typeof s === "string" ? s : s?.url)).filter((u) => typeof u === "string" && u);
+  const urlOf = (u) => { try { return new URL(u); } catch { return null; } };
+  const sameHost = (u) => { const p = urlOf(u); return !!(p && hostKey && openapiHostKey(p.hostname) === hostKey); };
+  // A server that is not a public host (a development or placeholder entry,
+  // or a templated URL that does not parse) names no other seller.
+  const notPublic = (u) => { const p = urlOf(u); return !p || /[{}]|%7b|%7d/i.test(p.hostname) || isDevServerHost(p.hostname); };
   const pick =
-    (origin && candidates.find((u) => { try { return new URL(u).origin === origin; } catch { return false; } })) ||
+    (origin && candidates.find((u) => urlOf(u)?.origin === origin)) ||
+    candidates.find(sameHost) ||
     candidates.find((u) => u.startsWith("/")) ||
-    candidates[0];
+    candidates.find(notPublic);
+  // Every server the document names is another public host: its paths are
+  // that host's endpoints, not this seller's. Filing them under this origin
+  // lists routes that do not exist here, so the document contributes no rows
+  // (the other host is indexed on its own account).
+  if (!pick && candidates.length) return null;
   // A path seller whose document names no server: its paths are relative to
   // the prefix it is served under (the rows are then scoped back to it). A
   // document naming another server is honoured and scoped as usual.
@@ -2226,12 +2401,22 @@ export function openapiBasePath(openapi, originUrl) {
   return path === "/" ? "" : path;
 }
 
+/** Host identity for an OpenAPI server: case-insensitive, `www.` folded. */
+function openapiHostKey(h) { return String(h || "").toLowerCase().replace(/^www\./, ""); }
+/** A loopback, private-range or local-suffix host: a development server. */
+function isDevServerHost(h) {
+  const host = String(h || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "::1" || host === "0.0.0.0"
+    || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+}
+
 export function normaliseOpenapiTools(openapi, originUrl) {
   return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
 }
 function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return [];
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
   logUnknownPaymentKeys(openapi, originUrl);
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
@@ -2366,6 +2551,9 @@ const MANIFEST_NON_TOOL_PATH =
   /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
 const MANIFEST_HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]);
 
+// Marks a manifest row whose ref was written host-relative (no scheme or host).
+const MANIFEST_HOST_RELATIVE = Symbol("manifestHostRelativeRef");
+
 function manifestToolRichness(t) {
   if (!t) return 0;
   const named = t.name && t.name !== t.route && !String(t.name).startsWith("/");
@@ -2396,6 +2584,7 @@ function mergeManifestToolRows(a, b) {
     ...(prefer.stellarPayTo ? {} : (other.stellarPayTo ? { stellarPayTo: other.stellarPayTo } : {})),
     ...(prefer.algorandPayTo ? {} : (other.algorandPayTo ? { algorandPayTo: other.algorandPayTo } : {})),
     ...(prefer.evmDomainByNetwork ? {} : (other.evmDomainByNetwork ? { evmDomainByNetwork: other.evmDomainByNetwork } : {})),
+    ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
@@ -2606,7 +2795,28 @@ function manifestPaymentAccepts(manifest) {
 }
 
 export function normaliseManifestTools(manifest, originUrl) {
-  return scopeRowsToSeller(normaliseManifestToolsUnscoped(manifest, originUrl), originUrl);
+  const rows = normaliseManifestToolsUnscoped(manifest, originUrl);
+  // A path seller's manifest that declares its own origin WITH the prefix
+  // writes its routes relative to that origin ("/v1/reconcile" under
+  // ".../functions/v1/api"); read host-absolute they fall outside the prefix
+  // and every row is dropped. Such routes are re-anchored under the prefix.
+  const prefix = sellerPrefixOf(originUrl);
+  // Only a ref WRITTEN host-relative ("/v1/x") is re-anchored: an absolute URL
+  // that names another path on the host is outside the seller and stays out.
+  if (prefix && Array.isArray(rows) && manifestDeclaresPrefixedOrigin(manifest, originUrl)) {
+    for (const r of rows) {
+      if (r && r[MANIFEST_HOST_RELATIVE] && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
+    }
+  }
+  return scopeRowsToSeller(rows, originUrl);
+}
+function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
+  const declared = typeof manifest?.origin === "string" ? manifest.origin : "";
+  if (!declared) return false;
+  try {
+    const a = new URL(declared), b = new URL(originUrl);
+    return a.host === b.host && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
+  } catch { return false; }
 }
 function normaliseManifestToolsUnscoped(manifest, originUrl) {
   if (!manifest || typeof manifest !== "object") return [];
@@ -2712,6 +2922,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
           // been listed as GET, answered 405 to every buyer, and been recorded
           // as broken by us.
           ...(method ? {} : { methodInferred: true }),
+          ...(ref.startsWith("/") && !ref.startsWith("//") ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
           route,
           slug,
           name: name || u.pathname,
@@ -3146,6 +3357,7 @@ export function openapiOperationPayment(op) {
   const addNetwork = (raw) => {
     if (typeof raw !== "string" || !raw.trim()) return null;
     const n = normalizeNetwork(raw.trim());
+    if (!isNetworkId(n)) return null;
     if (n && !out.networks.includes(n)) out.networks.push(n);
     return n;
   };
@@ -3328,6 +3540,7 @@ export function openapiAllOperationRoutes(openapi, originUrl) {
 function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return [];
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
@@ -4561,8 +4774,42 @@ export function noteForcedCrawl(originUrl, now = Date.now()) {
     if (forcedCrawlAt.size > 2000) forcedCrawlAt.clear();
   }
   forcedCrawlAt.set(originUrl, now);
+  cooldownShare(() => shared.flagSet(COOL_FORCED, originUrl, now + FORCED_CRAWL_COOLDOWN_MS, { now }), COOL_FORCED, originUrl);
 }
-export function __resetForcedCrawlForTest() { forcedCrawlAt.clear(); repriceAt.clear(); repriceSpend.clear(); }
+export function __resetForcedCrawlForTest() {
+  forcedCrawlAt.clear(); repriceAt.clear(); repriceSpend.clear();
+  for (const nk of coolKeys) { const [n, k] = nk.split("\u0000"); void sharedWrite("index-cooldown", n === COOL_SPEND ? shared.windowClear(n, k) : shared.flagSet(n, k, 0)); }
+  coolKeys.clear();
+}
+
+// THE COOLDOWNS ARE SHARED BETWEEN CONTAINERS (src/shared-limits.js): each
+// window is a flag per origin and each re-price spend a weighted window entry,
+// so a re-registration landing on the other container honours them. The local
+// maps stay the floor: a store that does not answer leaves each container
+// deciding on its own counters, as with one container.
+const COOL_FORCED = "index-forced-crawl", COOL_REPRICE = "index-reprice", COOL_SPEND = "index-reprice-spend";
+const coolKeys = new Set(); // "name\u0000origin" written by this process (test reset only)
+let coolSeq = 0;
+function cooldownShare(op, name, origin) {
+  if (coolKeys.size < 5000) coolKeys.add(`${name}\u0000${origin}`);
+  void sharedWrite("index-cooldown", op());
+}
+/** Fold the shared cooldowns for one origin into the local maps. Never throws. */
+async function refreshOriginCooldowns(originUrl, now = Date.now()) {
+  if (coolShift) await coolShift;
+  try {
+    const [f, r, w] = await Promise.all([
+      shared.flagGet(COOL_FORCED, originUrl, { now }),
+      shared.flagGet(COOL_REPRICE, originUrl, { now }),
+      shared.windowRead(COOL_SPEND, originUrl, { windowMs: HOUR_MS, now }),
+    ]);
+    if (f?.ok && f.until > now) { const at = f.until - FORCED_CRAWL_COOLDOWN_MS; if (!(forcedCrawlAt.get(originUrl) >= at)) forcedCrawlAt.set(originUrl, at); }
+    if (r?.ok && r.until > now) { const at = r.until - REPRICE_COOLDOWN_MS; if (!(repriceAt.get(originUrl) >= at)) repriceAt.set(originUrl, at); }
+    if (w?.ok && Number(w.sum) > spentThisHour(originUrl, now)) {
+      repriceSpend.set(originUrl, Array.isArray(w.entries) && w.entries.length ? w.entries.map((e) => ({ at: Number(e.score), n: Number(e.weight) || 0 })) : [{ at: now, n: Number(w.sum) }]);
+    }
+  } catch (e) { noteSharedLimitsDegraded("index-cooldown", { error: e?.message }); }
+}
 
 // The same bound for the re-registration's live-402 re-price: a window per
 // origin, and an hourly allowance of route probes per origin across calls.
@@ -4577,10 +4824,28 @@ function trimMap(map, keep) {
   for (const [k, v] of map) if (!keep(v)) map.delete(k);
   if (map.size > 2000) map.clear();
 }
+let coolShift = null;
 export function __shiftRecheckClocksForTest(ms) {
   for (const [k, t] of repriceAt) repriceAt.set(k, t - ms);
   for (const [k, t] of forcedCrawlAt) forcedCrawlAt.set(k, t - ms);
   for (const rows of repriceSpend.values()) for (const r of rows) r.at -= ms;
+  // The shared copies move with them (read by the next refresh, which waits).
+  const keys = [...coolKeys];
+  coolShift = (async () => {
+    const now = Date.now();
+    for (const nk of keys) {
+      const [n, k] = nk.split("\u0000");
+      if (n === COOL_SPEND) {
+        const w = await shared.windowRead(n, k, { windowMs: HOUR_MS + ms, now });
+        await shared.windowClear(n, k);
+        for (const e of w?.entries || []) if (now - (e.score - ms) < HOUR_MS) await shared.windowAdd(n, k, { windowMs: HOUR_MS, member: e.member, weight: e.weight, now, score: e.score - ms });
+      } else {
+        const f = await shared.flagGet(n, k, { now });
+        if (f?.until) await shared.flagSet(n, k, f.until - ms, { now });
+      }
+    }
+  })().catch(() => {});
+  return coolShift;
 }
 export function repriceDue(originUrl, now = Date.now()) {
   const at = repriceAt.get(originUrl);
@@ -4589,6 +4854,7 @@ export function repriceDue(originUrl, now = Date.now()) {
 function noteReprice(originUrl, now = Date.now()) {
   trimMap(repriceAt, (t) => now - t < REPRICE_COOLDOWN_MS);
   repriceAt.set(originUrl, now);
+  cooldownShare(() => shared.flagSet(COOL_REPRICE, originUrl, now + REPRICE_COOLDOWN_MS, { now }), COOL_REPRICE, originUrl);
 }
 function spentThisHour(originUrl, now = Date.now()) {
   const rows = (repriceSpend.get(originUrl) || []).filter((r) => now - r.at < HOUR_MS);
@@ -4604,6 +4870,7 @@ function spendRepriceAllowance(originUrl, n, now = Date.now()) {
   const rows = repriceSpend.get(originUrl) || [];
   rows.push({ at: now, n });
   repriceSpend.set(originUrl, rows);
+  cooldownShare(() => shared.windowAdd(COOL_SPEND, originUrl, { windowMs: HOUR_MS, member: `${process.pid}:${++coolSeq}:${now}`, weight: n, now }), COOL_SPEND, originUrl);
 }
 // What the register answer says about the re-check it did (or did not) run,
 // so a seller whose call landed inside a window knows when to try again
@@ -5922,13 +6189,20 @@ export function heldLastGood(v) {
 function persistedEntries() {
   const out = [];
   for (const [origin, v] of cache.entries()) {
+    const e = persistedEntryOf(v);
+    if (e) out.push([origin, e]);
+  }
+  return out;
+}
+function persistedEntryOf(v) {
+  {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
     // A failure that still holds its last good catalogue is. Dropping those
     // made one failed crawl before a restart delete the listing outright,
     // and the per-operator crawl cap can take hours to bring it back
     // (2026-10-02: five path sellers on one shared host vanished this way).
-    if (v?.error && !heldLastGood(v)) continue;
-    out.push([origin, {
+    if (v?.error && !heldLastGood(v)) return null;
+    return ({
       manifest: slimManifestForPersist(v.manifest),
       tools: Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : [],
       fetchedAt: v.fetchedAt ?? null,
@@ -5941,9 +6215,34 @@ function persistedEntries() {
       history: Array.isArray(v.history) ? v.history.slice(-10) : [],
       paywall: v.paywall ?? null,
       ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
-    }]);
+      // Stamped by a change made outside a crawl (a re-price): with fetchedAt
+      // it is the entry's revision, what the pull and the upsert compare.
+      ...(Number(v.updatedAt) > 0 ? { updatedAt: Number(v.updatedAt) } : {}),
+    });
   }
-  return out;
+}
+
+/** One origin's row, written now: a re-read a seller asked for reaches the
+ *  other container on its next pull instead of waiting for this one's crawl
+ *  cycle. Same newer-wins rule as the full persist; never deletes. */
+export async function persistOriginToStateDb(origin) {
+  if (!stateDbEnabled()) return false;
+  const entry = persistedEntryOf(cache.get(origin));
+  if (!entry) return false;
+  try {
+    const line = JSON.stringify([origin, entry]);
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+       WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+      [INDEX_RECORDS, origin, JSON.stringify(entry)],
+    );
+    pgOriginHashes.set(origin, lineHash(line));
+    return true;
+  } catch (e) {
+    console.warn(`[x402-index] state database write for one origin failed: ${String(e?.message || e).slice(0, 120)}`);
+    return false;
+  }
 }
 
 /** Async persist for the crawler's own cycle. Each origin is stringified ONCE,
@@ -6032,6 +6331,9 @@ const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
 // An entry's fetchedAt as a number in SQL, 0 when absent or not numeric.
 const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'fetchedAt')::numeric ELSE 0 END)`;
+const UPDATED_AT_SQL = (col) => `(CASE WHEN (${col}->>'updatedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'updatedAt')::numeric ELSE 0 END)`;
+// The revision in SQL (entryRev): newer wins on the later of the two stamps.
+const REV_SQL = (col) => `GREATEST(${FETCHED_AT_SQL(col)}, ${UPDATED_AT_SQL(col)})`;
 
 // ---- two containers, one index (2026-10-15) --------------------------------
 // Each container holds the whole index in memory. A seller registered, or an
@@ -6043,6 +6345,13 @@ const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\
 // removed on the other container leaves this one before it could be saved.
 const INDEX_PULL_MS = Number(process.env.INDEX_PULL_MS) || 30_000;
 const entryFetchedAt = (e) => { const n = Number(e?.fetchedAt); return Number.isFinite(n) ? n : 0; };
+/** An entry's revision: the later of its crawl stamp and its last change made
+ *  outside a crawl. What decides which of two copies is newer. */
+export const entryRev = (e) => { const u = Number(e?.updatedAt); return Math.max(entryFetchedAt(e), Number.isFinite(u) ? u : 0); };
+/** The next revision for an entry changed outside a crawl. */
+const nextRev = (e, now = Date.now()) => Math.max(now, entryRev(e) + 1);
+/** The persisted hash of an origin's entry as a save would write it. */
+const persistedHashOf = (origin, v) => { const e = persistedEntryOf(v); return e ? lineHash(JSON.stringify([origin, e])) : null; };
 let pullWatermark = null;
 let pullInFlight = null;
 export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) {
@@ -6050,6 +6359,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
   if (pullInFlight) return pullInFlight;
   pullInFlight = (async () => {
     await reloadRemovedOrigins();
+    // Successions, gone marks, submitted seeds and removals another container
+    // changed, folded in before the index rows.
+    await refreshIndexSideStores();
     let folded = 0;
     if (pullWatermark == null) {
       // The first pull starts from the database's clock a little before now:
@@ -6068,8 +6380,10 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         pullWatermark = stamp;
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
-        if (held && entryFetchedAt(held) >= entryFetchedAt(body)) continue;
+        if (held && entryRev(held) >= entryRev(body)) continue;
         cache.set(id, held ? { ...held, ...body } : { ...body, warmStarted: true });
+        // Held as stored, so this container's next save does not write it back.
+        pgOriginHashes.set(id, persistedHashOf(id, cache.get(id)));
         if (!held) discoveredSeeds.add(id);
         folded++;
       }
@@ -6135,7 +6449,7 @@ async function persistIndexCacheToStateDb(entries, lines) {
         `INSERT INTO ${recordsTable()} AS r (collection, id, body)
          SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
          ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-         WHERE ${FETCHED_AT_SQL("r.body")} <= ${FETCHED_AT_SQL("EXCLUDED.body")}`,
+         WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
         [INDEX_RECORDS, ids, bodies],
       );
       for (const id of ids) pgOriginHashes.set(id, changed.get(id));
@@ -6232,8 +6546,10 @@ async function warmStartIndexOnce() {
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
-        pgOriginHashes.set(id, null);
-        if (foldWarmEntry(id, body)) n++;
+        // A row read at boot is held as stored: the first save writes only
+        // what this container changed, never every row over a peer's newer one.
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); }
+        else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
       pages++;
@@ -7493,7 +7809,7 @@ function routeIndexScheduleDrain() {
       if (!routeIndexAdvancePartial(until)) break; // out of time inside one seller
     }
     if (routeIdx.partial || routeIdx.pending.size) setImmediate(drainSlice);
-    else routeDrainScheduled = false;
+    else { routeDrainScheduled = false; routeIndexCompactIfStale(); }
   });
 }
 function routeIndexReset() {
@@ -7606,6 +7922,15 @@ function routeIndexStartShadow() {
     routeIdx.builds++;
   };
   setImmediate(step);
+}
+// Stale rows were cleared only by routeIndexSync, which only a route query on
+// this thread and the boot warm-up call. With a router worker loaded this
+// thread answers no queries, so every crawl cycle's replaced entries piled up
+// as stale rows (and the old entries they hold) until the heap ran out. The
+// drain that indexes a crawl's changes now starts the same shadow rebuild.
+function routeIndexCompactIfStale() {
+  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) routeIndexStartShadow();
 }
 function routeIndexSync({ sync = false } = {}) {
   const total = routeIdx.indexedTools + routeIdx.staleTools;

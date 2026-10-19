@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
-import { Agent } from "undici";
+import { Agent, buildConnector } from "undici";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -188,7 +188,21 @@ function guardedLookup(hostname, options, callback) {
 // validated public IP. Scoped to the tool fetchers — it is passed explicitly
 // and never set as the process-global dispatcher, so the x402 payment client's
 // own outbound calls are unaffected.
-export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+// The lookup above never runs for a literal IP: Node connects to it directly.
+// A redirect to http://127.0.0.1/ or http://[::1]/ therefore skipped the check
+// entirely, so every connection (each redirect hop included) is checked here,
+// at connect time, whatever form its host takes.
+function guardedConnector() {
+  const connect = buildConnector({ lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS });
+  return (opts, callback) => {
+    const host = String(opts?.hostname || "").replace(/^\[|\]$/g, "");
+    if (isIP(host) && isPrivateIp(host)) {
+      return callback(Object.assign(new Error(`Blocked: ${host} is a private address`), { code: SSRF_BLOCK_CODE }), null);
+    }
+    return connect(opts, callback);
+  };
+}
+export const ssrfDispatcher = new Agent({ connect: guardedConnector() });
 // A FRESH pinned dispatcher for callers that must not reuse a kept-alive
 // connection. Measured 2026-09-01 on a real seller: their edge corrupts the
 // socket after serving a 402, so a paid retry reusing the bare leg's
@@ -196,7 +210,7 @@ export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, time
 // throw that surfaced as an uncaught exception - while the same request on a
 // fresh connection settled fine. Same guardedLookup pin, so SSRF safety is
 // identical; the caller owns close().
-export const freshSsrfDispatcher = () => new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+export const freshSsrfDispatcher = () => new Agent({ connect: guardedConnector() });
 
 // Distinguish an SSRF-block from a generic network failure on a thrown fetch error.
 export function isSsrfBlock(err) {
@@ -341,8 +355,12 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
 export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
   const url = await assertPublicUrl(rawUrl);
 
+  // timeoutMs bounds the whole exchange: connect, headers AND body. The timer
+  // is cleared only once the body has been read (or the call has failed), so
+  // a server that sends headers and then trickles the body is cut off too.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
   let response;
   try {
     response = await fetch(url, {
@@ -386,8 +404,6 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       ),
       { statusCode: 504 }
     );
-  } finally {
-    clearTimeout(timer);
   }
 
   // 304 Not Modified is a SUCCESS, and it must be handled before the !ok check
@@ -417,7 +433,16 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   const chunks = [];
   let received = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw Object.assign(new Error(`Source URL did not finish sending within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`), { statusCode: 504 });
+      }
+      throw err;
+    }
+    const { done, value } = step;
     if (done) break;
     received += value.length;
     if (received > maxBytes) {
@@ -437,6 +462,9 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   const vals = readValidators(response);
   if (binary) return { finalUrl: response.url, buffer, contentType, validators: vals };
   return { finalUrl: response.url, html: buffer.toString("utf-8"), contentType, validators: vals };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** ETag / Last-Modified off a response, or null when the origin sends neither.

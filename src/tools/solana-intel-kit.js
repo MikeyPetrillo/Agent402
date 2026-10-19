@@ -519,7 +519,7 @@ export const SOLANA_INTEL_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/sol-token-safety",
-    name: "Solana token safety check",
+    name: "Solana token risk check",
     slug: "sol-token-safety",
     category: "crypto",
     price: "$0.005",

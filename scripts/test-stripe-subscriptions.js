@@ -125,6 +125,17 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   try { rmSync(STORE + ".webhooks.json"); } catch { /* ignore */ }
 }
 
+// The same invoice delivered again after a restart (a fresh instance on the
+// same store remembers no event ids) books no second sale; a new one does.
+{
+  const after = [];
+  const restarted = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE, onInvoicePaid: (i) => after.push(i) });
+  await restarted.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_re_1", type: "invoice.paid", data: { object: { id: "in_1", subscription: "sub_1", customer: "cus_1", amount_paid: 900 } } })), "goodsig");
+  ok(after.length === 0, `a redelivered invoice after a restart books nothing (${after.length})`);
+  await restarted.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_re_2", type: "invoice.paid", data: { object: { id: "in_2", subscription: "sub_1", customer: "cus_1", amount_paid: 900 } } })), "goodsig");
+  ok(after.length === 1 && after[0].invoiceId === "in_2", "...and the next invoice is booked");
+}
+
 try { rmSync(STORE); } catch { /* ignore */ }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

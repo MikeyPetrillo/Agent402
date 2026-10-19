@@ -159,6 +159,7 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   // Gateway-rail accept used to pass here as "unknown" and be refused one hop
   // later in payX402, and the next unsignable rail would do the same.
   ok(/usdcDomainVerdict\(liveBase\)/.test(fn) && /unsignableByStockBuyer\(domain\)/.test(fn) && !/domain\.verdict === "wrong_domain"/.test(fn) && /live = false/.test(fn.slice(fn.indexOf("usdcDomainVerdict(liveBase)"))), "the resolver re-reads the LIVE Base accept's domain after the probe and refuses every unsignable verdict through unsignableByStockBuyer, never a bare wrong_domain compare");
+  ok(/const liveBase = pickPayableAccept\(liveAccepts \|\| \[\], "base"\)/.test(fn), "the resolver judges the live Base accept the buyer will sign (the first payable one), not the first listed");
   ok(/usdcDomain: row\.evmDomainByNetwork\?\.\["eip155:8453"\] \|\| null,/.test(server), "withDispatchFields hands the row's observation to the label");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const pay = buyer.slice(buyer.indexOf("export async function payX402("));

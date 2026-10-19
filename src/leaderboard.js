@@ -1567,6 +1567,45 @@ export const LEADERBOARD_FUNDING_SWITCH_FILE =
   process.env.LEADERBOARD_FUNDING_SWITCH_FILE || "/data/leaderboard-funding-switch.json";
 let fundingSwitch = null; // null: not loaded; false: no operator choice; else { enabled, at, note, persisted }
 let fundingSwitchVersion = 0;
+// Two containers share the switch's row: each re-reads it in the background
+// (at most every FUNDING_SWITCH_REFRESH_MS, kicked by the getters) and before
+// each scan, so a choice made on one applies on the other. A local change made
+// while a re-read is in flight wins over that read (the generation moved on).
+const FUNDING_SWITCH_REFRESH_MS = Math.max(1_000, Number(process.env.LEADERBOARD_FUNDING_SWITCH_REFRESH_MS) || 30_000);
+let fundingSwitchGen = 0, fundingSwitchRefreshedAt = 0, fundingSwitchRefreshing = null;
+const parseFundingSwitch = (j) => (typeof j?.enabled === "boolean" ? { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true } : null);
+/** Re-read the switch's row (database mode). Resolves true when the in-memory switch changed. */
+export function refreshSellerFundingSwitch() {
+  const d = docFor(LEADERBOARD_FUNDING_SWITCH_FILE);
+  if (d.backend !== "pg") return Promise.resolve(false);
+  if (fundingSwitchRefreshing) return fundingSwitchRefreshing;
+  operatorFundingSwitch();
+  const gen = fundingSwitchGen;
+  fundingSwitchRefreshing = d.read({ quiet: true }).then((r) => {
+    if (!r.ok || gen !== fundingSwitchGen) return false;
+    fundingSwitchRefreshedAt = Date.now();
+    // A local choice still being written is not undone by the row it replaces.
+    if (fundingSwitch && fundingSwitch.persisted === null) return false;
+    // One whose write failed is written now that the row answers, and kept.
+    if (fundingSwitch && fundingSwitch.persisted === false) { const f = fundingSwitch; f.persisted = null; void d.save({ enabled: f.enabled, at: f.at, note: f.note }).then((stored) => { f.persisted = stored === true; }); return false; }
+    const next = r.exists ? parseFundingSwitch(r.body) : null;
+    const cur = fundingSwitch || null;
+    if (!next && !cur) return false;
+    if (next && cur && next.enabled === cur.enabled && next.at === cur.at && next.note === cur.note) return false;
+    fundingSwitch = next || false;
+    fundingSwitchVersion++;
+    evidenceMemo = { ev: null, ver: null, out: null };
+    circularMemo = { ev: null, at: 0, set: new Set(), version: "", ver: null };
+    return true;
+  }).catch(() => false).finally(() => { fundingSwitchRefreshing = null; });
+  return fundingSwitchRefreshing;
+}
+function kickFundingSwitchRefresh() {
+  if (fundingSwitchRefreshing || Date.now() - fundingSwitchRefreshedAt < FUNDING_SWITCH_REFRESH_MS) return;
+  if (docFor(LEADERBOARD_FUNDING_SWITCH_FILE).backend !== "pg") return;
+  fundingSwitchRefreshedAt = Date.now();
+  void refreshSellerFundingSwitch();
+}
 function operatorFundingSwitch() {
   if (fundingSwitch === null) {
     fundingSwitch = false;
@@ -1591,6 +1630,7 @@ function operatorFundingSwitch() {
 export function sellerFundingEnabled() {
   if (String(process.env.LEADERBOARD_FUNDING_SCAN || "").trim().toLowerCase() === "off") return false;
   const op = operatorFundingSwitch();
+  kickFundingSwitchRefresh();
   return op ? op.enabled : true;
 }
 /** Operator view of the switch: whether it is on, and what decided it. */
@@ -1613,6 +1653,7 @@ export function setSellerFundingEnabled(enabled, { note = "", now = Date.now() }
   else if (d.backend === "pg") { next.persisted = null; void d.save(body).then((stored) => { next.persisted = stored === true; }); }
   fundingSwitch = next;
   fundingSwitchVersion++;
+  fundingSwitchGen++;
   evidenceMemo = { ev: null, ver: null, out: null };
   circularMemo = { ev: null, at: 0, set: new Set(), version: "", ver: null };
   return { changed: before !== sellerFundingEnabled(), ...sellerFundingSwitch() };
@@ -1667,7 +1708,24 @@ export function leaderboardLogCacheStatus() {
 
 // Under a lease (see src/state-db.js): the old and the new container of a
 // deploy never scan at once, so the seller-funding cursors advance once.
-const refreshOnce = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
+const refreshOnceLeased = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, failOpen: true }, refreshOnceUnleased);
+// The container that does not hold the lease skips the scan, and used to keep
+// its boot snapshot for good: router evidence then differed by container. A
+// skipped tick adopts the snapshot the other container saved, when newer.
+async function refreshOnce(opts) {
+  const r = await refreshOnceLeased(opts);
+  if (r && r.skipped) await adoptPeerLeaderboardSnapshot().catch(() => {});
+  return r;
+}
+export async function adoptPeerLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_FILE) {
+  const d = docFor(file);
+  if (d.backend !== "pg") return false;
+  const r = await d.read({ quiet: true });
+  const s = r?.ok && r.exists ? wellFormedSnapshot(r.body) : null;
+  if (!s || !(String(s.asOf || "") > String(cached.snapshot?.asOf || ""))) return false;
+  cached.snapshot = { ...s, adoptedFromPeer: true };
+  return true;
+}
 async function refreshOnceUnleased(opts) {
   if (cached.warming) return; // overlapping refreshes would just rate-limit each other
   cached.warming = true;
@@ -1677,6 +1735,7 @@ async function refreshOnceUnleased(opts) {
     // of every Base scan; the previous scan's per-wallet evidence rides in too,
     // so a wallet found circular keeps that verdict for the Bazaar's window.
     const base = !opts.chain || opts.chain === "base";
+    if (base) await refreshSellerFundingSwitch(); // the other container may have switched it
     const fundingState = base && sellerFundingEnabled() ? await loadSellerFundingState() : undefined;
     const scanChain = chainScanConfig(opts.chain || "base");
     const logCache = opts.logCache === undefined && scanChain ? logCacheFor(scanChain.key, scanChain.token) : (opts.logCache || null);
@@ -1905,7 +1964,11 @@ export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
   fundingStateCache = null;
   fundingSwitch = null;
+  fundingSwitchRefreshedAt = 0; fundingSwitchGen++;
   baseLogCache = null;
   configureSellerFunding({});
   stopLeaderboardRefresh();
 }
+// Test seams: a scan's save, and one refresh tick through the lease.
+export const __persistLeaderboardSnapshotForTest = (snap) => persistLeaderboardSnapshot(snap);
+export const __refreshTickForTest = (opts = {}) => refreshOnce(opts);

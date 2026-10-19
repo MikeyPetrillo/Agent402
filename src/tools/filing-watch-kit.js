@@ -30,7 +30,7 @@ import { resolveCompany } from "./edgar-kit.js";
 // EDGAR JSON read, column-oriented "recent" arrays zipped into rows). Imported,
 // never re-implemented, so there is exactly one place that knows that URL shape.
 import { probeCompanyFilings as edgarCompanyFilings } from "./ticker-pack-kit.js";
-import { fetchXmlText } from "./edgar-kit.js";
+import { fetchXmlText, edgarGetJson } from "./edgar-kit.js";
 import { parseForm4 } from "./insider-flow-kit.js";
 import { extractFilingExcerpts } from "./dossier-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -291,11 +291,38 @@ export function normForms(value, field) {
  *        edgar-kit's resolveCompany (cached ticker map, zero requests when warm).
  * @returns {Promise<object>} { cik, name, ticker, filings, ids, keys, fingerprint, ... }
  */
+// A form filter reads the whole recent block of the submissions index (up to
+// about a thousand rows, one request) and then up to MAX_OLDER_FILES older
+// files, newest first, until it has `limit` matches.
+export const FORM_FILTER_SCAN_ROWS = 5000;
+export const MAX_OLDER_FILES = 4;
+
+/** Rows of an older submissions file (columnar, like the index's recent
+ *  block), in the shape the probe reads. Pure; exported for tests. */
+export function filingRowsFromColumns(r, cik) {
+  if (!r || !Array.isArray(r.form)) return [];
+  const cikInt = parseInt(String(cik), 10);
+  return r.form.map((form, i) => {
+    const acc = String(r.accessionNumber?.[i] || "");
+    const doc = String(r.primaryDocument?.[i] || "");
+    return {
+      form: String(form || ""),
+      filed: String(r.filingDate?.[i] || ""),
+      period: String(r.reportDate?.[i] || ""),
+      description: String(r.primaryDocDescription?.[i] || "").slice(0, 120),
+      items: String(r.items?.[i] || ""),
+      accession: acc,
+      url: acc && doc ? `https://www.sec.gov/Archives/edgar/data/${cikInt}/${acc.replace(/-/g, "")}/${doc}` : "",
+    };
+  });
+}
+
 export async function probeCompanyFilings(tickerOrCik, opts = {}) {
   const t = FILING_TIERS["filing-report"];
   const {
     limit = t.probeLimit, days = null, forms = null, exclude = null,
     readSubmissions = edgarCompanyFilings, resolve = resolveCompany,
+    readOlderFile = (name) => edgarGetJson(`https://data.sec.gov/submissions/${name}`),
   } = opts;
 
   const spec = typeof tickerOrCik === "string" || typeof tickerOrCik === "number"
@@ -307,20 +334,25 @@ export async function probeCompanyFilings(tickerOrCik, opts = {}) {
   // Cached ticker map (edgar-kit, 1h TTL) -> a warm probe adds no request.
   const resolved = await resolve({ ticker: spec.ticker ? String(spec.ticker).trim().toUpperCase() : undefined, cik: spec.cik });
 
-  // ONE EDGAR read. `scanLimit` raw rows so a form filter still has 40 to keep.
-  const sub = await readSubmissions({ cik: resolved.cik, limit: Math.max(limit, t.scanLimit) });
+  // ONE EDGAR read. `scanLimit` raw rows unfiltered; with a form filter every
+  // row of the index's recent block (the same one read), and older files after
+  // it until the filter has `limit` matches.
+  const sub = await readSubmissions({ cik: resolved.cik, limit: forms?.length ? FORM_FILTER_SCAN_ROWS : Math.max(limit, t.scanLimit) });
 
   const allow = (forms || []).map((f) => f.toUpperCase());
   const deny = (exclude || []).map((f) => f.toUpperCase());
   const cutoff = days ? isoDate(Date.now() - days * 86400_000) : null;
 
   const filings = [];
-  for (const f of (sub?.filings || [])) {
+  const seen = new Set();
+  let pastCutoff = false;
+  const take = (f) => {
     const form = String(f.form || "").toUpperCase();
-    if (!form || !f.accession) continue;
-    if (allow.length && !allow.includes(form)) continue;
-    if (deny.includes(form)) continue;
-    if (cutoff && String(f.filed || "") < cutoff) continue;
+    if (!form || !f.accession || seen.has(String(f.accession))) return;
+    if (cutoff && String(f.filed || "") < cutoff) { pastCutoff = true; return; }
+    if (allow.length && !allow.includes(form)) return;
+    if (deny.includes(form)) return;
+    seen.add(String(f.accession));
     filings.push({
       form: String(f.form || ""),
       formLabel: formLabel(form),
@@ -332,7 +364,17 @@ export async function probeCompanyFilings(tickerOrCik, opts = {}) {
       accession: String(f.accession),
       url: String(f.url || ""),
     });
-    if (filings.length >= limit) break;
+  };
+  for (const f of (sub?.filings || [])) { take(f); if (filings.length >= limit) break; }
+  let olderFilesRead = 0;
+  if (allow.length && filings.length < limit && !pastCutoff) {
+    for (const file of (sub?.olderFiles || []).slice(0, MAX_OLDER_FILES)) {
+      if (cutoff && file.filingTo && file.filingTo < cutoff) break;
+      const older = await readOlderFile(file.name);
+      olderFilesRead++;
+      for (const f of filingRowsFromColumns(older, resolved.cik)) { take(f); if (filings.length >= limit) break; }
+      if (filings.length >= limit || pastCutoff) break;
+    }
   }
 
   // Sorted, so a reordering upstream can never move the fingerprint; the FORM
@@ -353,6 +395,7 @@ export async function probeCompanyFilings(tickerOrCik, opts = {}) {
     stateOfIncorporation: sub?.stateOfIncorporation || null,
     days, forms: allow, exclude: deny,
     filings, ids, keys, formCounts,
+    ...(allow.length ? { olderFilesRead } : {}),
     fingerprint: JSON.stringify(keys),
     browseUrl: sub?.browseUrl || `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${resolved.cik}&type=&dateb=&owner=include&count=40`,
     submissionsUrl: `https://data.sec.gov/submissions/CIK${resolved.cik}.json`,

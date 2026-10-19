@@ -43,7 +43,9 @@ export function makeFreeAlertProbes({ probeInsider, probeFilings, resolveManager
   // A probe whose id space changes carries a new `version`; the engine then
   // re-baselines an alert silently instead of mailing every id the old
   // baseline did not hold. The filing probe narrowed to three forms on
-  // 2026-10-02, so a baseline taken before it holds other forms.
-  probes.filing.version = "forms:" + FILING_ALERT_FORMS.join(",");
+  // 2026-10-02, so a baseline taken before it holds other forms; it also reads
+  // past the newest 250 filings since 2026-10-19, which can add older filings
+  // of those forms to its list ("older" in the version re-baselines them).
+  probes.filing.version = "forms:" + FILING_ALERT_FORMS.join(",") + ";older";
   return probes;
 }

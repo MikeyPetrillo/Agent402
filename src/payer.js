@@ -76,7 +76,19 @@ export function payerFromRequest(req) {
   if (!header) return null;
   try {
     const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
-    const from = payload?.payload?.authorization?.from || null;
+    // A Permit2 payment is verified on its permit2Authorization, and the
+    // facilitator ignores any `authorization` block riding beside it, so that
+    // block's `from` is unsigned there. The payer is then the Permit2 signer,
+    // and a request naming a different `authorization.from` has no identity.
+    const p2 = payload?.payload?.permit2Authorization;
+    const plain = payload?.payload?.authorization?.from;
+    let from = plain || null;
+    if (p2 && typeof p2 === "object") {
+      const p2from = typeof p2.from === "string" ? p2.from : null;
+      if (!p2from) return null;
+      if (typeof plain === "string" && plain.toLowerCase() !== p2from.toLowerCase()) return null;
+      from = p2from;
+    }
     if (typeof from !== "string") return null;
     // EVM ONLY, deliberately: this `from` is covered by the EIP-3009 signature
     // the facilitator verifies before settlement, so it can carry memory

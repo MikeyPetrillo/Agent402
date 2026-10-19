@@ -89,6 +89,10 @@ ok(/Base, Polygon/.test(m.ecosystem.note) && !/Solana|Stellar|Robinhood/.test(m.
 {
   const big = serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, walletName: null, catalog: CATALOG, toolCount: 3, powSlugs: POW, powDifficulty: 20, prices: { a: 0.001, b: 3.3 } });
   ok(big.payment.x402.priceRange === "$0.001–$3.30", `price range shows cents ($0.001–$3.30, got ${big.payment.x402.priceRange})`);
+  // Sub-cent prices are shown exactly, never rounded to a third decimal.
+  const fine = serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, walletName: null, catalog: CATALOG, toolCount: 3, powSlugs: POW, powDifficulty: 20, prices: { a: 0.0005, b: 0.0125, "v1-chat-nano": 0.0025 } });
+  ok(fine.payment.x402.priceRange === "$0.0005–$0.0125", `sub-cent range is exact (got ${fine.payment.x402.priceRange})`);
+  ok(JSON.stringify(fine).includes("chat from $0.0025/call"), "a sub-cent price in prose is exact ($0.0025, not $0.003)");
 }
 // No payment facilitator, vendor or host-product names in the manifest's own prose.
 {

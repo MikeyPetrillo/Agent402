@@ -4,7 +4,8 @@
 // response, imageless -> 502, no key -> 503, chain walk on 502/503/504 only,
 // live-listing repricing guard, margin bound (worst case <= MARGIN x price)
 // for every link, and the video submit -> poll -> download loop (failed ->
-// 502, timeout -> 504, off-host polling URL never followed).
+// 502, timeout -> 504, off-host polling URL never followed), and parking:
+// keyed on the EVM payer, claimed once, released on every terminal error.
 //
 //   node scripts/test-images-fast-kit.js
 process.env.POSTHOG_TEST_CAPTURE = "1";
@@ -215,14 +216,15 @@ await throws(() => validateVideosRequest({ prompt: "x".repeat(2001) }), "Prompt 
 
 // ---- video handler (stubbed fetch): submit -> poll -> download ----
 const MP4 = Buffer.from("\0\0\0 ftypisom-fake-mp4-bytes");
-function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, failError } = {}) {
+function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, failError, submitId = "job1" } = {}) {
   let contentCalls = 0, pollCalls = 0;
-  let polls = 0; const seen = { submit: null, polls: [], content: null };
+  let polls = 0; const seen = { submit: null, submits: 0, polls: [], content: null };
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
     if (init.method === "POST") {
       seen.submit = { url: u, body: JSON.parse(init.body), auth: init.headers?.Authorization };
-      const j = { id: "job1", polling_url: pollingUrl ?? `${OPENROUTER_VIDEOS_URL}/job1`, status: "pending" };
+      seen.submits++;
+      const j = { id: submitId, polling_url: pollingUrl ?? `${OPENROUTER_VIDEOS_URL}/${submitId}`, status: "pending" };
       return { ok: submitStatus < 400, status: submitStatus, text: async () => JSON.stringify(submitStatus < 400 ? j : { error: { message: "bad" } }) };
     }
     if (u.includes("/content")) {
@@ -260,29 +262,70 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", "job failed -> 502 (not charged)");
   ok(e?.statusCode === 502 && String(e.message).includes("blocked by policy"), "…502 carries the short upstream reason");
 }
+// Parking is keyed on the signed EVM payer (payerFromRequest): a request with
+// no such identity never parks or resumes, so two buyers sending the same
+// prompt cannot share a clip.
+const payReq = (payload) => {
+  const h = Buffer.from(JSON.stringify(payload)).toString("base64");
+  return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined), ip: "203.0.113.9" };
+};
+const evmReq = (n = 1) => payReq({ x402Version: 2, payload: { signature: "0x00", authorization: { from: `0x${String(n).padStart(40, "a")}` } } });
+const svmReq = () => payReq({ x402Version: 2, accepted: { scheme: "exact", network: "solana:mainnet" }, payload: { transaction: "AQAB" } });
 {
   installVideoFetch({ statuses: ["pending"] });
   const t0 = Date.now();
-  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "did not finish", "job never completes -> 504 after the wait budget");
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }, evmReq(1)), "did not finish", "job never completes -> 504 after the wait budget");
   ok(e?.statusCode === 504 && Date.now() - t0 >= 900, "…504 after VIDEOS_MAX_WAIT_MS");
-  ok(/same request again/.test(e?.message || "") && !/job1/.test(e?.message || ""), "…504 tells the buyer to resend to collect the clip, without naming the job");
+  ok(/same request again/.test(e?.message || "") && /not charged on x402/.test(e?.message || "") && !/job1/.test(e?.message || ""), "…504 tells an EVM payer to resend to collect the clip, scoped to x402, without naming the job");
   // The retry the 504 asks for resumes the SAME upstream job instead of paying for a new one.
   const seen = installVideoFetch();
-  const out = await bySlug("v1-videos").handler({ prompt: "a boat" });
-  ok(!seen.submit && seen.polls.length > 0 && seen.polls.every((p) => p.url === `${OPENROUTER_VIDEOS_URL}/job1`) && out.data[0].b64_json === MP4.toString("base64"), "an identical retry polls the parked job and submits nothing new");
+  const out = await bySlug("v1-videos").handler({ prompt: "a boat" }, evmReq(1));
+  ok(!seen.submit && seen.polls.length > 0 && seen.polls.every((p) => p.url === `${OPENROUTER_VIDEOS_URL}/job1`) && out.data[0].b64_json === MP4.toString("base64"), "an identical retry from the same EVM payer polls the parked job and submits nothing new");
   const again = installVideoFetch();
-  await bySlug("v1-videos").handler({ prompt: "a boat" });
+  await bySlug("v1-videos").handler({ prompt: "a boat" }, evmReq(1));
   ok(!!again.submit, "once collected the parked job is released; the next identical request submits a fresh job");
 }
 {
   installVideoFetch({ statuses: ["pending"] });
-  await throws(() => bySlug("v1-videos").handler({ prompt: "a different boat" }), "did not finish", "a second timed-out request parks its own job");
+  await throws(() => bySlug("v1-videos").handler({ prompt: "a different boat" }, evmReq(1)), "did not finish", "a second timed-out request parks its own job");
   const seen = installVideoFetch();
-  await bySlug("v1-videos").handler({ prompt: "another prompt entirely" });
+  await bySlug("v1-videos").handler({ prompt: "another prompt entirely" }, evmReq(1));
   ok(!!seen.submit, "a different request never picks up someone else's parked job");
+  const other = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "a different boat" }, evmReq(2));
+  ok(!!other.submit, "another EVM payer sending the same prompt never picks up the parked job");
   const resume = installVideoFetch();
-  await bySlug("v1-videos").handler({ prompt: "a different boat" });
-  ok(!resume.submit, "and the parked one is still collected by its own retry");
+  await bySlug("v1-videos").handler({ prompt: "a different boat" }, evmReq(1));
+  ok(!resume.submit, "and the parked one is still collected by its own payer's retry");
+}
+for (const [label, mk] of [["no payment header", () => undefined], ["a non-EVM payer", svmReq]]) {
+  installVideoFetch({ statuses: ["pending"] });
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "an unkeyed boat" }, mk()), "did not finish", `${label}: timeout -> 504`);
+  ok(e?.statusCode === 504 && !/collect/.test(e?.message || "") && /not charged on x402/.test(e?.message || ""), `${label}: the 504 promises no collection and scopes the charge to x402`);
+  const seen = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "an unkeyed boat" }, mk());
+  ok(seen.submits === 1, `${label}: an identical retry submits its own job (nothing was parked)`);
+}
+{
+  // Two concurrent identical retries: one claims the parked clip, the other
+  // submits its own job, so one clip is never collected twice.
+  installVideoFetch({ statuses: ["pending"] });
+  await throws(() => bySlug("v1-videos").handler({ prompt: "a contested boat" }, evmReq(3)), "did not finish", "concurrent: a timed-out request parks its job");
+  const seen = installVideoFetch({ submitId: "job2" });
+  const [a, b] = await Promise.all([bySlug("v1-videos").handler({ prompt: "a contested boat" }, evmReq(3)), bySlug("v1-videos").handler({ prompt: "a contested boat" }, evmReq(3))]);
+  const polled = new Set(seen.polls.map((p) => p.url));
+  ok(!!a?.data && !!b?.data && seen.submits === 1 && polled.has(`${OPENROUTER_VIDEOS_URL}/job1`) && polled.has(`${OPENROUTER_VIDEOS_URL}/job2`), "concurrent: exactly one retry resumes the parked job and the other submits a new one");
+}
+for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }], ["the poll-failure limit", { pollHttp: [502, 502, 502, 502, 502, 502] }], ["a non-transient content status", { contentStatuses: [404] }]]) {
+  // A resumed job that ends in a terminal error is released: the next retry
+  // submits fresh instead of resuming a dead job.
+  installVideoFetch({ statuses: ["pending"] });
+  await throws(() => bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4)), "did not finish", `${label}: a timed-out request parks its job`);
+  installVideoFetch(opts);
+  await throws(() => bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4)), "pstream", `${label}: the resumed job ends in a terminal error`);
+  const seen = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4));
+  ok(seen.submits === 1, `${label}: the dead job is no longer parked; the next retry submits fresh`);
 }
 {
   const seen = installVideoFetch({ pollingUrl: "https://evil.example/steal?job=1" });

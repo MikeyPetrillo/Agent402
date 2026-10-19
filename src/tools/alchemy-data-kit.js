@@ -341,6 +341,9 @@ async function tokenMetadata(network, contract) {
     };
   } catch (err) {
     if (err?.statusCode === 503 && /not configured/.test(err.message)) throw err;
+    // The daily usage ceiling refused the lookup: answer its 503 for the whole
+    // call rather than a charged row with metadata we chose not to fetch.
+    if (err?.hardCap) throw err;
     meta = { symbol: null, name: null, decimals: null, logo: null, unavailable: true };
   }
   if (!meta.unavailable) cacheSet(k, meta);

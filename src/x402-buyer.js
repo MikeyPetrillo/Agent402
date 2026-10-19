@@ -9,6 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { Agent as UndiciAgent } from "undici";
 
 // What a seller sees in their logs when our router buys from them. Points at
 // the same page as the crawler's string: one place that says who we are.
@@ -19,7 +20,7 @@ import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
-import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
+import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -73,11 +74,16 @@ const MAX_REFUSAL_BODY_BYTES = 4 * 1024;
 export function pickPayableAccept(accepts, chain) {
   const cfg = BUYER_CHAINS[chain];
   if (!cfg) return null;
-  return (accepts || []).find((a) =>
-    cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
+  const matches = (accepts || []).filter((a) =>
+    a && cfg.networkLabels.has(String(a.network || "").toLowerCase()) &&
     String(a.scheme || "exact") === "exact" &&
     String(a.asset || "").toLowerCase() === cfg.asset.toLowerCase()
-  ) || null;
+  );
+  // The first one the stock signer can sign: an unsignable entry (another
+  // rail's domain, a wrong name, a transfer-then-prove method) listed ahead of
+  // a payable one must not decide the purchase. Every entry here is already the
+  // chain's USDC, so whichever is picked is what the cap check reads.
+  return firstSignableAccept(matches, cfg.caip2);
 }
 
 /** True only for a well-formed atomic-USDC quote at or under `maxAtomic`.
@@ -302,6 +308,59 @@ const SELLER_REFUSAL_TTL_MS = Number(process.env.SOR_SELLER_REFUSAL_TTL_MS || 6 
 const SELLER_REFUSAL_MAX = 500;
 const SELLER_REFUSAL_MIN_STRIKES = 2;
 const sellerRefusals = new Map(); // "chain|origin/path" -> { at, firstAt, status, strikes }
+// BOTH MEMOS ARE SHARED BETWEEN REPLICAS (src/shared-limits.js). Each strike
+// is also a member of a shared window keyed like the local map, so a strike
+// one container records counts on the other. The local map stays the floor:
+// readers answer from it synchronously, and refreshSellerMemos() folds the
+// shared windows into it before a resolver reads them. A window the shared
+// store answered empty clears a local entry that reached it (another replica
+// saw a delivery); an entry whose shared write failed is kept.
+const REFUSAL_MEMO = "sor-refusal";
+const DELIVERY_MEMO = "sor-delivery";
+let memoSeq = 0;
+const MEMO_REPLICA = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+const memoKeysWritten = new Set(); // "name\u0000key", so a test reset clears what it wrote
+function memoShare(name, key, windowMs, status, now, entry) {
+  if (!(windowMs > 0)) return;
+  if (memoKeysWritten.size < 5000) memoKeysWritten.add(`${name}\u0000${key}`);
+  void sharedWrite("sor-memo", shared.windowAdd(name, key, { windowMs, member: `${MEMO_REPLICA}:${++memoSeq}`, weight: Number(status) || 0, now })).then((r) => { if (r?.ok) entry.shared = true; });
+}
+/** Fold one shared window into a local memo map (strikes from every replica). */
+function foldShared(map, key, r) {
+  const local = map.get(key);
+  if (!r?.ok) return;
+  const entries = Array.isArray(r.entries) ? r.entries : [];
+  if (!r.count) { if (local?.shared) map.delete(key); return; }
+  const at = entries.length ? Math.max(...entries.map((e) => e.score)) : (local?.at || Date.now());
+  const firstAt = entries.length ? Math.min(...entries.map((e) => e.score)) : (local?.firstAt || at);
+  const latest = entries.find((e) => e.score === at);
+  if (local && local.at >= at && (local.strikes || 0) >= r.count) return;
+  map.set(key, { ...(local || {}), at: Math.max(at, local?.at || 0), firstAt: Math.min(firstAt, local?.firstAt || firstAt), status: latest && latest.weight ? latest.weight : (local?.status ?? null), strikes: Math.max(r.count, local?.strikes || 0), shared: true });
+}
+/**
+ * Read the shared strikes for these candidates into the local memos, so the
+ * synchronous readers below see what every replica recorded. `items` are
+ * { url, chain } (route refusals) and/or { origin, chain } (delivery
+ * failures). Never throws; a store that does not answer leaves the local
+ * floor as it is.
+ */
+export async function refreshSellerMemos(items = [], now = Date.now()) {
+  const reads = [];
+  for (const it of items) {
+    if (!it?.chain) continue;
+    const route = it.url ? refusalRoute(it.url) : null;
+    if (route) reads.push({ map: sellerRefusals, key: `${it.chain}|${route}`, q: { name: REFUSAL_MEMO, key: `${it.chain}|${route}`, windowMs: SELLER_REFUSAL_TTL_MS } });
+    const ttl = deliveryFailTtlMs();
+    if (it.origin && ttl > 0) { const k = refusalKey(it.origin, it.chain); reads.push({ map: deliveryFailures, key: k, q: { name: DELIVERY_MEMO, key: k, windowMs: ttl } }); }
+  }
+  if (!reads.length) return;
+  try {
+    const r = await shared.windowReadMany(reads.map((x) => x.q), { now });
+    if (!r?.ok) { noteSharedLimitsDegraded("sor-memo", r); return; }
+    reads.forEach((x, i) => foldShared(x.map, x.key, { ok: true, ...(r.results?.[i] || {}) }));
+  } catch (e) { noteSharedLimitsDegraded("sor-memo", { error: e?.message }); }
+}
+
 // The delivery memo below keys by origin + chain.
 const refusalKey = (origin, chain) => `${chain}|${String(origin || "").toLowerCase().replace(/\/+$/, "")}`;
 /** "https://host/path" for a route URL (query dropped, trailing slash dropped), or null. */
@@ -345,12 +404,16 @@ export function noteSellerRefusal(url, chain, status) {
   // Re-inserted at the tail, so eviction takes the least recently refused.
   sellerRefusals.delete(key);
   if (sellerRefusals.size >= SELLER_REFUSAL_MAX) sellerRefusals.delete(sellerRefusals.keys().next().value);
-  sellerRefusals.set(key, { at: now, firstAt: live ? live.firstAt : now, status, strikes: (live?.strikes || 0) + 1 });
+  const entry = { at: now, firstAt: live ? live.firstAt : now, status, strikes: (live?.strikes || 0) + 1 };
+  sellerRefusals.set(key, entry);
+  memoShare(REFUSAL_MEMO, key, SELLER_REFUSAL_TTL_MS, status, now, entry);
 }
 /** A settled delivery from the route forgets its strikes. */
 export function clearSellerRefusal(url, chain) {
   const route = refusalRoute(url);
-  if (route && chain) sellerRefusals.delete(`${chain}|${route}`);
+  if (!route || !chain) return;
+  sellerRefusals.delete(`${chain}|${route}`);
+  void sharedWrite("sor-memo", shared.windowClear(REFUSAL_MEMO, `${chain}|${route}`));
 }
 /** Is the route `url` benched on `chain` right now? What the resolver asks. */
 export function sellerRouteRefusedRecently(url, chain, now = Date.now()) {
@@ -377,7 +440,15 @@ export function sellerRefusedRecently(origin, chain, now = Date.now()) {
   }
   return best;
 }
-export function __resetSellerRefusalsForTest() { sellerRefusals.clear(); }
+function clearSharedMemoKeys(name) {
+  for (const nk of memoKeysWritten) {
+    const [n, k] = nk.split("\u0000");
+    if (n !== name) continue;
+    memoKeysWritten.delete(nk);
+    void sharedWrite("sor-memo", shared.windowClear(n, k));
+  }
+}
+export function __resetSellerRefusalsForTest() { sellerRefusals.clear(); clearSharedMemoKeys(REFUSAL_MEMO); }
 
 // Sellers whose PAID call did not DELIVER. The memo above is the opposite
 // outcome and the milder one: the seller declined the payment and nobody was
@@ -457,13 +528,15 @@ export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = n
   // the update path.)
   deliveryFailures.delete(key);
   if (deliveryFailures.size >= DELIVERY_FAIL_MAX) deliveryFailures.delete(deliveryFailures.keys().next().value);
-  deliveryFailures.set(key, {
+  const entry = {
     at: Date.now(),
     firstAt: live ? live.firstAt : Date.now(),
     status: Number.isFinite(status) ? status : null,
     ms: Number.isFinite(ms) ? Math.round(ms) : null,
     strikes: (live?.strikes || 0) + 1,
-  });
+  };
+  deliveryFailures.set(key, entry);
+  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry);
 }
 
 /**
@@ -488,6 +561,7 @@ export function isCallerInputStatus(status) {
 export function clearSellerDeliveryFailure(origin, chain) {
   if (!origin || !chain) return;
   deliveryFailures.delete(refusalKey(origin, chain));
+  void sharedWrite("sor-memo", shared.windowClear(DELIVERY_MEMO, refusalKey(origin, chain)));
 }
 
 /**
@@ -522,7 +596,7 @@ export function sellerDeliveryMemoEntries(now = Date.now()) {
 export const DELIVERY_FAIL_STRIKES_REQUIRED = DELIVERY_FAIL_MIN_STRIKES;
 /** The live TTL, for the operator surface. 0 = disarmed. */
 export const deliveryFailTtlMsNow = () => deliveryFailTtlMs();
-export function __resetSellerDeliveryFailuresForTest() { deliveryFailures.clear(); }
+export function __resetSellerDeliveryFailuresForTest() { deliveryFailures.clear(); clearSharedMemoKeys(DELIVERY_MEMO); }
 
 /** Does a response carry a settle receipt that says the payment SETTLED
  *  (`success: true`)? A receipt with no success flag, or one that fails to
@@ -685,6 +759,8 @@ export function neverLeftUs(err) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
+// A fresh plain connection for a trusted URL (no address guard).
+const trustedDispatcher = () => new UndiciAgent();
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, trusted = false, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
@@ -737,7 +813,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // wouldn't re-check a redirect target. redirect:"manual" + reject any 3xx so
     // a public seller can't 302 us onto an internal host (which would relay
     // internal data or forward our signed X-PAYMENT header).
-    dispatcher: ssrfDispatcher,
+    // A trusted URL (a fixed first-party address, or a test seller on this
+    // host) skips the address guard on every leg, not only the up-front check.
+    dispatcher: trusted ? trustedDispatcher() : ssrfDispatcher,
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   };
@@ -788,7 +866,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // refusal memo below): a check whose URL the caller chose reports the
       // accept and changes no routing decision.
       if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
-      const e = bad(domain.verdict === "gateway_batched"
+      const e = bad(domain.verdict === "payment_method_unsupported"
+        ? `Seller's Base accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
+        : domain.verdict === "gateway_batched"
         ? `Seller's Base accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
         : `Seller's Base USDC accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
       e.refused = true;
@@ -975,7 +1055,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // inside undici, with our signed payment never delivered). guardedLookup
     // still pins the IP, so the SSRF discipline is unchanged.
     const { freshSsrfDispatcher } = await import("./tools/fetch-guard.js");
-    const paidDispatcher = freshSsrfDispatcher();
+    const paidDispatcher = trusted ? trustedDispatcher() : freshSsrfDispatcher();
     const paidHeaders = { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" };
     // Wall-clock mark BEFORE the payment header leaves: the chain-truth check
     // after a refusal asks "did our wallet move since here".
@@ -1134,7 +1214,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
           const { freshSsrfDispatcher: freshAgain } = await import("./tools/fetch-guard.js");
-          paid = await fetch(url, { ...reqInit, dispatcher: freshAgain(), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
+          paid = await fetch(url, { ...reqInit, dispatcher: trusted ? trustedDispatcher() : freshAgain(), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);
         }

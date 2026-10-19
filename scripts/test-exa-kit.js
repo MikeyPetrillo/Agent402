@@ -105,7 +105,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   const s = exaSpendStatus();
   eq(s.status, "capped", "status says capped");
   ok(s.refusedToday >= 1, "and the refusal is counted");
-  ok(/Nothing was charged/.test((await tool("exa-search").handler({ query: "three" }).catch((e) => e)).message),
+  ok(/not charged on x402/.test((await tool("exa-search").handler({ query: "three" }).catch((e) => e)).message),
      "the refusal tells the buyer they were not charged (a >= 400 cancels settlement)");
 }
 
@@ -156,7 +156,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
     [402, /temporarily unavailable/, "402 is a 503 that says temporarily unavailable, never the account state"],
     [429, /rate-limiting/, "429 is a 503 with a retry hint"],
     [404, /nothing for that request/, "404 stays a 404"],
-    [500, /upstream error.*Nothing was charged/, "5xx is a 503 that names the upstream and the uncharged call"],
+    [500, /upstream error.*not charged on x402/, "5xx is a 503 that names the upstream and the uncharged call"],
     [400, /refused the request/, "4xx blames the request"],
   ]) {
     reset(); stub(status, { error: `leaked ${secret}` });
@@ -172,7 +172,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   ok(down.statusCode === 503 && down.attribution === "upstream" && /Exa is unreachable from here/.test(down.message) && /nothing was charged/i.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
   reset(); globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, headers: { get: () => null } });
   const junk = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
-  ok(junk.statusCode === 503 && /not JSON.*Nothing was charged/.test(junk.message), "a non-JSON upstream body is a 503 naming the upstream");
+  ok(junk.statusCode === 503 && /not JSON.*not charged on x402/.test(junk.message), "a non-JSON upstream body is a 503 naming the upstream");
   reset(); globalThis.fetch = async () => { throw Object.assign(new Error("timeout"), { name: "TimeoutError" }); };
   const slow = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
   ok(slow.statusCode === 503 && slow.upstreamFailure === "deadline" && /Exa did not answer/.test(slow.message) && /nothing was charged/i.test(slow.message), "a timeout is the deadline 503 naming Exa and the no-charge");

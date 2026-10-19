@@ -366,5 +366,30 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   stub.close();
 }
 
+// An EVM refund is marked paid only on a successful receipt: a reverted
+// transfer, or one with no receipt in time, leaves the row `sending`.
+{
+  const client = (receipt) => ({
+    prepareTransactionRequest: async (r) => r, signTransaction: async () => "0xsigned",
+    sendRawTransaction: async () => "0xhash", waitForTransactionReceipt: receipt,
+  });
+  const row = { id: 7, network: "eip155:8453", payer: "0x2222222222222222222222222222222222222222", priceUsd: 0.5 };
+  const prep = (c) => ({ client: c, token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", data: "0x", gas: 60000n });
+  let r = await rr.sendEvm(row, null, prep(client(async () => ({ status: "success" })))).then((h) => ({ h }), (e) => ({ e }));
+  ok(r.h === "0xhash", "a refund with a successful receipt returns its hash");
+  r = await rr.sendEvm(row, null, prep(client(async () => ({ status: "reverted" })))).then((h) => ({ h }), (e) => ({ e }));
+  ok(r.e && /reverted/.test(r.e.message) && r.e.refundTx === "0xhash", "a reverted refund throws with its hash (never returned as paid)");
+  r = await rr.sendEvm(row, null, prep(client(async () => { throw new Error("timed out"); }))).then((h) => ({ h }), (e) => ({ e }));
+  ok(r.e && /no receipt/.test(r.e.message), "a refund with no receipt in time throws");
+  // Through the executor: the row is left for a human, not marked paid.
+  let marked = 0;
+  const out = await rr.executeRefunds([row], {
+    verifyInbound: async () => ({ verified: true }), claim: async () => true, prepare: async () => null,
+    send: async () => rr.sendEvm(row, null, prep(client(async () => ({ status: "reverted" })))),
+    markPaid: async () => { marked++; }, pause: async () => {}, log: { log() {}, warn() {}, error() {} },
+  });
+  ok(marked === 0 && out.ok === 0, `a reverted refund is never marked paid (${JSON.stringify(out)})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

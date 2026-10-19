@@ -117,7 +117,7 @@ async function runInSandbox(code, language, tierSlug) {
       // The SDK text wraps the upstream error body (account state, the key):
       // log it redacted, answer the buyer generically.
       console.warn(`[code-run] sandbox creation failed: ${redactSecrets(String(e?.message || e)).slice(0, 300)}`);
-      throw bad("Code execution is temporarily unavailable (the sandbox could not start) - retry shortly. Nothing was charged.", 503);
+      throw bad("Code execution is temporarily unavailable (the sandbox could not start) - retry shortly. This call is not charged on x402.", 503);
     }
 
     // Output streamed so far, kept for a run that hits the time limit.
@@ -197,7 +197,7 @@ function makeHandler(tierSlug) {
     const who = payerKeyOf(req);
     if (who) {
       const n = payerInFlight.get(who) || 0;
-      if (n >= limitFor(who)) throw bad(`Too many concurrent runs: at most ${limitFor(who)} at a time per caller. Nothing was charged.`, 429);
+      if (n >= limitFor(who)) throw bad(`Too many concurrent runs: at most ${limitFor(who)} at a time per caller. This call is not charged on x402.`, 429);
       payerInFlight.set(who, n + 1);
     }
     try {

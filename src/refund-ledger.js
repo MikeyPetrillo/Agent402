@@ -128,6 +128,14 @@ const restateHandlerFailure = db.prepare(`
     note = CASE WHEN note IS NULL OR note = '' THEN @append ELSE note || '; ' || @append END
   WHERE evidence = @evidence AND status = 'owed' AND note = @from
 `);
+// A push debt voided by a claim that was held for serving (voidOwedForServe)
+// whose run then did not end in a served 200: back to owed, taking the
+// failure's status and note. Only while the note still reads the hold's.
+const reopenHeld = db.prepare(`
+  UPDATE refunds SET status = 'owed', resolvedAt = NULL, httpStatus = @httpStatus, hangupReason = @hangupReason, note = @note
+  WHERE evidence = @evidence AND status = 'void' AND note = @held
+`);
+const renoteVoid = db.prepare("UPDATE refunds SET note = @to WHERE evidence = @evidence AND status = 'void' AND note = @from");
 const selectByStatus = db.prepare("SELECT * FROM refunds WHERE status = ? ORDER BY id DESC LIMIT ?");
 const selectAll = db.prepare("SELECT * FROM refunds ORDER BY id DESC LIMIT ?");
 const resolveRow = db.prepare(`
@@ -270,6 +278,21 @@ const OWED_CHANGES = {
          WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
   restate: () => `UPDATE ${T("refunds")} SET http_status = $3, note = ${NOTE_CASE("$4")}, updated_at = ${PG_NOW_MS}
          WHERE evidence = $1 AND status = 'owed' AND note = $2 RETURNING *`,
+  // The void a claim takes BEFORE it is served (voidOwedForServe). The same
+  // guarded UPDATE as "void" but without the evidence mark: the row lock it
+  // takes serializes it with a refund send's claim (that UPDATE is guarded on
+  // status 'owed' as well), so exactly one of the two wins the row.
+  hold: () => `UPDATE ${T("refunds")} SET status = 'void', note = ${NOTE_CASE("$2")}, resolved_at = $3, updated_at = ${PG_NOW_MS}
+         WHERE evidence = $1 AND status = 'owed' RETURNING *`,
+  // A held claim whose run was not served: the row (still void with the
+  // hold's note, $2) is owed again, and so is its mark, so a send can claim it.
+  reopen: () => `WITH r AS (
+           UPDATE ${T("refunds")} SET status = 'owed', resolved_at = NULL, http_status = $3, hangup_reason = $4, note = $5, updated_at = ${PG_NOW_MS}
+           WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *),
+         m AS (UPDATE ${T("refund_marks")} SET state = 'owed' WHERE evidence IN (SELECT evidence FROM r))
+         SELECT * FROM r`,
+  // A held claim that was served: its note says so, so reopen never matches it.
+  renoteVoid: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *`,
 };
 /** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE. */
 async function runOwedChange(op, params) {
@@ -685,6 +708,44 @@ export function voidOwedOnClaim(evidence, note) {
     return owedChange("void-on-claim", "void", [evidence.trim(), noNul(note.trim()), Date.now()]);
   }
   try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
+}
+
+/** The void a Tempo push claim takes BEFORE its handler runs, so a refund
+ *  send and a serve can never both win one debt: one guarded UPDATE (status
+ *  owed), serialized with claimRefundForSend's on the row. True when this call
+ *  voided the row (database mode: a Promise of it); false when there is no
+ *  owed row, and then refundByEvidence reads what is there (in database mode
+ *  re-read from Postgres for this evidence). Writes no evidence mark: a debt
+ *  that lands later for a run that then fails must still book. */
+export function voidOwedForServe(evidence, note) {
+  if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
+  if (USE_PG) return owedChange("void-for-serve", "hold", [evidence.trim(), noNul(note.trim()), Date.now()]);
+  try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
+}
+
+/** Undo a voidOwedForServe whose run was not served: the row, while it is
+ *  still void with exactly the note `held`, is owed again with `httpStatus`
+ *  (499 with `hangupReason` for a disconnect) and the note `note`. Never
+ *  touches an owed, sending or paid row. True when it did; database mode: a
+ *  Promise of it. */
+export function reopenHeldClaim(evidence, { held, httpStatus, hangupReason = null, note } = {}) {
+  const st = Number(httpStatus);
+  if (typeof evidence !== "string" || !evidence.trim() || !held || !note || !Number.isInteger(st) || st < 400) return refuse();
+  const ev = evidence.trim();
+  const reason = st === 499 && hangupReason ? String(hangupReason).slice(0, 40) : null;
+  const n = String(note).slice(0, 200);
+  if (USE_PG) return owedChange("reopen-held", "reopen", [ev, held, st, noNul(reason), noNul(n)]);
+  try { return reopenHeld.run({ evidence: ev, held, httpStatus: st, hangupReason: reason, note: n }).changes > 0; } catch { return false; }
+}
+
+/** Rewrite a VOID row's note from `from` to `to`, exactly once (a held push
+ *  claim that was served: reopenHeldClaim then no longer matches it). True
+ *  when it did; database mode: a Promise of it. */
+export function renoteVoidRefund(evidence, from, to) {
+  const ev = String(evidence || "").trim();
+  if (!ev || !from || !to) return refuse();
+  if (USE_PG) return owedChange("renote-void", "renoteVoid", [ev, from, noNul(String(to).slice(0, 200))]);
+  try { return renoteVoid.run({ evidence: ev, from, to: String(to).slice(0, 200) }).changes > 0; } catch { return false; }
 }
 
 /** Rewrite an OWED row's note from `from` to `to`, exactly once: the row

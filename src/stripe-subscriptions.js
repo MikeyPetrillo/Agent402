@@ -16,7 +16,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady, stateDbSchema } from "./state-db.js";
+import { trackStoreReady, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 
@@ -35,7 +35,7 @@ export const MONITOR_PRODUCTS_ALL = {
     blurb: "We check this company's SEC filings index every day and email you a fresh cited report when anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained in plain language.",
   },
   "token-monitor": {
-    label: "Solana token safety watch", price: 500, kind: "token", slug: "token-brief",
+    label: "Solana token risk watch", price: 500, kind: "token", slug: "token-brief",
     inputField: "mint", inputLabel: "a Solana token mint address",
     blurb: "We re-check this token's mint and freeze authorities, LP lock, holder concentration and risk flags every day, and email you a fresh cited brief when any of them changes.",
   },
@@ -193,6 +193,21 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   // on this database), the file beside the store is the fallback.
   const pending = PG ? createDeadLetter({ file: `${path}.pending.ndjson`, name: "subscriptions", journalKey: `${stateDbSchema()}:subscriptions:${doc.name}` }) : null;
   const unsaved = new Set(); // subIds whose latest record has not landed
+  // One sale per paid invoice. On the state database the invoice id is
+  // claimed with an insert-if-absent in the shared records table, so a
+  // redelivery to the other container, or after a restart, books nothing.
+  // On the file the subscription record's lastInvoiceId (persisted) is the
+  // mark. True: this delivery books the sale; false: already booked.
+  const INVOICE_SALES = "stripe-invoice-sales";
+  async function claimInvoiceSale(invoiceId, seenOnRecord) {
+    if (!invoiceId) return !seenOnRecord;
+    if (!PG) return !seenOnRecord;
+    const r = await stateQuery(
+      `INSERT INTO ${stateDbSchema()}.records (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING RETURNING id`,
+      [INVOICE_SALES, String(invoiceId).slice(0, 200), JSON.stringify({ at: new Date().toISOString() })],
+    );
+    return r.rows.length > 0;
+  }
   // Resolves false only in database mode when the record did not reach the
   // database (it waits in the local journal); the webhook then answers 503
   // so Stripe delivers the event again.
@@ -410,16 +425,23 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       case "invoice.paid": {
         // Recurring revenue lands here (the first invoice too). Hand it to the
         // accounting hook so /revenue and the operator surfaces see card
-        // subscriptions, not only x402 settlements. Idempotent on invoice id.
+        // subscriptions, not only x402 settlements. Booked once per invoice
+        // id, across containers and restarts (claimInvoiceSale).
         const inv = event.data.object;
         const subId = typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id || inv.parent?.subscription_details?.subscription || null;
         const rec = subId ? store.get(subId) : null;
+        const seenOnRecord = !!inv.id && rec?.lastInvoiceId === inv.id;
         // The record first: an event answered 503 (its record not stored) is
         // delivered again, so the sale is booked on the delivery that stores
         // it, never once per delivery.
         if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
         if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
-          try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ }
+          let first;
+          try { first = await claimInvoiceSale(inv.id, seenOnRecord); } catch { first = null; }
+          // The claim could not be read: not acknowledged, so Stripe delivers
+          // the event again and the claim decides then.
+          if (first === null) { stored = false; break; }
+          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ } }
         }
         break;
       }

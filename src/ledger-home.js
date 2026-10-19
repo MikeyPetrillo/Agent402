@@ -136,7 +136,7 @@ const CAPABILITY_CHIPS = [
   ["crypto-options-chain", "Options chain"],
   ["defi-yields", "DeFi yield screener"],
   ["stablecoins", "Stablecoin supply"],
-  ["sol-token-safety", "Solana token safety"],
+  ["sol-token-safety", "Solana token risk"],
   ["sol-token-report", "Solana risk report"],
   ["crypto-market-pulse", "Crypto market pulse"],
   ["coin-profile", "Coin profile"],
@@ -243,6 +243,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 .hm-term { font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.8; color: var(--on-panel-soft); white-space: pre-wrap; word-break: break-word; margin: 0; }
 @media (max-width: 900px) { .hm-hero, .hm-2col, .hm-doors, .hm-decide { grid-template-columns: minmax(0,1fr) !important; } .hm-row { grid-template-columns: 1fr !important; gap: 6px; } .hm-h2 { font-size: var(--fs-2xl); } }
 @media (max-width: 600px) { .hm-live-stats { grid-template-columns: 1fr 1fr !important; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span { white-space: nowrap; } .why-cmp td { min-width: 150px; } }
+/* Phone widths: the four proof links sit two by two under the live label, so the
+   row never depends on font metrics to avoid a lone last link. */
+@media (max-width: 480px) { .hm-links { display: grid !important; grid-template-columns: repeat(2, max-content); justify-content: start; } .hm-links-label { grid-column: 1 / -1; } }
 @media (max-width: 480px) { .hm-reg-row { flex-direction: column !important; } .hm-reg-row button { width: 100%; } }
 .hm-sellcard { padding: 26px; display: flex; flex-direction: column; }
 .hm-sellk { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--accent); margin-bottom: 14px; }
@@ -297,8 +300,8 @@ ${WHY_SECTION_CSS}
           </div>
           <a href="/guides/agent-hosts" style="align-self:flex-start;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);white-space:nowrap;">Claude, Cursor, Codex and more &rarr;</a>
         </div>
-        <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:10px;"><span class="ml-dot"></span>${railCountLabel}</span>
+        <div class="ml-items hm-links" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
+          <span class="hm-links-label" style="display:inline-flex;align-items:center;gap:10px;flex-basis:100%;"><span class="ml-dot"></span>${railCountLabel}</span>
           <a href="/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">status</a>
           <a href="/api/reliability" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">reliability</a>
           <a href="${REPO_URL}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">open source</a>

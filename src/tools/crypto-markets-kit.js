@@ -1128,7 +1128,9 @@ const RWA_TOOLS = [
       const meta = await cgGet(`/rwas/${encodeURIComponent(id)}`, {}, TTL.list);
       const mk = await cgGet("/rwas/markets", { vs_currency: currency, ids: id, per_page: 1, page: 1 }, TTL.price);
       const d = meta.data || {};
-      const row = Array.isArray(mk.data) ? mk.data.find((r) => r?.id === id) || mk.data[0] : null;
+      // Only the row for this id: a markets answer without it means no market
+      // data for this asset, never another asset's row.
+      const row = Array.isArray(mk.data) ? mk.data.find((r) => r?.id === id) || null : null;
       return {
         source: SOURCE, fetchedAt: mk.fetchedAt, cached: meta.cached && mk.cached,
         id: d.id ?? id, symbol: typeof d.symbol === "string" ? d.symbol.toUpperCase() : null, name: d.name ?? null, type: d.asset_type ?? null,

@@ -244,6 +244,7 @@ function hangupForgivenessKeys(req) {
   return [who, `ip:${clientIp(req)}`];
 }
 import { mppProblem, sendMppProblem } from "./mpp-problem.js";
+import { settleReceiptHeaderGuard } from "./facilitator-diagnostics.js";
 import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
 import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
@@ -561,6 +562,7 @@ import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, sto
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -655,7 +657,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -720,7 +722,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -1644,7 +1646,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   }
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
   const resolved = [];
-  const { sellerRouteRefusedRecently, sellerServesModel } = await import("./x402-buyer.js");
+  const { sellerRouteRefusedRecently, sellerServesModel, refreshSellerMemos } = await import("./x402-buyer.js");
+  // Strikes another replica recorded reach this one's memos before they are read.
+  await refreshSellerMemos(candidates.map((r) => ({ url: r.url, origin: r.seller, chain })));
   for (const r of candidates) {
     let live = false;
     // The wallets this candidate's INHERITED evidence belongs to, when that
@@ -1764,7 +1768,10 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // it since the crawl is admitted and one who broke it since is not.
         if (chain === "base") {
           await readLivePayTo();
-          const liveBase = (liveAccepts || []).find((a) => a?.network === "eip155:8453" && String(a?.scheme || "exact") === "exact");
+          // The accept the buyer will sign (pickPayableAccept): the first
+          // payable Base USDC entry, so an unsignable one listed ahead of it
+          // does not skip a payable seller.
+          const liveBase = pickPayableAccept(liveAccepts || [], "base");
           const domain = liveBase ? usdcDomainVerdict(liveBase) : { verdict: "unknown" };
           // Both unsignable verdicts skip the seller HERE, before anything is
           // signed - a Gateway-rail accept used to pass this gate as "unknown"
@@ -3110,7 +3117,9 @@ function routerWarming(now = Date.now()) {
   if (!READY_ROUTER_WAIT_MS || !listenedAt || now - listenedAt >= READY_ROUTER_WAIT_MS) return false;
   try { const st = routerPoolStatus(); return Boolean(st.enabled) && !st.loaded; } catch { return false; }
 }
-app.get("/health", (req, res) => {
+// /health/ready is the same check as /health?ready=1, for a healthcheck
+// setting that takes a plain path.
+app.get(["/health", "/health/ready"], (req, res) => {
   const checks = {
     db: dbHealthy(),
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
@@ -3121,7 +3130,7 @@ app.get("/health", (req, res) => {
   // container is still serving, so it answers not-ready until a worker loads,
   // for at most READY_ROUTER_WAIT_MS after listen (0 turns it off). Plain
   // /health stays liveness for the monitors.
-  const warming = req.query?.ready === "1" && routerWarming();
+  const warming = (req.query?.ready === "1" || req.path === "/health/ready") && routerWarming();
   const ok = checks.db && checks.wallet && !warming;
   // Public `meta` carries ONLY toolCount — it's already published on
   // /api/pricing, /openapi.json, and /api/stats, and sync-count.js reads it
@@ -4054,7 +4063,11 @@ if (humanCheckoutEnabled()) {
     app.get("/api/r/:sessionId", async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
       try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
-      catch (e) { res.status(500).json({ status: "error", error: String(e?.message || e).slice(0, 200) }); }
+      catch (e) {
+        // The detail (a database or driver message) is for the operator log only.
+        console.warn("[human-checkout] report read failed:", String(e?.message || e).slice(0, 200));
+        res.status(500).set("Cache-Control", "no-store").json({ status: "error", error: "The report could not be read right now. Please retry in a moment." });
+      }
     });
   }
 }
@@ -7219,11 +7232,9 @@ app.get("/api/index", (req, res) => {
 // per-route parser here would be a no-op — the global one already parsed the
 // body by the time this handler runs).
 const REG_WINDOW_MS = 3600_000;
-const regByIp = new Map(); // ip -> [timestamps]; global cap is regGlobal below
 // F21: keep the per-IP maps from growing without bound between the periodic
 // sweeps when a burst of unique IPs arrives.
 const RL_MAP_MAX_KEYS = 5000;
-let regGlobal = [];
 // The backstop, not the fairness rule: per-IP (5/hour) is what stops one actor,
 // and this exists only so the endpoint cannot become a fetch amplifier at
 // scale. It was 30/hour, low enough that ordinary adoption hit it - each new
@@ -7231,27 +7242,26 @@ let regGlobal = [];
 // Env-overridable so it can be raised without a deploy.
 const REG_GLOBAL_MAX = Math.max(30, Number(process.env.INDEX_REGISTER_GLOBAL_MAX || 300));
 let regGlobalTripped = 0;
+// Both limits are counted across every replica (src/registration-limits.js:
+// shared-limits windows, with this process's own counts as the floor).
+const regLimiter = createRegistrationLimiter({ name: "x402", perIpMax: 5, globalMax: REG_GLOBAL_MAX, windowMs: REG_WINDOW_MS, maxKeys: RL_MAP_MAX_KEYS });
 // F21: evict stale keys from the one-time-IP rate map so distributed input
 // can't grow it without bound (the per-IP prune only fires when the SAME IP
 // returns). Mirrors the powChallengeHits / operatorSessions sweeps; the inline
 // size backstop covers bursts between ticks.
-setInterval(() => {
-  const now = Date.now();
-  sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
-}, 60_000);
+setInterval(() => { regLimiter.sweep(); }, 60_000).unref?.();
 app.post("/api/index/register", async (req, res) => {
   const now = Date.now();
   // An IPv6 client is keyed on its /64: one host is routinely assigned a whole
   // /64, so a full-address key gave it a fresh 5/hour per address.
   const ip = limiterKey(req.ip || "?");
-  if (regByIp.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
-  const mine = (regByIp.get(ip) || []).filter((t) => now - t < REG_WINDOW_MS);
-  if (mine.length >= 5) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!(await regLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
   if (v.error) return res.status(400).json({ error: v.error });
   if (isRemovedOrigin(v.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
-  regGlobal = regGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (regGlobal.length >= REG_GLOBAL_MAX) {
+  const taken = await regLimiter.take(ip, now);
+  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok) {
     // A global cap is a backstop, not the fairness mechanism - the per-IP cap
     // above is. At 30/hour it did the second job badly: one actor spending 5
     // from each of six addresses exhausted the budget for every seller on earth
@@ -7262,12 +7272,12 @@ app.post("/api/index/register", async (req, res) => {
     // of a known origin that fetches nothing (inside both of that origin's
     // windows) gives its slot back below, so such calls cannot fill this cap.
     if (!regGlobalTripped || now - regGlobalTripped > 600_000) {
-      console.warn(`[index-register] GLOBAL cap hit (${regGlobal.length}/${REG_GLOBAL_MAX} in the last hour) - NEW sellers are being refused`);
+      console.warn(`[index-register] GLOBAL cap hit (${REG_GLOBAL_MAX} in the last hour across replicas) - NEW sellers are being refused`);
       regGlobalTripped = now;
     }
     return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   }
-  mine.push(now); regByIp.set(ip, mine); regGlobal.push(now);
+  const slot = taken.slot;
   // Optional succession: a seller moving off a throwaway host to a permanent
   // domain keeps how long we have known them, when BOTH origins advertise the
   // same Base payTo. Validated like any other origin input - it is a caller-
@@ -7286,10 +7296,7 @@ app.post("/api/index/register", async (req, res) => {
     // The removal list has not been read yet (the state database is down):
     // nothing was fetched or listed, so the call gives back both of its
     // slots and answers 503 with when to try again.
-    const gi = regGlobal.lastIndexOf(now);
-    if (gi >= 0) regGlobal.splice(gi, 1);
-    const mi = mine.lastIndexOf(now);
-    if (mi >= 0) mine.splice(mi, 1);
+    regLimiter.giveBack(slot);
     return res.status(503).set("Retry-After", "30").json(result);
   }
   // Verification outlasted the registration's deadline: answered now (202),
@@ -7299,31 +7306,23 @@ app.post("/api/index/register", async (req, res) => {
   // nothing, so it gives back its slot in the GLOBAL budget: repeated calls
   // about one known origin must not use up the hour for new sellers. (The
   // per-IP count stands - that is the caller's own limit.)
-  if (!replaces && result?.reverify && !result.reverify.documentsReread && !result.reverify.routesRechecked) {
-    const i = regGlobal.lastIndexOf(now);
-    if (i >= 0) regGlobal.splice(i, 1);
-  }
+  if (!replaces && result?.reverify && !result.reverify.documentsReread && !result.reverify.routesRechecked) regLimiter.giveBackGlobal(slot);
   res.json(result);
 });
 // MPP self-serve listing: same shape/limits as /api/index/register above -
 // validate + rate-limit here, all probing happens inside the crawler behind
 // assertPublicUrl/ssrfDispatcher (src/mpp-index.js).
-const mppRegByIp = new Map();
-let mppRegGlobal = [];
-setInterval(() => {
-  sweepStaleTsMap(mppRegByIp, REG_WINDOW_MS, Date.now());
-}, 60_000);
+const mppRegLimiter = createRegistrationLimiter({ name: "mpp", perIpMax: 5, globalMax: REG_GLOBAL_MAX, windowMs: REG_WINDOW_MS, maxKeys: RL_MAP_MAX_KEYS });
+setInterval(() => { mppRegLimiter.sweep(); }, 60_000).unref?.();
 app.post("/api/mpp-index/register", async (req, res) => {
   const now = Date.now();
-  const ip = req.ip || "?";
-  if (mppRegByIp.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(mppRegByIp, REG_WINDOW_MS, now);
-  const mine = (mppRegByIp.get(ip) || []).filter((t) => now - t < REG_WINDOW_MS);
-  if (mine.length >= 5) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  const ip = limiterKey(req.ip || "?");
+  if (!(await mppRegLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateMppOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
   if (v.error) return res.status(400).json({ error: v.error });
-  mppRegGlobal = mppRegGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (mppRegGlobal.length >= REG_GLOBAL_MAX) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
-  mine.push(now); mppRegByIp.set(ip, mine); mppRegGlobal.push(now);
+  const taken = await mppRegLimiter.take(ip, now);
+  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
   const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
@@ -7704,7 +7703,10 @@ app.get("/sdk-playground/sandbox", (req, res) => {
   let buf;
   try { buf = readFileSync(new URL("../assets/sdk-sandbox.html", import.meta.url)); }
   catch { return res.status(404).end(); }
-  res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'");
+  // sandbox allow-scripts gives the document an opaque origin however it is
+  // reached (a top-level visit or a frame without the sandbox attribute), so
+  // code it runs never acts as this site's origin.
+  res.setHeader("Content-Security-Policy", "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'");
   res.setHeader("Cache-Control", "public, max-age=300");
   res.type("text/html").send(buf);
 });
@@ -8525,17 +8527,23 @@ app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 // gate, so nothing settles on the 202. The call is replayed to this server over
 // 127.0.0.1 with the buyer's own payment headers and runs through the normal
 // chain below, settling only on a final 200; GET /api/jobs/:id serves the result.
+// A settled job result that cannot be delivered (not retained, or its body
+// lost on the loopback) is a debt, on the receipt's proof only. Resolves
+// false when nothing was booked.
+const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd }) => {
+  try {
+    if (!receiptProvesCharge(receipt)) return false;
+    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
+    // A duplicate (false) is a debt already on the books: still recorded.
+    return true;
+  } catch { return false; /* recording a debt must never break the serving path */ }
+};
 const asyncJobStore = createTaskStore({
   dir: taskDataDir("async-jobs"), label: "async-jobs",
-  onChargedFailure: async ({ slug, receipt, priceUsd }) => {
-    try {
-      if (!receiptProvesCharge(receipt)) return;
-      recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
-    } catch { /* recording a debt must never break the serving path */ }
-  },
+  onChargedFailure: bookAsyncChargedFailure,
 });
 const asyncJobs = createAsyncJobs({
-  port: PORT, store: asyncJobStore,
+  port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.runSeconds ? def : null; },
 });
 app.use(asyncJobs.middleware);
@@ -8560,6 +8568,10 @@ if (!FREE_MODE) {
   // Arrival stamp for the per-phase timing of paid calls
   // (src/paid-phase-timing.js); before every gate, so gate time is measured.
   app.use(phaseArrivalMiddleware());
+  // A settle-failure PAYMENT-RESPONSE carries a short reason code and a fixed
+  // message to the buyer; the facilitator's own text goes to this log
+  // (src/facilitator-diagnostics.js). Before every payment gate.
+  app.use(settleReceiptHeaderGuard());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
@@ -8648,7 +8660,7 @@ if (!FREE_MODE) {
   // at least this route's price" before a single relay call. Without them
   // createTempoGate refuses to mount (fail closed).
   tempoPushDebts = createTempoPushDebts({
-    recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
+    recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
     recordChargedFailure, isSynthetic: isSyntheticRequest,
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
@@ -8686,12 +8698,27 @@ if (!FREE_MODE) {
     // src/tempo-push-debts.js); a served claim voids the debt.
     onPushNotClaimed: (req, info) => tempoPushDebts.notClaimed(req, info),
     onPushInputRefused: (req, info) => tempoPushDebts.inputRefused(req, info),
-    // Read fresh: a refund another container just started for this push must
-    // stop this one from serving it (served and refunded is the case to avoid).
-    pushClaimAllowed: async (hash) => !["sending", "paid"].includes((await refundByEvidenceFresh(hash))?.status),
+    // A transfer this container already knows is refunded is not claimed.
+    // The mirror is enough here: the decision that keeps a push from being
+    // both served and refunded is the claim hold below, not this read.
+    pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
   });
   if (tempoGate) {
     app.use(tempoGate);
+    // A claimed push credential is served only once its owed debt (an
+    // earlier input refusal) is voided, in one statement a refund send's
+    // claim cannot interleave with (tempoPushDebts.claimForServe). A debt
+    // already being sent or paid is not served: the buyer is refunded. A run
+    // that is then not served reopens the debt at finish.
+    app.use(async (req, res, next) => {
+      if (!req.tempoSettled || !tempoPushHashOf(req)) return next();
+      let serve = true;
+      try { serve = await tempoPushDebts.claimForServe(req); } catch { serve = true; }
+      if (serve) return next();
+      req.tempoPushRefunded = true;
+      console.warn(`[mpp-tempo] push transfer ${tempoPushHashOf(req)} is refunded or being refunded; not served (${req.method} ${req.path})`);
+      return sendMppProblem(res, mppProblem("invalid-challenge", "The transfer this credential names has been refunded (or is being refunded), so it no longer pays for a request.", { status: 402, hint: "Request the resource again and pay the fresh challenge.", details: { reason: "refunded", transferClaimed: true } }));
+    });
     // Direct mode screens every payment party before any money moves, and
     // offers no tempo challenge until the list has loaded (tempoEnabled).
     if (tempoSettlementMode() === "direct") startSanctionsScreen();
@@ -9478,7 +9505,7 @@ app.use((req, res, next) => {
             payer,
           });
         }
-      } else if ((req.tempoSettled || req.stripeSettled) && res.statusCode >= 400) {
+      } else if ((req.tempoSettled || req.stripeSettled) && res.statusCode >= 400 && !req.tempoPushRefunded) {
         // The MPP Tempo/Stripe gates settle BEFORE replaying the buffered
         // response and carry no PAYMENT-RESPONSE, so the branch above never saw
         // them: a replay that threw after settlement (the gate's own

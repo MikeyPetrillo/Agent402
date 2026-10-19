@@ -785,6 +785,30 @@ export function leaseFailOpenMs(env = process.env) {
   const n = Number(env.STATE_DB_LEASE_FAILOPEN_MS);
   return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000;
 }
+// "The only container" holds for one replica only. With more than one
+// configured (STATE_DB_REPLICAS, else RATE_LIMIT_REPLICAS), an old container
+// is not alone, so a fail-open tick may run on every replica at once. That is
+// fine for a loop whose rerun only repeats a read or an idempotent write (a
+// crawl, a leaderboard, a cache warmer), and not for a singleton whose second
+// run is a second artifact or a second report: those fail CLOSED whenever
+// more than one replica is configured. The singletons are named here (and in
+// STATE_DB_LEASE_SINGLETONS, comma-separated) or by `singleton: true`.
+export const FAIL_CLOSED_SINGLETONS = Object.freeze(["backup-nightly", "mpp-reconcile-run"]);
+/** The configured replica count (at least 1). */
+export function leaseReplicas(env = process.env) {
+  const explicit = Number(env.STATE_DB_REPLICAS);
+  if (Number.isFinite(explicit) && explicit >= 1) return Math.floor(explicit);
+  const n = Number(env.RATE_LIMIT_REPLICAS);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+/** Whether this lease may fail open on a database error (before the age check). */
+export function leaseMayFailOpen(name, { failOpen = false, singleton = false } = {}, env = process.env) {
+  if (!failOpen) return false;
+  if (leaseReplicas(env) <= 1) return true;
+  if (singleton) return false;
+  const extra = String(env.STATE_DB_LEASE_SINGLETONS || "").split(",").map((x) => x.trim()).filter(Boolean);
+  return !FAIL_CLOSED_SINGLETONS.includes(String(name)) && !extra.includes(String(name));
+}
 async function acquireWithin(name, owner, ttlMs, limitMs) {
   let timer;
   let timedOut = false;
@@ -821,8 +845,9 @@ export async function withLease(name, opts = {}, fn) {
   if (typeof fn !== "function") throw new Error("withLease needs a function");
   const {
     ttlMs = 120_000, owner = leaseOwnerDefault, log = console.warn, uptimeMs = process.uptime() * 1000,
-    failOpen = false, acquireTimeoutMs = stateDbTimeouts().leaseAcquireMs,
+    failOpen: failOpenOpt = false, singleton = false, acquireTimeoutMs = stateDbTimeouts().leaseAcquireMs,
   } = opts || {};
+  const failOpen = leaseMayFailOpen(name, { failOpen: failOpenOpt, singleton });
   if (!stateDbEnabled()) return { ran: true, result: await fn(TRIVIAL_CTX) };
   if (leasesStopped) return { ran: false, reason: "shutdown" };
   const key = leaseKey(owner, String(name));
@@ -844,7 +869,7 @@ export async function withLease(name, opts = {}, fn) {
         entry.failOpen = true;
         return { ran: true, result: await fn(ctx), reason: "db-failopen" };
       }
-      log(`[state-db] lease ${name}: acquire failed (${why}); this tick is skipped${failOpen ? ` (container up ${Math.round(uptimeMs / 1000)} s, under the fail-open age)` : ""}`);
+      log(`[state-db] lease ${name}: acquire failed (${why}); this tick is skipped${failOpen ? ` (container up ${Math.round(uptimeMs / 1000)} s, under the fail-open age)` : failOpenOpt ? " (a singleton with more than one replica configured fails closed)" : ""}`);
       return { ran: false, reason: "db" };
     }
     if (!held) return { ran: false, reason: "held" };
@@ -991,7 +1016,9 @@ export function stateStoresLoaded() {
 export async function stateStoresReady({ timeoutMs = 15_000 } = {}) {
   const all = Promise.all([...readyPromises]);
   let timer;
-  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); timer.unref?.(); });
+  // Not unref'd: during boot this timer is what keeps the process alive while every
+  // store retries on unref'd timers; it is cleared as soon as the race settles.
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); });
   const r = await Promise.race([all.then(() => "settled"), deadline]);
   clearTimeout(timer);
   bootWaitDone = true;
@@ -1121,10 +1148,10 @@ export async function importOnce(name, { source = "", run }) {
  * with no external effects (see withLease). Inside fn, `leaseStillHeld(name)`
  * is the fencing check before an external effect.
  */
-export function leased(name, { ttlMs = 120_000, log = console.warn, failOpen = false, uptimeMs } = {}, fn) {
+export function leased(name, { ttlMs = 120_000, log = console.warn, failOpen = false, singleton = false, uptimeMs } = {}, fn) {
   if (typeof fn !== "function") throw new Error("leased needs a function");
   return async (...args) => {
-    const r = await withLease(name, { ttlMs, log, failOpen, ...(uptimeMs !== undefined ? { uptimeMs } : {}) }, () => fn(...args));
+    const r = await withLease(name, { ttlMs, log, failOpen, singleton, ...(uptimeMs !== undefined ? { uptimeMs } : {}) }, () => fn(...args));
     return r.ran ? r.result : { skipped: "leased", reason: r.reason };
   };
 }

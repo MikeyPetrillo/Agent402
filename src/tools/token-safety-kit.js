@@ -71,14 +71,14 @@ export function safetyVerdict(g) {
 export const TOKEN_SAFETY_TOOLS = [
   {
     route: "POST /api/token-safety",
-    name: "EVM token safety check",
+    name: "EVM token risk check",
     slug: "token-safety",
     category: "crypto",
     price: "$0.005",
     aliases: ["honeypot-check", "honeypot", "rugpull-check", "scam-token-check", "token-scam-check",
       "malicious-token", "is-this-token-safe", "evm-token-safety", "token-security"],
     description:
-      "Is this EVM token safe to trade? One deterministic call returns a verdict (ok, caution, unsafe) with the named facts behind it: honeypot, can-sell, buy and sell tax, mintable supply, hidden or reclaimable ownership, pausable transfers, blacklist, modifiable slippage, upgradeable proxy, verified source, LP lock share and holder counts. Covers Base, Ethereum, Polygon, Arbitrum, Optimism, BSC, Gnosis and Celo. No model in the path, so the same token always gives the same answer; checks the upstream could not answer are listed as unknown rather than counted as safe. For the cited, researched version see token-risk; for Solana mints see sol-token-safety.",
+      "Risk facts for an EVM token before a trade. One deterministic call returns a verdict (ok, caution, unsafe) with the named facts behind it: honeypot, can-sell, buy and sell tax, mintable supply, hidden or reclaimable ownership, pausable transfers, blacklist, modifiable slippage, upgradeable proxy, verified source, LP lock share and holder counts. Covers Base, Ethereum, Polygon, Arbitrum, Optimism, BSC, Gnosis and Celo. No model in the path, so the same token always gives the same answer; checks the upstream could not answer are listed as unknown rather than counted as safe. For the cited, researched version see token-risk; for Solana mints see sol-token-safety.",
     tags: ["token", "safety", "honeypot", "rugpull", "evm"],
     discovery: {
       bodyType: "json",
