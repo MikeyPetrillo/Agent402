@@ -3,7 +3,8 @@ import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createJsonDocument, documentNameOf } from "./json-document.js";
 import { stateDbEnabled, stateDbSchema, withStateTx, trackStoreReady } from "./state-db.js";
-import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
+import { getSharedRedisClient } from "./shared-limit.js";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -88,6 +89,70 @@ async function sharedPayerExposureUsd(k, now) {
   const r = await shared.windowRead("esg-payer", k, { windowMs: STALE_MS, now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return null; }
   return r.sum / 1e6;
+}
+
+// The reservation itself is ONE script on the shared store: prune the window,
+// sum it, and add this spend only when the larger of that sum and this
+// process's own figure plus the spend stays within the ceiling. Two replicas
+// reserving for one payer at once queue on Redis, so the shared window never
+// holds more than the ceiling (a read followed by a separate add let each
+// replica pass on the same reading). A store that does not answer leaves the
+// decision to the read-then-book path below (this process's rows bound it).
+// Entries are encoded as shared-limits.js encodes them (`<micro>|<member>`),
+// so its window reads and removals see the same rows.
+// KEYS[1] = window; ARGV: cutoff, windowMs, encodedMember, score, capMicro, floorMicro, weightMicro
+const WINDOW_RESERVE = `
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local items = redis.call('ZRANGE', KEYS[1], 0, -1)
+local sum = 0
+for i = 1, #items do sum = sum + (tonumber(string.match(items[i], '^(%-?%d+)|')) or 1) end
+local base = math.max(sum, tonumber(ARGV[6]))
+if base + tonumber(ARGV[7]) > tonumber(ARGV[5]) then return { 0, sum } end
+redis.call('ZADD', KEYS[1], ARGV[4], ARGV[3])
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return { 1, sum }`;
+const payerRefusal = (exposure, maxUnsettledUsd) => ({
+  ok: false,
+  exposure,
+  reason:
+    `this wallet already has $${exposure.toFixed(3)} of upstream spend from earlier calls whose payment has not settled` +
+    ` (ceiling $${maxUnsettledUsd}). It clears as soon as those settle.`,
+});
+/**
+ * The payer half of a reservation on the shared store, before the chain
+ * check. Null when there is nothing to reserve there (no shared store, no
+ * attributable payer, an exempt payer); `{ refusal }` when the ceiling has no
+ * room; `{ id, reserved: true }` when the entry is in the window;
+ * `{ id, reserved: false }` when the store did not answer.
+ */
+async function reservePayerShared(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now() } = {}) {
+  if (!SHARED) return null;
+  const k = keyOf(payer);
+  if (!k || exemptSet().has(k.toLowerCase())) return null;
+  const id = ++seq;
+  const w = microOf(usd);
+  const local = payerExposureUsd(k, now);
+  let c = null;
+  try { c = await getSharedRedisClient(); } catch { c = null; }
+  if (!c) { noteSharedLimitsDegraded(CONTROL, { ok: false, error: "redis unavailable" }); return { id, reserved: false }; }
+  let timer = null;
+  try {
+    const bound = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("shared-limits: command timed out")), OP_MS()); timer.unref?.(); });
+    const r = await Promise.race([c.eval(WINDOW_RESERVE, {
+      keys: [sharedKeyOf("esg-payer", k)],
+      arguments: [now - STALE_MS, Math.max(1, Math.round(STALE_MS)), `${w}|${SHARED_PROC}:${id}`, now, microOf(maxUnsettledUsd), microOf(local), w].map(String),
+    }), bound]);
+    if (Number(r?.[0]) === 1) return { id, reserved: true, payer: k, usd: Number(usd) || 0 };
+    return { refusal: payerRefusal(Math.max(local, (Number(r?.[1]) || 0) / 1e6), maxUnsettledUsd) };
+  } catch (e) {
+    noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
+    return { id, reserved: false };
+  } finally { if (timer) clearTimeout(timer); }
+}
+/** Give back a shared reservation whose spend was then refused (the chain ceiling). */
+function releasePayerShared(pre) {
+  if (!pre?.reserved) return;
+  void sharedWrite(CONTROL, shared.windowRemove("esg-payer", pre.payer, { member: `${SHARED_PROC}:${pre.id}`, weight: microOf(pre.usd) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -441,23 +506,33 @@ export function reserveSpend(payer, usd, opts = {}) {
       const d = decideSpend(payer, usd, opts);
       return d.ok ? { ...d, handle: noteSpend(payer, usd, opts) } : d;
     }
-    return withSharedExposure(payer, opts).then((o) => {
+    return (async () => {
+      const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+      const pre = await reservePayerShared(payer, usd, { ...opts, now });
+      if (pre?.refusal) return pre.refusal;
+      // Reserved: the window holds it, so the payer check below reads only
+      // this process's rows. Not reserved (store away): the read-then-book path.
+      const o = pre?.reserved ? { ...opts, now } : await withSharedExposure(payer, { ...opts, now });
       const d = decideSpend(payer, usd, o);
-      return d.ok ? { ...d, handle: noteSpend(payer, usd, o) } : d;
-    });
+      if (!d.ok) { releasePayerShared(pre); return d; }
+      return { ...d, handle: bookLocal(keyOf(payer), chainKeyOf(opts.chain), Number(usd) || 0, now, pre) };
+    })();
   }
   return reserveSpendPg(payer, usd, opts);
 }
 let reserveReadHook = null;
 async function reserveSpendPg(payer, usd, opts0) {
   await pgReady;
-  const opts = await withSharedExposure(payer, opts0);
+  const now = Number.isFinite(opts0.now) ? opts0.now : Date.now();
+  const pre = await reservePayerShared(payer, usd, { ...opts0, now });
+  if (pre?.refusal) return pre.refusal;
+  const opts = pre?.reserved ? opts0 : await withSharedExposure(payer, opts0);
   const ck = chainKeyOf(opts.chain);
-  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const amount = Number(usd) || 0;
   if (!ck) {
     const d = decideSpend(payer, usd, { ...opts, now });
-    return d.ok ? { ...d, handle: await noteSpend(payer, usd, { now }) } : d;
+    if (!d.ok) { releasePayerShared(pre); return d; }
+    return { ...d, handle: bookLocal(keyOf(payer), null, amount, now, pre) };
   }
   let booked = null;
   try {
@@ -473,8 +548,8 @@ async function reserveSpendPg(payer, usd, opts0) {
       chainLedgerLoaded = true;
       // No await from here to the booking: the decision and the rows it adds are one step.
       const d = decideSpend(payer, usd, { ...opts, now });
-      if (!d.ok) return d;
-      booked = bookLocal(keyOf(payer), ck, amount, now);
+      if (!d.ok) { releasePayerShared(pre); return d; }
+      booked = bookLocal(keyOf(payer), ck, amount, now, pre);
       const body = mergedChainBody(storedBody.chains || {}, now);
       await client.query(
         `INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb)
@@ -492,10 +567,10 @@ async function reserveSpendPg(payer, usd, opts0) {
     const t = Date.now();
     if (t - pgLastReadWarn > 60_000) { pgLastReadWarn = t; console.warn(`[spend-guard] reservation against the state database failed (${String(e?.message || e).slice(0, 80)}); deciding on this container's own records`); }
     const refused = unreadableRefusal(opts);
-    if (refused) return refused;
+    if (refused) { releasePayerShared(pre); return refused; }
     const d = decideSpend(payer, usd, { ...opts, now });
-    if (!d.ok) return d;
-    const handle = bookLocal(keyOf(payer), ck, amount, now);
+    if (!d.ok) { releasePayerShared(pre); return d; }
+    const handle = bookLocal(keyOf(payer), ck, amount, now, pre);
     void writeChainLedgerPg();
     return { ...d, handle };
   }
@@ -545,15 +620,7 @@ function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, 
   // it was read, never below this process's own.
   const exposure = Math.max(payerExposureUsd(k, now), Number.isFinite(sharedExposureUsd) ? sharedExposureUsd : 0);
   const next = exposure + (Number(usd) || 0);
-  if (next > maxUnsettledUsd) {
-    return {
-      ok: false,
-      exposure,
-      reason:
-        `this wallet already has $${exposure.toFixed(3)} of upstream spend from earlier calls whose payment has not settled` +
-        ` (ceiling $${maxUnsettledUsd}). It clears as soon as those settle.`,
-    };
-  }
+  if (next > maxUnsettledUsd) return payerRefusal(exposure, maxUnsettledUsd);
   return { ok: true, exposure };
 }
 
@@ -576,9 +643,11 @@ export function noteSpend(payer, usd, opts = undefined) {
   return (ck ? writeChainLedgerPg() : Promise.resolve(true)).then(() => handle);
 }
 
-/** Add the rows for one spend to the in-memory ledgers (synchronous). */
-function bookLocal(k, ck, amount, now) {
-  const id = ++seq;
+/** Add the rows for one spend to the in-memory ledgers (synchronous). With
+ *  `pre` (reservePayerShared) the spend keeps that id, and a payer entry it
+ *  already put in the shared window is not added again. */
+function bookLocal(k, ck, amount, now, pre = null) {
+  const id = pre?.id || ++seq;
   if (k) {
     const rows = prune(ledger.get(k) || [], now);
     rows.push({ id, usd: amount, at: now, settled: false });
@@ -586,7 +655,7 @@ function bookLocal(k, ck, amount, now) {
     // The shared entry reaches the store before the buy (the write is sent
     // now; the other replica's next read counts it); its member names this
     // process so the lowering and the settlement below find it.
-    if (SHARED) void sharedWrite(CONTROL, shared.windowAdd("esg-payer", k, { windowMs: STALE_MS, member: `${SHARED_PROC}:${id}`, weight: microOf(amount), now, score: now }));
+    if (SHARED && !pre?.reserved) void sharedWrite(CONTROL, shared.windowAdd("esg-payer", k, { windowMs: STALE_MS, member: `${SHARED_PROC}:${id}`, weight: microOf(amount), now, score: now }));
   }
   if (ck) {
     const rows = pruneChain(ck, now);
