@@ -251,7 +251,7 @@ globalThis.fetch = async (url, opts = {}) => {
   // A 200 in place of a 206: refused, body cancelled, nothing buffered.
   requests.length = 0;
   rangeMode = "200";
-  await throws(dataSetHead({ dataSet: "latest", table: "SUMMARYPAGE" }), 502, "edgar-13f-dataset-head: a Range GET answered 200 is refused, the whole archive is never downloaded", /did not honour the byte-range/);
+  await throws(dataSetHead({ dataSet: "latest", table: "SUMMARYPAGE" }), 502, "edgar-13f-dataset-head: a Range GET answered 200 is refused, the whole archive is never downloaded", /did not honor the byte-range/);
   ok(requests.some((q) => q.cancelled), "edgar-13f-dataset-head: the 200 body was cancelled, not read");
   rangeMode = "206";
   for (const t of DATASET_TABLES) ok(typeof t === "string" && t === t.toUpperCase(), `table name ${t} is upper-case`);
