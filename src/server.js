@@ -63,7 +63,7 @@ import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { kitDisclaimer } from "./report-disclosure.js";
-import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
@@ -247,6 +247,7 @@ function hangupForgivenessKeys(req) {
 import { mppProblem, sendMppProblem } from "./mpp-problem.js";
 import { settleReceiptHeaderGuard } from "./facilitator-diagnostics.js";
 import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
+import { createManageLinkHandler, subManageMessage } from "./monitor-manage-link.js";
 import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, CREDIT_PACKS } from "./credits.js";
@@ -4075,6 +4076,19 @@ if (humanCheckoutEnabled()) {
     });
   }
 }
+// "Already subscribed? Manage or cancel" (the form on /monitors): emails a
+// fresh signed manage link to a checkout email that has a card subscription.
+// Mounted with or without Stripe, so the answer is the same either way.
+const manageLinkIpLimiter = createRateLimiter("manage-link", { perMin: 6, perHour: 40 });
+// Keyed on the ADDRESS (hashed), so rotating IPs cannot flood one inbox.
+const manageLinkEmailLimiter = createRateLimiter("manage-link-email", { perMin: 1, perHour: 2 });
+app.post("/monitors/manage-link", express.urlencoded({ extended: false, limit: "4kb" }), createManageLinkHandler({
+  findSubs: (email) => (_subs ? _subs.findManageableByEmail(email) : Promise.resolve([])),
+  send: faSendEmail,
+  linkFor: (subId, exp) => `${BASE_URL}/monitors/manage?sub=${encodeURIComponent(subId)}&exp=${exp}&k=${_manageToken(subManageMessage(subId, exp))}`,
+  labelOf: (product) => MONITOR_PRODUCTS_ALL[product]?.label || "monitor",
+  ipLimiter: manageLinkIpLimiter, emailLimiter: manageLinkEmailLimiter, clientIp, page: alertPage,
+}));
 // Monitoring subscriptions - JSON routes + pages. The webhook is
 // mounted EARLY (raw body) above. Provisioning is belt-and-suspenders: the
 // confirm route records the sub from the paid session; the webhook keeps the
@@ -4121,6 +4135,15 @@ if (_subs) {
         const subId = await _monitors.subIdOfReportFresh(reportId);
         let rec = subId ? _subs.get(subId) : null;
         if (subId && !rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
+        if (rec?.customer) customer = rec.customer;
+      } else if (req.query.sub) {
+        // A link from the "Already subscribed?" form: keyed over the
+        // subscription id and an expiry (unix seconds).
+        const subId = String(req.query.sub || "").slice(0, 100);
+        const exp = Number(req.query.exp);
+        if (!Number.isSafeInteger(exp) || exp * 1000 < Date.now() || !_manageTokenOk(subManageMessage(subId, exp), req.query.k)) return res.redirect("/monitors#manage");
+        let rec = _subs.get(subId);
+        if (!rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
         if (rec?.customer) customer = rec.customer;
       } else {
         const r = await _subs.recordFromSession(String(req.query.session || ""));
