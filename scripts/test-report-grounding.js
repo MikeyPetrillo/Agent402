@@ -328,7 +328,7 @@ for (const [kit, f] of Object.entries(KITS)) {
     const u = String(url);
     const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
     if (u.includes("/drug/enforcement.json")) return json(200, { meta: { results: { total: 139 } }, results: rows });
-    if (u.includes("api.fda.gov")) return json(404, { error: { code: "NOT_FOUND", message: "No matches found!" } });
+    if (new URL(u).hostname === "api.fda.gov") return json(404, { error: { code: "NOT_FOUND", message: "No matches found!" } });
     if (u.includes("openrouter")) return json(200, { choices: [{ message: { content: prose }, finish_reason: "stop" }], usage: { cost: 0 } });
     throw new Error(`unexpected fetch ${u}`);
   };

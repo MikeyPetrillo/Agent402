@@ -139,7 +139,8 @@ const scriptSrcs = (w) => [...w.document.querySelectorAll("script[src]")].map((s
 // --- /privacy copy -----------------------------------------------------------
 {
   const { privacyPage } = await import("../src/privacy.js");
-  const text = privacyPage("https://agent402.tools").replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+  // Visible text of the page, read through a DOM rather than a tag regex.
+  const text = new JSDOM(privacyPage("https://agent402.tools")).window.document.body.textContent.replace(/\s+/g, " ");
   ok(!/page path, referrer and screen size/.test(text), "/privacy no longer under-lists the counter as path, referrer and screen size");
   for (const phrase of ["page views, page leaves", "page load timings (web vitals)", "operating system", "device type", "utm_* campaign parameters", "the address of the page that linked you here"]) {
     ok(text.includes(phrase), `/privacy lists: ${phrase}`);

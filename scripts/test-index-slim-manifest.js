@@ -71,7 +71,7 @@ __setCrawlFetchForTest(async (url, opts = {}) => {
   fetches.set(url, (fetches.get(url) || 0) + 1);
   const body = served.get(url);
   if (body === undefined) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422 });
-  const withValidators = url.startsWith(ETAGGED);
+  const withValidators = new URL(url).origin === new URL(ETAGGED).origin;
   const sent = opts.validators?.etag;
   if (withValidators && opts.allowNotModified && sent && sent === etag(url)) { notModified++; return { notModified: true, finalUrl: url, validators: null }; }
   return { html: body, finalUrl: url, validators: withValidators ? { etag: etag(url) } : null };
