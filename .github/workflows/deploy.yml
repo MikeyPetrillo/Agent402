@@ -1378,6 +1378,7 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          t node scripts/test-leaderboard-peer-adopt-pg.js
           t node scripts/test-x402-removals-pg.js
           t node scripts/test-scan-state-version-pg.js
           t node scripts/test-revenue-ledger-pg.js
@@ -2812,6 +2813,7 @@ jobs:
           t node scripts/test-stripe-shadow-ledger.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
+          t node scripts/test-ssrf-literal-ip.js
           t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
