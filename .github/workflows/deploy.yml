@@ -2868,6 +2868,8 @@ jobs:
           t node scripts/test-home-page.js
           t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
+          # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
+          t node scripts/test-analytics-privacy.js
           t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
@@ -2885,6 +2887,8 @@ jobs:
           t node scripts/test-credits.js
           # CAN-SPAM: every outbound email carries the physical postal address
           t node scripts/test-email-postal-address.js
+          # List-Unsubscribe headers reach both email providers (ZeptoMail mime_headers, Resend headers)
+          t node scripts/test-email-unsub-headers.js
           # Prepaid credits are not SOLD by default (no held balance), but existing keys still redeem
           t node scripts/test-credits-sales-gate.js
           # Stripe shadow ledger (off by default and inert, idempotent on tx hash, failures swallowed, restart-durable, caller unchanged in every world)

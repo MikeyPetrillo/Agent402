@@ -13,7 +13,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
-  const description = "Agent402's privacy policy: no accounts, no ad trackers, page analytics with a consent choice in Europe. What we process, why, how long we keep it, and how to have it erased.";
+  const description = "Agent402's privacy policy: no accounts, no ad trackers, an analytics cookie choice you can change. What we process, why, how long we keep it, and how to have it erased.";
   const canonical = `${baseUrl}/privacy`;
 
   const extraCss = `
@@ -39,22 +39,28 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-14.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-19.</p>
 </section>
 
 <section>
 <div class="pv-body">
 <p>Agent402 has no accounts and no ad trackers on its pages. Pages run a first-party page counter
-(PostHog, served from our own domain: page path, referrer and screen size, a random per-visit id held in
-session storage, never a cookie; our server relays the events and forwards only their body and content
-type, so your IP address is not passed on to the analytics provider). It keeps no session
+(PostHog, served from our own domain). It records page views, page leaves (time on the page and how far
+you scrolled) and page load timings (web vitals), with your browser, user agent string, operating system,
+device type, screen and window size, browser language and time zone, the page address with any query
+string cut to its <code>utm_*</code> campaign parameters, and the address of the page that linked you here,
+cut the same way. It keeps a random per-visit id in session storage, never a cookie; our server relays the
+events and forwards only their body and content type, so your IP address is not passed on to the
+analytics provider. It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
 <b>Google Analytics</b> to count visits and see how people find the site. It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
 features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
 cookie is off until you choose "Allow" in the strip at the bottom of the page, and Google only receives
-cookieless pings before that; your choice is kept in your browser. Pages whose address is itself a private
+cookieless pings before that; your choice is kept in your browser. Wherever you are, you can make or
+change that choice at any time with "analytics choices" at the foot of the page. If your browser sends the Global Privacy Control signal,
+the cookie stays off, you are not asked, and the page counter does not load. Pages whose address is itself a private
 link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
@@ -206,6 +212,11 @@ on-chain. Aggregate, non-personal counters (total calls served per tool) are kep
 including the email, memory and ledger records) to separate object storage, and each copy is deleted
 after ${backupKeepDays()} days. A deletion you ask for therefore reaches the last backup that still holds
 the record within ${backupKeepDays()} days.</p>
+
+<h2>Children</h2>
+<p>The service is for people 18 and older (see the <a href="/terms">terms</a>) and is not directed at
+children. We do not knowingly collect anything from anyone under 13; if you believe a child has sent us
+an email address or other information, write to the address below and we will delete it.</p>
 
 <h2>Abuse &amp; legal requests</h2>
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained
