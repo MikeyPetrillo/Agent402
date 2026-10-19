@@ -101,7 +101,8 @@ function exaRate(k) {
   if (v == null) throw bad("Exa tools are temporarily unavailable. Nothing was charged for this request.", 503);
   return v;
 }
-const EXA_DAILY_MAX_USD = () => { const n = Number(process.env.EXA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
+// 0 refuses every call; blank or malformed reads as the default, never as off.
+const EXA_DAILY_MAX_USD = () => { const raw = String(process.env.EXA_DAILY_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n >= 0 ? n : 1; };
 
 // ---- prepaid allowance + low-water -----------------------------------------
 // EXA PUBLISHES NO BALANCE. Their public OpenAPI carries 42 endpoints and not
@@ -165,7 +166,7 @@ export function exaSpendStatus(now = Date.now()) {
     spentUsd: Number(spent.toFixed(4)),
     capUsd: cap,
     refusedToday: spend.refused,
-    status: cap > 0 && spent >= cap ? "capped" : "ok",
+    status: spent >= cap ? "capped" : "ok",
   };
 }
 /** Calls our Exa tools sent today. The index crawlers also read api.exa.ai
@@ -218,8 +219,8 @@ async function exaPost(path, body) {
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them.
-  if (cap > 0 && exaShared.enabled && !(await exaShared.reserve(estimate, cap))) throw capped();
-  if (cap > 0 && spentToday() + estimate > cap) { exaShared.book(-estimate); throw capped(); }
+  if (exaShared.enabled && !(await exaShared.reserve(estimate, cap))) throw capped();
+  if (spentToday() + estimate > cap) { exaShared.book(-estimate); throw capped(); }
   // Book the estimate BEFORE the call. If the request dies mid-flight we may
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.

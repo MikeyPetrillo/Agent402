@@ -283,7 +283,7 @@ if (fail) process.exit(1);
     ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && !/\$\d/.test(threw.message) && fetched === 1, "over the cap: 503 before any fetch, names the cap");
     ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().status === "ok", "status counts the refusal; the cap is not yet reached by booked spend");
     process.env.X_DATA_DAILY_MAX_USD = "0"; threw = null; try { await __test.xGet("/tweets/1"); } catch (e) { threw = e; }
-    ok(threw === null && fetched === 2, "cap 0 disables the guard");
+    ok(threw?.statusCode === 503 && fetched === 1, "cap 0 refuses every read; it never disables the guard");
     process.env.X_DATA_DAILY_MAX_USD = "junk"; _xSpendReset(); _xSpendBook(0.99); threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; }
     ok(threw?.statusCode === 503, "a malformed cap reads as the $1 default, never as disabled");
   } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
