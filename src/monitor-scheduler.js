@@ -32,7 +32,8 @@ import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, withLease } from "./state-db.js";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { MONITOR_PRODUCTS_ALL as MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { rugcheckEnabled } from "./tools/solana-intel-kit.js";
 
 const HOUR = 3600_000, DAY = 24 * HOUR;
 export const DOMAIN_CHECK_MS = DAY;
@@ -486,6 +487,9 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // SUCCESSFUL run, so a failed run re-detects the change on the retry.
   async function processToken(rec, st, { force, budget }) {
     if (typeof probeTokenBrief !== "function") return "skip";
+    // The probe is a RugCheck read; while RUGCHECK_TOOLS is off it can only
+    // fail, so the watch waits instead of counting failures.
+    if (!rugcheckEnabled()) return "skip";
     const retryPending = (st.failures || 0) > 0;
     const checkDue = force || retryPending || !st.lastCheckAt || now() - st.lastCheckAt >= TOKEN_CHECK_MS || !st.tokenFingerprint;
     if (!checkDue) return "skip";

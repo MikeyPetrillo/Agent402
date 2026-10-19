@@ -81,6 +81,7 @@ import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 // imported by pages the kits do not know about.
 import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
+import { rugcheckEnabled } from "./tools/solana-intel-kit.js";
 
 // ---- Public reports -------------------------------------------------------
 // A buyer may make a delivered report public: it gets a second, unguessable
@@ -191,6 +192,10 @@ for (const p of Object.values(HUMAN_PRODUCTS)) {
   const cents = cardCentsForAgentPrice(agentPriceUsdFor(p.slug));
   if (cents) p.price = cents;
 }
+// The token brief is sold only while its RugCheck sources are listed
+// (RUGCHECK_TOOLS=on). A paid session for it that is fulfilled after the
+// switch goes off finds no product and is refunded.
+if (!rugcheckEnabled()) delete HUMAN_PRODUCTS["token-brief"];
 
 // Stripe metadata: <= 50 keys, value <= 500 chars. Inputs are capped at 2000
 // chars (createSession), so four 500-char chunks always suffice.

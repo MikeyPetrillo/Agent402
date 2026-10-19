@@ -21,6 +21,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 import { monitorForKind, monitorPrefillUrl, upgradeOffer, monitorMapJson, priceUsd } from "../src/report-upgrade.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
+import { rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 import { monitorsPage } from "../src/monitors-page.js";
 import { reportDeliveryPage } from "../src/human-reports-page.js";
 import { buildReportReadyEmail, buildMonitorEmail } from "../src/email.js";
@@ -37,7 +38,7 @@ const EXPECTED = {
   fund: "fund-monitor",
   recall: "recall-monitor",
   insider: "insider-monitor",
-  token: "token-monitor",
+  token: rugcheckEnabled() ? "token-monitor" : null, // the token watch sells only with RUGCHECK_TOOLS=on
   research: "research-monitor", // 2026-08-28: the saved-question weekly re-run
   dossier: "filing-monitor", // aliased 2026-08-28: a dossier reader is served by the filing watch
 };

@@ -22,7 +22,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---- fixtures (offline) ----
 const files = readdirSync("assets/samples").filter((f) => f.endsWith(".json"));
 ok(files.length >= 4, `at least four sample fixtures exist (${files.length})`);
-ok(SAMPLE_PRODUCTS.length === files.length, `every fixture loads (${SAMPLE_PRODUCTS.length} of ${files.length})`);
+// A fixture whose product is not on sale on this boot (the token brief without
+// RUGCHECK_TOOLS=on) is not served; every other fixture loads.
+const onSale = files.filter((f) => Object.hasOwn(HUMAN_PRODUCTS, f.replace(/\.json$/, "")));
+ok(SAMPLE_PRODUCTS.length === onSale.length, `every fixture for a product on sale loads (${SAMPLE_PRODUCTS.length} of ${onSale.length})`);
 for (const product of SAMPLE_PRODUCTS) {
   const s = SAMPLES[product];
   const raw = JSON.parse(readFileSync(`assets/samples/${product}.json`, "utf8"));
