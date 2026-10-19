@@ -88,7 +88,7 @@ export function validateJudgeRequest(input = {}) {
   const stateStr = typeof state === "string" ? state : state == null ? "" : JSON.stringify(state);
   if (!stateStr.trim()) throw bad('"state" is required: the content to judge, as a string or an object.');
   if (stateStr.length > LIMITS.stateChars) {
-    throw bad(`"state" is ${stateStr.length} characters; this endpoint accepts ${LIMITS.stateChars}. Split the work or summarise upstream.`);
+    throw bad(`"state" is ${stateStr.length} characters; this endpoint accepts ${LIMITS.stateChars}. Split the work or summarize upstream.`);
   }
   const out = buildQuestions(questions);
   const body = { state: stateStr, model: String(model), questions: out };

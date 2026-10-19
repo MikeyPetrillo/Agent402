@@ -15,6 +15,7 @@ import { monitorMapJson } from "./report-upgrade.js";
 import { priceUsdFor } from "./report-tiers.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
 import { RECALL_TIERS } from "./tools/recall-report-kit.js";
+import { REPORT_MODEL_NOTE, CODE_WRITTEN_REPORT_KINDS } from "./report-disclosure.js";
 
 // How long a report takes, said once: the storefront said "about two minutes"
 // while the page a buyer waits on said one to three, the deepest up to five.
@@ -79,6 +80,7 @@ export const REPORTS_CSS = `
   .rpt-title{font-weight:500;font-size:var(--fs-3xl);letter-spacing:-.03em;line-height:1.08;margin:0;color:var(--ink);text-wrap:balance}
   .cite-run{white-space:nowrap}
   @media (max-width:600px){.cite-run{white-space:normal}.cite-gap::after{content:"\\200b"}}
+  .report .rpt-note{font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin:12px 0 0;max-width:76ch}.report .rpt-note+.rpt-note{margin-top:4px}
   .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}.rpt-meta>span+span::before{content:"·";padding:0 8px}
   .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
@@ -95,7 +97,7 @@ export const REPORTS_CSS = `
     .rpt-head{border-bottom-color:#111315;margin-bottom:22px}
     .rpt-brand .n{color:#111315}.rpt-brand .s,.rpt-meta{color:#626970}
     .rpt-title,.report h1,.report h2,.report h3{color:#111315}
-    .report p,.report ol,.report ul{color:#3A3F45}
+    .report p,.report ol,.report ul,.report .rpt-note{color:#3A3F45}
     .cite{color:#0F5E43}
     .report a{color:#0F5E43;text-decoration:none}
     h1,h2,h3,.rpt-head{break-after:avoid;page-break-after:avoid}
@@ -137,6 +139,7 @@ export function humanReportsPage(baseUrl) {
     <h1>A finished report, <em>not a chat answer.</em></h1>
     <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
     <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secure card checkout</span><span><span class="dot"></span> PDF and data tables</span></div>
+    <p class="note" id="model-note" style="margin-top:12px;max-width:76ch;">${esc(REPORT_MODEL_NOTE)}</p>
     <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">
     <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">read a real one first</div>
@@ -281,7 +284,7 @@ const sampleLink = (slug) => { const p = sampleLinkFor(slug); return p ? `<a hre
 export function reportDeliveryPage(sessionId, { api = "/api/r/", waitCopy = `Reports take ${REPORT_TURNAROUND}. Keep this page open, it appears here automatically.`, baseUrl = "https://agent402.tools", robots = "noindex, nofollow", title = "Your report - Agent402", description = "Your Agent402 report.", canonical = `${baseUrl}/reports`, note = "Your report is yours to keep - bookmark this page or use the link we emailed you.", jsonLd, extraHtml = "", extraScripts = "" } = {}) {
   const body = `
 <div class="wrap" style="padding-top:28px;">
-  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>
+  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}" data-model-note="${esc(REPORT_MODEL_NOTE)}" data-code-kinds="${esc(CODE_WRITTEN_REPORT_KINDS.join(","))}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>
   ${extraHtml}
   ${note ? `<p class="note no-print">${esc(note)}</p>` : ""}
 </div>

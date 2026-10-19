@@ -1961,7 +1961,7 @@ export function validateServiceTier(input, tier) {
     const v = raw.toLowerCase();
     if (v === "flex") throw bad('"service_tier": "flex" is not a buyer knob here - the gateway already tries the flex (discounted) endpoint first on every model that has one and falls back to the default tier itself, which an explicit flex request cannot do. Omit the field.');
     if (PRIORITY_SERVICE_TIER_VALUES.includes(v)) want = "priority";
-    else if (v !== "default" && v !== "auto") throw bad(`"service_tier" ${JSON.stringify(raw).slice(0, 40)} is not recognised - send "priority" (alias "fast") for the priority endpoint, or omit the field`);
+    else if (v !== "default" && v !== "auto") throw bad(`"service_tier" ${JSON.stringify(raw).slice(0, 40)} is not recognized - send "priority" (alias "fast") for the priority endpoint, or omit the field`);
   }
   if (speed === "fast") want = "priority";
   if (!want) return undefined;

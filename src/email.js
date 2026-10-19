@@ -7,6 +7,7 @@
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, stateDbEnabled } from "./state-db.js";
 import { upgradeOffer } from "./report-upgrade.js";
+import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 // ZeptoMail region base (api.zeptomail.com default; .eu / .in for those regions).
@@ -168,6 +169,11 @@ const hdr = (s, n = 100) => String(s ?? "").replace(/[\r\n\x00-\x1f\x7f]/g, " ")
 function originOf(url) {
   try { return new URL(String(url)).origin; } catch { return ""; }
 }
+// The model-written note under the open-report link, for a kind a model writes.
+function modelNoteParts(kind) {
+  if (!reportIsModelWritten(kind)) return { html: "", text: "" };
+  return { html: `<p style="color:#626970;font-size:12px;margin:0 0 16px">${escapeHtml(REPORT_MODEL_NOTE)}</p>`, text: `${REPORT_MODEL_NOTE}\n` };
+}
 
 export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "" }) {
   const subj = `Your ${hdr(productLabel || "report", 60)} is ready`;
@@ -177,6 +183,7 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   // form), so an email client following it can never start a checkout. Label
   // and price come from the monitor product table, never from copy here.
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
+  const note = modelNoteParts(kind);
   const upHtml = up
     ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you a fresh report the moment it changes, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
@@ -188,10 +195,11 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
     <p style="color:#3A3F45">Your report${escapeHtml(on)} is finished and waiting for you. It's yours to keep: open it any time with the link below.</p>
     <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open your report →</a></p>
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
+    ${note.html}
     ${upHtml}
     <p style="color:#626970;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
   </div>`;
-  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${upText}\nAgent402`;
+  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}\nAgent402`;
   return { subject: subj, html, text };
 }
 
@@ -200,8 +208,10 @@ export async function sendReportReadyEmail({ to, ...rest }) {
   return sendEmail({ to, subject, html, text });
 }
 
-/** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl }) {
+/** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
+ *  `kind` is the monitored report's kind; without it a "digest" (the IPO
+ *  watch's only reason) reads as the code-written IPO digest. */
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null }) {
   const t = hdr(target);
   const lbl = hdr(label || "monitor", 60);
   const subjects = {
@@ -229,6 +239,8 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     digest: `Your weekly IPO pipeline digest is ready${t && t !== "all" ? ` (filers matching "${t}")` : ""}.`,
   };
   const subj = subjects[reason] || `${lbl}: update for ${t}`;
+  // A "problem" mail reports a run that produced nothing, so it carries no note.
+  const note = reason === "problem" ? { html: "", text: "" } : modelNoteParts(kind || (reason === "digest" ? "ipo" : null));
   const lead = leads[reason] || `Your ${lbl} has an update for ${t}.`;
   // Plain-language "why you got this": recurring mail must say who asked for it
   // and how to stop it, in words, next to the manage link (which stays the
@@ -244,10 +256,11 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     <p style="color:#3A3F45">${escapeHtml(lead)}</p>${changesHtml}
     <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open the report →</a></p>
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
+    ${note.html}
     ${whyHtml}
     <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · <a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">manage or cancel</a></p>
   </div>`;
-  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
+  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
   return { subject: subj, html, text };
 }
 

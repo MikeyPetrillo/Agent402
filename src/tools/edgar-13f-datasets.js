@@ -144,7 +144,7 @@ export async function rangeBytes(url, start, end, { fetchImpl = fetch } = {}) {
   }, ctx);
   if (res.status !== 206) {
     try { await res.body?.cancel?.(); } catch { /* nothing to release */ }
-    if (res.status === 200) throw bad("SEC did not honour the byte-range request (answered 200 for a Range GET); refusing to download the whole archive", 502);
+    if (res.status === 200) throw bad("SEC did not honor the byte-range request (answered 200 for a Range GET); refusing to download the whole archive", 502);
     if (res.status === 404) throw bad("That data set is no longer at the URL the SEC's listing gave for it", 422);
     throw Object.assign(bad(`SEC upstream HTTP ${res.status}`, res.status >= 500 ? 502 : 502), { upstreamStatus: res.status });
   }

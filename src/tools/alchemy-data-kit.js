@@ -795,12 +795,12 @@ export const ALCHEMY_DATA_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/block-receipts",
-    name: "Block receipts (one block, summarised)",
+    name: "Block receipts (one block, summarized)",
     slug: "block-receipts",
     category: "crypto",
     price: "$0.005",
     description:
-      "Every transaction receipt in one block, fetched as a single upstream read and summarised: tx count, succeeded vs failed, total gas used, total fees, log count, contract creations, tx-type mix - plus compact per-transaction rows (hash, from, to, status, gas used, effective gas price, fee, log count) capped at 300. Block analytics, failed-tx hunting, or 'who paid what in block N' without N separate receipt calls.",
+      "Every transaction receipt in one block, fetched as a single upstream read and summarized: tx count, succeeded vs failed, total gas used, total fees, log count, contract creations, tx-type mix - plus compact per-transaction rows (hash, from, to, status, gas used, effective gas price, fee, log count) capped at 300. Block analytics, failed-tx hunting, or 'who paid what in block N' without N separate receipt calls.",
     tags: ["crypto", "block", "receipts", "transactions", "gas", "analytics", "evm", "ethereum", "base"],
     discovery: {
       bodyType: "json",

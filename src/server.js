@@ -62,6 +62,7 @@ import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
+import { kitDisclaimer } from "./report-disclosure.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
@@ -3857,6 +3858,8 @@ const _humanGenerate = async (kind, slug, input, ctx = {}) => {
       // Generated files (the LinkedIn article's sized images) ride the bundle so
       // the delivery page can preview and download them.
       ...(Array.isArray(out?.images) && out.images.length ? { images: out.images } : {}),
+      // The kit's own disclaimer (meta.disclaimer), which the report page shows under the title.
+      ...(kitDisclaimer(out) ? { disclaimer: kitDisclaimer(out) } : {}),
     };
 };
 // The storefront PAGES are always served (they are linked from the nav and
@@ -8336,7 +8339,7 @@ mountMcp(app, SEC_CATALOG, {
     flagshipSlugs: SEC_MCP_SLUGS,
     mcpNames: SEC_MCP_NAMES,
     metaTools: false,
-    instructions: `SEC filings over MCP, pay per call, no account. Free-to-read EDGAR data: sec.company_lookup (ticker or name -> CIK), sec.filings (a company's recent filings), sec.search (full-text search), sec.insider_trades (Form 4s), sec.holdings_13f (a manager's 13F), sec.financials (XBRL concepts). Finished, grounded reports: sec.filing_report (the newest 10-K/10-Q/8-K read and summarised with verbatim excerpts), sec.insider_report (Form 4 flow, open-market buys and sells vs awards), sec.fund_report (a 13F portfolio with quarter-over-quarter changes and amendments folded in). Every tool is priced per call in USDC; an unpaid call answers a payment challenge (MPP on this connector, x402 on the HTTP routes at ${BASE_URL}). Reports run 30 s to 4 min and are served as MCP tasks. payment.info explains how to pay; server.describe names this host.`,
+    instructions: `SEC filings over MCP, pay per call, no account. Free-to-read EDGAR data: sec.company_lookup (ticker or name -> CIK), sec.filings (a company's recent filings), sec.search (full-text search), sec.insider_trades (Form 4s), sec.holdings_13f (a manager's 13F), sec.financials (XBRL concepts). Finished, grounded reports: sec.filing_report (the newest 10-K/10-Q/8-K read and summarized with verbatim excerpts), sec.insider_report (Form 4 flow, open-market buys and sells vs awards), sec.fund_report (a 13F portfolio with quarter-over-quarter changes and amendments folded in). Every tool is priced per call in USDC; an unpaid call answers a payment challenge (MPP on this connector, x402 on the HTTP routes at ${BASE_URL}). Reports run 30 s to 4 min and are served as MCP tasks. payment.info explains how to pay; server.describe names this host.`,
   },
 });
 
