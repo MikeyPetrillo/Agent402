@@ -69,6 +69,33 @@ function capText(text, max = 100_000, label = "text") {
   return text;
 }
 
+// A YAML alias points at an anchored node, so a few hundred bytes of nested
+// aliases can stand for billions of nodes once written out as JSON. The size
+// of the expanded document is measured over the parsed graph, each shared
+// node measured once, so the check itself costs one pass over what was parsed.
+const YAML_JSON_MAX_BYTES = 2_000_000;
+const YAML_MAX_ALIASES = 10_000;
+function expandedJsonBytes(root, max) {
+  const memo = new Map();
+  const active = new Set();
+  const size = (v) => {
+    if (v === null || typeof v !== "object") return v === undefined ? 4 : JSON.stringify(v).length;
+    if (memo.has(v)) return memo.get(v);
+    if (active.has(v)) throw bad("YAML refers to itself through an alias; JSON cannot represent a cycle");
+    active.add(v);
+    let n = 2;
+    if (Array.isArray(v)) {
+      for (const x of v) { n += size(x) + 1; if (n > max) break; }
+    } else {
+      for (const k of Object.keys(v)) { n += JSON.stringify(k).length + 2 + size(v[k]); if (n > max) break; }
+    }
+    active.delete(v);
+    memo.set(v, n);
+    return n;
+  };
+  return size(root);
+}
+
 function parseMaybeJson(value, label) {
   if (typeof value !== "string") return value;
   try {
@@ -720,11 +747,16 @@ const dataTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "yaml"), 100_000, "yaml");
+      let json;
       try {
-        return { json: yamlLoad(text, { schema: YAML_JSON_SCHEMA }) ?? null };
+        json = yamlLoad(text, { schema: YAML_JSON_SCHEMA, maxAliases: YAML_MAX_ALIASES }) ?? null;
       } catch (e) {
         throw bad(`YAML parse error: ${e.message.split("\n")[0]}`);
       }
+      if (expandedJsonBytes(json, YAML_JSON_MAX_BYTES) > YAML_JSON_MAX_BYTES) {
+        throw bad(`YAML expands past ${YAML_JSON_MAX_BYTES} bytes of JSON once its aliases are written out; send a document whose aliases expand to less`);
+      }
+      return { json };
     },
   },
   {

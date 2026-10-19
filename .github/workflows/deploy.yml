@@ -2664,6 +2664,8 @@ jobs:
           t node scripts/test-what-is-mpp-page.js
           # robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
           t node scripts/test-robots-redos.js
+          # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
+          t node scripts/test-yaml-alias-cap.js
 
   test-unit-d:
     # The second half of test-unit-b (2026-08-25). That lane was 200 steps
