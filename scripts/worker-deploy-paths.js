@@ -26,6 +26,12 @@ export function importClosure(entry, root = ROOT) {
     for (const m of src.matchAll(/(?:from\s+|import\s+|import\s*\(\s*|require\s*\(\s*)["']((?:\.\.?\/)[^"']+)["']/g)) {
       stack.push(resolve(dirname(f), m[1]));
     }
+    // A worker thread is started from a file path, not an import:
+    // new Worker(fileURLToPath(new URL("./x-worker.js", import.meta.url))).
+    // Those files run in the image too, so they are part of the closure.
+    for (const m of src.matchAll(/new\s+URL\(\s*["']((?:\.\.?\/)[^"']+\.m?js)["']\s*,\s*import\.meta\.url\s*\)/g)) {
+      stack.push(resolve(dirname(f), m[1]));
+    }
   }
   return [...seen].map((f) => relative(root, f)).sort();
 }

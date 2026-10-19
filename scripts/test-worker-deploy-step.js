@@ -18,6 +18,7 @@ ok(!paths.includes("src/server.js"), "the main app's server is not in the worker
 ok(touchesWorker(["README.md", "src/tools/render.js"]), "a change to render.js selects the worker");
 ok(touchesWorker(["worker/new-helper.js"]), "a new file under worker/ selects the worker");
 ok(touchesWorker(["src/tools/fetch-guard.js"]), "a change to an import of an import selects the worker");
+ok(touchesWorker(["src/tools/html-worker.js"]) && paths.includes("src/tools/html-parse-ops.js"), "a worker thread the closure starts by file URL (and what it imports) selects the worker");
 ok(!touchesWorker(["src/server.js", "README.md", "scripts/test-all.js"]), "a change outside the worker leaves it alone");
 ok(!touchesWorker([""]), "an empty diff leaves it alone");
 
