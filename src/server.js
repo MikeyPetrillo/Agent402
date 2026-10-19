@@ -3110,7 +3110,9 @@ function routerWarming(now = Date.now()) {
   if (!READY_ROUTER_WAIT_MS || !listenedAt || now - listenedAt >= READY_ROUTER_WAIT_MS) return false;
   try { const st = routerPoolStatus(); return Boolean(st.enabled) && !st.loaded; } catch { return false; }
 }
-app.get("/health", (req, res) => {
+// /health/ready is the same check as /health?ready=1, for a healthcheck
+// setting that takes a plain path.
+app.get(["/health", "/health/ready"], (req, res) => {
   const checks = {
     db: dbHealthy(),
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
@@ -3121,7 +3123,7 @@ app.get("/health", (req, res) => {
   // container is still serving, so it answers not-ready until a worker loads,
   // for at most READY_ROUTER_WAIT_MS after listen (0 turns it off). Plain
   // /health stays liveness for the monitors.
-  const warming = req.query?.ready === "1" && routerWarming();
+  const warming = (req.query?.ready === "1" || req.path === "/health/ready") && routerWarming();
   const ok = checks.db && checks.wallet && !warming;
   // Public `meta` carries ONLY toolCount — it's already published on
   // /api/pricing, /openapi.json, and /api/stats, and sync-count.js reads it

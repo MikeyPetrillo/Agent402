@@ -26,8 +26,9 @@ async function boot(env) {
     try {
       const r = await fetch(`http://127.0.0.1:${port}/health?ready=1`, { signal: AbortSignal.timeout(2000) });
       const live = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
+      const path = await fetch(`http://127.0.0.1:${port}/health/ready`, { signal: AbortSignal.timeout(2000) });
       if (!listenAt) listenAt = Date.now();
-      seen.push({ at: Date.now() - listenAt, status: r.status, live: live.status, loaded: /worker \d+ loaded/.test(log) });
+      seen.push({ at: Date.now() - listenAt, status: r.status, path: path.status, live: live.status, loaded: /worker \d+ loaded/.test(log) });
       if (r.status === 200) break;
     } catch { /* not listening yet */ }
     await wait(150);
@@ -44,6 +45,8 @@ async function boot(env) {
   ok(last?.status === 200 && last.loaded === true, `it turns 200 once the worker has loaded (${JSON.stringify(last)})`);
   ok(seen.filter((s) => s.status === 503).every((s) => !s.loaded || s.at < 1000), "it never stays 503 after the worker loaded");
   ok(seen.every((s) => s.live === 200), "plain /health (liveness, the monitors) answers 200 throughout");
+  ok(seen[seen.length - 1].path === 200, "/health/ready turns 200 with /health?ready=1 (the path form Railway's setting accepts)");
+  ok(seen.some((s) => s.path === 503), "/health/ready is 503 while the worker loads");
 }
 {
   const { seen } = await boot({ ROUTER_WORKER_TEST_WARM_DELAY_MS: "60000", READY_ROUTER_WAIT_MS: "3000" });
