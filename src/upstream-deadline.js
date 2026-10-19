@@ -183,6 +183,9 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
   try {
     return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(cap) });
   } catch (err) {
+    // A daily ceiling refusal (src/upstream-hard-caps.js) is already the
+    // answer: it names the limit and the retry time, and nothing was sent.
+    if (err?.hardCap) throw err;
     const timedOut = isAbortError(err);
     if (ctx.tag !== null) {
       console.warn(`${ctx.tag || "[upstream]"} ${label} ${timedOut ? `did not answer within ${cap} ms` : "unreachable"}: ${hostOf(url)} (${step}) -> ${err?.name ?? err?.code ?? err?.message}`);

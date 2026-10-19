@@ -127,7 +127,10 @@ export function hardCapStatus(now = Date.now()) {
   for (const c of HARD_CAPS) {
     const s = rowOf(c, now);
     const cap = hardCapOf(c);
-    const status = cap === null ? "disabled" : (s.refused > 0 ? "capped" : "ok");
+    // From the day's total, not this process's own refusals: with two
+    // replicas each answering the status in turn, a per-process refusal count
+    // made the word (and the heartbeat issue) flip on every read.
+    const status = cap === null ? "disabled" : (seenToday(s) >= cap ? "capped" : "ok");
     if (status === "capped") worst = "capped";
     rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, status, shared: s.store.enabled };
   }
