@@ -13,6 +13,8 @@ carries its own version on npm.
 - /sell has a New sellers section: listing and being paid by the router are
   separate gates, how the unproven lane works, and what each
   `routerDispatchReason` means with what the seller can do about it.
+- seller-trust names why our own host is not on the proven lane instead of
+  answering an empty `provenBlockers` list.
 - demand-radar's description calls `/api/wishes` a free aggregate beacon
   (counts only), which is what it returns.
 

@@ -113,7 +113,7 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   const text = sec.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ");
   const stray = (text.match(/(?<![$\w./-])\d+(?![\w.%-])/g) || []).filter((n) => n !== "402");
   ok(stray.length === 0, `no floor figure in the section (stray numbers: ${stray.join(", ") || "none"})`);
-  ok(/We don.t quote the figure here/.test(text) && !/private/i.test(text), "the section says the figure is not quoted here, and never claims it is private (it is readable server config)");
+  ok(/seller-trust answer/.test(text) && !/private|don.t quote|not publish/i.test(text), "the section points to where a seller reads the exact gate and never claims the figure is hidden (it is readable server config and a seller-trust field)");
   const faq = FAQ_TEXT_OF(html);
   ok(/settlement floor/i.test(faq) && !/\b(50|3) (settle|payer|transaction)/i.test(faq), "the floor FAQ explains it without a figure");
 }
