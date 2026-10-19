@@ -105,7 +105,9 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   const start = html.indexOf('id="new-sellers"');
   const sec = start < 0 ? "" : html.slice(html.indexOf(">", start) + 1, html.indexOf("</section>", start));
   ok(sec.length > 0, "the page carries a #new-sellers section");
-  for (const code of ["price_unknown", "network_unknown", "usdc_domain_mismatch", "url_template", "settlement_required", "settlement_self_funded", "delivery_failing"]) {
+  // Every refusal reason the router emits is listed (an eligible verdict is not).
+  const NOT_REFUSALS = new Set(["eligible", "local_catalog", "settlement_checked_at_pay_time"]);
+  for (const code of Object.keys(DISPATCH_REASONS).filter((c) => !NOT_REFUSALS.has(c))) {
     ok(sec.includes(`>${code}<`) && sec.includes(DISPATCH_REASONS[code].slice(0, 40).replace(/"/g, "&quot;")), `${code}: named with the router's own reason text`);
   }
   // The floor's figures are server config (SOR_MIN_SETTLED_TX / SOR_MIN_DISTINCT_PAYERS):

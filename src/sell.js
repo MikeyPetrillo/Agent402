@@ -98,9 +98,12 @@ const COMMITMENTS = [
 // not typed on the page: it is a router setting (server config, readable in
 // this repo), and a seller's own seller-trust answer carries its exact gate.
 const NEW_SELLER_VERDICTS = [
+  ["crawl_failed", "Serve your manifest, OpenAPI document or llms.txt at a public URL that answers with a parseable body. The next successful crawl restores routing; re-registering below crawls you now."],
+  ["no_supported_route", "Advertise at least one chain the router pays on, alongside any others you support. The verdict at /api/index?seller=<your host> lists the chains it reads."],
   ["price_unknown", "Answer a bare unpaid request to every paid route with its 402, before you validate input. A route that needs a query parameter or a body still has to return its 402 to the crawler's empty probe, or no price can be read and the router never spends against an unknown one."],
   ["network_unknown", "Same fix: the paid route answered the probe with something other than a 402, so no chain was learned."],
   ["usdc_domain_mismatch", "Advertise the token's own EIP-712 name in the accept's extra (\"USD Coin\" for Base USDC). Until then no stock buyer can pay you, ours included."],
+  ["gateway_rail_unsupported", "Nothing to fix: your batched rail works for buyers that speak it. To be routable today as well, add a second accept on the same chain signed under the token's own EIP-712 domain."],
   ["payment_method_unsupported", "Offer the standard exact scheme, where the buyer signs a USDC authorization and the facilitator settles it. A 402 that asks the buyer to send a transfer and prove it afterwards cannot be paid by a stock x402 buyer, ours included."],
   ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
