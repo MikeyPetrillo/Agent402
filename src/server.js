@@ -381,6 +381,13 @@ const MEDIA_TOOLS = MEDIA_TOOLS_RAW.map((t) => ({
   ...t,
   handler: async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx)),
 }));
+// page-speed and html-frames run on the browser pool, so they follow render's
+// placement: on the secretless worker when it is configured, in-process otherwise.
+import { BROWSER_MEASURE_TOOLS as BROWSER_MEASURE_TOOLS_RAW } from "./tools/browser-measure-kit.js";
+const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => ({
+  ...t,
+  handler: async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx)),
+}));
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
@@ -498,6 +505,7 @@ import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
 import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 // Exa is also an indexed seller the crawlers read unpaid; its budget counts only
 // the calls our Exa tools make.
 registerUpstreamCounter("exa", exaCallsToday);
@@ -532,7 +540,7 @@ import { workflowsPage } from "./workflows.js";
 import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
-import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
+import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -576,7 +584,7 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
 const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger() }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...DECIDE_TOOLS_ENABLED];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...DECIDE_TOOLS_ENABLED];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -2192,6 +2200,8 @@ for (const [route, def] of Object.entries(CATALOG)) {
 // by an invoice: they all looked like ordinary traffic until someone totalled
 // it up, and nothing was totalling it up.
 installEgressMeter();
+// The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
+startHardCapSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
 installDrainAwareFetch();
 // Outbound wait is charged to the request that made it (src/request-timing.js).
@@ -2897,6 +2907,9 @@ app.use("/v1/metered", express.json({ limit: "1mb" }));
 app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
 app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
 app.use("/v1/judge/long", express.json({ limit: "2mb" }));
+// html-frames carries a whole HTML document (512 KB cap, checked by the
+// handler); the limit leaves room for its JSON escaping.
+app.use("/api/html-frames", express.json({ limit: "3mb" }));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", express.json({ limit: "34mb" }));
@@ -3091,12 +3104,25 @@ app.get("/marketplaces", (_req, res) => res.redirect(301, "/marketplace"));
 // route around this instance. Verifies the stats DB is readable and that the
 // payment configuration is intact (wallet present unless we're explicitly in
 // FREE_MODE). Kept O(1) so a flood of probes can't degrade the service.
+let listenedAt = 0;
+const READY_ROUTER_WAIT_MS = Math.max(0, Number(process.env.READY_ROUTER_WAIT_MS ?? 30_000) || 0);
+function routerWarming(now = Date.now()) {
+  if (!READY_ROUTER_WAIT_MS || !listenedAt || now - listenedAt >= READY_ROUTER_WAIT_MS) return false;
+  try { const st = routerPoolStatus(); return Boolean(st.enabled) && !st.loaded; } catch { return false; }
+}
 app.get("/health", (req, res) => {
   const checks = {
     db: dbHealthy(),
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
   };
-  const ok = checks.db && checks.wallet;
+  // Readiness (`?ready=1`, the deploy healthcheck): right after listen, a
+  // container whose router worker has not loaded yet would score route
+  // queries on its main thread; during a deploy overlap the previous
+  // container is still serving, so it answers not-ready until a worker loads,
+  // for at most READY_ROUTER_WAIT_MS after listen (0 turns it off). Plain
+  // /health stays liveness for the monitors.
+  const warming = req.query?.ready === "1" && routerWarming();
+  const ok = checks.db && checks.wallet && !warming;
   // Public `meta` carries ONLY toolCount — it's already published on
   // /api/pricing, /openapi.json, and /api/stats, and sync-count.js reads it
   // here. Process uptime (restart-timing recon) and freeMode (operating mode)
@@ -3261,6 +3287,8 @@ app.get("/api/gateway-status", async (req, res) => {
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
+    // Hard daily ceilings (src/upstream-hard-caps.js): one word publicly.
+    upstreamHardCaps: (() => { try { const h = hardCapStatus(); return full ? h : { status: h.status }; } catch { return { status: "unknown" }; } })(),
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
     solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
@@ -7651,7 +7679,9 @@ app.get("/js/:file", (req, res) => {
   let buf;
   try { buf = readFileSync(new URL(`../assets/js/${file}`, import.meta.url)); }
   catch { return res.status(404).end(); }
-  res.setHeader("Cache-Control", "public, max-age=300");
+  // The page shell's URLs carry ?v=<build> (jsSrc): that exact version is
+  // immutable; anything else keeps the short cache.
+  res.setHeader("Cache-Control", req.query?.v === ASSET_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=300");
   res.type("application/javascript").send(buf);
 });
 
@@ -10253,9 +10283,10 @@ setUnloadedStoresProbe(unloadedStores);
   if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
   else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
-const httpServer = app.listen(PORT, () =>
-  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
-);
+const httpServer = app.listen(PORT, () => {
+  listenedAt = Date.now();
+  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
+});
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
 // socket we just closed (a sporadic edge 502), headers stays above keep-alive

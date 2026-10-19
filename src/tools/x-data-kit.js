@@ -112,7 +112,8 @@ function xRate(k) {
   if (v == null) { const e = new Error("X data tools are temporarily unavailable. Nothing was charged for this request."); e.statusCode = 503; throw e; }
   return v;
 }
-const X_DATA_DAILY_MAX_USD = () => { const n = Number(process.env.X_DATA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
+// 0 refuses every call; blank or malformed reads as the default, never as off.
+const X_DATA_DAILY_MAX_USD = () => { const raw = String(process.env.X_DATA_DAILY_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n >= 0 ? n : 1; };
 const xSpend = { day: "", micro: 0, refused: 0 };
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after,
@@ -139,7 +140,7 @@ export function actualXReadUsd(path, data) {
 export function xDataSpendStatus(now = Date.now()) {
   const spent = xSpendToday(now);
   const cap = X_DATA_DAILY_MAX_USD();
-  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, refusedToday: xSpend.refused, status: cap > 0 && spent >= cap ? "capped" : "ok" };
+  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, refusedToday: xSpend.refused, status: spent >= cap ? "capped" : "ok" };
 }
 export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xShared.reset(); }
 export function _xSpendBook(usd) { xSpendToday(); xSpend.micro += Math.round(usd * 1e6); }
@@ -169,8 +170,8 @@ async function xGet(path, params = {}) {
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them, so concurrent
   // reads cannot all pass the check before any of them books.
-  if (cap > 0 && xShared.enabled && !(await xShared.reserve(estimate, cap))) throw capped();
-  if (cap > 0 && xSpendToday() + estimate > cap) { xShared.book(-estimate); throw capped(); }
+  if (xShared.enabled && !(await xShared.reserve(estimate, cap))) throw capped();
+  if (xSpendToday() + estimate > cap) { xShared.book(-estimate); throw capped(); }
   // Reserve the estimate before the call; corrected to the actual cost after,
   // released on a clean refusal. A timeout or 5xx keeps the reservation.
   _xSpendBook(estimate);

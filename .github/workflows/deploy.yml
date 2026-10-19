@@ -1722,6 +1722,7 @@ jobs:
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
           t node scripts/test-router-worker.js
           t node scripts/test-router-worker-prod-boot.js
+          t node scripts/test-health-router-warming.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
           t node scripts/test-report-synthesis.js
@@ -2538,6 +2539,7 @@ jobs:
           t node scripts/test-finance-kit.js
           t node scripts/test-databento-timeouts.js
           t node scripts/test-databento-fallback.js
+          t node scripts/test-databento-bar-range.js
           # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"
           t node scripts/test-stock-quote-speed.js
           # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
@@ -3061,6 +3063,7 @@ jobs:
           t node scripts/test-ci-key-exposure.js
           # Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar, Exa)
           t node scripts/test-upstream-budgets.js
+          t node scripts/test-upstream-hard-caps.js
           # /api/gateway-status is public: verdicts only, never limits or balances
           t node scripts/test-gateway-status-privacy.js
           # Redis persistence as one word (INFO persistence parse, the monitor, the journal gate on a stub client, the heartbeat and Worker legs - offline)
@@ -4226,6 +4229,10 @@ jobs:
           curl -s localhost:3000/tools | grep -oiE -m1 '<h1[^>]*>'
           curl -s localhost:3000/tools/memory-write | grep -o '<title>[^<]*</title>'
           curl -s localhost:3000/sitemap.xml | grep -c '<loc>'
+
+      # page-speed against a port-0 fixture (loopback refused by the public guard; timings, Web Vitals, heaviest, render-blocking, console errors, the single-measurement field) and html-frames (document requests never reach a listening server, renderAt errors answer 400, caps refuse, every PNG decodes) - real Chromium
+      - name: Browser pool tools (page-speed fixture + html-frames sandbox)
+        run: node scripts/test-page-speed-frames.js
 
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js

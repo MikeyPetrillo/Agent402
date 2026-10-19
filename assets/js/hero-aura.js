@@ -67,8 +67,11 @@
     gl.uniform3f(uG, g[0], g[1], g[2]);
   }
 
+  // The field is two soft blurred blobs, so it is drawn at half the CSS
+  // pixel size and stretched: a quarter of the fragments, no visible change.
+  var SCALE = 0.5;
   function resize() {
-    var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    var dpr = Math.min(window.devicePixelRatio || 1, 1.5) * SCALE;
     var w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; gl.viewport(0, 0, w, h); }
     gl.uniform2f(uR, w, h);
@@ -83,21 +86,32 @@
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
+  // A slow drift needs no more than about 30 frames a second.
+  var FRAME_MS = 33, last = 0;
   function loop(now) {
     if (!running) return;
-    draw(now);
+    if (now - last >= FRAME_MS) { last = now; draw(now); }
     requestAnimationFrame(loop);
   }
+  var started = false;
   function update() {
+    if (!started) return;
     var should = visible && !document.hidden && !(reduce && reduce.matches);
     if (should && !running) { running = true; requestAnimationFrame(loop); }
     else if (!should) { running = false; draw(); }
   }
 
-  readColors();
-  canvas.classList.add('is-on');
-  draw();
-  update();
+  // Start after the page has loaded and the browser is idle, so the field
+  // never competes with the headline's first paint.
+  function begin() {
+    started = true;
+    readColors();
+    canvas.classList.add('is-on');
+    draw();
+    update();
+  }
+  function whenIdle() { if ('requestIdleCallback' in window) requestIdleCallback(begin, { timeout: 2000 }); else setTimeout(begin, 200); }
+  if (document.readyState === 'complete') whenIdle(); else window.addEventListener('load', whenIdle, { once: true });
   document.addEventListener('visibilitychange', update);
   if (reduce && reduce.addEventListener) reduce.addEventListener('change', update);
   if ('IntersectionObserver' in window) {

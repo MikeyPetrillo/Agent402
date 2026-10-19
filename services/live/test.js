@@ -3,7 +3,7 @@
 import { pairSettlements } from "./lib/base.js";
 import { tempoEvents } from "./lib/tempo.js";
 import { bazaarDirectory } from "./lib/directory.js";
-import { isPrivateIp } from "./lib/logos.js";
+import { isPrivateIp, makeLogoCache } from "./lib/logos.js";
 import { makeStore } from "./lib/store.js";
 import { AUTH_USED_TOPIC, TRANSFER_TOPIC } from "./lib/chains.js";
 
@@ -54,6 +54,14 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   ok(s && s.name === "Seller" && s.icon === "https://seller.example/i.png" && s.origin === "https://seller.example" && s.endpoints.length === 2, "Bazaar: payTo lowercased, name, icon, origin and endpoints collected");
   ok(!d.get(C).name.includes("<") && d.get(C).origin === null, "Bazaar: markup stripped from names; an http resource is not an origin");
   ok(!d.has(A), "Bazaar: a non-Base accept is not a Base seller");
+}
+
+// --- Logo state: unknown until tried, then a hit or a remembered miss
+{
+  const lc = makeLogoCache({ fetchImpl: async () => { throw new Error("offline"); } });
+  ok(lc.known("x402:0xabc") === null, "logo: an untried seller's logo state is unknown (no URL is published for it)");
+  await lc.get("x402:0xabc", { origin: "https://seller.example" });
+  ok(lc.known("x402:0xabc") === "miss", "logo: a seller with no usable icon is remembered as a miss (still no URL)");
 }
 
 // --- Private address guard for the logo fetcher
@@ -127,6 +135,10 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
     ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(csp) && /connect-src 'self' [^;]*google-analytics\.com/.test(csp) && !/unsafe-inline'[^;]*script|script-src[^;]*unsafe/.test(csp) && /frame-ancestors 'none'/.test(csp), "analytics: CSP allows Google tag and collection hosts only, no inline script, still unframeable");
     const emb = await fetch(base + "/embed"), ehtml = await emb.text(), ecsp = emb.headers.get("content-security-policy") || "";
     ok(!/ga-config|ga-loader/.test(ehtml) && !/googletagmanager/.test(ecsp), "analytics: /embed carries no tag, so the homepage hero is not counted twice");
+    const app = await fetch(base + "/app.js", { headers: { "accept-encoding": "gzip" } });
+    ok(app.headers.get("content-encoding") === "gzip" && /accept-encoding/i.test(app.headers.get("vary") || "") && (await app.text()).length > 1000, "compression: app.js goes out gzipped when accepted, and varies on it");
+    const st = await fetch(base + "/api/stats", { headers: { "accept-encoding": "gzip" } });
+    ok(st.headers.get("content-encoding") === "gzip" && typeof (await st.json()) === "object", "compression: /api/stats is gzipped JSON");
     const loader = await fetch(base + "/ga-loader.js"), src = await loader.text();
     ok(loader.status === 200 && /javascript/.test(loader.headers.get("content-type")) && /https:\/\/agent402\.tools\/privacy/.test(src), "analytics: loader served, its privacy link points at agent402.tools");
   }

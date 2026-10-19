@@ -265,6 +265,24 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   const t0 = Date.now();
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "did not finish", "job never completes -> 504 after the wait budget");
   ok(e?.statusCode === 504 && Date.now() - t0 >= 900, "…504 after VIDEOS_MAX_WAIT_MS");
+  ok(/same request again/.test(e?.message || "") && !/job1/.test(e?.message || ""), "…504 tells the buyer to resend to collect the clip, without naming the job");
+  // The retry the 504 asks for resumes the SAME upstream job instead of paying for a new one.
+  const seen = installVideoFetch();
+  const out = await bySlug("v1-videos").handler({ prompt: "a boat" });
+  ok(!seen.submit && seen.polls.length > 0 && seen.polls.every((p) => p.url === `${OPENROUTER_VIDEOS_URL}/job1`) && out.data[0].b64_json === MP4.toString("base64"), "an identical retry polls the parked job and submits nothing new");
+  const again = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "a boat" });
+  ok(!!again.submit, "once collected the parked job is released; the next identical request submits a fresh job");
+}
+{
+  installVideoFetch({ statuses: ["pending"] });
+  await throws(() => bySlug("v1-videos").handler({ prompt: "a different boat" }), "did not finish", "a second timed-out request parks its own job");
+  const seen = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "another prompt entirely" });
+  ok(!!seen.submit, "a different request never picks up someone else's parked job");
+  const resume = installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "a different boat" });
+  ok(!resume.submit, "and the parked one is still collected by its own retry");
 }
 {
   const seen = installVideoFetch({ pollingUrl: "https://evil.example/steal?job=1" });

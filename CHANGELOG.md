@@ -7,9 +7,27 @@ carries its own version on npm.
 ## Unreleased
 
 ### 2026-10-19
+- `/v1/videos/generations`: a request that times out (504, not charged)
+  can be sent again unchanged within 30 minutes to collect the same clip.
+- `html-frames`: loading and every `renderAt` together share a 25 s budget.
 - Route searches score in their worker thread again on production servers;
   since the 2026-10-13 storage change the worker had been exiting at start,
   so searches ran on the main thread.
+- New tool `page-speed` (`POST /api/page-speed`): loads one public URL once in
+  headless Chromium on a mobile or desktop viewport and reports navigation
+  timings (TTFB, DOMContentLoaded, load), LCP, FCP, CLS and total blocking
+  time from the page's own performance entries, transfer bytes, request
+  count, the five heaviest resources, render-blocking scripts and styles, and
+  console errors. The answer's `measurement` field states that it is a single
+  measurement from one server location under shared load, not field data
+  from real users and not a Lighthouse score. Deterministic code, no model.
+- New tool `html-frames` (`POST /api/html-frames`): renders a self-contained
+  HTML document with all network access refused, calls its
+  `window.renderAt(t)` for each requested time, and returns a PNG still per
+  time plus a contact-sheet PNG. Script errors and a missing or throwing
+  `renderAt` answer 400. Deterministic code, no model.
+- A saturated browser pool (render, screenshot and the two tools above)
+  answers 503 with `Retry-After`.
 
 ### 2026-10-18
 - Operators can make Solvador Celo's primary settlement service with

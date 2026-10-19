@@ -873,9 +873,10 @@ proof-of-work tier, are unaffected.
 
 ## What doesn't change per chain
 
-The guarantee is identical everywhere: a failed or unmatched call never
-settles, regardless of which of the twelve chains it failed on. Chain choice
-changes *where* the USDC moves, never *whether* a bad call gets charged.
+The settlement rule is the same everywhere: a call that answers an error
+status, or whose payment does not match the offer, is not settled, on any of
+the twelve chains. Chain choice changes *where* the USDC moves, not the rule
+that decides *whether* it moves.
 
 ## The Smart Order Router uses this directly
 

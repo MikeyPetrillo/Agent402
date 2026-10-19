@@ -33,7 +33,7 @@ const html = ledgerShell({
   baseUrl: "https://agent402.tools", body: "<main>hi</main>",
 });
 
-ok(html.includes('<script src="/js/site-chrome.js">'),
+ok(/<script src="\/js\/site-chrome\.js\?v=[a-z0-9]+" defer>/.test(html),
   "every ledgerShell page references the external site-chrome script carrying reveal-on-scroll");
 const src = readFileSync(new URL("../assets/js/site-chrome.js", import.meta.url), "utf8");
 const scriptMatch = /document\.addEventListener\('DOMContentLoaded',function\(\)\{try\{if\(window\.matchMedia[\s\S]*?data-reveal[\s\S]*?\}catch\(e\)\{\}\}\);/.test(src);

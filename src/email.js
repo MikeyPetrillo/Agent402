@@ -5,7 +5,7 @@
 // provider's key + EMAIL_FROM - a no-op that returns false when unconfigured, so
 // nothing breaks before email is set up. NEVER throws into the caller.
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady } from "./state-db.js";
+import { trackStoreReady, stateDbEnabled } from "./state-db.js";
 import { upgradeOffer } from "./report-upgrade.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
@@ -34,6 +34,9 @@ function loadOutcome() {
   if (!outcome || typeof outcome !== "object") outcome = { ok: null, at: null, status: null, code: null, provider: null, failuresSinceOk: 0, sentTotal: 0, failedTotal: 0 };
   return outcome;
 }
+// With the state database, start the row read at module load so the boot
+// awaits it (trackStoreReady) and the first status read is not "unknown".
+if (stateDbEnabled()) loadOutcome();
 function persistOutcome() {
   void outcomeStore().save(outcome); // no volume and no database: memory only
 }

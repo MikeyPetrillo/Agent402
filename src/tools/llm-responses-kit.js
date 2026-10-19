@@ -29,7 +29,7 @@ import {
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
-  rateLimitDelaysFor, paymentWindowTimeoutMs, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
+  rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning,
   refuseCostVariants, refuseUnsupportedParams,
   assertUpstreamBody,
@@ -331,6 +331,7 @@ export function makeResponsesHandler(routeTier) {
       return {
         __sse: async (res) => {
           let lastErr;
+          const timeouts = timedOutBudget();
           const client = streamClientWatch(res);
           try {
             for (const { model, flex } of attempts) {
@@ -338,6 +339,7 @@ export function makeResponsesHandler(routeTier) {
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              const attemptStarted = Date.now();
               try {
                 return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
                   url: OPENROUTER_RESPONSES_URL, timeoutMs,
@@ -346,6 +348,8 @@ export function makeResponsesHandler(routeTier) {
               } catch (e) {
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 lastErr = e;
+                timeouts.note(e, attemptStarted, timeoutMs);
+                if (timeouts.spent()) throw e;
               }
             }
             client.assertPresent();
@@ -357,11 +361,13 @@ export function makeResponsesHandler(routeTier) {
 
     let lastErr;
     let refusedModel = null;
+    const timeouts = timedOutBudget();
     for (const { model, flex } of attempts) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
       const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
+      const attemptStarted = Date.now();
       try {
         const data = await retryRateLimited(async () => {
           const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL, timeoutMs });
@@ -401,6 +407,8 @@ export function makeResponsesHandler(routeTier) {
       } catch (e) {
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         lastErr = e;
+        timeouts.note(e, attemptStarted, timeoutMs);
+        if (timeouts.spent()) throw e;
       }
     }
     throw lastErr || bad("No upstream model could serve this request", 502);

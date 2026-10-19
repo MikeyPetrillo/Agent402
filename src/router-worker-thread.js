@@ -76,6 +76,10 @@ parentPort.on("message", (m) => {
     case "warm": {
       // Build the candidate index now, off any query's clock.
       const t0 = performance.now();
+      if (testHooks && Number(process.env.ROUTER_WORKER_TEST_WARM_DELAY_MS) > 0) {
+        const until = performance.now() + Number(process.env.ROUTER_WORKER_TEST_WARM_DELAY_MS);
+        while (performance.now() < until) { /* a slow load, on purpose */ }
+      }
       let n = 0;
       try { n = xi.warmRouteIndex(); } catch { /* the first query builds it instead */ }
       post({ t: "warmed", seq: m.seq, tools: n, ms: Math.round(performance.now() - t0) });

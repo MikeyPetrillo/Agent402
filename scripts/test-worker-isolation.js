@@ -24,6 +24,10 @@ const listen = (app) => new Promise((res) => { const s = app.listen(0, () => res
   const base = `http://127.0.0.1:${srv.address().port}`;
 
   ok(Object.keys(HANDLERS).includes("render") && Object.keys(HANDLERS).includes("media-info"), "worker exposes render + media handlers");
+  ok(Object.keys(HANDLERS).includes("page-speed") && Object.keys(HANDLERS).includes("html-frames"), "worker exposes the browser-pool page-speed + html-frames handlers");
+  // Input validation runs on the worker too: a bad html-frames body is a 400, not a pool slot.
+  const badFrames = await fetch(`${base}/call`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-worker-token" }, body: JSON.stringify({ slug: "html-frames", input: { html: "<p>", times: [] } }) });
+  ok(badFrames.status === 400, `worker html-frames refuses an empty times list with 400 (got ${badFrames.status})`);
   const health = await (await fetch(`${base}/health`)).json();
   ok(health.ok === true && Array.isArray(health.tools), "worker /health reports ok + tool list");
 

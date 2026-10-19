@@ -88,7 +88,12 @@ export async function runOnWorker(slug, input, { signal } = {}) {
   const text = await readBounded(res, WORKER_MAX_BYTES);
   let body = null;
   try { body = JSON.parse(text); } catch { /* non-JSON */ }
-  if (!res.ok) throw Object.assign(new Error(body?.error || `render worker HTTP ${res.status}`), { statusCode: res.status });
+  if (!res.ok) {
+    // A saturated pool on the worker names a retry delay; carry it through so
+    // the buyer's 503 has the same Retry-After as the in-process path.
+    const retryAfter = Number.isInteger(body?.retryAfterSeconds) ? body.retryAfterSeconds : undefined;
+    throw Object.assign(new Error(body?.error || `render worker HTTP ${res.status}`), { statusCode: res.status, ...(retryAfter ? { retryAfter } : {}) });
+  }
   if (body && body.__binary) {
     const buf = Buffer.from(body.__binary, "base64");
     if (buf.byteLength > WORKER_MAX_BYTES) throw Object.assign(new Error("render worker binary too large"), { statusCode: 502 });

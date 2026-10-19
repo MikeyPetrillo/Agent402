@@ -52,8 +52,11 @@ try {
   ok(out.status === "active" && onDisk, `recorded with the database away: told ${out.status}, kept in the journal (${onDisk})`);
   relay.heal();
   // A restart: a fresh instance on the same store path replays the record.
+  // A2 replays the journal itself when its first load lands; when that load
+  // meets a connection the cut left dead, the still-running A lands the record
+  // instead, and A2 sees it on its next reload (the scheduler's path).
   const A2 = make();
-  for (let i = 0; i < 40 && !A2.get("sub_cs_down1"); i++) await wait(100);
+  for (let i = 0; i < 40 && !A2.get("sub_cs_down1"); i++) { await wait(100); if (i % 5 === 4) await A2.reload().catch(() => {}); }
   ok(A2.get("sub_cs_down1")?.product === "domain-monitor", `after a restart the subscription is there (${A2.get("sub_cs_down1")?.status})`);
   const docName = (await sdb.stateQuery(`SELECT name FROM ${sdb.stateDbSchema()}.documents WHERE body ? 'sub_cs_down1'`)).rows[0]?.name;
   ok(Boolean(docName), `...and in the database (${docName})`);
