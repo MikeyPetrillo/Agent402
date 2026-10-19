@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderArticle, screenshotPage } from "../src/tools/render.js";
 import { MEDIA_TOOLS } from "../src/tools/media-kit.js";
+import { BROWSER_MEASURE_TOOLS } from "../src/tools/browser-measure-kit.js";
 import { startEgressProxy } from "./egress-proxy.js";
 
 const PORT = Number(process.env.PORT) || 3999;
@@ -30,6 +31,7 @@ const HANDLERS = {
   },
 };
 for (const t of MEDIA_TOOLS) HANDLERS[t.slug] = (input) => t.handler(input || {});
+for (const t of BROWSER_MEASURE_TOOLS) HANDLERS[t.slug] = (input) => t.handler(input || {});
 
 // Boot guard: this worker must be SECRETLESS by construction. Enforced ONLY at
 // boot (see the isMain block), not at module import — so a test/CI process, which
@@ -95,7 +97,8 @@ const tokenOk = (got) => {
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "1mb" }));
+// html-frames sends a document of up to 512 KB, JSON-escaped.
+app.use(express.json({ limit: "3mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, tools: Object.keys(HANDLERS) }));
 
@@ -110,7 +113,8 @@ app.post("/call", async (req, res) => {
   try {
     res.json(await handler(input || {}));
   } catch (err) {
-    res.status(err?.statusCode || 502).json({ error: err?.message || "worker error" });
+    if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+    res.status(err?.statusCode || 502).json({ error: err?.message || "worker error", ...(Number.isInteger(err?.retryAfter) ? { retryAfterSeconds: err.retryAfter } : {}) });
   }
 });
 
