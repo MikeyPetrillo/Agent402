@@ -10,8 +10,24 @@
 //   - the paid-path p95 passes PERF_PAID_P95_MS (default 600; CI runners are
 //     slower than a laptop; without the CPU budget the p95 measured 3.4 s),
 //   - the server logs a stall over 1 s during the flood.
+//
+// The flood starts only once the router worker reports loaded. Until then
+// route queries run on the main thread by design (src/router-pool.js), and a
+// fixed sleep was not long enough on a slow runner: the flood then measured
+// that boot window, not steady state.
+//
+// The probe is a separate client with its own keep-alive connections, opened
+// before the flood, the way a buyer's own client (or the edge proxy in front
+// of the server) holds a connection. On the flood's shared fetch pool the
+// probe opened a fresh connection whenever the 50 flood loops held every
+// socket, and a fresh connection waits in the kernel accept queue behind every
+// connection opened before it: Node accepts one connection per event-loop
+// turn, so a probe opened beside the flood's 50 connections waited one loaded
+// turn per connection ahead of it, while its handler took 2 ms and no single
+// turn was long enough to read as a stall.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,8 +67,30 @@ try {
     if (sellers < 2900) await new Promise((r) => setTimeout(r, 500));
   }
   ok(sellers >= 2900, `the index warm-started at production size (${sellers} sellers)`);
-  await new Promise((r) => setTimeout(r, 2000)); // let the route index build off the query path
-  await fetch(`${base}/__operator/perf.json?reset=1`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  const operator = { headers: { authorization: `Bearer ${TOKEN}` } };
+  let pool = null;
+  for (let i = 0; i < 120 && !pool?.loaded; i++) {
+    try { pool = (await (await fetch(`${base}/__operator/perf.json`, operator)).json()).routerPool; } catch { /* warming */ }
+    if (!pool?.loaded) await new Promise((r) => setTimeout(r, 500));
+  }
+  ok(pool?.loaded === true, `a router worker is loaded before the flood (${JSON.stringify(pool?.workers || [])})`);
+
+  // The paid probe: its own client and keep-alive connections, opened now.
+  const probeAgent = new http.Agent({ keepAlive: true, maxSockets: 8 });
+  const paidCall = (text) => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ text });
+    const req = http.request(`${base}/api/hash`, { method: "POST", agent: probeAgent, timeout: 20_000, headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), "payment-signature": "perf-budget-paid-probe".padEnd(48, "x") } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode, reused: req.reusedSocket }));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(Object.assign(new Error("probe timed out"), { name: "TimeoutError" })));
+    req.on("error", reject);
+    req.end(body);
+  });
+  const warm = await Promise.all(Array.from({ length: 4 }, (_, k) => paidCall(`warm ${k}`)));
+  ok(warm.every((r) => r.status === 200), "the paid probe's connections are open before the flood");
+  await fetch(`${base}/__operator/perf.json?reset=1`, operator);
 
   // This process drives the flood too; its own loop delay is time a probe
   // spends waiting here, after the server has answered.
@@ -70,18 +108,20 @@ try {
   }));
   const paid = [], paidStatus = {};
   const probes = [];
+  let fresh = 0; // probe calls that had to open a new connection mid-flood
   while (Date.now() < until) {
     const t0 = performance.now();
-    probes.push(fetch(`${base}/api/hash`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": "perf-budget-paid-probe".padEnd(48, "x") }, body: JSON.stringify({ text: String(t0) }), signal: AbortSignal.timeout(20_000) })
-      .then(async (r) => { await r.arrayBuffer(); paid.push(performance.now() - t0); paidStatus[r.status] = (paidStatus[r.status] || 0) + 1; })
+    probes.push(paidCall(String(t0))
+      .then((r) => { paid.push(performance.now() - t0); if (!r.reused) fresh++; paidStatus[r.status] = (paidStatus[r.status] || 0) + 1; })
       .catch((e) => { paid.push(performance.now() - t0); paidStatus[e?.name || "error"] = (paidStatus[e?.name || "error"] || 0) + 1; }));
     await new Promise((r) => setTimeout(r, 100));
   }
   await Promise.all([flood, ...probes]);
   clientLag.disable();
-  const perf = await (await fetch(`${base}/__operator/perf.json?top=200&min=1`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  probeAgent.destroy();
+  const perf = await (await fetch(`${base}/__operator/perf.json?top=200&min=1`, operator)).json();
   const hashRow = (perf.routes || []).find((r) => /\/api\/hash\b/.test(r.route));
-  console.log(`# attribution: server ${hashRow ? `${hashRow.route} total p50=${hashRow.totalMs.p50}ms p95=${hashRow.totalMs.p95}ms n=${hashRow.window}` : "no /api/hash row"}; client loop delay p50=${Math.round(clientLag.percentile(50) / 1e6)}ms p99=${Math.round(clientLag.percentile(99) / 1e6)}ms max=${Math.round(clientLag.max / 1e6)}ms`);
+  console.log(`# attribution: server ${hashRow ? `${hashRow.route} total p50=${hashRow.totalMs.p50}ms p95=${hashRow.totalMs.p95}ms n=${hashRow.window}` : "no /api/hash row"}; client loop delay p50=${Math.round(clientLag.percentile(50) / 1e6)}ms p99=${Math.round(clientLag.percentile(99) / 1e6)}ms max=${Math.round(clientLag.max / 1e6)}ms; probe calls on a new connection=${fresh}; router served ${JSON.stringify(perf.routerPool?.served || {})}`);
   const p95 = Math.round(pct(paid, 0.95));
   console.log(`# paid-path: n=${paid.length} p50=${Math.round(pct(paid, 0.5))}ms p95=${p95}ms max=${Math.round(Math.max(...paid))}ms statuses=${JSON.stringify(paidStatus)}; flood searches=${i}; shed=${JSON.stringify(perf.shed)}; stalls=${perf.loop.stalls} worst=${perf.loop.worstMs}ms`);
   ok(paid.length >= FLOOD_MS / 150 && Object.keys(paidStatus).every((k) => k === "200"), `every paid-path call answered 200 during the flood (${JSON.stringify(paidStatus)})`);
