@@ -161,6 +161,22 @@ function setup(plan, { ledgerWrap = (l) => l, runStopSignal, runBudgetMs = () =>
   ok(out.steps[2].status === "ok" && out.steps[2].result.value === "c:a:a", `it gets its dependency's output (${JSON.stringify(out.steps[2].result)})`);
 }
 
+// ---- a reference to a later step never resolves, even when that step finished first ----
+{
+  const { h, run } = setup([
+    { step: 1, tool: tool("a"), dependsOn: [] },
+    { step: 2, tool: tool("c", { exampleParams: { q: "{{step 3}}" } }), dependsOn: [1] },
+    { step: 3, tool: tool("b"), dependsOn: [] },
+  ]);
+  h.gates.a = gate();
+  const p = run();
+  await settleSoon();
+  ok(h.log.includes("end b"), "the later step finished while step 1 still ran");
+  h.gates.a.open();
+  const out = await p;
+  ok(out.steps[1].status === "skipped" && out.steps[1].reason === "needs the output of step 3, which did not run: pass params for this step" && !h.log.includes("start c"), `it reads as it did in plan order: step 3 had not run (${out.steps[1].reason})`);
+}
+
 // ---- a failed step skips only its descendants ----
 {
   const { h, run } = setup([
@@ -226,13 +242,14 @@ function setup(plan, { ledgerWrap = (l) => l, runStopSignal, runBudgetMs = () =>
 // ---- the spend ledger failing while a sibling is in flight skips the leg, it does not refuse the run ----
 {
   const flaky = (l) => new Proxy(l, { get(t, k) { const v = t[k]; if (k === "holdSellerSpend") return async () => { throw new Error("ledger down"); }; return typeof v === "function" ? v.bind(t) : v; } });
-  const { h, run } = setup([{ step: 1, tool: tool("a"), dependsOn: [] }, { step: 2, tool: ext("e2", "s2.example"), dependsOn: [] }], { ledgerWrap: flaky });
+  const { h, run } = setup([{ step: 1, tool: tool("a"), dependsOn: [] }, { step: 2, tool: ext("e2", "s2.example"), dependsOn: [] }, { step: 3, tool: tool("b"), dependsOn: [1] }], { ledgerWrap: flaky });
   h.gates.a = gate();
   const p = run();
   await settleSoon();
   h.gates.a.open();
   const out = await p;
   ok(out.status === "partial" && out.steps[0].status === "ok" && out.steps[1].attempts[0].skipped === "the spend ledger is unavailable; this leg was not paid", "with a step of ours in flight the leg is skipped and the run answers");
+  ok(out.steps[2].status === "ok" && h.log.includes("start b"), `...and the rest of the plan still runs (${out.steps[2].status} ${out.steps[2].reason || ""})`);
   const solo = setup([{ step: 1, tool: ext("e1", "s1.example"), dependsOn: [] }, { step: 2, tool: tool("a"), dependsOn: [1] }], { ledgerWrap: flaky });
   const e = await solo.run().catch((x) => x);
   ok(e?.statusCode === 503 && !solo.h.log.includes("start a"), `with nothing spent or in flight the run is refused 503 and no other step starts (${e?.statusCode})`);
