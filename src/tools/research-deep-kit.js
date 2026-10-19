@@ -11,6 +11,7 @@
 // NETWORK test set, never cached (the web moves). Gated on OPENROUTER_API_KEY
 // (503 without it), independent of Stripe keys.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, RERANK_MODEL, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { extractArticle } from "./extract.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -278,19 +279,21 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     if (!prose0) throw bad("Synthesis produced no report - not charged", 502);
     const audit = auditCitations(prose0, sources, good.map((r) => r.answer).join(" "));
     const prose = audit.prose;
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
     // Append the complete, deterministic source list from the structured array
     // (the model was told not to write one). Always complete and correct, never
     // truncated by the token budget.
     const sourceList = sources.map((s) => `[${s.n}] ${s.title}${s.body ? "" : " (excerpt only)"} - ${s.url}`).join("\n");
     const report = sourceList ? `${prose}\n\n## Sources\n${sourceList}` : prose;
 
-    const meta = { disclaimer: "Research assembled from public sources and summarised by a model. Not investment, legal or professional advice. Check the cited sources before relying on any figure.", tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
+    const meta = { disclaimer: "Research assembled from public sources and summarized by a model. Not investment, legal or professional advice. Check the cited sources before relying on any figure.", tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
       citations_stripped: audit.stripped, unverified_numeric_claims: audit.unverified.length, ...(audit.unverified.length ? { unverified_numeric_claims_detail: audit.unverified } : {}), synthesis_model: synthModel };
     // Cost is NEVER returned to the buyer (same rule as the gateway).
     const pubSources = sources.map(({ body, bodyTruncated, bodyChars, ...rest }) => ({ ...rest, fullText: !!body, ...(bodyChars ? { bodyChars } : {}) }));
     const out = format === "json"
-      ? { report, sources: pubSources, sub_questions: subQuestions, outline, meta }
-      : { report, sources: pubSources, sub_questions: subQuestions, meta };
+      ? { report, sources: pubSources, sub_questions: subQuestions, outline, meta, grounding }
+      : { report, sources: pubSources, sub_questions: subQuestions, meta, grounding };
     // Debug seam (never in prod): expose the grounding material so an eval can
     // check that every specific in the report traces to retrieved content.
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { subAnswers: good.map((r) => ({ q: r.q, answer: r.answer })), snippets: sources.map((s) => ({ n: s.n, snippet: s.snippet })) };

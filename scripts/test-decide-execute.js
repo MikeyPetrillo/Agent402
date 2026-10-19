@@ -12,6 +12,7 @@ import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { buildDecideTools } from "../src/tools/decide-kit.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { makeExecuteHandler, executeQuoteUsd, executeBudgetUsd, makeDecideHandler, makeFeedbackHandler } from "../src/tools/decide-kit.js";
+import { sketchPlan, referencedSteps } from "../src/decide/sketch-plan.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -666,6 +667,18 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(rows() === before, "a refused sketch writes no decision row");
   await throwsWith(() => exec({ steps: ["s1", "s2"] }, mkReq("0xr2")), 400, "needs text", "unrunnable again");
   ok(rows() === before + 1, "a sketch that was booked and then could not run keeps its row, like a paid decision");
+
+  // dependsOn is the data graph: a step depends only on the steps its params reference
+  const dep = (steps) => { const r = sketchPlan(steps, { catalog, refuse: () => null }); return r.ok ? r.plan.map((p) => p.dependsOn) : r.error; };
+  ok(JSON.stringify(dep(["s4", "s4", "s4"])) === "[[],[],[]]", `steps that take only the caller's inputs depend on nothing (${JSON.stringify(dep(["s4", "s4", "s4"]))})`);
+  const mixed = sketchPlan(["s4", "s1", "s2"], { catalog, refuse: () => null });
+  ok(mixed.ok && mixed.plan[2].tool.exampleParams.q === "{{step 2}}" && JSON.stringify(mixed.plan.map((p) => p.dependsOn)) === "[[],[1],[2]]", `a step referencing {{step 2}} depends on 2 only (${JSON.stringify(mixed.plan?.map((p) => p.dependsOn))})`);
+  ok(JSON.stringify(dep(["s1", "s4", "s2"])) === "[[],[],[2]]", "a step with several required fields breaks the chain; the next single-input step still reads the step before it");
+  ok(mixed.plan.every((p) => p.dependsOn.every((d) => referencedSteps(p.tool.exampleParams).includes(d))) && referencedSteps({ a: "{{step 2}}", b: "{{step 2}}", c: "{{step 1}}", d: "x {{step 3}}" }).join() === "1,2", "every edge is a reference in the step's params, and only a whole-value reference counts");
+  // independent steps still all run: execute carries no context between steps except a {{step N}} reference
+  calls.length = 0;
+  const par = await exec({ steps: ["s4", "s4"], params: { 1: { n: 1, flag: true }, 2: { n: 2, flag: false } } }, mkReq("0xpar"));
+  ok(par.status === "complete" && par.steps.every((s) => s.status === "ok") && calls.map((c) => c[1].n).join() === "1,2", `a sketch of independent steps runs every step on its own inputs (${par.status})`);
 }
 
 // ---- H5: a ledger write that fails after outside sellers were paid never turns the run into a 500 ----

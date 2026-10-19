@@ -15,6 +15,7 @@ import { localToolRow, remoteToolRow } from "./tool-rows.js";
 import { routableRemoteEntries, looksLikeListingInjection, liveProofAt, mppDualStackOrigins, indexReadiness } from "../x402-index.js";
 import { unpackRequestContract } from "../request-contract.js";
 import { dispatchable } from "../tools/route-execute.js";
+import { routeExcludedCategory } from "../route-category.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
 
 /** Whether POST /api/decide/execute can run this tool as a step: the router's
@@ -66,9 +67,10 @@ export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date
         injected: looksLikeListingInjection(`${t.name || ""} ${t.description || ""} ${t.sellerName || ""} ${t.category || ""} ${t.route || ""}`),
         lastLiveAt: liveProofAt(t),
         mppOrigins,
-        // Unknown (no verdict function) keeps the old behaviour; a function
+        // Unknown (no verdict function) keeps the old behavior; a function
         // that throws reads as not executable, never as a guess that it is.
-        executable: typeof remoteExecutable === "function" ? (() => { try { return remoteExecutable(t) === true; } catch { return false; } })() : true,
+        // A route in a category the router never buys is never executable.
+        executable: routeExcludedCategory(t) !== null ? false : typeof remoteExecutable === "function" ? (() => { try { return remoteExecutable(t) === true; } catch { return false; } })() : true,
       });
       if (row && !emitted.has(row.id)) { emitted.add(row.id); yield row; }
       if (++n % YIELD_EVERY === 0) await yieldLoop();

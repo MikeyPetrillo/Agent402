@@ -1134,7 +1134,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(e?.statusCode === 400 && /not offered on/.test(e.message) && /\/v1\/pro\/chat\/completions \(\$0\.1\)/.test(e.message) && /\/v1\/premium\/chat\/completions/.test(e.message), `${slug}: priority refused 400 naming the pro and premium routes`);
   }
   throws(() => validateRequest({ model: "openai/gpt-4o", messages: msg1(), service_tier: "flex" }, "v1-chat-pro"), "not a buyer knob", '"flex" is refused: the gateway applies flex itself (with a fallback a buyer flex cannot have)');
-  throws(() => validateRequest({ model: "openai/gpt-4o", messages: msg1(), service_tier: "turbo" }, "v1-chat-pro"), "not recognised", "an unknown service_tier is refused, never dropped");
+  throws(() => validateRequest({ model: "openai/gpt-4o", messages: msg1(), service_tier: "turbo" }, "v1-chat-pro"), "not recognized", "an unknown service_tier is refused, never dropped");
   throws(() => validateRequest({ model: "openai/gpt-4o", messages: msg1(), service_tier: 1 }, "v1-chat-pro"), "must be a string", "a non-string service_tier is refused");
   // Attempts and the outbound field: priority never tries flex; a :nitro
   // default attempt carries "default"; a plain request is byte-identical.

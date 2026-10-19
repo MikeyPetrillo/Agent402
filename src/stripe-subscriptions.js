@@ -70,6 +70,24 @@ export const MONITOR_PRODUCTS_ALL = {
 // existing ones stay active and are looked up in MONITOR_PRODUCTS_ALL.
 export const MONITOR_PRODUCTS = Object.fromEntries(Object.entries(MONITOR_PRODUCTS_ALL).filter(([k]) => k !== "token-monitor" || rugcheckEnabled()));
 
+// The renewal terms, one sentence, shown beside every Subscribe button on
+// /monitors and above the pay button on the Stripe Checkout page, so the two
+// never say different things.
+export const RENEWAL_TERMS = "Renews each month until you cancel. Cancel anytime from the manage link in your monitor emails.";
+// The Checkout version (custom_text.submit.message, Markdown links, at most
+// 1200 characters): the same sentence, where to get a new manage link, and
+// the terms.
+export function renewalCheckoutMessage(baseUrl) {
+  const b = String(baseUrl || "").replace(/\/+$/, "");
+  let host = b;
+  try { host = new URL(b).host; } catch { /* the base as given */ }
+  return `${RENEWAL_TERMS} Without those emails, request a new link at [${host}/monitors](${b}/monitors#manage). [Terms of Service](${b}/terms)`;
+}
+// Statuses a subscriber can still manage in the portal (change the card, or
+// cancel). A canceled or expired subscription has nothing left to manage.
+const MANAGEABLE = new Set(["active", "trialing", "past_due", "unpaid"]);
+const normEmail = (e) => String(e ?? "").trim().toLowerCase();
+
 export function subscriptionsEnabled() {
   return Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
 }
@@ -321,6 +339,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       success_url: `${baseUrl}/monitors/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/monitors?canceled=1`,
       allow_promotion_codes: true,
+      custom_text: { submit: { message: renewalCheckoutMessage(baseUrl).slice(0, 1200) } },
     });
     return { id: session.id, url: session.url };
   }
@@ -496,6 +515,20 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return out;
   }
   const get = (subId) => store.get(subId) || null;
+  // Card subscriptions a checkout email can still manage (the "Already
+  // subscribed?" form on /monitors). Reads the stored records only, never
+  // Stripe; in database mode it reloads first so a subscription recorded by
+  // the other container is found.
+  async function findManageableByEmail(email) {
+    const want = normEmail(email);
+    if (!want) return [];
+    await reload().catch(() => 0);
+    const out = [];
+    for (const [subId, rec] of store) {
+      if (rec?.customer && MANAGEABLE.has(rec.status) && normEmail(rec.email) === want) out.push({ ...rec, subId });
+    }
+    return out;
+  }
 
   // Operator surface: is Stripe delivering, and are we accepting? A snapshot
   // (never the live object), counts + timestamps only.
@@ -503,5 +536,5 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return { ...tally, byType: { ...tally.byType }, configured: Boolean(webhookSecret()) };
   }
 
-  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
+  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, findManageableByEmail, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
 }

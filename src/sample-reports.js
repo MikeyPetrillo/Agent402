@@ -17,6 +17,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HUMAN_PRODUCTS, reportHeadline } from "./human-checkout.js";
 import { houseStyleBundle } from "./house-style.js";
+import { REPORT_MODEL_NOTE, reportIsModelWritten, kitDisclaimer } from "./report-disclosure.js";
+import { shownGroundingNote } from "./report-grounding.js";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "samples");
 
@@ -46,6 +48,14 @@ export const SAMPLES = (() => {
         tables: Array.isArray(j.tables) ? j.tables : [],
         at: j.at || j.generatedAt || null,
         priceUsd: p.price / 100,
+        // The kit's own disclaimer as the run returned it, and the model-written
+        // note the page shows under the title (the JSON reader gets both too).
+        ...(kitDisclaimer(j) ? { disclaimer: kitDisclaimer(j) } : {}),
+        ...(reportIsModelWritten(p.kind) ? { notice: REPORT_MODEL_NOTE } : {}),
+        // A fixture generated after the grounding check shipped carries its
+        // result; the sample shows the same field and note a buyer gets.
+        ...(j.grounding && typeof j.grounding === "object" ? { grounding: j.grounding } : {}),
+        ...(shownGroundingNote(j.grounding) ? { groundingNote: shownGroundingNote(j.grounding) } : {}),
         // A fixture whose text stops mid-sentence says so on its page rather
         // than passing as a finished report (the fixture itself is left as run).
         ...(endsMidSentence(j.report) ? { cutShort: true } : {}),

@@ -181,9 +181,13 @@ Returns an **object**, not a bare array. The matches are in `results`:
   (`crawl_failed`, `network_unknown`, `no_supported_route`, `url_template`,
   `price_unknown`, `usdc_domain_mismatch`, `gateway_rail_unsupported`,
   `delivery_failing`, `settlement_self_funded`, `settlement_required`,
-  `settlement_checked_at_pay_time`, `eligible`, `local_catalog`); `routable` and
-  `health` are crawl readiness, never a promise to pay. The response's
-  `dispatchLegend` spells each out and is the full list.
+  `category_excluded`, `settlement_checked_at_pay_time`, `eligible`,
+  `local_catalog`); `routable` and `health` are crawl readiness, never a
+  promise to pay. The response's `dispatchLegend` spells each out and is the
+  full list.
+- Routes that sell personal data about individuals are listed but not bought by
+  the router: they read `category_excluded` on `/api/index?seller=`, are not
+  ranked here, and `categoryExcluded` counts the matching routes left out.
 - `executeVia` names the cheapest execution rung that covers this result (see
   the ladder above) and appears **only on a row the router will pay now**
   (`executeViaCallableNow: true`). A row that is not dispatch-eligible carries

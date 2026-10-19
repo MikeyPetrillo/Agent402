@@ -2385,6 +2385,10 @@ jobs:
           t node scripts/test-mcp-search-ranking.js
           # Report -> monitor upgrade loop (kind mapping, table-driven price, escaping, prefill-only deep link)
           t node scripts/test-report-upgrade.js
+          # Model-written reports say so on every surface a person reads (storefront, viewer, samples, public pages, emails)
+          t node scripts/test-report-model-note.js
+          # Every number a report kit writes is traced to its synthesis material (offline)
+          t node scripts/test-report-grounding.js
           # /llms.txt MPP/x402 dual-header reading note (issue #794 guidance, offline)
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
@@ -2623,6 +2627,8 @@ jobs:
           t node scripts/test-decide-index.js
           t node scripts/test-decide-planner.js
           t node scripts/test-decide-execute.js
+          # Execute runs independent plan steps at once: one run budget reserved per leg, deadline and drain on every step (offline)
+          t node scripts/test-decide-execute-parallel.js
           t node scripts/test-decide-feedback.js
           t node scripts/test-decide-site.js
           t node scripts/test-decide-cost.js
@@ -2633,11 +2639,15 @@ jobs:
           t node scripts/test-leaderboard-chains.js
           # Discovery strict-source filters (testnet + junk origins)
           t node scripts/test-discovery-filter.js
+          # Registry discovery folds each page as it arrives: same published maps as the whole-list fold, a failed walk publishes nothing, lower peak heap (offline)
+          t node scripts/test-discovery-streaming.js
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js
           # A seller without /.well-known/x402 keeps its catalog when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
           t node scripts/test-index-fallback-304.js
+          # A crawled entry keeps the slim manifest; a 304 derives the same catalog from the packed body (offline)
+          t node scripts/test-index-slim-manifest.js
           # A seller's own payTo outranks a registry's record of an old wallet, across re-crawls (offline)
           t node scripts/test-seller-payto-precedence.js
           # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
@@ -2868,6 +2878,8 @@ jobs:
           t node scripts/test-home-page.js
           t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
+          # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
+          t node scripts/test-analytics-privacy.js
           t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
@@ -2881,10 +2893,14 @@ jobs:
           t node scripts/test-kit2.js
           # Stripe subscriptions (checkout, provisioning, webhook signature discipline)
           t node scripts/test-stripe-subscriptions.js
+          # Monitor renewal terms beside Subscribe and on Checkout; the manage-link route (same answer, rate limits, one send)
+          t node scripts/test-monitor-manage-link.js
           # Prepaid card credits (mint-once, exact micro-dollar balances, gate debits only on 200, 402 on insufficient, operator view)
           t node scripts/test-credits.js
           # CAN-SPAM: every outbound email carries the physical postal address
           t node scripts/test-email-postal-address.js
+          # List-Unsubscribe headers reach both email providers (ZeptoMail mime_headers, Resend headers)
+          t node scripts/test-email-unsub-headers.js
           # Prepaid credits are not SOLD by default (no held balance), but existing keys still redeem
           t node scripts/test-credits-sales-gate.js
           # Stripe shadow ledger (off by default and inert, idempotent on tx hash, failures swallowed, restart-durable, caller unchanged in every world)
@@ -3041,6 +3057,8 @@ jobs:
           t node scripts/test-mppx-store.js
           # Tempo direct mode screens every payment party against the OFAC SDN list before money moves (fixture list, offline)
           t node scripts/test-sanctions-screen.js
+          # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
+          t node scripts/test-x402-payer-screen.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
@@ -4501,6 +4519,8 @@ jobs:
           t node scripts/test-skill-pack-avm-match.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
+          t node scripts/test-router-people-data.js
           t node scripts/test-unproven-lane-labels.js
           # seller-trust and seller-dossier report both router lanes (proven, Base unproven) from the per-route verdicts, through their routes (FREE_MODE boots, seeded index, ceiling on and off)
           t node scripts/test-seller-trust-lanes.js
@@ -4523,6 +4543,8 @@ jobs:
           t node scripts/test-solana-history-rpc.js
           # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
           t node scripts/test-leaderboard-log-cache.js
+          # Base board log cache at the row cap: kept rows folded by index (identical order to a full read), only changed segments re-hashed and saved, no stale digest after any invalidation, earlier state loads (offline)
+          t node scripts/test-leaderboard-log-cache-scan.js
           # Recent EVM getLogs public-first: complete-answer guard (own head, filter match), fallback on error/range cap/behind head/timeout/429, skips, rollback, ledger rows identical (offline stub RPCs)
           t node scripts/test-evm-logs-rpc.js
           # accepts[0].outputSchema on the 402: pure header rewrite + mount order (offline)

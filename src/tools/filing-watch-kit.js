@@ -24,6 +24,7 @@
 //   describeFilingChanges(prev, next) human-readable lines for the filings in
 //     `next` that were not in `prev` - the body of the alert email.
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany } from "./edgar-kit.js";
 // The submissions read itself is the helper ticker-pack already ships (one
@@ -744,6 +745,8 @@ ${docBlocks || "(no primary document was read for this window)"}`;
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Filing report synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
 
     const header = `# SEC Filing Report: ${name}${symbol ? ` (${symbol})` : ""}\n\n**Last ${days} days** · ${pr.filings.length} filing${pr.filings.length === 1 ? "" : "s"}${counts ? ` (${counts})` : ""} · ${read.length} primary document${read.length === 1 ? "" : "s"} read in full${routineParsed.length ? ` · ${routineParsed.length} ownership form${routineParsed.length === 1 ? "" : "s"} parsed` : ""}\n`;
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
@@ -784,7 +787,7 @@ ${docBlocks || "(no primary document was read for this window)"}`;
       disclaimer: "SEC filings as filed with the Commission (public domain); summary of public documents, not investment advice.",
     };
 
-    const out = { report, company: name, ticker: symbol || null, cik: pr.cik, sources: numbered, tables, evidence, meta, untrustedContent: true };
+    const out = { report, company: name, ticker: symbol || null, cik: pr.cik, sources: numbered, tables, evidence, meta, grounding, untrustedContent: true };
     // A composite calling this in-process passes `accountAs` so the sale is
     // booked once against the product the buyer actually paid for.
     if (input?.accountAs) input.accountAs(spent);

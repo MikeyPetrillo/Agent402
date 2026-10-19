@@ -107,7 +107,7 @@ it was read, whether it is stale, whether it disagrees with the seller's own
 declaration); the wallets the origin advertises set against the wallets that
 were actually paid, including evidence it inherits from a shared payTo and who
 else claims that wallet; settlement evidence kept **per source** rather than
-summed (our own Base leaderboard, the Bazaar's measurement labelled as theirs,
+summed (our own Base leaderboard, the Bazaar's measurement labeled as theirs,
 Solana SPL credits, MPP transfers); the router's dispatch verdict per chain with
 its reason and any recent refusal; and what happened the times our router
 actually paid it.

@@ -81,7 +81,7 @@ function leaderboardHtml(lb, host = null) {
   const ruleText = `at least ${floor ?? "-"} inbound transfers in the window${minPayers != null ? ` from at least ${minPayers} distinct payers other than the recipient` : ""}, plus a tempo/charge offer on the live challenge`;
   const routerCell = (r) => {
     if (r.routable) return `<span class="mpr-proven">routable</span>`;
-    const dim = (t, title = "") => `<span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);"${title ? ` title="${esc(title)}"` : ""}>${t}</span>`;
+    const dim = (t, title = "") => `<span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;"${title ? ` title="${esc(title)}"` : ""}>${t}</span>`;
     if (r.proven) return dim("session only", "On-chain floor met, but the live challenge offers no tempo/charge - the router pays charge only");
     if (floor != null && r.transfers < floor) return dim(`below floor (${r.transfers.toLocaleString("en-US")} of ${floor} transfers)`);
     if (minPayers != null && r.evidencePayers != null && r.evidencePayers < minPayers) return dim(`too few payers (${r.evidencePayers} of ${minPayers})`);
@@ -102,13 +102,17 @@ function leaderboardHtml(lb, host = null) {
   const MAX_NAMES = 4;
   const trs = active.map((r) => {
     const all = r.sellers || [];
-    const shown = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;white-space:nowrap;">${esc(x.name)}</a>`).join(", ");
+    const links = all.slice(0, MAX_NAMES).map((x) => `<a href="${safeHref(x.url || x.origin)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;white-space:nowrap;">${esc(x.name)}</a>`);
     const more = all.length > MAX_NAMES ? ` <span class="mlb-tag" title="${esc(all.slice(MAX_NAMES).map((x) => x.name).join(", "))}">+${all.length - MAX_NAMES} more on this recipient</span>` : "";
+    // The "+N more" tag stays on the line of the last name, so a narrow
+    // screen never leaves it alone on the last line.
+    if (more) links.push(`<span style="white-space:nowrap;">${links.pop()}${more}</span>`);
+    const shown = links.join(", ");
     // One recipient credited under several names is a shared payment address
     // (a gateway that collects for many services), so it says so instead of
     // reading as if each named company is a seller on this row.
     const sharedTag = all.length > 1 ? `<span class="mlb-tag">shared recipient &middot; ${all.length} services:</span> ` : "";
-    const names = sharedTag + shown + more;
+    const names = sharedTag + shown;
     const who = r.self ? `<span style="font-weight:700;">Agent402</span> <span class="mlb-tag">(this server)</span>${names ? `, ${names}` : ""}` : (names || `<span style="color:var(--faint);">unnamed recipient</span>`);
     return `<tr>
       <td class="num">${r.rank}</td>

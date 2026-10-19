@@ -31,7 +31,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-11.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-19.</p>
 </section>
 
 <section>
@@ -156,10 +156,11 @@ that bought it. The same applies to an unused monitor period. Nothing here waive
 and it does not apply to a balance disabled for a refund or dispute.</p>
 <p><b>Free email alerts.</b> A free alert watches one subject with the same daily check a monitor uses and emails you when something changes, at most once a day. It is free, best-effort and not a monitor: no report is generated, delivery is not guaranteed, and we may pause or discontinue alerts at any time. It starts only after you confirm by email and ends the moment you use the unsubscribe link in any alert.</p>
 <p><b>Subscriptions (monitors).</b> A monitor bills monthly in advance, by card through Stripe or over
-MPP on Tempo from an authorization you sign, until cancelled. Cancel any time through the
-manage link in your monitor emails (the Stripe Customer Portal, reached from <a href="/monitors">/monitors</a>) or by
-revoking the MPP authorization; cancellation stops future renewals and the monitor keeps running to the end of the paid
-period. Renewal charges are not refunded pro rata. A monitor whose subject cannot be read (for example a
+MPP on Tempo from an authorization you sign, and renews each month until you cancel. Cancel a card subscription any
+time in the Stripe Customer Portal, opened by the manage link in your monitor emails; if you no longer have those
+emails, enter your checkout email under "Already subscribed?" on <a href="/monitors#manage">/monitors</a> and we email
+you a new link. Cancel an MPP subscription by revoking the authorization. Cancellation stops future renewals and the
+monitor keeps running to the end of the paid period. Renewal charges are not refunded pro rata. A monitor whose subject cannot be read (for example a
 domain that does not resolve) keeps its free daily check, emails you once about the problem, and produces
 no further paid reports until the subject is readable again; each subscription also has a cap on paid
 re-runs per 30 days, above which it alerts without re-running.</p>

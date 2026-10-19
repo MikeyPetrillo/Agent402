@@ -10,7 +10,7 @@
 //
 // Listed only when DECIDE_SERVICE_URL and DECIDE_INTERNAL_TOKEN are set.
 
-import { runInAbortableScope } from "../drain-abort.js";
+import { runInAbortableScope, drainSignal, clientGoneSignal } from "../drain-abort.js";
 import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
@@ -20,7 +20,8 @@ import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { dispatchable } from "./route-execute.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
-import { resolveStepRefs } from "../decide/step-refs.js";
+import { resolveStepRefs, STEP_REF } from "../decide/step-refs.js";
+import { hasLastingEffect } from "../hangup-forgiveness.js";
 import { sketchPlan, sketchListPriceUsd, SKETCH_MIN_STEPS, SKETCH_MAX_STEPS } from "../decide/sketch-plan.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -255,7 +256,145 @@ function priceOfDef(def) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS }) {
+// ------------------------------------------------- run scheduling (execute)
+
+/** Most steps of one run in flight at once (DECIDE_CONFIG execute.maxParallelSteps). */
+export function maxParallelSteps(cfg = decideConfig()) {
+  const n = Math.floor(Number(cfg?.execute?.maxParallelSteps));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 8) : 3;
+}
+
+/** Every params object a step may send: the caller's for the step, else each tool's own. */
+function paramSetsOf(step, overrides) {
+  const caller = stepOverride(step, overrides);
+  if (caller) return [caller];
+  return [step?.tool?.exampleParams, ...((step?.fallbacks || []).map((f) => f?.exampleParams))].filter((p) => p && typeof p === "object");
+}
+
+/**
+ * Which steps each step waits for, as plan indexes. A step waits for every
+ * step in its dependsOn and every earlier step one of its params names as
+ * "{{step N}}", so a value it takes from another step is always there when it
+ * starts. A plan the graph cannot be read from (a step number repeated or not
+ * an integer, a dependsOn that is not a list, or that names a step that is not
+ * earlier in the plan: unknown, itself, later, or a cycle) runs in plan order,
+ * one step at a time, as every plan did before.
+ * A step whose tool (or any fallback) leaves state behind (hasLastingEffect:
+ * the memory writers, attest, feedback, ...) is a barrier: it waits for every
+ * earlier step and every later step waits for it, so a write and a read of the
+ * same state keep plan order even when the plan names no edge between them.
+ * @returns {{ parallel: boolean, deps: number[][], why?: string }}
+ */
+export function planSchedule(plan, overrides) {
+  const steps = Array.isArray(plan) ? plan : [];
+  const sequential = (why) => ({ parallel: false, why, deps: steps.map((_, i) => (i ? [i - 1] : [])) });
+  const indexOf = new Map();
+  for (const [i, p] of steps.entries()) {
+    const k = Number(p?.step);
+    if (!Number.isInteger(k) || indexOf.has(k)) return sequential("step numbers are not distinct integers");
+    indexOf.set(k, i);
+  }
+  const deps = [];
+  for (const [i, p] of steps.entries()) {
+    if (!Array.isArray(p.dependsOn)) return sequential(`step ${p.step} has no dependsOn list`);
+    const set = new Set();
+    for (const raw of p.dependsOn) {
+      const j = Number.isInteger(Number(raw)) ? indexOf.get(Number(raw)) : undefined;
+      if (j === undefined || j >= i) return sequential(`step ${p.step} depends on ${String(raw).slice(0, 24)}, which is not an earlier step`);
+      set.add(j);
+    }
+    for (const params of paramSetsOf(p, overrides)) {
+      for (const v of Object.values(params)) {
+        const m = typeof v === "string" ? STEP_REF.exec(v) : null;
+        const j = m ? indexOf.get(Number(m[1])) : undefined;
+        if (j !== undefined && j < i) set.add(j);
+      }
+    }
+    deps.push(set);
+  }
+  const barrier = steps.map((p) => [p?.tool, ...(Array.isArray(p?.fallbacks) ? p.fallbacks : [])].some((t) => hasLastingEffect(t?.slug)));
+  for (let i = 0; i < steps.length; i++) {
+    for (let j = 0; j < i; j++) if (barrier[i] || barrier[j]) deps[i].add(j);
+  }
+  return { parallel: true, deps: deps.map((s) => [...s].sort((a, b) => a - b)) };
+}
+
+/**
+ * The run's budget, shared by its steps. A step reserves its worst case
+ * before it starts (the check and the reservation are one synchronous step,
+ * so two steps in flight cannot both pass on the same headroom), then turns
+ * the reservation into what it spent, or gives it back. A step that would fit
+ * once a sibling in flight finishes waits for it; one that cannot fit even if
+ * every sibling spends nothing is refused at once.
+ */
+export function makeSpendPool(spendable) {
+  let spent = 0, reserved = 0, holders = 0;
+  let waiters = [];
+  const wake = () => { const w = waiters; waiters = []; for (const fn of w) fn(); };
+  const pool = {
+    get spent() { return spent; },
+    get reserved() { return reserved; },
+    /** Reservations not yet settled or given back. */
+    get holders() { return holders; },
+    wake,
+    /** A reservation of size(available) (at least `need`), or null when it can never fit, or "wait". */
+    tryReserve(need, size = () => need) {
+      if (spent + need > spendable + 1e-9) return null;
+      const available = roundUsd(spendable - spent - reserved);
+      // Waiting needs a sibling whose reservation can come back; with none, it never fits.
+      if (need > available + 1e-9) return holders > 0 ? "wait" : null;
+      const amount = Math.max(need, Number(size(available)) || 0);
+      reserved = roundUsd(reserved + amount);
+      holders++;
+      return { amount, open: true };
+    },
+    /** Waits while only siblings' reservations stand in the way; "halted" when halt() says so. */
+    async reserve(need, size, halt = () => null) {
+      for (;;) {
+        if (halt()) return "halted";
+        const r = pool.tryReserve(need, size);
+        if (r !== "wait") return r;
+        await new Promise((res) => waiters.push(res));
+      }
+    },
+    commit(h, usd) {
+      if (!h?.open) return;
+      h.open = false; holders--;
+      reserved = holders ? roundUsd(Math.max(0, reserved - h.amount)) : 0;
+      spent = roundUsd(spent + usd);
+      wake();
+    },
+    release(h) {
+      if (!h?.open) return;
+      h.open = false; holders--;
+      reserved = holders ? roundUsd(Math.max(0, reserved - h.amount)) : 0;
+      wake();
+    },
+  };
+  return pool;
+}
+
+/** Rejects (503, marked runStopped) as soon as the run's stop signal fires. */
+function raceStop(promise, signal) {
+  if (!signal) return promise;
+  let onAbort;
+  const stopped = new Promise((_, rej) => {
+    onAbort = () => rej(Object.assign(bad(`the run was stopped: ${String(signal.reason?.message || "stopped").slice(0, 160)}`, 503), { runStopped: true }));
+    if (signal.aborted) onAbort(); else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  stopped.catch(() => {});
+  return Promise.race([promise, stopped]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
+/** The drain signal and, inside a paid request's scope, the buyer's client-gone signal. */
+function defaultRunStopSignal() {
+  // Always a signal of the run's own (never the process-wide one itself), so
+  // a listener added for the run cannot pile up on a long-lived signal.
+  const parts = [drainSignal(), clientGoneSignal()].filter(Boolean);
+  return parts.length ? AbortSignal.any(parts) : null;
+}
+
+export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal }) {
   // A write after money may have moved: awaited once, then retried and
   // journaled (kind, payload) on local disk before the run answers.
   const afterSpend = (label, kind, payload, thunk) => ledgerWriteAfterSpend(label, thunk, ledgerRetryMs, journalOf(ledger, kind, payload));
@@ -404,16 +543,49 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const catalog = getCatalog();
     const bySlug = new Map(Object.values(catalog).map((def) => [def.slug, def]));
     const router = bySlug.get("route-execute-pro");
-    let spent = 0;
     let mayHaveSpentOutside = false; // an external payment whose outcome we cannot know
-    const results = [];
     const outputs = {};
-    for (const step of d.plan) {
+    // Steps run as their dependencies finish, up to maxParallelSteps at once,
+    // in plan order among the ready ones; everything the buyer reads stays in
+    // plan order. Every step draws on one budget (the pool): a leg reserves
+    // its worst case before it starts and settles it after.
+    const schedule = planSchedule(d.plan, input.params);
+    if (!schedule.parallel && d.plan.length > 1) console.warn(`[decide] run ${runId}: steps run in plan order (${schedule.why})`);
+    const pool = makeSpendPool(spendable);
+    const stop = (() => { try { return runStopSignal() || null; } catch { return null; } })();
+    const stopWhy = () => String(stop?.reason?.message || "stopped").slice(0, 160);
+    let refusedBy = null; // the ledger error that refuses the whole run (503) before anything was spent
+    let defect = null; // a step that threw (a defect, not a tool failure)
+    const halt = () => (refusedBy ? "refused" : defect ? "defect" : stop?.aborted ? "stopped" : null);
+    const haltSkip = () => (refusedBy ? "the run was refused before this leg started" : defect ? "the run stopped on an internal error" : `the run was stopped: ${stopWhy()}`);
+    // A step waiting for budget wakes when the run stops, and gives up.
+    const onStop = () => pool.wake();
+    stop?.addEventListener?.("abort", onStop, { once: true });
+    let okCount = 0;
+    // One leg in flight per outside seller within a run, as when steps ran one at a time.
+    const sellerLocks = new Map();
+    const lockSeller = (key) => {
+      const prev = sellerLocks.get(key) || Promise.resolve();
+      let release;
+      const mine = new Promise((r) => { release = r; });
+      const tail = prev.then(() => mine);
+      sellerLocks.set(key, tail);
+      return prev.then(() => () => { release(); if (sellerLocks.get(key) === tail) sellerLocks.delete(key); });
+    };
+    // A step's "{{step N}}" sees only steps earlier in the plan (all of which
+    // it waits for when it names them), so a reference reads what it read
+    // when steps ran in order.
+    const stepIndex = new Map(d.plan.map((p, i) => [String(p.step), i]));
+    const outputsBefore = (i) => (schedule.parallel ? Object.fromEntries(Object.entries(outputs).filter(([k]) => (stepIndex.get(k) ?? Infinity) < i)) : outputs);
+
+    const runStep = async (step, stepAt) => {
       let done = null;
       const attempts = [];
       const inputSkips = [];
       const callerParams = stepOverride(step, input.params);
+      const seen = outputsBefore(stepAt);
       for (const tool of [step.tool, ...(step.fallbacks || [])]) {
+        if (halt()) { attempts.push({ id: tool.id, skipped: haltSkip() }); break; }
         // This tool's own params: the caller's for the step if given, else the
         // ones the plan wrote for this tool (backups carry their own; a plan
         // from before that falls back to the step's), under this tool's field
@@ -422,7 +594,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         // A "{{step N}}" value is taken from step N's output (an address an ENS
         // lookup resolved); one that cannot be named without guessing skips
         // this tool, and the next one is tried.
-        const chained = resolveStepRefs(raw, outputs);
+        const chained = resolveStepRefs(raw, seen);
         if (!chained.ok) { inputSkips.push(chained.reason); attempts.push({ id: tool.id, skipped: chained.reason }); continue; }
         // A placeholder the plan could not fill from the task is never sent to
         // a paid tool as if it were the value.
@@ -435,10 +607,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const listPrice = tool.firstParty ? priceOfDef(def) : tool.priceUsd;
         if (tool.firstParty && listPrice === null) { attempts.push({ id: tool.id, skipped: "no longer in the catalog" }); continue; }
         const cost = tool.firstParty ? listPrice : roundUsd(listPrice * (1 + cfg.routingFeePct / 100));
-        if (spent + cost > spendable + 1e-9) { attempts.push({ id: tool.id, skipped: "over the remaining budget" }); continue; }
+        // Over what is left even if every leg in flight spends nothing: never fits.
+        if (pool.spent + cost > spendable + 1e-9) { attempts.push({ id: tool.id, skipped: "over the remaining budget" }); continue; }
         const v = validateParams(tool.inputSchema, toolParams);
         if (!v.ok) { attempts.push({ id: tool.id, skipped: `params do not fit: ${v.errors.slice(0, 3).join("; ")}` }); continue; }
-        const t0 = Date.now();
         if (tool.firstParty) {
           // The router's dispatch rules, plus: nothing priced per request and
           // no report composite (those carry their own spend guards and run
@@ -448,21 +620,30 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             : isComposite(def.slug) ? "a report product; call it directly"
             : null;
           if (why) { attempts.push({ id: tool.id, skipped: why }); continue; }
+          // Reserved before the call, settled at its price or given back.
+          const held = await pool.reserve(cost, undefined, halt);
+          if (held === "halted") { attempts.push({ id: tool.id, skipped: haltSkip() }); break; }
+          if (!held) { attempts.push({ id: tool.id, skipped: "over the remaining budget" }); continue; }
+          if (left() < 5000) { pool.release(held); attempts.push({ id: tool.id, skipped: "the run's time budget is spent" }); break; }
+          const t0 = Date.now();
           try {
             // No request object: a step must not see (or act on) the paying
             // request's credential, payer or settle hooks.
-            // Past the timeout the step's own outbound calls are cut off too,
-            // so a late step cannot keep spending upstream while the fallback runs.
+            // Past the timeout (or once the run is stopped) the step's own
+            // outbound calls are cut off too, so a late step cannot keep
+            // spending upstream while the fallback runs.
             const stepStop = new AbortController();
-            const result = await withTimeout(runInAbortableScope(() => Promise.resolve(def.handler(toolParams)), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug)
+            const result = await raceStop(withTimeout(runInAbortableScope(() => Promise.resolve(def.handler(toolParams)), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug), stop)
               .catch((e) => { stepStop.abort(e); throw e; });
-            spent = roundUsd(spent + cost);
+            pool.commit(held, cost);
             done = { tool: { id: tool.id, slug: tool.slug, seller: tool.seller, firstParty: true }, costUsd: cost, result, latencyMs: Date.now() - t0 };
             break;
           } catch (e) {
+            pool.release(held);
             // A 4xx means our request was wrong for this tool, not that the tool
-            // is unreliable; only a failure on the tool's side counts against it.
-            attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: !(e?.statusCode >= 400 && e?.statusCode < 500) });
+            // is unreliable; only a failure on the tool's side counts against it
+            // (a run stopped on our side is neither).
+            attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: e?.runStopped ? false : !(e?.statusCode >= 400 && e?.statusCode < 500) });
             continue;
           }
         }
@@ -474,73 +655,134 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         }
         if (!router) { attempts.push({ id: tool.id, skipped: "external execution is not enabled on this host" }); continue; }
         if (outsidePaused) { attempts.push({ id: tool.id, skipped: "outside steps are paused while our spending wallet is topped up" }); continue; }
-        // The most this leg may pay: the planned price with room for a small
-        // live-price drift, never the whole remaining budget (a leg whose
-        // outcome is unknown is booked at this worst case).
-        const maxUsd = Math.min(roundUsd((spendable - spent) / (1 + cfg.routingFeePct / 100)), roundUsd(listPrice * 1.5), cfg.execute.perCallMaxUsd);
-        // Checked and held in one turn, before the payment: concurrent runs
-        // see this leg's worst case against the seller's daily ceiling.
-        // A hold the ledger cannot book (refused, or its reply lost) is a leg
-        // not paid. After money moved the run goes on without it (a 500 now
-        // would leave that spend uncharged); before, the run is refused
-        // (503, not charged). A hold row that may have landed is dropped.
-        let hold;
-        const holdAt = now();
-        try { hold = await ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt, capUsd: cfg.execute.perSellerDayUsd, sinceMs: t - 86_400_000 }); }
-        catch (e) {
-          if (typeof ledger.dropSellerHold === "function") {
-            const lost = { runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt };
-            await afterSpend(`drop unbooked hold ${runId}`, "dropSellerHold", lost, () => ledger.dropSellerHold(lost));
-          }
-          if (spent > 0 || mayHaveSpentOutside || results.some((r) => r.status === "ok")) { attempts.push({ id: tool.id, skipped: "the spend ledger is unavailable; this leg was not paid" }); continue; }
-          await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
-          if (redeemed) await restore(input.creditToken, runId);
-          throw Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: e });
-        }
-        if (hold === false) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
+        const unlock = await lockSeller(String(tool.seller || "").toLowerCase());
         try {
-          const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
-          const underlying = Number(r?.receipt?.underlyingPriceUsd);
-          const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
-          const fee = roundUsd(paidOut * cfg.routingFeePct / 100);
-          spent = roundUsd(spent + paidOut + fee);
-          await settleHold(runId, hold, paidOut);
-          // The router's receipt prices the router's own call (paidUsd is its
-          // tier price, routingFeeUsd the tier price minus the seller's). This
-          // run charges the seller's price plus decide's fee, so those two
-          // fields are replaced with this step's own figures.
-          const receipt = r?.receipt && typeof r.receipt === "object" ? { ...r.receipt, paidUsd: roundUsd(paidOut + fee), routingFeeUsd: fee } : r?.receipt;
-          done = { tool: { id: tool.id, slug: tool.slug, seller: tool.seller, firstParty: false }, costUsd: roundUsd(paidOut + fee), routingFeeUsd: fee, result: r?.result, receipt, untrustedContent: true, latencyMs: Date.now() - t0 };
-          break;
-        } catch (e) {
-          const timedOut = e?.statusCode === 504 && /did not answer within/.test(String(e?.message));
-          const maybePaid = timedOut || e?.committed === true || e?.paidUnanswered === true || /no other seller is tried/.test(String(e?.message));
-          // A seller that refuses a valid payment, or rejects the paid retry,
-          // failed on its own side whatever status the router relays: it counts
-          // against the seller's reliability, so the next plans rank it lower.
-          const sellerRefused = /refused the payment|rejected the paid retry|Seller .* failed/i.test(String(e?.message || ""));
-          attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), ...(maybePaid ? { mayHavePaid: true } : {}) });
-          if (maybePaid) {
-            // The payment may have left (or may still leave: a timed-out leg is
-            // not cancelled). Book its worst case and try no other paid seller.
-            mayHaveSpentOutside = true;
-            // What the signed credential could move, when the payer said; else the cap.
-            const signed = Number(e?.signedUsd);
-            const exposure = Number.isFinite(signed) && signed >= 0 && !timedOut ? Math.min(signed, maxUsd) : maxUsd;
-            spent = roundUsd(spent + exposure * (1 + cfg.routingFeePct / 100));
-            await settleHold(runId, hold, exposure);
-            attempts[attempts.length - 1].bookedUsd = roundUsd(exposure); // the worst case booked for this leg (read by the reconciliation)
-            break;
+          if (halt()) { attempts.push({ id: tool.id, skipped: haltSkip() }); break; }
+          if (left() < 5000) { attempts.push({ id: tool.id, skipped: "the run's time budget is spent" }); break; }
+          // The most this leg may pay: the planned price with room for a small
+          // live-price drift, never the whole remaining budget (a leg whose
+          // outcome is unknown is booked at this worst case). Reserved, fee
+          // included, in the same step as the check.
+          let maxUsd = 0;
+          const held = await pool.reserve(cost, (available) => {
+            maxUsd = Math.min(roundUsd(available / (1 + cfg.routingFeePct / 100)), roundUsd(listPrice * 1.5), cfg.execute.perCallMaxUsd);
+            return roundUsd(maxUsd * (1 + cfg.routingFeePct / 100));
+          }, halt);
+          if (held === "halted") { attempts.push({ id: tool.id, skipped: haltSkip() }); break; }
+          if (!held) { attempts.push({ id: tool.id, skipped: "over the remaining budget" }); continue; }
+          const t0 = Date.now();
+          // Checked and held in one turn, before the payment: concurrent runs
+          // see this leg's worst case against the seller's daily ceiling.
+          // A hold the ledger cannot book (refused, or its reply lost) is a leg
+          // not paid. After money moved, or while another leg of this run is in
+          // flight, the run goes on without it (a 500 now would leave that
+          // spend uncharged); before, the run is refused (503, not charged) and
+          // no other leg starts. A hold row that may have landed is dropped.
+          let hold;
+          const holdAt = now();
+          try { hold = await ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt, capUsd: cfg.execute.perSellerDayUsd, sinceMs: t - 86_400_000 }); }
+          catch (e) {
+            pool.release(held);
+            // Decided in this turn, before any await, so no sibling starts a leg after it.
+            const refuseRun = !refusedBy && !(pool.spent > 0 || mayHaveSpentOutside || okCount > 0 || pool.holders > 0);
+            if (refuseRun) refusedBy = e;
+            if (typeof ledger.dropSellerHold === "function") {
+              const lost = { runId, seller: tool.seller, amountUsd: maxUsd, now: holdAt };
+              await afterSpend(`drop unbooked hold ${runId}`, "dropSellerHold", lost, () => ledger.dropSellerHold(lost));
+            }
+            attempts.push({ id: tool.id, skipped: "the spend ledger is unavailable; this leg was not paid" });
+            if (refusedBy) break; // the run is refused: no other tool is tried
+            continue;
           }
-          await settleHold(runId, hold, 0); // refused before any payment: nothing left
-        }
+          if (hold === false) { pool.release(held); attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
+          try {
+            const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
+            const underlying = Number(r?.receipt?.underlyingPriceUsd);
+            const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
+            const fee = roundUsd(paidOut * cfg.routingFeePct / 100);
+            pool.commit(held, paidOut + fee);
+            await settleHold(runId, hold, paidOut);
+            // The router's receipt prices the router's own call (paidUsd is its
+            // tier price, routingFeeUsd the tier price minus the seller's). This
+            // run charges the seller's price plus decide's fee, so those two
+            // fields are replaced with this step's own figures.
+            const receipt = r?.receipt && typeof r.receipt === "object" ? { ...r.receipt, paidUsd: roundUsd(paidOut + fee), routingFeeUsd: fee } : r?.receipt;
+            done = { tool: { id: tool.id, slug: tool.slug, seller: tool.seller, firstParty: false }, costUsd: roundUsd(paidOut + fee), routingFeeUsd: fee, result: r?.result, receipt, untrustedContent: true, latencyMs: Date.now() - t0 };
+            break;
+          } catch (e) {
+            const timedOut = e?.statusCode === 504 && /did not answer within/.test(String(e?.message));
+            const maybePaid = timedOut || e?.committed === true || e?.paidUnanswered === true || /no other seller is tried/.test(String(e?.message));
+            // A seller that refuses a valid payment, or rejects the paid retry,
+            // failed on its own side whatever status the router relays: it counts
+            // against the seller's reliability, so the next plans rank it lower.
+            const sellerRefused = /refused the payment|rejected the paid retry|Seller .* failed/i.test(String(e?.message || ""));
+            attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), ...(maybePaid ? { mayHavePaid: true } : {}) });
+            if (maybePaid) {
+              // The payment may have left (or may still leave: a timed-out leg is
+              // not canceled). Book its worst case and try no other paid seller.
+              mayHaveSpentOutside = true;
+              // What the signed credential could move, when the payer said; else the cap.
+              const signed = Number(e?.signedUsd);
+              const exposure = Number.isFinite(signed) && signed >= 0 && !timedOut ? Math.min(signed, maxUsd) : maxUsd;
+              pool.commit(held, exposure * (1 + cfg.routingFeePct / 100));
+              await settleHold(runId, hold, exposure);
+              attempts[attempts.length - 1].bookedUsd = roundUsd(exposure); // the worst case booked for this leg (read by the reconciliation)
+              break;
+            }
+            pool.release(held);
+            await settleHold(runId, hold, 0); // refused before any payment: nothing left
+          }
+        } finally { unlock(); }
       }
-      if (done) { outputs[String(step.step)] = done.result; results.push({ step: step.step, status: "ok", ...done, ...(attempts.length ? { attempts } : {}) }); }
+      if (done) { outputs[String(step.step)] = done.result; okCount++; return { step: step.step, status: "ok", ...done, ...(attempts.length ? { attempts } : {}) }; }
       // Every tool was held back for want of an input: the step is skipped
       // (nothing was tried, nothing paid), and the first reason says why.
-      else if (inputSkips.length && inputSkips.length === attempts.length) results.push({ step: step.step, status: "skipped", reason: inputSkips[0], attempts });
-      else results.push({ step: step.step, status: "failed", attempts });
+      if (inputSkips.length && inputSkips.length === attempts.length) return { step: step.step, status: "skipped", reason: inputSkips[0], attempts };
+      return { step: step.step, status: "failed", attempts };
+    };
+
+    // Ready steps start in plan order while fewer than the cap are in flight.
+    // A step that throws (a defect, not a tool failure) stops new starts; the
+    // run waits for every step in flight before it answers, so nothing is
+    // still spending when it does.
+    const cap = schedule.parallel ? maxParallelSteps(cfg) : 1;
+    const entries = new Array(d.plan.length);
+    await new Promise((resolveRun) => {
+      const state = new Array(d.plan.length).fill(0); // 0 waiting, 1 running, 2 finished
+      let running = 0;
+      const pump = () => {
+        if (!defect && !halt()) {
+          for (let i = 0; i < d.plan.length && running < cap; i++) {
+            if (state[i] !== 0 || !schedule.deps[i].every((j) => state[j] === 2)) continue;
+            state[i] = 1; running++;
+            runStep(d.plan[i], i)
+              .then((r) => { entries[i] = r; }, (e) => { defect ||= e; pool.wake(); })
+              .finally(() => { state[i] = 2; running--; pump(); });
+          }
+        }
+        if (running === 0) resolveRun();
+      };
+      pump();
+    });
+    stop?.removeEventListener?.("abort", onStop);
+    if (defect) {
+      // An internal error in one step, after its siblings may have spent: the
+      // run is closed as failed with what was spent (best effort, so the
+      // error the buyer gets stays the original one), and a credit is given
+      // back only when nothing was spent at all.
+      const closed = d.plan.map((p, i) => entries[i]).filter(Boolean).map(({ result, ...r }) => r);
+      try { await finish({ runId, status: "failed", spentUsd: pool.spent, steps: closed, now: now() }); } catch { /* the defect is the answer */ }
+      if (redeemed && pool.spent === 0 && !mayHaveSpentOutside) { try { await restore(input.creditToken, runId); } catch { /* likewise */ } }
+      throw defect;
     }
+    if (refusedBy && pool.spent === 0 && !mayHaveSpentOutside && okCount === 0) {
+      await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
+      if (redeemed) await restore(input.creditToken, runId);
+      throw Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: refusedBy });
+    }
+    // A step the run never started (stopped, or refused) says so, in its place.
+    const results = d.plan.map((p, i) => entries[i] || { step: p.step, status: "skipped", reason: `the run ${refusedBy ? "was refused" : `was stopped (${stopWhy()})`} before this step started`, attempts: [] });
+    const spent = pool.spent;
 
     sendObservations(results.flatMap((r) => [
       // A leg that may have been paid and still failed is the worst outcome a
@@ -557,9 +799,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       if (redeemed && nothingSpent) await restore(input.creditToken, runId);
       // Caused by the caller's own inputs (skipped steps, params that do not
       // fit, 4xx answers) with nothing spent: a 400, which the spend-then-fail
-      // breaker does not count. A tool-side failure or any spend: a 502.
+      // breaker does not count. A tool-side failure or any spend: a 502. A
+      // run stopped on our side (draining, or the buyer gone): a 503.
       const callerCaused = nothingSpent && results.every((r) => r.status === "skipped" || (r.attempts || []).every((a) => a.skipped || (a.status >= 400 && a.status < 500)));
-      throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}). Nothing was charged.`, callerCaused ? 400 : 502), { steps: results });
+      throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}). Nothing was charged.`, stop?.aborted ? 503 : callerCaused ? 400 : 502), { steps: results });
     }
     const finishedAt = now();
     const finalSteps = results.map(({ result, ...r }) => r);

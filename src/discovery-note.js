@@ -28,7 +28,7 @@ export function discoveryNote(entry) {
   const path = entry?.discoveryPath || null;
   if (path === WELL_KNOWN_PATH) return null;
   if (path) {
-    return `catalogue read from ${path} - no ${WELL_KNOWN_PATH} served, ` +
+    return `catalog read from ${path} - no ${WELL_KNOWN_PATH} served, ` +
       `so buyers who follow the spec path find nothing`;
   }
   // No origin surface answered at all: everything shown was synthesised from a

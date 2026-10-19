@@ -11,6 +11,7 @@
 // charged), cost read for the internal accumulator and never returned,
 // WALLET_ONLY, not cached. Gated on OPENROUTER_API_KEY (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
@@ -430,6 +431,8 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Dossier synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
 
     const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
     const dossier = sourceList ? `${prose}\n\n## Sources\n${sourceList}` : prose;
@@ -465,8 +468,8 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
       synthesis_model: SYNTH,
     };
     const out = format === "json"
-      ? { dossier, company, ticker, sources: numbered, tables, meta }
-      : { dossier, company, ticker, sources: numbered, tables, meta };
+      ? { dossier, company, ticker, sources: numbered, tables, meta, grounding }
+      : { dossier, company, ticker, sources: numbered, tables, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })), quoteBlock, insiderBlock, financialsBlock, bridge: financials.bridge, excerptBlock, webSources: numbered.filter((s) => !s.title.includes("SEC EDGAR")).map((s) => ({ n: s.n, snippet: s.snippet })) };
     // A composite that CALLS this one in-process passes `accountAs`, so the sale is
     // booked once against the product the buyer actually paid for; the caller folds

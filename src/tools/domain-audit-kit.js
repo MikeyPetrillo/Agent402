@@ -11,6 +11,7 @@
 // Settlement-safe (throws >=400 on failure), WALLET_ONLY, not cached. Gated on
 // OPENROUTER_API_KEY for the synthesis (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -334,7 +335,7 @@ function makeDomainAuditHandlerInner(tierSlug) {
       ? `DNSSEC: ${dnsx.dnssec === true ? "validated (AD)" : dnsx.dnssec === false ? "NOT signed/validated" : `unknown (${dnsx.dnssecError || "resolver unreadable"})`}. CAA: ${dnsx.caa ? (dnsx.caa.length ? dnsx.caa.map((c) => `${c.tag} ${c.value}`).join("; ") : "none published (any CA may issue)") : `unknown (${dnsx.caaError})`}. MTA-STS: ${dnsx.mtaSts ? `present (${dnsx.mtaSts})` : dnsx.mtaStsError ? `unknown (${dnsx.mtaStsError})` : "not published"}. TLS-RPT: ${dnsx.tlsRpt ? `present (${dnsx.tlsRpt})` : dnsx.tlsRptError ? `unknown (${dnsx.tlsRptError})` : "not published"}. BIMI: ${dnsx.bimi ? "present" : dnsx.bimiError ? `unknown (${dnsx.bimiError})` : "not published"}.`
       : `DNS posture probe FAILED: ${dnsR.error} - DNSSEC/CAA/MTA-STS/TLS-RPT/BIMI were NOT checked.`;
     const hostBlock = dnsx
-      ? `Nameservers: ${dnsx.nameservers?.length ? dnsx.nameservers.join(", ") : `unknown (${dnsx.nsError || "no answer"})`}. DNS host: ${dnsx.dnsHost ? `${dnsx.dnsHost.name} - CAA records ${dnsx.dnsHost.caa === false ? "NOT OFFERED by this host's DNS panel" : dnsx.dnsHost.caa ? "supported" : "support unknown"}; DNSSEC ${dnsx.dnsHost.dnssec === false ? "NOT OFFERED by this host" : dnsx.dnsHost.dnssec ? "supported" : "support unknown"}${dnsx.dnsHost.platformCerts ? "; TLS certificates are issued and rotated by the hosting platform (it may switch CA, e.g. Let's Encrypt <-> Google Trust Services)" : ""}${dnsx.dnsHost.note ? `; NOTE: ${dnsx.dnsHost.note}` : ""}` : "not recognised (CAA/DNSSEC support unknown - the reader must check their DNS host's panel)"}.`
+      ? `Nameservers: ${dnsx.nameservers?.length ? dnsx.nameservers.join(", ") : `unknown (${dnsx.nsError || "no answer"})`}. DNS host: ${dnsx.dnsHost ? `${dnsx.dnsHost.name} - CAA records ${dnsx.dnsHost.caa === false ? "NOT OFFERED by this host's DNS panel" : dnsx.dnsHost.caa ? "supported" : "support unknown"}; DNSSEC ${dnsx.dnsHost.dnssec === false ? "NOT OFFERED by this host" : dnsx.dnsHost.dnssec ? "supported" : "support unknown"}${dnsx.dnsHost.platformCerts ? "; TLS certificates are issued and rotated by the hosting platform (it may switch CA, e.g. Let's Encrypt <-> Google Trust Services)" : ""}${dnsx.dnsHost.note ? `; NOTE: ${dnsx.dnsHost.note}` : ""}` : "not recognized (CAA/DNSSEC support unknown - the reader must check their DNS host's panel)"}.`
       : "Nameservers / DNS host: not checked (DNS posture probe failed).";
     const wwwBlock = www
       ? (www.reachable ? `${www.twin}: reachable (HTTP ${www.status ?? "?"}), ${www.redirectsToOther ? `redirects to ${www.finalHost}` : "serves its own response (no redirect to the other host)"}, HSTS ${www.hsts ? "present" : "ABSENT"} there${hdr ? ` vs ${(hdr.security?.findings || []).some((f) => f.header === "HSTS" && f.present) ? "present" : "absent"} on ${domain}` : ""}.` : `${www.twin}: NOT reachable (${www.error}) - if people type it, they get an error.`)
@@ -390,6 +391,8 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
     if (!prose) throw bad("Domain audit synthesis produced nothing - not charged", 502);
+    // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
+    const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# Domain Security Audit: ${domain}\n\n**Overall grade: ${grade}** (${composite}/100)${gradeCaveat}\n`;
     const report = `${header}\n${prose}`;
 
@@ -421,7 +424,7 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
       probes: { email: emailR.ok, tls: tlsR.ok, headers: hdrR.ok, ...(t.pro ? { certTransparency: !!ct, techStack: !!tech, whois: !!whois } : {}) },
       synthesis_model: SYNTH,
     };
-    const out = { report, domain, grade, composite, sources: [], tables, meta };
+    const out = { report, domain, grade, composite, sources: [], tables, meta, grounding };
     if (process.env.RESEARCH_DEBUG === "1") out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) });
     return out;

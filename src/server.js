@@ -62,7 +62,9 @@ import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
 import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
-import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { kitDisclaimer } from "./report-disclosure.js";
+import { shownGroundingNote } from "./report-grounding.js";
+import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
@@ -246,6 +248,7 @@ function hangupForgivenessKeys(req) {
 import { mppProblem, sendMppProblem } from "./mpp-problem.js";
 import { settleReceiptHeaderGuard } from "./facilitator-diagnostics.js";
 import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
+import { createManageLinkHandler, subManageMessage } from "./monitor-manage-link.js";
 import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, CREDIT_PACKS } from "./credits.js";
@@ -338,6 +341,7 @@ import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppO
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
+import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -567,6 +571,7 @@ import { flushJsonDocuments } from "./json-document.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { routeExcludedCategory } from "./route-category.js";
 import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -1399,7 +1404,9 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     networks,
     settled: ev.settled.get(origin) || 0,
     payers: ev.payers.get(origin),
-    ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate } : {}),
+    // A route row is also judged on what it sells (src/route-category.js);
+    // a seller-level verdict is not, since no one route's category decides it.
+    ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate, routeText: row } : {}),
     spendChains: spendChainsConfigured(),
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
@@ -1462,6 +1469,12 @@ function withDispatchSnapshot(snapshot) {
 }
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
+  // Filled by the dispatch gate below; read by route-execute when nothing
+  // resolves, so the refusal can say which world it is in.
+  const gateDrops = { total: 0, byReason: {} };
+  // Rows routeQuery left out for their category (it never ranks them) are
+  // tallied like any other gate drop.
+  const noteExcluded = (n) => { if (n > 0) { gateDrops.total += n; gateDrops.byReason.category_excluded = (gateDrops.byReason.category_excluded || 0) + n; } };
   // A pinned endpoint (a decision's own step) is found by search like any
   // other, and the step's wording need not rank it in the first 200 rows:
   // a planned, router-eligible gas seller read as "no seller matched"
@@ -1469,14 +1482,13 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // endpoint's own host and path words, which rank it first.
   const routeRows = async (args) => {
     const r = await routeQueryAsync(args);
-    if (!onlyUrl || (r.results || []).some((x) => sameUrl(x.url))) return r;
+    if (!onlyUrl || (r.results || []).some((x) => sameUrl(x.url))) { noteExcluded(r.categoryExcluded || 0); return r; }
     let q2 = "";
-    try { const u = new URL(onlyUrl); q2 = `${u.host.replace(/[.:]/g, " ")} ${u.pathname.replace(/[/_.-]+/g, " ")}`.trim(); } catch { return r; }
-    return routeQueryAsync({ ...args, query: q2 });
+    try { const u = new URL(onlyUrl); q2 = `${u.host.replace(/[.:]/g, " ")} ${u.pathname.replace(/[/_.-]+/g, " ")}`.trim(); } catch { noteExcluded(r.categoryExcluded || 0); return r; }
+    const r2 = await routeQueryAsync({ ...args, query: q2 });
+    noteExcluded(r2.categoryExcluded || 0);
+    return r2;
   };
-  // Filled by the dispatch gate below; read by route-execute when nothing
-  // resolves, so the refusal can say which world it is in.
-  const gateDrops = { total: 0, byReason: {} };
   // F4: never route to ourselves (paying our own endpoint over x402 = fee loss
   // / accidental self-recursion) — exclude our own host from candidates.
   const ourHost = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
@@ -1515,6 +1527,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // candidate when it exceeds the cap.
         price: r.dynamic ? null : `$${r.priceUsd}`, priceUsd: r.dynamic ? null : r.priceUsd, dynamic: !!r.dynamic,
         networks: r.networks, wire: "mpp", settled: r.settled,
+        // The route's own text, for the category filter below.
+        description: r.description, tags: r.tags,
       }));
   } else if (chain === "algorand") {
     // Algorand sellers come from the GoPlausible facilitator catalog AND from
@@ -1540,6 +1554,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // would be comparing two assertions and could refuse a seller that is
         // genuinely proven.
         chainProvenPayTo: r.source === "crawl" && typeof r.payTo === "string" ? r.payTo : null,
+        // The route's own text, for the category filter below.
+        description: r.description,
       }));
   } else if (chain === "solana") {
     // Solana sellers come from the SAME crawled index as Base ones - their
@@ -1601,7 +1617,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // observation. Only the tally is new; the decision is untouched, and it
       // is computed ONCE per candidate rather than once per branch.
       .filter((r) => {
-        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
+        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
         const eligible = verdict.chains.base?.eligible === true;
         // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
         // else wrong and a price within the ceiling. Kept, marked, and
@@ -1624,6 +1640,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .slice(0, 5);
   }
   if (onlyUrl) candidates = candidates.filter((r) => sameUrl(r.url));
+  // What the route sells, on EVERY chain: the Tempo and Algorand candidates
+  // come from their own catalogs, not from routeQuery, so the category rule
+  // (src/route-category.js, the same one the labels and routeQuery read) is
+  // applied here to whatever any branch produced.
+  candidates = candidates.filter((r) => {
+    if (!routeExcludedCategory(r)) return true;
+    noteExcluded(1);
+    return false;
+  });
   // Judged order over gated candidates (src/tool-judge.js); injection-screened text only.
   // A pinned target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
@@ -1833,7 +1858,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         }
         if (live && chain === "base" && r.binding && !r.unproven) {
           const livePayTo = await readLivePayTo();
-          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, binding: r.binding, livePayTo });
+          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
           if (!gate.ok) {
             console.warn(`[sor] refusing ${r.seller}: ${gate.detail} (evidence wallets ${gate.payTos.length ? gate.payTos.join(",") : "none"}, live ${gate.livePayTo || "unreadable"})`);
             live = false;
@@ -3310,11 +3335,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
-    // Tempo direct mode's payment-party screen (src/sanctions-screen.js):
-    // fresh / stale / missing, only while direct mode's gate is mounted. One word
-    // publicly; counts and the last load time for the operator.
-    ...(sanctionsScreenStarted() && tempoSettlementMode() === "direct"
-      ? { sanctionsScreen: (() => { try { return full ? sanctionsScreenOperatorView() : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+    // The payment-party screen (src/sanctions-screen.js) of Tempo direct
+    // mode and of x402 payers (src/x402-payer-screen.js): fresh / stale /
+    // missing, while either is on. One word publicly; counts and the last
+    // load time for the operator.
+    ...(sanctionsScreenStarted()
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView() } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
@@ -3857,6 +3883,12 @@ const _humanGenerate = async (kind, slug, input, ctx = {}) => {
       // Generated files (the LinkedIn article's sized images) ride the bundle so
       // the delivery page can preview and download them.
       ...(Array.isArray(out?.images) && out.images.length ? { images: out.images } : {}),
+      // The kit's own disclaimer (meta.disclaimer), which the report page shows under the title.
+      ...(kitDisclaimer(out) ? { disclaimer: kitDisclaimer(out) } : {}),
+      // The grounding check's sentence (src/report-grounding.js), shown under
+      // the title when a figure could not be traced to the report's data and
+      // REPORT_GROUNDING_NOTE is on.
+      ...(shownGroundingNote(out?.grounding) ? { groundingNote: shownGroundingNote(out.grounding) } : {}),
     };
 };
 // The storefront PAGES are always served (they are linked from the nav and
@@ -4072,6 +4104,19 @@ if (humanCheckoutEnabled()) {
     });
   }
 }
+// "Already subscribed? Manage or cancel" (the form on /monitors): emails a
+// fresh signed manage link to a checkout email that has a card subscription.
+// Mounted with or without Stripe, so the answer is the same either way.
+const manageLinkIpLimiter = createRateLimiter("manage-link", { perMin: 6, perHour: 40 });
+// Keyed on the ADDRESS (hashed), so rotating IPs cannot flood one inbox.
+const manageLinkEmailLimiter = createRateLimiter("manage-link-email", { perMin: 1, perHour: 2 });
+app.post("/monitors/manage-link", express.urlencoded({ extended: false, limit: "4kb" }), createManageLinkHandler({
+  findSubs: (email) => (_subs ? _subs.findManageableByEmail(email) : Promise.resolve([])),
+  send: faSendEmail,
+  linkFor: (subId, exp) => `${BASE_URL}/monitors/manage?sub=${encodeURIComponent(subId)}&exp=${exp}&k=${_manageToken(subManageMessage(subId, exp))}`,
+  labelOf: (product) => MONITOR_PRODUCTS_ALL[product]?.label || "monitor",
+  ipLimiter: manageLinkIpLimiter, emailLimiter: manageLinkEmailLimiter, clientIp, page: alertPage,
+}));
 // Monitoring subscriptions - JSON routes + pages. The webhook is
 // mounted EARLY (raw body) above. Provisioning is belt-and-suspenders: the
 // confirm route records the sub from the paid session; the webhook keeps the
@@ -4118,6 +4163,15 @@ if (_subs) {
         const subId = await _monitors.subIdOfReportFresh(reportId);
         let rec = subId ? _subs.get(subId) : null;
         if (subId && !rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
+        if (rec?.customer) customer = rec.customer;
+      } else if (req.query.sub) {
+        // A link from the "Already subscribed?" form: keyed over the
+        // subscription id and an expiry (unix seconds).
+        const subId = String(req.query.sub || "").slice(0, 100);
+        const exp = Number(req.query.exp);
+        if (!Number.isSafeInteger(exp) || exp * 1000 < Date.now() || !_manageTokenOk(subManageMessage(subId, exp), req.query.k)) return res.redirect("/monitors#manage");
+        let rec = _subs.get(subId);
+        if (!rec) { await _subs.reload().catch(() => 0); rec = _subs.get(subId); }
         if (rec?.customer) customer = rec.customer;
       } else {
         const r = await _subs.recordFromSession(String(req.query.session || ""));
@@ -8336,7 +8390,7 @@ mountMcp(app, SEC_CATALOG, {
     flagshipSlugs: SEC_MCP_SLUGS,
     mcpNames: SEC_MCP_NAMES,
     metaTools: false,
-    instructions: `SEC filings over MCP, pay per call, no account. Free-to-read EDGAR data: sec.company_lookup (ticker or name -> CIK), sec.filings (a company's recent filings), sec.search (full-text search), sec.insider_trades (Form 4s), sec.holdings_13f (a manager's 13F), sec.financials (XBRL concepts). Finished, grounded reports: sec.filing_report (the newest 10-K/10-Q/8-K read and summarised with verbatim excerpts), sec.insider_report (Form 4 flow, open-market buys and sells vs awards), sec.fund_report (a 13F portfolio with quarter-over-quarter changes and amendments folded in). Every tool is priced per call in USDC; an unpaid call answers a payment challenge (MPP on this connector, x402 on the HTTP routes at ${BASE_URL}). Reports run 30 s to 4 min and are served as MCP tasks. payment.info explains how to pay; server.describe names this host.`,
+    instructions: `SEC filings over MCP, pay per call, no account. Free-to-read EDGAR data: sec.company_lookup (ticker or name -> CIK), sec.filings (a company's recent filings), sec.search (full-text search), sec.insider_trades (Form 4s), sec.holdings_13f (a manager's 13F), sec.financials (XBRL concepts). Finished, grounded reports: sec.filing_report (the newest 10-K/10-Q/8-K read and summarized with verbatim excerpts), sec.insider_report (Form 4 flow, open-market buys and sells vs awards), sec.fund_report (a 13F portfolio with quarter-over-quarter changes and amendments folded in). Every tool is priced per call in USDC; an unpaid call answers a payment challenge (MPP on this connector, x402 on the HTTP routes at ${BASE_URL}). Reports run 30 s to 4 min and are served as MCP tasks. payment.info explains how to pay; server.describe names this host.`,
   },
 });
 
@@ -8848,6 +8902,14 @@ if (FREE_MODE) {
       )
     ),
   });
+  // x402 payer screen (src/x402-payer-screen.js): called as the x402
+  // middleware's `next`, so it runs after verification and before every paid
+  // handler; a refusal is a 403 and cancels settlement. The list is shared
+  // with Tempo direct mode (started there first when that mode is on); the
+  // first tick waits for the sanctions tools' boot warm-up so one download
+  // feeds both.
+  startSanctionsScreen({ firstTickDelayMs: 15_000 });
+  const x402PayerScreen = createX402PayerScreen();
   // Payment-nonce replay guard (M3, defends "Five Attacks on x402" Attack II).
   // Defense-in-depth over settle-before-grant: rejects a duplicate payment
   // authorization before it reaches the facilitator and closes the concurrent-
@@ -9284,7 +9346,7 @@ if (FREE_MODE) {
         } catch { /* unreadable header: leave it exactly as sent */ }
       }
     }
-    return x402mw(req, res, next);
+    return x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next)));
   });
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }

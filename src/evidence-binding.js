@@ -308,11 +308,11 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
  *
  * `livePayTo` may be passed decoded, or read from the probe's `header` / `body`.
  */
-export function baseLiveGate({ networks, settled, payers, priceUsd, urlTemplate = false, minSettled, minPayers, binding, livePayTo, header, body, usdcDomain = null } = {}) {
+export function baseLiveGate({ networks, settled, payers, priceUsd, urlTemplate = false, minSettled, minPayers, binding, livePayTo, header, body, usdcDomain = null, routeText = null } = {}) {
   const live = livePayTo !== undefined ? livePayTo : payToFromLive402({ header, body });
   const v = dispatchEligibility({
     routable: true, networks, settled, payers, priceUsd, urlTemplate: !!urlTemplate,
-    spendChains: ["base"], minSettled, minPayers, usdcDomain,
+    spendChains: ["base"], minSettled, minPayers, usdcDomain, routeText,
     ...(binding ? { evidence: binding, livePayTo: live } : {}),
   });
   const base = v.chains?.base || {};

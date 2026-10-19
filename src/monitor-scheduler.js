@@ -313,6 +313,8 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
       subId: rec.subId, kind: p.kind, product: rec.product, label: p.label, target: rec.target,
       title: bundle.title || rec.target, report: bundle.report,
       sources: Array.isArray(bundle.sources) ? bundle.sources : [], tables: Array.isArray(bundle.tables) ? bundle.tables : [],
+      ...(typeof bundle.disclaimer === "string" && bundle.disclaimer ? { disclaimer: bundle.disclaimer } : {}),
+      ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
       at, reason, changes,
     };
     st.lastFullAt = now(); st.lastReportId = id; st.failures = 0; st.nextAttemptAt = null; st.lastError = null;
@@ -323,7 +325,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (rec.email) {
       // The manage link (a keyed bearer to the Stripe portal) rides ONLY in the
       // subscriber's email; the report JSON/page carry no bearer to the portal.
-      notify({ to: rec.email, reason, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, manageUrl: manageUrlFor(id) }).catch(() => {});
+      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, manageUrl: manageUrlFor(id) }).catch(() => {});
     }
     return id;
   }
@@ -337,7 +339,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     persist();
     if (rec.email) {
       const id = st.lastReportId;
-      notify({ to: rec.email, reason, label: p.label, target: rec.target, changes, reportUrl: id ? `${baseUrl}/m/${id}` : `${baseUrl}/monitors`, manageUrl: id ? manageUrlFor(id) : `${baseUrl}/monitors` }).catch(() => {});
+      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: id ? `${baseUrl}/m/${id}` : `${baseUrl}/monitors`, manageUrl: id ? manageUrlFor(id) : `${baseUrl}/monitors` }).catch(() => {});
     }
   }
 
@@ -708,6 +710,8 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (!store.reports[reportId]) store.reports[reportId] = r;
     return {
       status: "done", kind: r.kind, title: r.title, report: r.report, sources: r.sources, tables: r.tables, at: r.at,
+      ...(r.disclaimer ? { disclaimer: r.disclaimer } : {}),
+      ...(r.groundingNote ? { groundingNote: r.groundingNote } : {}),
       monitor: { label: r.label, target: r.target, reason: r.reason, changes: r.changes || [] },
     };
   }

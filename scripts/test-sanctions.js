@@ -253,4 +253,23 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   ok(/AbortSignal\.timeout\(sdnFetchTimeoutMs\(\)\)/.test(src) && /10 \* 60_000/.test(src), "the download timeout covers a multi-minute download");
 }
 
+// Parsed entries must not keep the export text alive: a field that is a
+// substring of the export can share its memory, so the parse copies each value.
+{
+  const v8 = await import("node:v8");
+  const vm = await import("node:vm");
+  v8.setFlagsFromString("--expose-gc");
+  const gc = vm.runInNewContext("gc");
+  const entry = (i) => `<sdnEntry><uid>${i}</uid><lastName>NAME ${i} ${"Q".repeat(40)}</lastName><sdnType>Entity</sdnType><programList><program>CYBER2 ${"P".repeat(30)}</program></programList><idList><id><idType>Digital Currency Address - ETH</idType><idNumber>0x${String(i).padStart(40, "0")}</idNumber></id></idList><remarks>${"x".repeat(8000)}</remarks></sdnEntry>`;
+  let xml = `<sdnList><publshInformation><Publish_Date>10/19/2026</Publish_Date></publshInformation>${Array.from({ length: 10000 }, (_, i) => entry(i + 1)).join("")}</sdnList>`;
+  const xmlBytes = xml.length;
+  gc(); const before = process.memoryUsage().heapUsed;
+  const parsed = parseSdnXml(xml);
+  xml = null;
+  gc(); gc();
+  const held = process.memoryUsage().heapUsed - before;
+  ok(parsed.entries.length === 10000, "the large export parses every entry");
+  ok(held < xmlBytes / 4, `parsed entries do not keep the export text alive (held ${Math.round(held / 1e6)} MB of a ${Math.round(xmlBytes / 1e6)} MB export)`);
+}
+
 console.log(`test-sanctions: ${n} assertions OK`);
