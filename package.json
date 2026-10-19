@@ -122,7 +122,7 @@
     "@solana-program/token": "0.17.0",
     "@solana-program/compute-budget": "0.19.0",
     "@solana-program/token-2022": "0.19.0",
-    "@solana/program-client-core": "8.4.0",
+    "@solana/program-client-core": "8.5.0",
     "e2b": {
       "undici8": "npm:undici@8.11.2"
     }
