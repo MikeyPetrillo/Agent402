@@ -763,7 +763,7 @@ const CATALOG = {
           excerpt: "Short summary…",
           wordCount: 850,
           markdown: "# x402 in 5 minutes\n\nBody…",
-          hiddenContent: { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, ariaHidden: 0, offscreen: 0, invisibleChars: 0 }, instructionLike: [] },
+          hiddenContent: { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, offscreen: 0, invisibleChars: 0, attributes: 0 }, instructionLike: [] },
           untrustedContent: true,
         },
       },
@@ -830,7 +830,7 @@ const CATALOG = {
         required: ["url"],
       },
       output: {
-        example: { url: "https://agent402.tools/playground", title: "Page title", wordCount: 500, markdown: "…", hiddenContent: { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, ariaHidden: 0, offscreen: 0, invisibleChars: 0 }, instructionLike: [] }, rendered: true, untrustedContent: true },
+        example: { url: "https://agent402.tools/playground", title: "Page title", wordCount: 500, markdown: "…", hiddenContent: { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, offscreen: 0, invisibleChars: 0, attributes: 0 }, instructionLike: [] }, rendered: true, untrustedContent: true },
       },
     },
   },

@@ -847,7 +847,7 @@ const dataTools = [
     slug: "html-to-markdown",
     category: "conversion",
     price: "$0.001",
-    description: "Convert an HTML fragment or document you already have into clean markdown. hiddenContent reports text a reader cannot see (HTML comments, display:none or aria-hidden elements, white-on-white or off-screen text, zero-width characters) and quotes any of it that reads as an instruction to an AI; send hidden: \"drop\" to leave it out of the markdown. (To fetch + convert a live URL, use /api/extract.)",
+    description: "Convert an HTML fragment or document you already have into clean markdown. hiddenContent reports text a reader cannot see (HTML comments, display:none or hidden elements, white-on-white or off-screen text, zero-width characters) and quotes any of it that reads as an instruction to an AI; send hidden: \"drop\" to leave it out of the markdown. (To fetch + convert a live URL, use /api/extract.)",
     tags: ["html", "markdown", "convert"],
     discovery: {
       bodyType: "json",

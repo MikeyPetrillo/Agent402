@@ -6,21 +6,28 @@
 //
 // What counts as hidden (inline styles, attributes and top-level <style> rules;
 // a full layout engine is out of scope, so this is a floor, not a guarantee):
-//   - HTML comments and <template> contents
-//   - the `hidden` attribute and aria-hidden="true"
-//   - display:none, visibility:hidden, opacity:0, font-size 0/1px, zero
-//     max-height or height with overflow hidden
+//   - HTML comments anywhere in the document, and <template> contents
+//   - the `hidden` attribute
+//   - display:none, visibility:hidden, opacity:0, font-size 2px or less,
+//     transform scale(0), zero height/width (or max-) with overflow hidden
 //   - text coloured transparent, or near-white with no non-white background
-//     on the element or any ancestor (white on the default white page)
-//   - text pushed off screen (left/top/text-indent at -999px or beyond) or
-//     clipped to nothing (clip rect(0..), clip-path inset(50%))
+//     on the element or any ancestor (inline, bgcolor/background attribute, or
+//     a style rule that sets one)
+//   - text pushed off screen (left/top/text-indent/margin-left at -500px or
+//     beyond) or clipped to nothing (clip rect(0..), clip-path inset(50%))
 //   - invisible characters: zero-width spaces and joiners (an emoji joiner is
-//     kept), word joiners, bidi controls, BOM, Unicode tag characters
+//     kept), word joiners, BOM, Unicode tag characters (decoded for quoting)
+// aria-hidden is NOT hidden: it hides from screen readers, not from sight.
+// Bidi direction marks are not counted: right-to-left text uses them.
+// Directive text in attributes an agent may read but a person rarely sees
+// (alt, title, aria-label, data-*, <meta> content) is quoted and counted as
+// `attributes`; the attribute stays in place.
 //
 // mode "keep" (the default) leaves the document as is, so a tool's output is
 // unchanged: collapsed answers, inactive tabs and preview lines are often real
-// content. mode "drop" removes it. Both report what was found, and `instructionLike` quotes hidden text (and any
-// base64 run in visible text that decodes to one) that reads as a directive.
+// content. mode "drop" removes it. Both report what was found, and
+// `instructionLike` quotes hidden text (and any base64 run or tag-character
+// run that decodes to one) that reads as a directive.
 
 const MODES = new Set(["drop", "keep"]);
 const MAX_QUOTES = 5;
@@ -31,15 +38,25 @@ const QUOTE_CHARS = 160;
 // not checked, and the report says so (styleRuleCoverage).
 const RULE_VISIT_BUDGET = 1_000_000;
 const MAX_RULES = 200;
+// Background rules consulted for white text. Each check is a selector match
+// against an ancestor, so the total is bounded by BG_MATCH_BUDGET (results are
+// remembered per element); past it, white text whose background is unknown is
+// not counted and the report says the check was incomplete.
+const MAX_BG_RULES = 50;
+const BG_MATCH_BUDGET = 200_000;
 
 // Phrasing that addresses an AI or asks it to act. Kept narrow on purpose:
 // hidden preview lines and decorative text are common and must not be quoted
 // as instructions.
-export const DIRECTIVE = /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)\b|\b(?:dear|attention|note to|hey|hi|hello|to the|for the)\s+(?:ai|email|inbox|virtual)?\s*(?:assistant|agent|model|llm)\b|\b(?:ai|email|inbox) assistant\b|\bas an ai\b|\b(?:language model|llm)\b|\b(?:system|developer)\s*(?:prompt|message|note)?\s*:|\binstructions? (?:for|to) (?:the )?(?:ai|assistant|agent|model)|\b(?:tell|inform|remind|instruct|advise) the (?:user|reader|recipient)\b|\bdo not (?:mention|reveal|tell|show)\b|\b(?:bank|payment|wire|account|banking) (?:details|information|instructions) (?:have |has )?(?:changed|updated)\b|\b(?:update|change) (?:the )?(?:payment|bank|wire) (?:details|information)\b|\b(?:run|execute) (?:this|the following) (?:command|script|code)\b|\b(?:mark|flag|treat) (?:this|the) (?:email|message|page) as (?:urgent|legitimate|safe|important|trusted)\b/i;
+export const DIRECTIVE = /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)\b|\b(?:dear|attention|note to|hey|hi|hello|to the|for the)\s+(?:ai|email|inbox|virtual)?\s*(?:assistant|agent|model|llm)\b|\b(?:ai|email|inbox) assistant\b|\bas an ai\b|\b(?:system|developer)\s+(?:prompt|message|instructions?)\b|\binstructions? (?:for|to) (?:the )?(?:ai|assistant|agent|model)|\b(?:tell|inform|remind|instruct|advise) the (?:user|reader|recipient)\b|\bdo not (?:mention|reveal|tell|show)\b|\bwhen (?:you )?summari[sz](?:e|ing)\b|\bin your (?:summary|reply|response|answer)\b|\b(?:bank|payment|wire|account|banking) (?:details|information|instructions) (?:have |has )?(?:changed|updated)\b|\b(?:update|change) (?:the )?(?:payment|bank|wire) (?:details|information)\b|\b(?:run|execute) (?:this|the following) (?:command|script|code)\b|\b(?:mark|flag|treat) (?:this|the) (?:email|message|page) as (?:urgent|legitimate|safe|important|trusted)\b/i;
 
 // Invisible characters. U+200D (zero-width joiner) is only counted when it is
 // not joining emoji, since family and flag sequences need it.
-const INVISIBLE = /[​‌⁠-⁤‪-‮⁦-⁩﻿]|‍(?![\p{Extended_Pictographic}⬛⬜♀♂⚕⚖✈❤])|[\u{E0000}-\u{E007F}]/gu;
+const INVISIBLE = /[​‌⁠-⁤﻿]|‍(?![\p{Extended_Pictographic}⬛⬜♀♂⚕⚖✈❤])|[\u{E0000}-\u{E007F}]/gu;
+// Unicode tag characters U+E0020..E007E mirror printable ASCII; a run of them
+// is a sentence no one sees. Decoded only to quote it.
+const TAG_RUN = /[\u{E0020}-\u{E007E}]{4,}/gu;
+const decodeTags = (run) => Array.from(run, (c) => String.fromCharCode(c.codePointAt(0) - 0xE0000)).join("");
 
 /** The `hidden` input: "keep" (default) or "drop". Throws a 400-shaped Error on anything else. */
 export function hiddenMode(input) {
@@ -55,11 +72,11 @@ export function hiddenMode(input) {
 export const HIDDEN_INPUT_SCHEMA = {
   type: "string",
   enum: ["keep", "drop"],
-  description: 'What to do with content a reader cannot see (HTML comments, display:none or aria-hidden elements, white-on-white or off-screen text, zero-width characters): "keep" (default) converts it like everything else, "drop" removes it first. Either way hiddenContent reports what was found and quotes any hidden text that reads as an instruction to an AI.',
+  description: 'What to do with content a reader cannot see (HTML comments, display:none or hidden elements, white-on-white or off-screen text, zero-width characters): "keep" (default) converts it like everything else, "drop" removes it first. Either way hiddenContent reports what was found and quotes any hidden text that reads as an instruction to an AI.',
 };
 
 /** The output-example entry for `hiddenContent`. */
-export const HIDDEN_OUTPUT_EXAMPLE = { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, ariaHidden: 0, offscreen: 0, invisibleChars: 0 }, instructionLike: [] };
+export const HIDDEN_OUTPUT_EXAMPLE = { mode: "keep", total: 0, found: { comments: 0, cssHidden: 0, hiddenAttr: 0, offscreen: 0, invisibleChars: 0, attributes: 0 }, instructionLike: [] };
 
 const px = (v) => { const m = /^(-?\d+(?:\.\d+)?)(px|pt|em|rem)?$/.exec(String(v || "").trim()); if (!m) return null; const n = Number(m[1]); return m[2] === "em" || m[2] === "rem" ? n * 16 : m[2] === "pt" ? n * 4 / 3 : n; };
 function rgb(v) {
@@ -85,24 +102,53 @@ function hiddenByDecl(st) {
   const op = g("opacity");
   if (op !== "" && Number(op) <= 0.01) return "cssHidden";
   const fs = px(g("font-size"));
-  if (fs !== null && fs <= 1) return "cssHidden";
+  if (fs !== null && fs <= 2) return "cssHidden";
+  if (/scale[xy]?\(\s*0(?:\.0*)?\s*[,)]/.test(g("transform"))) return "cssHidden";
   const ov = g("overflow");
-  if ((px(g("max-height")) === 0 || px(g("height")) === 0) && /hidden|clip/.test(ov)) return "cssHidden";
+  if ([g("max-height"), g("height"), g("max-width"), g("width")].some((v) => px(v) === 0) && /hidden|clip/.test(ov)) return "cssHidden";
   const col = rgb(g("color"));
   if (col && col.a <= 0.05) return "cssHidden";
-  for (const p of ["left", "top", "text-indent", "margin-left"]) { const n = px(g(p)); if (n !== null && n <= -999) return "offscreen"; }
+  for (const p of ["left", "top", "text-indent", "margin-left"]) { const n = px(g(p)); if (n !== null && n <= -500) return "offscreen"; }
   if (/rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)/.test(g("clip")) || /inset\(\s*50%\s*\)/.test(g("clip-path"))) return "offscreen";
   return null;
 }
 
-// Near-white text with nothing but white (or nothing) behind it.
-function whiteOnWhite(el) {
+// A declaration block that paints a background: a colour that is not white, or
+// an image/gradient (whose colour is unknown, so treated as not white).
+function paintsBackground(st) {
+  const g = (p) => String(st?.getPropertyValue?.(p) || "").trim().toLowerCase();
+  if (/url\(|gradient\(/.test(g("background-image")) || /url\(|gradient\(/.test(g("background"))) return true;
+  const bg = rgb(g("background-color"));
+  return !!(bg && bg.a > 0.05 && !nearWhite(bg));
+}
+
+// Whether a style rule paints a background on `n`: true, false, or null once
+// the match budget is spent (unknown).
+function ruleBackground(n, bg) {
+  if (!bg.selectors.length) return false;
+  if (bg.memo.has(n)) return bg.memo.get(n);
+  let hit = false;
+  for (const sel of bg.selectors) {
+    if (bg.budget <= 0) { bg.exhausted = true; return null; }
+    bg.budget--;
+    try { if (n.matches(sel)) { hit = true; break; } } catch { /* unsupported selector */ }
+  }
+  bg.memo.set(n, hit);
+  return hit;
+}
+
+// Near-white text with nothing but white (or nothing) behind it. A background
+// from an inline style, a bgcolor/background attribute, or a style rule on the
+// element or any ancestor means it can be seen. Unknown counts as visible.
+function whiteOnWhite(el, bg) {
   const col = rgb(el.style?.getPropertyValue?.("color") || el.getAttribute?.("color"));
   if (!nearWhite(col)) return false;
   for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
-    const bg = rgb(n.style?.getPropertyValue?.("background-color")) || rgb(n.getAttribute?.("bgcolor"));
-    if (bg && bg.a > 0.05) return nearWhite(bg);
-    if (/url\(|gradient\(/i.test(n.style?.getPropertyValue?.("background-image") || "")) return false;
+    const c = rgb(n.style?.getPropertyValue?.("background-color")) || rgb(n.getAttribute?.("bgcolor"));
+    if (c && c.a > 0.05) return nearWhite(c);
+    if (n.hasAttribute?.("background") || paintsBackground(n.style)) return false;
+    const r = ruleBackground(n, bg);
+    if (r !== false) return false;
   }
   return true;
 }
@@ -125,24 +171,33 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   const doc = root?.ownerDocument || root;
   const win = doc?.defaultView;
   const scope = root?.nodeType === 9 ? (root.documentElement || root) : root;
-  const found = { comments: 0, cssHidden: 0, hiddenAttr: 0, ariaHidden: 0, offscreen: 0, invisibleChars: 0 };
+  const found = { comments: 0, cssHidden: 0, hiddenAttr: 0, offscreen: 0, invisibleChars: 0, attributes: 0 };
   const instructionLike = [];
   if (!scope || !win) return { mode, total: 0, found, instructionLike };
   const drop = mode === "drop";
 
-  // 1. Comments (and <template>, whose content is never rendered).
+  // 1. Comments (and <template>, whose content is never rendered). For a whole
+  // document the walk starts at the document node, so a comment before <html>
+  // or after </html> is found too.
   const comments = [];
-  const tw = doc.createTreeWalker(scope, win.NodeFilter.SHOW_COMMENT);
+  const tw = doc.createTreeWalker(root?.nodeType === 9 ? root : scope, win.NodeFilter.SHOW_COMMENT);
   for (let n = tw.nextNode(); n; n = tw.nextNode()) comments.push(n);
   for (const c of comments) { found.comments++; quote(instructionLike, c.data); if (drop) c.remove(); }
-  // One pass over the elements collects <template>s and every element that
-  // carries an attribute that can hide it (cheaper than attribute selectors).
+  // One pass over the elements collects <template>s, every element that
+  // carries an attribute that can hide it (cheaper than attribute selectors),
+  // and directive text in attributes a person rarely sees.
   const templates = [];
   const flagged = [];
   const ew = doc.createTreeWalker(scope, win.NodeFilter.SHOW_ELEMENT);
   for (let el = scope.nodeType === 1 ? scope : ew.nextNode(); el; el = ew.nextNode()) {
     if (el.localName === "template") { templates.push(el); continue; }
-    if (el.hasAttribute("hidden") || el.hasAttribute("aria-hidden") || el.hasAttribute("style") || el.hasAttribute("color") || el.localName === "font") flagged.push(el);
+    if (el.hasAttribute("hidden") || el.hasAttribute("style") || el.hasAttribute("color") || el.localName === "font") flagged.push(el);
+    for (const a of el.attributes) {
+      const n = a.name;
+      if (n === "alt" || n === "title" || n === "aria-label" || n.startsWith("data-") || (n === "content" && el.localName === "meta")) {
+        if (a.value.length > 12 && DIRECTIVE.test(a.value.replace(INVISIBLE, ""))) { found.attributes++; quote(instructionLike, a.value); }
+      }
+    }
   }
   for (const t of templates) { found.cssHidden++; quote(instructionLike, t.content?.textContent || t.textContent); if (drop) t.remove(); }
 
@@ -150,6 +205,7 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   const marked = new Map(); // element -> reason
   const mark = (el, why) => { if (!marked.has(el)) marked.set(el, why); };
   const hidingRules = new Map(); // selector -> reason, first rule wins
+  const bg = { selectors: [], budget: BG_MATCH_BUDGET, exhausted: false, memo: new Map() }; // rules that paint a background
   for (const sheet of Array.from(doc.styleSheets || [])) {
     let rules;
     try { rules = sheet.cssRules; } catch { continue; }
@@ -157,6 +213,7 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
       if (rule.type !== 1 || !rule.selectorText) continue; // style rules only; @media and the rest are conditional
       const why = hiddenByDecl(rule.style);
       if (why && !hidingRules.has(rule.selectorText)) hidingRules.set(rule.selectorText, why);
+      if (bg.selectors.length < MAX_BG_RULES && paintsBackground(rule.style)) bg.selectors.push(rule.selectorText);
     }
   }
   let rulesChecked = 0;
@@ -174,10 +231,9 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   }
   for (const el of flagged) {
     if (el.hasAttribute("hidden")) { mark(el, "hiddenAttr"); continue; }
-    if (String(el.getAttribute("aria-hidden") || "").toLowerCase() === "true") { mark(el, "ariaHidden"); continue; }
     const why = hiddenByDecl(el.style);
     if (why) { mark(el, why); continue; }
-    if (whiteOnWhite(el)) mark(el, "cssHidden");
+    if (whiteOnWhite(el, bg)) mark(el, "cssHidden");
   }
   // Only the outermost hidden element counts; its descendants go with it.
   for (const [el, why] of marked) {
@@ -198,6 +254,7 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
   let joined = "";
   for (const t of texts) {
     const v = t.data;
+    for (const run of v.match(TAG_RUN) || []) quote(instructionLike, decodeTags(run));
     const hits = v.match(INVISIBLE);
     if (hits) {
       found.invisibleChars += hits.length;
@@ -219,9 +276,12 @@ export function scrubHidden(root, { mode = "keep" } = {}) {
 
   const total = Object.values(found).reduce((a, b) => a + b, 0);
   const out = { mode, total, found, instructionLike };
-  // Present when the page has hiding style rules. coversAll false means some
-  // were not checked (the visit budget ran out), so hidden content can be
-  // under-counted and a clean result is not a complete one.
-  if (hidingRules.size) out.styleRuleCoverage = { hidingRules: hidingRules.size, checked: rulesChecked, coversAll: rulesChecked >= hidingRules.size };
+  // Present when the page has hiding or background style rules. coversAll false
+  // means a budget ran out (hiding rules not all checked, or white text whose
+  // background could not be resolved), so hidden content can be under-counted
+  // and a clean result is not a complete one.
+  if (hidingRules.size || bg.selectors.length) {
+    out.styleRuleCoverage = { hidingRules: hidingRules.size, checked: rulesChecked, backgroundsResolved: !bg.exhausted, coversAll: rulesChecked >= hidingRules.size && !bg.exhausted };
+  }
   return out;
 }
