@@ -109,6 +109,25 @@ try {
       const landed = ev.type === "invoice.paid" ? rx?.lastInvoiceId === "in_down" : rx?.status === "past_due";
       ok(again.code === 200 && !again.body?.duplicate && landed && booked.length === (ev.type === "invoice.paid" ? 1 : 0), `...Stripe's retry once it is back answers ${again.code} (duplicate ${Boolean(again.body?.duplicate)}), the record is in the database (${landed}), sales booked ${booked.length}`);
     }
+
+    // The same invoice.paid redelivered to another container (or after a
+    // restart: a fresh instance remembers no event ids) books no second sale;
+    // two containers receiving one new invoice at once book it once.
+    const fresh = (into) => createStripeSubscriptions({ stripe: { ...stripe, webhooks: Stripe.webhooks }, baseUrl: "https://example.test", storePath: STORE, onInvoicePaid: (i) => into.push(i.invoiceId) });
+    const sendTo = async (inst, ev) => { const p = JSON.stringify(ev); try { await inst.handleWebhook(Buffer.from(p), Stripe.webhooks.generateTestHeaderString({ payload: p, secret: "whsec_test" })); return 200; } catch (e) { return e.statusCode || 0; } };
+    const other = [];
+    const cw3 = fresh(other);
+    await wait(300);
+    await cw3.reload();
+    const code3 = await sendTo(cw3, { id: "evt_down_inv", type: "invoice.paid", data: { object: { id: "in_down", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1" } } });
+    ok(code3 === 200 && other.length === 0, `a redelivery of a booked invoice to another container books nothing (${code3}, sales ${other.length})`);
+    const x = [], y = [];
+    const cx = fresh(x), cy = fresh(y);
+    await wait(300);
+    await Promise.all([cx.reload(), cy.reload()]);
+    const evNew = { id: "evt_race_inv", type: "invoice.paid", data: { object: { id: "in_race", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1" } } };
+    const codes = await Promise.all([sendTo(cx, evNew), sendTo(cy, evNew)]);
+    ok(codes.every((c) => c === 200) && x.length + y.length === 1, `one new invoice delivered to two containers at once is booked once (${codes.join(",")}; sales ${x.length}+${y.length})`);
   }
 
   // A replayed record never overwrites a newer copy.
