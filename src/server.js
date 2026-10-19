@@ -720,7 +720,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -8650,7 +8650,7 @@ if (!FREE_MODE) {
   // at least this route's price" before a single relay call. Without them
   // createTempoGate refuses to mount (fail closed).
   tempoPushDebts = createTempoPushDebts({
-    recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
+    recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
     recordChargedFailure, isSynthetic: isSyntheticRequest,
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
@@ -8688,12 +8688,27 @@ if (!FREE_MODE) {
     // src/tempo-push-debts.js); a served claim voids the debt.
     onPushNotClaimed: (req, info) => tempoPushDebts.notClaimed(req, info),
     onPushInputRefused: (req, info) => tempoPushDebts.inputRefused(req, info),
-    // Read fresh: a refund another container just started for this push must
-    // stop this one from serving it (served and refunded is the case to avoid).
-    pushClaimAllowed: async (hash) => !["sending", "paid"].includes((await refundByEvidenceFresh(hash))?.status),
+    // A transfer this container already knows is refunded is not claimed.
+    // The mirror is enough here: the decision that keeps a push from being
+    // both served and refunded is the claim hold below, not this read.
+    pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
   });
   if (tempoGate) {
     app.use(tempoGate);
+    // A claimed push credential is served only once its owed debt (an
+    // earlier input refusal) is voided, in one statement a refund send's
+    // claim cannot interleave with (tempoPushDebts.claimForServe). A debt
+    // already being sent or paid is not served: the buyer is refunded. A run
+    // that is then not served reopens the debt at finish.
+    app.use(async (req, res, next) => {
+      if (!req.tempoSettled || !tempoPushHashOf(req)) return next();
+      let serve = true;
+      try { serve = await tempoPushDebts.claimForServe(req); } catch { serve = true; }
+      if (serve) return next();
+      req.tempoPushRefunded = true;
+      console.warn(`[mpp-tempo] push transfer ${tempoPushHashOf(req)} is refunded or being refunded; not served (${req.method} ${req.path})`);
+      return sendMppProblem(res, mppProblem("invalid-challenge", "The transfer this credential names has been refunded (or is being refunded), so it no longer pays for a request.", { status: 402, hint: "Request the resource again and pay the fresh challenge.", details: { reason: "refunded", transferClaimed: true } }));
+    });
     // Direct mode screens every payment party before any money moves, and
     // offers no tempo challenge until the list has loaded (tempoEnabled).
     if (tempoSettlementMode() === "direct") startSanctionsScreen();
@@ -9480,7 +9495,7 @@ app.use((req, res, next) => {
             payer,
           });
         }
-      } else if ((req.tempoSettled || req.stripeSettled) && res.statusCode >= 400) {
+      } else if ((req.tempoSettled || req.stripeSettled) && res.statusCode >= 400 && !req.tempoPushRefunded) {
         // The MPP Tempo/Stripe gates settle BEFORE replaying the buffered
         // response and carry no PAYMENT-RESPONSE, so the branch above never saw
         // them: a replay that threw after settlement (the gate's own
