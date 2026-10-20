@@ -782,6 +782,7 @@ function docsPanelNav() {
                 <span class="mlnav-label">BUILD ON AGENT402</span>
                 <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
                 <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call</span></a>
+                <a href="/how-to-pay" class="mlnav-row"><span style="font-weight:700;">how to pay</span><span class="mlnav-faint">every rail, step by step</span></a>
                 <a href="/guides" class="mlnav-row"><span style="font-weight:700;">guides</span><span class="mlnav-faint">hosts, router, selling</span></a>
                 <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks</span></a>
                 <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">refusal diagnostics</span></a>
@@ -912,6 +913,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
+      ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}
       ${mmLink("/blog", "blog", activePath === "/blog")}
       ${mmLink("/changelog", "changelog", activePath === "/changelog")}
@@ -942,7 +944,7 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
   };

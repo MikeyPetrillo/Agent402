@@ -290,6 +290,7 @@ import { transparencyPage, repoTraffic } from "./transparency.js";
 import { quickstartPage } from "./quickstart.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
+import { howToPayPage } from "./how-to-pay.js";
 import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
@@ -3477,6 +3478,8 @@ app.get("/what-is-x402", (_req, res) => htmlCache(res, 300, 900).send(whatIsX402
   leaderboardSnapshot: getLeaderboardSnapshot(),
 })));
 app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPage(BASE_URL, CATALOG)));
+// The buyer path per rail (x402, MPP, credits, proof-of-work); prices from the live catalog.
+app.get("/how-to-pay", (_req, res) => htmlCache(res, 300, 900).send(howToPayPage(BASE_URL, CATALOG)));
 // The category page: Agentic Finance - the moniker the whole surface
 // positions under; DefinedTerm + Article + FAQPage structured data.
 app.get("/agentic-finance", (_req, res) => htmlCache(res, 300, 900).send(agenticFinancePage(BASE_URL)));
