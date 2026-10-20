@@ -710,6 +710,38 @@ jobs:
               ;;
           esac
 
+      # Recipients our spending wallets paid for the first time
+      # (src/outbound-destinations.js): one word on /api/gateway-status.
+      # burst pages (more first-time recipients inside the window than the
+      # threshold); ok and new close (a first buy from a newly proven seller is
+      # expected); unknown does neither. Two readings 30 s apart, like the
+      # dead-letter check. The status Worker runs the same check every five
+      # minutes under the same title.
+      - name: Outbound destinations check (alarm on a burst of first-time recipients)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_od() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.outboundDestinations.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_od)
+          if [ "$WORD" = "burst" ]; then sleep 30; WORD=$(read_od); fi
+          echo "outbound destinations: $WORD"
+          TITLE="Outbound payments reached a burst of NEW destinations"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            burst)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports outboundDestinations.status=burst on two readings 30 s apart: inside the last OUTBOUND_NEW_DEST_WINDOW_H hours (default 24) our spending wallets paid more recipients for the first time than OUTBOUND_NEW_DEST_BURST (default 10). A normal day reaches a few at most (a seller the router has just proven, a payability probe, the unproven lane). Read /__operator/outbound-destinations.json for the chain, recipient, origin and time of each first sighting, and match them against the proven-seller pool and the route-execute receipts of the same hours; a run of recipients no seller in the pool names is a wallet or a router being steered. The operator read of /api/gateway-status has the counts. Auto-closes when the word is ok or new." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|new)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: outbound destinations read $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Money writes (sales, refund debts, card report records, subscription
       # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on

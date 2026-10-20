@@ -28,6 +28,7 @@ import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
+import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
 const trustedDispatcher = new UndiciAgent();
@@ -321,10 +322,13 @@ export async function payTempo(url, {
     // the caller's params as the body, and striking there would let anyone
     // bench an honest seller with two malformed bodies (isCallerInputStatus).
     // Two strikes inside the TTL before it steers anything (x402-buyer.js).
-    if (memoizeDelivery && paid.status >= 400 && (paid.status >= 500 || (receiptHdr && !isCallerInputStatus(paid.status)))) {
-      const origin = (() => { try { return new URL(url).origin; } catch { return null; } })();
-      if (origin) noteSellerDeliveryFailure(origin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
-    }
+    const chargedFailure = paid.status >= 400 && (paid.status >= 500 || (receiptHdr && !isCallerInputStatus(paid.status)));
+    const sellerOrigin = (() => { try { return new URL(url).origin; } catch { return null; } })();
+    // The outbound ledger (src/outbound-ledger.js) records the payment the
+    // same way payX402 does: the money left on this rail too, delivered or not.
+    const ledger = (result, tx) => recordOutbound({ chain: "tempo", payTo: recipient, amountAtomic: quotedAtomic, asset: req.currency || null, usd: Number(quotedAtomic) / 1e6, slug: null, origin: sellerOrigin, result, tx });
+    if (chargedFailure) ledger("undelivered", null);
+    if (memoizeDelivery && chargedFailure && sellerOrigin) noteSellerDeliveryFailure(sellerOrigin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
     if (paid.status === 402 || paid.status === 401) throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
     if (paid.status >= 400) throw bad(`Seller failed after payment (HTTP ${paid.status})`, paid.status >= 500 ? 502 : 502);
     let reference = null;
@@ -336,6 +340,7 @@ export async function payTempo(url, {
     // payment and delivers.
     if (memoizeDelivery && reference) { try { clearSellerDeliveryFailure(new URL(url).origin, "tempo"); } catch { /* unparseable url: nothing to clear */ } }
     recordUpstreamSpend("tempo-buyer", Number(quotedAtomic) / 1e6);
+    ledger("delivered", reference);
     // A paid 200 is relayed even when its body cannot be read: the payment
     // went through, so this never throws (the x402 readAfterSpend rule).
     let result;

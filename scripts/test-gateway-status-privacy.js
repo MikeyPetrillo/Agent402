@@ -45,6 +45,10 @@ ok(pubBody?.ledgerDeadLetter?.status === "off" && Object.keys(pubBody.ledgerDead
 ok(opBody?.ledgerDeadLetter?.status === "off" && typeof opBody?.ledgerDeadLetter?.sales?.onDisk === "number", "the operator view of ledgerDeadLetter carries the counts");
 ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"].every((n) => typeof opBody?.ledgerDeadLetter?.[n]?.onDisk === "number"), `the operator view counts every local money journal (${Object.keys(opBody?.ledgerDeadLetter || {}).join(",")})`);
 
+// --- first-time payment recipients: one word publicly, the window and counts for the operator, an address nowhere ---
+ok(["ok", "new", "burst", "unknown"].includes(pubBody?.outboundDestinations?.status) && Object.keys(pubBody.outboundDestinations).join(",") === "status", `outboundDestinations publishes its word only (${JSON.stringify(pubBody?.outboundDestinations)})`);
+ok(typeof opBody?.outboundDestinations?.windowHours === "number" && typeof opBody?.outboundDestinations?.burstOver === "number" && !JSON.stringify(opBody.outboundDestinations).match(/0x[0-9a-f]{40}/i), `the operator view of outboundDestinations carries the window and the threshold and no address (${JSON.stringify(opBody?.outboundDestinations)})`);
+
 // --- the Tempo direct-mode screen word appears only while direct mode is mounted ---
 ok(!("sanctionsScreen" in pubBody) && !("sanctionsScreen" in opBody), "no sanctionsScreen field without Tempo direct mode (scripts/test-sanctions-screen.js covers the direct-mode words)");
 

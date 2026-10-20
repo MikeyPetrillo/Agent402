@@ -562,6 +562,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
@@ -1303,6 +1304,10 @@ function selfFundingClearedStore() {
 // The shared settlement contracts' outbound is never read (they credit nobody,
 // and they pay out on every payment they forward).
 configureSellerFunding({ cleared: selfFundingClearedStore(), skip: (w) => sharedPayToStore().has(w) });
+// The new-destination watch over the outbound ledger
+// (src/outbound-destinations.js): read at boot so the first word on
+// /api/gateway-status is the stored body, not an empty memory.
+outboundDestinationStore().load();
 function buildChainProven() {
   const econ = economySnapshotCached();
   return econ?.topMerchants?.length ? provenByChain({ sellers: routableSellerSummaries(), merchants: econ.topMerchants }) : new Map();
@@ -3402,6 +3407,14 @@ app.get("/api/gateway-status", async (req, res) => {
       const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48 });
       return full ? r : { status: r.status };
     })(),
+    // Recipients our spending wallets paid for the first time
+    // (src/outbound-destinations.js): ok / new (expected: a first buy from a
+    // newly proven seller) / burst (more first-time recipients inside
+    // OUTBOUND_NEW_DEST_WINDOW_H than OUTBOUND_NEW_DEST_BURST, the word the
+    // status Worker pages on) / unknown. One word publicly; the window, the
+    // threshold and the counts for the operator; never an address (those are
+    // on /__operator/outbound-destinations.json).
+    outboundDestinations: await outboundDestinationStore().status({ full }).catch(() => ({ status: "unknown" })),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -5487,6 +5500,17 @@ app.post("/__operator/successions/revoke", express.json(), (req, res) => {
   if (!from) return res.status(400).json({ error: 'pass {"from":"<the retired origin>"}' });
   const revoked = revokeSuccession(from);
   res.set("Cache-Control", "no-store").json({ revoked, from, note: revoked ? "the origin is listed again from the next read" : "no succession was recorded for that origin" });
+});
+// Every recipient our spending wallets paid for the first time inside the
+// window, newest first, then the earlier ones (src/outbound-destinations.js).
+// The addresses live here and nowhere public; /api/gateway-status carries the
+// word. ?limit= caps the rows (default 100, at most 5000).
+app.get("/__operator/outbound-destinations.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  const body = await outboundDestinationStore().list({ limit: parseInt(req.query.limit, 10) || 100 }).catch(() => null);
+  if (!body) return res.status(503).json({ error: "the destination store could not be read" });
+  res.set("Cache-Control", "no-store").json(body);
 });
 // SHARED payTo wallets, the operator's lever (src/shared-paytos.js): a listed
 // wallet credits nobody with its leaderboard or chain-join history, and origins

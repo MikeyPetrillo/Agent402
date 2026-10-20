@@ -31,6 +31,7 @@ import { randomBytes } from "node:crypto";
 import { logLines, stateDbEnabled, stateDbSchema, trackStoreReady, reconcileLogFile, markStoreFailed, markStoreLoaded } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 import { createDeadLetter, isRowError, everyMs } from "./ledger-mirror.js";
+import { noteOutboundDestination } from "./outbound-destinations.js";
 
 export const OUTBOUND_STREAM = "outbound-spend";
 
@@ -127,6 +128,13 @@ function hostOf(u) {
  */
 export function recordOutbound({ chain, payTo, amountAtomic, asset, usd, slug, origin, result, tx } = {}) {
   if (DISABLED) return;
+  // The new-destination watch (src/outbound-destinations.js) learns every
+  // recipient money actually went to: delivered or not, the wallet paid. A
+  // released credential ("refused": the chain showed no debit) paid nobody.
+  // Off the payment path: handed over, never awaited.
+  if (result !== "refused" && chain && payTo) {
+    try { noteOutboundDestination({ chain, payTo, origin, slug }); } catch { /* bookkeeping never throws into a payment */ }
+  }
   try {
     const line = JSON.stringify({
       at: new Date().toISOString(),
