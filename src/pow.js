@@ -264,6 +264,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "stock-quote", "stock-history",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
   "crypto-orderbook", "stablecoin-peg",
+  "market-tick",  // calls crypto-price + stock-quote in-process (both wallet-only); listed only with MARKET_TICK=on
   // Composite research tools fan out to multiple paid upstreams; PoW would
   // turn 1 free request into 5+ paid roundtrips. Wallet-only.
   // Network-kit: every tool hits an external resolver (DNS via 1.1.1.1/8.8.8.8/

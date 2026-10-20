@@ -3380,7 +3380,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (11 scripts, one process each)
+      - name: Offline suites (12 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3396,6 +3396,8 @@ jobs:
           t node scripts/test-solana-intel-kit.js
           # defi kit (offline)
           t node scripts/test-defi-kit.js
+          # market tick: stubbed sources, the per-symbol cache, partial marking, and the MARKET_TICK switch (offline)
+          t node scripts/test-market-tick.js
           t node scripts/test-cve-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js

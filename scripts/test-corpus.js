@@ -46,6 +46,7 @@ import path from "node:path";
 import { METERED_SLUGS } from "./test-non-metered-examples.js";
 import { getFreePort } from "./lib/free-port.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
+import { MARKET_TICK_SLUG, marketTickEnabled } from "../src/market-tick-switch.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS_DIR = path.join(HERE, "corpus");
@@ -293,6 +294,12 @@ async function main() {
           // not a retired or renamed tool.
           if (RUGCHECK_SLUGS.has(c.slug) && !rugcheckEnabled()) {
             results.push({ ...c, kind: "skipped", note: "RUGCHECK_TOOLS is off on this boot (tool not listed)" });
+            counts.skipped++;
+            continue;
+          }
+          // Same rule for the market tick read (src/market-tick-switch.js).
+          if (c.slug === MARKET_TICK_SLUG && !marketTickEnabled()) {
+            results.push({ ...c, kind: "skipped", note: "MARKET_TICK is off on this boot (tool not listed)" });
             counts.skipped++;
             continue;
           }

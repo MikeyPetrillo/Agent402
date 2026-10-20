@@ -175,6 +175,8 @@ const NETWORK = new Set([
   // crypto-orderbook rides Coinbase Exchange's public API (same lenient posture).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
   "/api/crypto-orderbook", "/api/stablecoin-peg",
+  // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
+  "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
   // resolvers can NXDOMAIN, time out, or return SERVFAIL for placeholder inputs —
   // tolerate transient failures, the shape check still gates the happy path.
