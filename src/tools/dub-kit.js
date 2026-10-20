@@ -22,7 +22,7 @@
 //
 // FAILURE. A failed step answers 4xx/5xx naming the step, and a status of
 // 400 or more is never settled (x402 settles after the handler), so a failed
-// translation or a failed speech call is not charged.
+// translation or a failed speech call is not charged on x402, card and credits.
 //
 // ANSWER. Raw audio bytes by default (Content-Type by format), with the
 // translation and what served in the X-Dub-Translation header (base64 JSON).
