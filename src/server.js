@@ -320,6 +320,7 @@ import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
 import { sectionCardSvg, ogSectionIds } from "./og-cards.js";
 import { robotsTxt, sitemapXml, llmsTxt, llmsFullTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills, sitemapReports, sitemapCategories, sitemapLearn } from "./seo.js";
+import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
@@ -5208,6 +5209,13 @@ app.get("/__operator/serving-health.json", (req, res) => {
 // Counts-only latency and event-loop read: per-route p50/p95/p99 split into
 // our compute and upstream wait, the last minute's event-loop percentiles,
 // stall totals and in-flight count.
+// Titles the meta clamp shortened since boot (src/seo-meta.js): a served
+// page whose source title ran past the bar. scripts/test-title-clamp.js reads
+// it after rendering every sitemap page and fails on any entry.
+app.get("/__operator/seo-meta.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json({ titleMax: META_TITLE_MAX, clampedTitles: [...clampedTitles].map(([source, served]) => ({ source, served })) });
+});
 app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).

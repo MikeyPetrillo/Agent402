@@ -45,7 +45,7 @@ const TOC = [
 
 export function agenticFinancePage(baseUrl) {
   const canonical = `${baseUrl}/agentic-finance`;
-  const title = "What is Agentic Finance (AIFI)? Agents that pay and get paid, over x402 and MPP";
+  const title = "What is Agentic Finance (AIFI)? Agents that pay and get paid";
   const description =
     "Agentic Finance (AIFI) is software agents transacting on their own: discovering services, paying per request from a wallet over open protocols like x402 and MPP, receiving verifiable receipts, and earning per request in return. The definition, the stack, and where Agent402 fits as its applied layer.";
 

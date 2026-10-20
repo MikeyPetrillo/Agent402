@@ -1919,7 +1919,7 @@ export function revenueNextStep(hashPriceUsd = null) {
 
 export function revenuePage(baseUrl, snap) {
   const canonical = baseUrl + "/revenue";
-  const title = "Transactions - x402 and MPP payment rails, every settle on-chain | Agent402";
+  const title = "Transactions - x402 and MPP settlements on-chain | Agent402";
   const description =
     `Every payment through the Agent402 rails, external and our own, across both wires (x402 and MPP) and ${RAILS_AMP}, plus Tempo. Each figure links to its on-chain proof.`;
   const chainKeyByLabel = { ...Object.fromEntries(Object.entries(EVM).map(([k, c]) => [c.label, k])), Solana: "solana", Stellar: "stellar", Algorand: "algorand" };

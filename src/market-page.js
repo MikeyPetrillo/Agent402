@@ -10,6 +10,7 @@
 // seller, "unavailable" rather than zeros on a failed scan, truncation
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
+import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -1003,7 +1004,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: `The ${C.chainName} x402 marketplace - pay-per-call tools for AI agents`,
+    // A long chain name takes the shorter form rather than a clamp mid-phrase.
+    title: fitTitle([`The ${C.chainName} x402 marketplace - pay-per-call tools for AI agents`, `${C.chainName} x402 marketplace - tools for AI agents`], META_TITLE_MAX),
     description: `The ${C.chainName} x402 marketplace: ${tools.length} pay-per-call tools for AI agents, settled in ${C.asset} on ${C.chainName}.${C.mpp ? " x402 and MPP (Machine Payments Protocol) both accepted." : ""} No signup, no API keys - the wallet is the account.`,
     canonical: `${baseUrl}/${chainKey}`,
     baseUrl,
@@ -1417,7 +1419,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: "x402 marketplace - every indexed seller, tool count, network and health",
+    title: "x402 marketplace: indexed sellers, tools, networks and crawl health",
     description: "The open directory of every x402 seller we can crawl: advertised tools, settlement networks, crawl health and routability. Free to browse, free to query, and the operator is excluded from its own ranking.",
     canonical: `${baseUrl}/marketplace`,
     baseUrl,

@@ -4687,6 +4687,9 @@ jobs:
 
       - name: Link integrity (every sitemap URL + every crawled internal href resolves; /mcp never a real <a href>)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-link-integrity.js
+      # Every sitemap page served without its <title> clamped (boots its own server with an operator token, reads /__operator/seo-meta.json)
+      - name: Title clamp (no served page needs its title cut)
+        run: node scripts/test-title-clamp.js
 
       # These four were 210s of test-unit-b's 506s of work, and they share a
       # real property rather than an arbitrary place in the list: each BOOTS ITS
