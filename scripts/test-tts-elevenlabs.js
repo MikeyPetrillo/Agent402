@@ -12,9 +12,11 @@
 //   - all six formats are served: mp3/pcm from the wire, wav/flac/opus/aac
 //     encoded from its PCM;
 //   - an ElevenLabs outage is served by the backup speech models on the same
-//     wire (TTS_BACKUP_MODELS, in order), named in the answer, with the voice
-//     asked for mapped to the backup's nearest and every format still served;
-//     a bad request is a 400 and never reaches a backup.
+//     wire (TTS_BACKUP_MODELS, in order: Voxtral, then Grok voice, then
+//     MAI-Voice-2), named in the answer, with the voice asked for mapped to
+//     the backup's nearest and every format still served; the first backup
+//     gives nine of the ten names their own voice id (coral and sage share
+//     one); a bad request is a 400 and never reaches a backup.
 import { TTS_TOOLS, TTS_TIERS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";
@@ -123,8 +125,16 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
 
 // --- backups ---------------------------------------------------------------
 {
-  ok(TTS_BACKUP_MODELS.length >= 2 && TTS_BACKUP_MODELS.every((id) => SPEECH_MODELS.some((m) => m.id === id)), `every backup is a model the speech wire serves (${TTS_BACKUP_MODELS.join(", ")})`);
-  ok(Object.keys(ELEVENLABS_VOICE_MAP).every((v) => firstBackup.map?.[v]), "the first backup maps every one of the ten voice names");
+  ok(TTS_BACKUP_MODELS.join() === "mistralai/voxtral-mini-tts-2603,x-ai/grok-voice-tts-1.0,microsoft/mai-voice-2" && TTS_BACKUP_MODELS.every((id) => SPEECH_MODELS.some((m) => m.id === id)), `the backups are Voxtral, then Grok voice, then MAI-Voice-2, each a model the speech wire serves (${TTS_BACKUP_MODELS.join(", ")})`);
+  ok(Object.keys(ELEVENLABS_VOICE_MAP).every((v) => firstBackup.map?.[v] && firstBackup.voices.has(firstBackup.map[v])), "the first backup maps every one of the ten voice names to a voice it serves");
+  {
+    const names = Object.keys(ELEVENLABS_VOICE_MAP);
+    const ids = names.map((v) => firstBackup.map[v]);
+    const shared = names.filter((v) => ids.filter((id) => id === firstBackup.map[v]).length > 1).sort().join("+");
+    ok(new Set(ids).size === 9 && shared === "coral+sage", `the first backup gives nine of the ten names their own voice id; coral and sage share ${firstBackup.map.coral} (shared: ${shared})`);
+    const speakers = new Set(ids.map((id) => id.replace(/_[a-z]+$/, "")));
+    ok(speakers.size === 3, `across three speakers (${[...speakers].join(", ")})`);
+  }
   ok(!("fallback" in TTS_TIERS.tts) && !("fallback" in TTS_TIERS["tts-hd"]), "no tier names a direct fallback model outside the wire");
   stub([["openrouter.ai", withBackups(err(503))]]);
   const r = await run("tts-hd", { text: "hi", voice: "george", format: "flac" });
@@ -163,10 +173,13 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(slow?.statusCode === 503 && /^Speech upstream did not answer the speech read within \d+ s \(upstream deadline\)/.test(slow?.message || "") && calls.length === 1, `a deadline is a final uncharged 503 naming the step after one upstream call (calls: ${calls.length}, got ${slow?.statusCode} "${slow?.message}")`);
   stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); })]]);
   ok((await run("tts", { text: "hi" })).model === FIRST_BACKUP, "a connection that never reached the upstream is an outage: the chain and then a backup run");
-  // The second backup serves only after the first failed unbilled.
+  // Each later backup serves only after the one before failed unbilled.
   stub([["openrouter.ai", (_u, init) => (modelOf(init) === TTS_BACKUP_MODELS[1] ? backupAudio(init) : err(503))]]);
+  const secondBackup = await run("tts", { text: "hi" });
+  ok(secondBackup.model === TTS_BACKUP_MODELS[1] && backupCalls().join() === TTS_BACKUP_MODELS.slice(0, 2).join(), `the second backup serves after the first failed (${backupCalls().join(" > ")})`);
+  stub([["openrouter.ai", (_u, init) => (modelOf(init) === TTS_BACKUP_MODELS.at(-1) ? backupAudio(init) : err(503))]]);
   const last = await run("tts", { text: "hi" });
-  ok(last.model === TTS_BACKUP_MODELS[1] && backupCalls().join() === TTS_BACKUP_MODELS.join(), `the backups are walked in order (${backupCalls().join(" > ")})`);
+  ok(last.model === TTS_BACKUP_MODELS.at(-1) && backupCalls().join() === TTS_BACKUP_MODELS.join(), `the backups are walked in order to the last (${backupCalls().join(" > ")})`);
   // With every model on the wire down, what the buyer reads names no vendor text.
   stub([["openrouter.ai", err(503, { error: { message: "vendor-internal-detail" } })]]);
   const down = await throwsWith(() => run("tts", { text: "hi" }));
