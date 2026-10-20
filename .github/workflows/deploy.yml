@@ -3397,6 +3397,8 @@ jobs:
           # defi kit (offline)
           t node scripts/test-defi-kit.js
           t node scripts/test-cve-kit.js
+          # mcp-package kit (offline, stub registry on port 0)
+          t node scripts/test-mcp-package-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js
           # Hyperliquid info cache shared by the two Hyperliquid kits (offline)
