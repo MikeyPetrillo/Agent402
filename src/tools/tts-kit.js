@@ -57,8 +57,8 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]);
-const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
+export const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]);
+export const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
 
 const TIERS = {
   // provider "openrouter" reaches Kokoro; "elevenlabs" is ElevenLabs over the
@@ -98,7 +98,7 @@ const WIRE_FORMATS = new Set(["mp3", "pcm"]);
 // OpenRouter's speech wire serves mp3 and pcm only; the OpenAI tiers keep the
 // full set. A format this tier cannot serve is a self-explaining 400, never a
 // silent downgrade to mp3 (a documented default is a contract - 2026-09-06).
-const LITE_FORMATS = new Set(["mp3", "pcm"]);
+export const LITE_FORMATS = new Set(["mp3", "pcm"]);
 
 function validateInput(input, tierSlug) {
   const text = typeof input.text === "string" ? input.text.trim() : "";

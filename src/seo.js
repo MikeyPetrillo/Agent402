@@ -249,6 +249,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/how-to-pay`, priority: "0.9" },
+    { loc: `${baseUrl}/speech`, priority: "0.8" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
@@ -327,6 +328,7 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/how-to-pay`, priority: "0.9" },
+    { loc: `${baseUrl}/speech`, priority: "0.8" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
     { loc: `${baseUrl}/x402-test`, priority: "0.7" },
     { loc: `${baseUrl}/markets`, priority: "0.8" },
@@ -599,6 +601,7 @@ ${toolSections}
 - [Glossary](${baseUrl}/glossary): x402, MPP, HTTP 402, facilitator, EIP-3009, receipts, settlement, rails, dual-stack, PoW tier, SOR, tollbooth - every term defined once, with anchors
 - [What is x402?](${baseUrl}/what-is-x402) / [What is MPP?](${baseUrl}/what-is-mpp): the two payment wires explained
 - [How to pay](${baseUrl}/how-to-pay): from nothing to a paid call on every rail (x402 on each listed chain, MPP over Tempo, EVM or card, prepaid credits, proof-of-work): what you need, the 402 flow, a snippet, the receipt, and what happens to the money when a call fails
+- [Speech](${baseUrl}/speech): the model-backed speech tools (text-to-speech tiers, transcription with speaker labels, the OpenAI-shaped wires) with voices, formats, caps and the fallback chain read from the tools themselves
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries

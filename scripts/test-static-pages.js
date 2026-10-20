@@ -55,6 +55,7 @@ const PAGES = [
   { path: "/revenue",     titleSubstr: "Transactions" },
   { path: "/what-is-mpp", titleSubstr: "MPP" },
   { path: "/how-to-pay",  titleSubstr: "How to pay" },
+  { path: "/speech",      titleSubstr: "Speech" },
   { path: "/agentic-finance", titleSubstr: "Agentic Finance" },
   { path: "/docs",         titleSubstr: "Docs" },
   { path: "/x402-test",    titleSubstr: "Test your x402 client" },

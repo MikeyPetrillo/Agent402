@@ -813,7 +813,7 @@ function ourToolsPanelNav() {
                 <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, several tools</span></a>
                 <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
                 <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">LLM gateway</span><span class="mlnav-faint">chat · messages · metered · images</span></a>
-                <a href="/tools/category/ai" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
+                <a href="/speech" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
                 <a href="/markets" class="mlnav-row"><span style="font-weight:700;">market data</span><span class="mlnav-faint">quotes · funding · on-chain</span></a>
                 <a href="/playground" class="mlnav-row"><span style="font-weight:700;">playground</span><span class="mlnav-faint">try free · PoW</span></a>
                 <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">pricing →</span><span style="color:var(--on-panel-dim);">/pricing</span></a>
@@ -885,6 +885,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/skills", "skill packs", activePath === "/skills")}
       ${mmLink("/tools/category/crypto", "crypto, DeFi & Solana", activePath === "/tools/category/crypto")}
       ${mmLink("/tools/category/llm", "images, video & LLM gateway", activePath === "/tools/category/llm")}
+      ${mmLink("/speech", "speech & transcription", activePath === "/speech")}
       ${mmLink("/playground", "playground · free", activePath === "/playground")}
       ${mmLink("/pricing", "pricing", activePath === "/pricing")}
     </div>
@@ -946,7 +947,7 @@ function nav(activePath) {
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
     docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
-    tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
+    tools: new Set(["/tools", "/skills", "/speech", "/playground", "/pricing"]),
   };
 
   const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
