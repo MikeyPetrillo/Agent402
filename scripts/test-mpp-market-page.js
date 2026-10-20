@@ -65,6 +65,12 @@ ok(html.includes('"@type":"CollectionPage"'), "CollectionPage JSON-LD present");
 ok(html.includes('"@type":"FAQPage"'), "FAQPage JSON-LD present");
 ok(html.includes('"@type":"Dataset"'), "Dataset JSON-LD present");
 
+// --- own roster, none of the x402 roster's wiring ---------------------------
+// The MPP roster is its own markup (.mpr-*); the all-chains roster's rows,
+// filter-bar controls and their script belong to /marketplace alone.
+ok(!/data-mfb-row|data-mfb-sort|data-mfb-search|market-filter-bar\.js|class="mlr-/.test(html), "MPP page renders no x402 roster rows, filter-bar controls or wiring script");
+ok(html.includes('class="mpr-row"') && html.includes('id="sellers"'), "MPP page keeps its own roster rows under the #sellers anchor");
+
 // --- security hygiene: only http(s) URLs become hrefs -----------------------
 const xssSnap = {
   verifiedSellers: 1, discoveredTotal: 1,

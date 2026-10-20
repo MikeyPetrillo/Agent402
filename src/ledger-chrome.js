@@ -425,8 +425,8 @@ a { color: inherit; }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
 .ml-nav-glyph { display: inline-block; vertical-align: -2px; margin-right: 1px; opacity: .8; }
 .ml-nav-link-on .ml-nav-glyph, .ml-nav-link:hover .ml-nav-glyph { opacity: 1; }
-.mlr-row, tr[data-mfb-row] { transition: background-color .12s ease; }
-.mlr-row:hover, tr[data-mfb-row]:hover { background: var(--card-zebra); }
+.mlr-row { transition: background-color .12s ease; }
+.mlr-row:hover { background: var(--card-zebra); }
 .ml-chip { transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
 .ml-faq-mark { transition: transform .15s ease; display: inline-block; }
 @media (max-width: 600px) { .mlnav-g > .mlnav-dd { display: none !important; } }
@@ -548,7 +548,7 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
   .ml-dot { animation: none; }
-  .ml-nav-link, .ml-cta, .mlr-row, tr[data-mfb-row], .ml-chip, .ml-faq-mark { transition: none !important; }
+  .ml-nav-link, .ml-cta, .mlr-row, .ml-chip, .ml-faq-mark { transition: none !important; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
 }
@@ -584,7 +584,6 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
    themes (white on #BF360C is 5.8:1; --ink/--on-panel flip light in dark mode and
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
-.mfb-tab{white-space:nowrap;}
 /* A phone shows the chain tabs as one strip that scrolls sideways, not a wrapped block ending on one stray tab. */
 @media (max-width:600px){.mfb-tabs{flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;}}
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
