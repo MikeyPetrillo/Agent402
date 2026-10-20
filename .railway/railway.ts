@@ -1,6 +1,7 @@
-// Railway Infrastructure as Code for the two services that still read a
-// Config as Code file (railway.facilitator.json, railway.worker.json). Those
-// files stop being read on 2026-12-01; this file carries the same settings.
+// Railway Infrastructure as Code for the facilitator and worker services.
+// Their settings live on the services themselves (Railway stops reading
+// Config as Code files on 2026-12-01, and the repo no longer carries one);
+// this file declares the same settings so a plan can show any drift.
 //
 // Prepared, not applied. The owner runbook is docs/railway-iac-migration.md:
 // plan, confirm no deletes, apply outside a CI run, clear each service's

@@ -11,10 +11,11 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 const paths = workerDeployPaths();
-for (const f of ["worker/server.js", "Dockerfile.worker", "railway.worker.json", "src/tools/render.js", "src/tools/browser-measure-kit.js", "src/tools/media-kit.js", "src/tools/fetch-guard.js"]) {
+for (const f of ["worker/server.js", "Dockerfile.worker", "docker-entrypoint.sh", "src/tools/render.js", "src/tools/browser-measure-kit.js", "src/tools/media-kit.js", "src/tools/fetch-guard.js"]) {
   ok(paths.includes(f), `${f} is watched`);
 }
 ok(!paths.includes("src/server.js"), "the main app's server is not in the worker's closure");
+ok(!paths.some((f) => /^railway\./.test(f)), "no retired Railway config file is watched");
 ok(touchesWorker(["README.md", "src/tools/render.js"]), "a change to render.js selects the worker");
 ok(touchesWorker(["worker/new-helper.js"]), "a new file under worker/ selects the worker");
 ok(touchesWorker(["src/tools/fetch-guard.js"]), "a change to an import of an import selects the worker");

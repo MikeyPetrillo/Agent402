@@ -3894,7 +3894,7 @@ jobs:
           t node scripts/test-mcp-sec.js
           # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio package (boots a free server)
           t node scripts/test-mcp-protocol-input-bound.js
-          # Prepared Railway IaC file keeps the facilitator and worker settings from their config files, as a named partial with unmanaged variables (offline: type-stripped load, SDK stubbed)
+          # Prepared Railway IaC file carries the facilitator and worker service settings as a named partial with unmanaged variables; the retired Config as Code files stay out of the repo and the runbook table carries every setting (offline: type-stripped load, SDK stubbed)
           t node scripts/test-railway-iac.js
 
 
@@ -4695,7 +4695,7 @@ jobs:
         # push, and facilitator/test.js imports only facilitator/* (pinned by
         # scripts/test-ci-facilitator-scope.js - the moment it reaches outside,
         # this scoping is dishonest and CI fails). So it runs only when the push
-        # touched facilitator/**, Dockerfile.facilitator or its Railway config.
+        # touched facilitator/** or Dockerfile.facilitator.
         # FAIL-OPEN: an unreadable diff (first push, force-push, API error) RUNS it.
         run: |
           if [ -z "$TEST_PAYER_STELLAR_SECRET" ]; then
@@ -4705,7 +4705,7 @@ jobs:
           RUN_GATE=yes
           if [ -n "$DIFF_BASE" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
             if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
-              if echo "$CHANGED" | grep -qE '^(facilitator/|Dockerfile\.facilitator$|railway\.facilitator\.json$)'; then
+              if echo "$CHANGED" | grep -qE '^(facilitator/|Dockerfile\.facilitator$)'; then
                 echo "facilitator files changed since $DIFF_BASE - running the gate"
               else
                 echo "no facilitator/** change in $DIFF_BASE...$GITHUB_SHA ($(echo "$CHANGED" | grep -c .) files) - facilitator/test.js imports only facilitator/*, skipping the gate"

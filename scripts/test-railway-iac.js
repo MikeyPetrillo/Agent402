@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// The prepared Railway IaC file (.railway/railway.ts) keeps every setting the
-// facilitator and worker services read from their Config as Code files, and
-// cannot reach past those two services: a named partial (so resources it does
-// not declare are left alone), unmanaged variables, the facilitator's repo
-// source kept, the worker's idle sleep kept.
+// The prepared Railway IaC file (.railway/railway.ts) declares every build and
+// deploy setting the facilitator and worker services hold, and cannot reach
+// past those two services: a named partial (so resources it does not declare
+// are left alone), unmanaged variables, the facilitator's repo source kept,
+// the worker's idle sleep kept. The Config as Code files that once carried
+// those settings are retired: none is in the repository, and the runbook's
+// table records each setting the IaC file declares.
 //
 // Offline. The file is loaded with Node's type stripping, and `railway/iac` is
 // replaced by a recorder, so CI needs no SDK install and no Railway access.
@@ -39,8 +41,14 @@ ok(proj.variables?.managed === false, "variables are unmanaged: no service varia
 ok(Object.keys(byName).sort().join(",") === "agent402-facilitator,agent402-worker", `it declares exactly the two services (${Object.keys(byName).join(", ")})`);
 ok(!proj.resources.some((r) => r.type !== "service"), "it declares no database, volume or bucket");
 
-const legacy = { "agent402-facilitator": "railway.facilitator.json", "agent402-worker": "railway.worker.json" };
-for (const [name, file] of Object.entries(legacy)) {
+// Railway stops reading Config as Code files on 2026-12-01; none is tracked
+// here, so no service can read one from this repository.
+for (const file of ["railway.facilitator.json", "railway.worker.json", "railway.json", "railway.toml"]) {
+  ok(!existsSync(join(ROOT, file)), `${file} is not in the repository`);
+}
+const runbook = readFileSync(join(ROOT, "docs/railway-iac-migration.md"), "utf8");
+const row = (label) => (runbook.split("\n").find((l) => l.startsWith(`| ${label} |`)) || "").split("|").map((c) => c.trim());
+for (const [name, col] of [["agent402-facilitator", 2], ["agent402-worker", 3]]) {
   const cfg = byName[name]?.config || {};
   const { build = {}, deploy = {} } = cfg;
   ok(build.builder === "DOCKERFILE", `${name}: builds with its Dockerfile`);
@@ -49,24 +57,15 @@ for (const [name, file] of Object.entries(legacy)) {
   ok(deploy.numReplicas === 1, `${name}: one replica`);
   ok(deploy.healthcheckPath === "/health" && Number.isInteger(deploy.healthcheckTimeout) && deploy.healthcheckTimeout > 0, `${name}: healthcheck /health (${deploy.healthcheckTimeout} s)`);
   ok(!("env" in cfg) && !("variables" in cfg), `${name}: declares no variables`);
-  // While the legacy file exists, every setting it carries is carried here.
-  const path = join(ROOT, file);
-  if (existsSync(path)) {
-    const old = JSON.parse(readFileSync(path, "utf8"));
-    for (const [section, fields] of [["build", old.build || {}], ["deploy", old.deploy || {}]]) {
-      for (const [k, v] of Object.entries(fields)) {
-        const mine = cfg[section]?.[k];
-        if (section === "build" && k === "watchPatterns") {
-          const kept = v.filter((p) => p !== file);
-          ok(JSON.stringify(mine) === JSON.stringify(kept), `${name}: watch patterns carried, less the retired config file (${JSON.stringify(mine)})`);
-        } else {
-          ok(JSON.stringify(mine) === JSON.stringify(v), `${name}: ${section}.${k} matches ${file} (${JSON.stringify(mine)})`);
-        }
-      }
-    }
-  } else {
-    ok(true, `${name}: ${file} is retired; the IaC file is the only source`);
-  }
+  // The runbook table is the record of the service's settings: each value the
+  // IaC file declares is written there, so the two cannot drift apart.
+  ok(row("Builder")[col] === `\`${build.builder}\``, `${name}: the runbook records the builder`);
+  ok(row("Dockerfile")[col] === `\`${build.dockerfilePath}\``, `${name}: the runbook records the Dockerfile path (${row("Dockerfile")[col]})`);
+  const patterns = build.watchPatterns || [];
+  ok(row("Watch patterns")[col] === (patterns.length ? patterns.map((p) => `\`${p}\``).join(", ") : "none"), `${name}: the runbook records the watch patterns (${row("Watch patterns")[col]})`);
+  ok(row("Healthcheck")[col] === `\`${deploy.healthcheckPath}\`, ${deploy.healthcheckTimeout} s`, `${name}: the runbook records the healthcheck (${row("Healthcheck")[col]})`);
+  ok(row("Restart policy")[col] === `\`${deploy.restartPolicyType}\`, ${deploy.restartPolicyMaxRetries} retries`, `${name}: the runbook records the restart policy`);
+  ok(row("Replicas")[col] === String(deploy.numReplicas), `${name}: the runbook records the replica count`);
 }
 
 const fac = byName["agent402-facilitator"]?.config || {};
@@ -84,7 +83,6 @@ const lock = JSON.parse(readFileSync(join(ROOT, ".railway/package-lock.json"), "
 ok(lock.packages?.["node_modules/railway"]?.version === pkg.dependencies?.railway, "the lockfile resolves the pinned version");
 
 // The runbook names each owner step.
-const runbook = readFileSync(join(ROOT, "docs/railway-iac-migration.md"), "utf8");
 for (const step of ["railway config plan", "0 to destroy", "railway config apply", "outside a CI run", "Config as Code path", "meta.build"]) {
   ok(runbook.includes(step), `the runbook covers "${step}"`);
 }

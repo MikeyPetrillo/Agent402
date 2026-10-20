@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Which changed files mean the render/media worker (agent402-worker) needs a
-// new build: its image inputs (Dockerfile.worker, its Railway config, the
-// entrypoint, the lockfile) and every file in worker/server.js's relative
+// new build: its image inputs (Dockerfile.worker, the entrypoint, the
+// lockfile) and every file in worker/server.js's relative
 // import closure, read from the source so a new import is covered without
 // editing a list.
 //
@@ -15,7 +15,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXED = ["Dockerfile.worker", "railway.worker.json", "docker-entrypoint.sh", "package.json", "package-lock.json"];
+const FIXED = ["Dockerfile.worker", "docker-entrypoint.sh", "package.json", "package-lock.json"];
 const DIRS = ["worker/"];
 
 export function importClosure(entry, root = ROOT) {
