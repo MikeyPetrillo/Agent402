@@ -453,6 +453,34 @@
       }
     },
     {
+      "slug": "page-speed",
+      "name": "a static page measures with its opportunities",
+      "input": {
+        "url": "https://example.com",
+        "device": "desktop"
+      },
+      "requires": "WORKER_URL",
+      "expect": {
+        "equals": {
+          "status": 200,
+          "device": "desktop",
+          "untrustedContent": true
+        },
+        "matches": {
+          "measurement.kind": "lab-single-run",
+          "opportunities.0.id": "lcp-element"
+        },
+        "populated": [
+          "timings.ttfbMs",
+          "webVitals.lcpMs",
+          "opportunitiesPartial"
+        ],
+        "minCount": {
+          "opportunities": 2
+        }
+      }
+    },
+    {
       "slug": "fred-series-info",
       "name": "a second series",
       "input": {

@@ -1,6 +1,7 @@
 import { assertPublicUrl, hostIsPublic } from "./fetch-guard.js";
 import { htmlToArticle } from "./extract.js";
 import { partialFields } from "../partial-answer.js";
+import { buildOpportunities } from "./page-speed-opportunities.js";
 
 const NAV_TIMEOUT_MS = 25000;
 const MAX_CONCURRENT = 3;
@@ -306,6 +307,11 @@ export const PAGE_SPEED_LIMITS = Object.freeze({
   maxUrlChars: 300,
   maxTextChars: 300,
   settleMs: 1000,            // after the load, so late LCP/CLS entries land
+  maxImages: 200,            // <img> elements read for the opportunities
+  maxFontFaces: 50,
+  maxStyleRules: 3000,       // CSS rules walked for image sizing and @font-face
+  maxShifts: 200,
+  maxLongFrames: 200,
 });
 
 export const PAGE_SPEED_DEVICES = Object.freeze({
@@ -321,23 +327,159 @@ const ms = (v) => (Number.isFinite(v) && v > 0 ? Math.round(v) : null);
 
 // Runs in the page before any of its own script. Standard PerformanceObserver
 // entry types only; CLS is the largest session window (1 s gap, 5 s cap).
+// Also keeps what the opportunities need: the LCP entry's node and URL, each
+// layout shift's moved nodes (as selectors, taken as they shift), and long
+// animation frames with their script attribution.
 function pageSpeedObserver() {
-  const s = { lcp: null, lcpElement: null, fcp: null, cls: 0, win: 0, winStart: 0, winLast: 0, longTasks: [] };
+  const s = { lcp: null, lcpElement: null, lcpNode: null, lcpUrl: null, lcpSize: null, fcp: null, cls: 0, win: 0, winStart: 0, winLast: 0, longTasks: [], shifts: [], longFrames: [] };
+  const sel = (el) => {
+    try {
+      if (!el || el.nodeType !== 1) return null;
+      const parts = [];
+      let n = el;
+      for (let depth = 0; n && n.nodeType === 1 && depth < 4; depth++) {
+        const tag = n.tagName.toLowerCase();
+        if (n.id && /^[A-Za-z][\w-]*$/.test(n.id)) { parts.unshift(`${tag}#${n.id}`); break; }
+        let part = tag;
+        const cls = Array.from(n.classList || []).find((c) => /^[A-Za-z_][\w-]*$/.test(c));
+        if (cls) part += `.${cls}`;
+        const parent = n.parentElement;
+        if (parent) {
+          const sib = Array.from(parent.children).filter((c) => c.tagName === n.tagName);
+          if (sib.length > 1) part += `:nth-of-type(${sib.indexOf(n) + 1})`;
+        }
+        parts.unshift(part);
+        if (tag === "body" || tag === "html") break;
+        n = parent;
+      }
+      return parts.join(" > ").slice(0, 160);
+    } catch { return null; }
+  };
+  s.sel = sel;
   Object.defineProperty(window, "__a402ps", { value: s, enumerable: false });
   try { performance.setResourceTimingBufferSize(1000); } catch { /* older engines */ }
   const obs = (type, cb) => {
     try { new PerformanceObserver((list) => list.getEntries().forEach(cb)).observe({ type, buffered: true }); } catch { /* unsupported entry type */ }
   };
   obs("paint", (e) => { if (e.name === "first-contentful-paint") s.fcp = e.startTime; });
-  obs("largest-contentful-paint", (e) => { s.lcp = e.renderTime || e.loadTime || e.startTime; s.lcpElement = e.element ? e.element.tagName.toLowerCase() : null; });
+  obs("largest-contentful-paint", (e) => {
+    s.lcp = e.renderTime || e.loadTime || e.startTime;
+    s.lcpElement = e.element ? e.element.tagName.toLowerCase() : null;
+    s.lcpNode = e.element || null; s.lcpUrl = e.url || null; s.lcpSize = e.size || null;
+  });
   obs("layout-shift", (e) => {
     if (e.hadRecentInput) return;
     if (s.win && (e.startTime - s.winLast > 1000 || e.startTime - s.winStart > 5000)) s.win = 0;
     if (!s.win) s.winStart = e.startTime;
     s.win += e.value; s.winLast = e.startTime;
     if (s.win > s.cls) s.cls = s.win;
+    if (s.shifts.length < 200) s.shifts.push({ startMs: e.startTime, value: e.value, elements: Array.from(e.sources || []).slice(0, 3).map((src) => sel(src.node)) });
   });
   obs("longtask", (e) => { if (s.longTasks.length < 2000) s.longTasks.push([e.startTime, e.duration]); });
+  obs("long-animation-frame", (e) => {
+    if (e.duration <= 50 || s.longFrames.length >= 200) return;
+    const scripts = Array.from(e.scripts || []).map((x) => ({ sourceURL: x.sourceURL || null, invoker: x.invoker || null, invokerType: x.invokerType || null, durationMs: x.duration }))
+      .sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0)).slice(0, 3);
+    s.longFrames.push({ startMs: e.startTime, durationMs: e.duration, blockingMs: e.blockingDuration || 0, scripts });
+  });
+}
+
+// Runs in the page after the load settled: what the DOM says about the head,
+// the images, the fonts and the LCP element. Pure reads, nothing mutated.
+function pageSpeedReadDom(L) {
+  const s = window.__a402ps || {};
+  const sel = typeof s.sel === "function" ? s.sel : () => null;
+  const nav = performance.getEntriesByType("navigation")[0] || null;
+  const res = performance.getEntriesByType("resource");
+  const blocking = res.filter((r) => r.renderBlockingStatus === "blocking")
+    .map((r) => ({ url: r.name, type: r.initiatorType, durationMs: r.duration }));
+  const timing = {};
+  for (const r of res.slice(0, 1000)) if (!(r.name in timing)) timing[r.name] = { durationMs: r.duration, initiatorType: r.initiatorType, renderBlocking: r.renderBlockingStatus === "blocking" };
+  const fcp = s.fcp;
+  let tbt = 0, longTaskCount = 0;
+  for (const [start, dur] of s.longTasks || []) {
+    longTaskCount++;
+    if (fcp == null || start + dur > fcp) tbt += Math.max(0, dur - 50);
+  }
+  const head = document.head || document.createElement("head");
+  const headScripts = Array.from(head.querySelectorAll("script[src]"))
+    .filter((el) => !el.async && !el.defer && !/^module$/i.test(el.getAttribute("type") || "") && /^https?:/i.test(el.src))
+    .map((el) => ({ url: el.src }));
+  const headStyles = Array.from(head.querySelectorAll("link[rel~=stylesheet][href]"))
+    .filter((el) => { const m = (el.getAttribute("media") || "").trim(); return !el.disabled && /^https?:/i.test(el.href) && (!m || m === "all" || (window.matchMedia && matchMedia(m).matches)); })
+    .map((el) => ({ url: el.href, media: (el.getAttribute("media") || "").trim() || null }));
+  // Author CSS that sizes an element: width and height on a rule that matches it.
+  const sizingRules = [];
+  const fontFaces = [];
+  let rulesSeen = 0;
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules;
+    try { rules = sheet.cssRules; } catch { continue; } // a cross-origin sheet without CORS cannot be read
+    if (!rules) continue;
+    const walk = (list) => {
+      for (const rule of Array.from(list)) {
+        if (rulesSeen++ >= L.maxStyleRules) return;
+        if (rule instanceof CSSFontFaceRule && fontFaces.length < L.maxFontFaces) {
+          const src = rule.style.getPropertyValue("src") || "";
+          const m = /url\((["']?)([^"')]+)\1\)/.exec(src);
+          let url = m ? m[2] : null;
+          try { if (url) url = new URL(url, sheet.href || location.href).href; } catch { /* keep as written */ }
+          fontFaces.push({ family: (rule.style.getPropertyValue("font-family") || "").replace(/^["']|["']$/g, "").trim(), display: (rule.style.getPropertyValue("font-display") || "").trim() || null, url });
+        } else if (rule instanceof CSSStyleRule && rule.style.width && rule.style.height && rule.selectorText) {
+          sizingRules.push(rule.selectorText);
+        } else if (rule.cssRules) { // @media, @supports, @layer, @container
+          walk(rule.cssRules);
+        }
+      }
+    };
+    walk(rules);
+  }
+  const sizedByCss = (el) => {
+    if (el.style && el.style.width && el.style.height) return true;
+    for (const sl of sizingRules) { try { if (el.matches(sl)) return true; } catch { /* unsupported selector */ } }
+    return false;
+  };
+  const images = Array.from(document.images).slice(0, L.maxImages).map((el) => {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+      selector: sel(el), url: el.currentSrc || el.src || null,
+      sized: (el.hasAttribute("width") && el.hasAttribute("height")) || (cs.aspectRatio && cs.aspectRatio !== "auto") || sizedByCss(el),
+      naturalWidth: el.naturalWidth || 0, naturalHeight: el.naturalHeight || 0,
+      width: r.width, height: r.height, lazy: el.loading === "lazy",
+    };
+  });
+  let lcp = null;
+  if (s.lcp) {
+    const el = s.lcpNode;
+    let lcpInfo = { tag: s.lcpElement || null, selector: null, url: s.lcpUrl || null, sizePx: s.lcpSize || null, width: null, height: null, lazy: null, text: !s.lcpUrl, fontFamily: null, webFont: false };
+    try {
+      if (el && el.nodeType === 1) {
+        const r = el.getBoundingClientRect();
+        lcpInfo.selector = sel(el); lcpInfo.width = r.width; lcpInfo.height = r.height;
+        lcpInfo.lazy = el.tagName === "IMG" ? el.loading === "lazy" : null;
+        if (!s.lcpUrl) {
+          const fam = (getComputedStyle(el).fontFamily || "").split(",")[0].replace(/^\s*["']?|["']?\s*$/g, "").trim();
+          lcpInfo.fontFamily = fam || null;
+          lcpInfo.webFont = !!fam && Array.from(document.fonts || []).some((f) => f.status === "loaded" && String(f.family).replace(/^["']|["']$/g, "") === fam);
+        }
+      }
+    } catch { /* detached node */ }
+    lcp = lcpInfo;
+  }
+  return {
+    nav: nav ? { ttfb: nav.responseStart, dcl: nav.domContentLoadedEventEnd, load: nav.loadEventEnd } : null,
+    lcp: s.lcp, lcpElement: s.lcpElement, fcp, cls: s.cls || 0, tbt, longTaskCount,
+    renderBlockingSupported: res.length === 0 || "renderBlockingStatus" in res[0],
+    blocking,
+    facts: {
+      timing, headScripts, headStyles, images, fontFaces, lcp: lcp ? { ...lcp, ms: s.lcp } : null,
+      longFrames: (s.longFrames || []).slice(0, L.maxLongFrames),
+      longTasks: (s.longTasks || []).map(([start, dur]) => ({ startMs: start, durationMs: dur })),
+      shifts: (s.shifts || []).slice(0, L.maxShifts),
+      dpr: window.devicePixelRatio || 1,
+    },
+  };
 }
 
 /**
@@ -363,25 +505,7 @@ export async function measurePageSpeed(rawUrl, { device = "mobile", signal } = {
   try {
     return await withPage(rawUrl, async (page, { networkIdle }) => {
       await page.waitForTimeout(L.settleMs);
-      const m = await page.evaluate(() => {
-        const s = window.__a402ps || {};
-        const nav = performance.getEntriesByType("navigation")[0] || null;
-        const res = performance.getEntriesByType("resource");
-        const blocking = res.filter((r) => r.renderBlockingStatus === "blocking")
-          .map((r) => ({ url: r.name, type: r.initiatorType, durationMs: r.duration }));
-        const fcp = s.fcp;
-        let tbt = 0, longTaskCount = 0;
-        for (const [start, dur] of s.longTasks || []) {
-          longTaskCount++;
-          if (fcp == null || start + dur > fcp) tbt += Math.max(0, dur - 50);
-        }
-        return {
-          nav: nav ? { ttfb: nav.responseStart, dcl: nav.domContentLoadedEventEnd, load: nav.loadEventEnd } : null,
-          lcp: s.lcp, lcpElement: s.lcpElement, fcp, cls: s.cls || 0, tbt, longTaskCount,
-          renderBlockingSupported: res.length === 0 || "renderBlockingStatus" in res[0],
-          blocking,
-        };
-      });
+      const m = await page.evaluate(pageSpeedReadDom, L);
       const recorded = [...net.values()].filter((r) => r.bytes > 0);
       const heaviest = recorded.sort((a, b) => b.bytes - a.bytes).slice(0, L.heaviest)
         .map((r) => ({ url: clip(r.url, L.maxUrlChars), type: r.type, bytes: r.bytes }));
@@ -416,6 +540,7 @@ export async function measurePageSpeed(rawUrl, { device = "mobile", signal } = {
         consoleErrorsPartial: partialFields(consoleErrorCount, consoleErrors.length),
         measurement: PAGE_SPEED_MEASUREMENT,
         untrustedContent: true,
+        ...pageSpeedOpportunitiesOf(m.facts, { docUrl: page.url(), net, consoleErrors }, L),
       };
     }, {
       signal,
@@ -434,6 +559,16 @@ export async function measurePageSpeed(rawUrl, { device = "mobile", signal } = {
           if (net.size < L.maxResourcesTracked) net.set(e.requestId, { url: e.request.url, type: String(e.type || "other").toLowerCase(), bytes: 0 });
           else untracked++;
         });
+        cdp.on("Network.responseReceived", (e) => {
+          const r = net.get(e.requestId);
+          if (!r || !e.response) return;
+          r.status = e.response.status;
+          r.mimeType = e.response.mimeType || null;
+          r.fromCache = !!(e.response.fromDiskCache || e.response.fromServiceWorker || e.response.fromPrefetchCache);
+          const h = {};
+          for (const [k, v] of Object.entries(e.response.headers || {})) h[k.toLowerCase()] = String(v);
+          r.headers = h;
+        });
         cdp.on("Network.loadingFinished", (e) => {
           const n = Number(e.encodedDataLength) || 0;
           totalBytes += n;
@@ -447,6 +582,19 @@ export async function measurePageSpeed(rawUrl, { device = "mobile", signal } = {
     if (err?.statusCode) throw err;
     throw Object.assign(new Error(`page could not be loaded: ${clip(err?.message || err, 200)}`), { statusCode: 502, attribution: "upstream" });
   }
+}
+
+// Opportunities from the same load: the page facts plus the network records,
+// URLs and text clipped like every other field of the answer.
+function pageSpeedOpportunitiesOf(facts, { docUrl, net, consoleErrors }, L) {
+  const resources = [...net.values()].map((r) => ({ url: r.url, type: r.type, bytes: r.bytes || 0, status: r.status ?? null, headers: r.headers || {}, mimeType: r.mimeType || null, fromCache: !!r.fromCache }));
+  const { opportunities, opportunitiesPartial } = buildOpportunities({ ...(facts || {}), docUrl, resources, consoleErrors });
+  for (const o of opportunities) {
+    if (typeof o.url === "string") o.url = clip(o.url, L.maxUrlChars);
+    if (typeof o.element === "string") o.element = clip(o.element, L.maxTextChars);
+    o.detail = clip(o.detail, 2 * L.maxTextChars);
+  }
+  return { opportunities, opportunitiesPartial };
 }
 
 export const PAGE_SPEED_MEASUREMENT = Object.freeze({

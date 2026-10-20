@@ -77,8 +77,8 @@ export const BROWSER_MEASURE_TOOLS = [
   {
     route: "POST /api/page-speed", name: "Page speed (one lab measurement)", slug: "page-speed", category: "web", price: "$0.01",
     description:
-      "Load one public URL once in headless Chromium and report what that load measured: navigation timings (TTFB, DOMContentLoaded, load), Web Vitals read from the page's own performance entries (LCP, FCP, CLS, total blocking time from long tasks), total transfer bytes, request count, the 5 heaviest resources, render-blocking scripts and styles, and console errors. Mobile or desktop viewport. This is a single measurement from one server location under shared load, with no throttling: it is a single lab measurement, not field data from real users, and the answer says so in its measurement field. Deterministic code, no model. Body: {\"url\":\"https://…\",\"device\":\"mobile\"|\"desktop\"?}.",
-    tags: ["browser", "performance", "web-vitals", "lcp", "cls", "page-speed", "ttfb", "audit"],
+      "Load one public URL once in headless Chromium and report what that load measured: navigation timings (TTFB, DOMContentLoaded, load), Web Vitals read from the page's own performance entries (LCP, FCP, CLS, total blocking time from long tasks), total transfer bytes, request count, the 5 heaviest resources, render-blocking scripts and styles, console errors, and an opportunities array computed from that same load: what to fix and where. Each opportunity names the element (a CSS selector) or the URL, says in one sentence what was measured, and carries the measured bytes or milliseconds behind it (null where the load measured neither). The ids cover the LCP element (tag, selector, size, whether it was lazy-loaded or waited for a web font), render-blocking scripts and stylesheets in the head, images without reserved dimensions or larger than they are shown, fonts without font-display swap, bytes by resource type and resources over 100 KB, responses sent uncompressed or without cache headers, requests to other hosts, long tasks with the script that ran, layout shifts with the element that moved, and console errors. The one paid call returns the measurement and the opportunities together, so an audit-fix-rescore loop needs no browser of its own. Mobile or desktop viewport. This is a single measurement from one server location under shared load, with no throttling: it is a single lab measurement, not field data from real users, and the answer says so in its measurement field. Deterministic code, no model. Body: {\"url\":\"https://…\",\"device\":\"mobile\"|\"desktop\"?}.",
+    tags: ["browser", "performance", "web-vitals", "lcp", "cls", "page-speed", "ttfb", "audit", "opportunities", "render-blocking", "cache-headers"],
     discovery: {
       bodyType: "json",
       input: { url: "https://agent402.tools", device: "mobile" },
@@ -95,19 +95,178 @@ export const BROWSER_MEASURE_TOOLS = [
           finalUrl: "https://agent402.tools/",
           status: 200,
           device: "mobile",
-          viewport: { width: 412, height: 823 },
+          viewport: {
+            width: 412,
+            height: 823
+          },
           networkIdle: true,
-          timings: { ttfbMs: 182, domContentLoadedMs: 401, loadMs: 655 },
-          webVitals: { lcpMs: 512, lcpElement: "h1", fcpMs: 430, cls: 0.0012, totalBlockingTimeMs: 0, longTaskCount: 0 },
-          transfer: { totalBytes: 98123, requestCount: 9, failedRequests: 0 },
-          heaviestResources: [{ url: "https://agent402.tools/", type: "document", bytes: 41210 }],
-          heaviestResourcesPartial: { returned: 1, matched: 9, complete: false, truncated: true },
-          renderBlocking: [],
-          renderBlockingPartial: { returned: 0, matched: 0, complete: true, truncated: false },
+          timings: {
+            ttfbMs: 176,
+            domContentLoadedMs: 443,
+            loadMs: 1090
+          },
+          webVitals: {
+            lcpMs: 380,
+            lcpElement: "p",
+            fcpMs: 380,
+            cls: 0,
+            totalBlockingTimeMs: 0,
+            longTaskCount: 0
+          },
+          transfer: {
+            totalBytes: 582458,
+            requestCount: 43,
+            failedRequests: 1
+          },
+          heaviestResources: [
+            {
+              url: "https://agent402.tools/",
+              type: "document",
+              bytes: 37659
+            }
+          ],
+          heaviestResourcesPartial: {
+            returned: 1,
+            matched: 41,
+            complete: false,
+            truncated: true
+          },
+          renderBlocking: [
+            {
+              url: "https://agent402.tools/js/theme-init.js?v=a017322",
+              type: "script",
+              durationMs: 139
+            }
+          ],
+          renderBlockingPartial: {
+            returned: 1,
+            matched: 1,
+            complete: true,
+            truncated: false
+          },
           consoleErrors: [],
-          consoleErrorsPartial: { returned: 0, matched: 0, complete: true, truncated: false },
+          consoleErrorsPartial: {
+            returned: 0,
+            matched: 0,
+            complete: true,
+            truncated: false
+          },
           measurement: PAGE_SPEED_MEASUREMENT,
           untrustedContent: true,
+          opportunities: [
+            {
+              id: "lcp-element",
+              element: "div > div.hm-hero > div.ml-stagger:nth-of-type(1) > p.hm-lede",
+              url: null,
+              detail: "The largest contentful paint at 380 ms was <p>, a text block, 380x132 px, set in the web font Geist.",
+              estimate: {
+                ms: 380
+              },
+              tag: "p",
+              sizePx: 47488,
+              lazyLoaded: null,
+              webFont: "Geist"
+            },
+            {
+              id: "lcp-text-behind-web-font",
+              element: "div > div.hm-hero > div.ml-stagger:nth-of-type(1) > p.hm-lede",
+              url: "https://agent402.tools/fonts/geist-300-latin.woff2",
+              detail: "The LCP text is set in the web font Geist, fetched from https://agent402.tools/fonts/geist-300-latin.woff2; the paint waited for that font.",
+              estimate: {
+                bytes: 13920,
+                ms: 118
+              }
+            },
+            {
+              id: "render-blocking-script",
+              element: null,
+              url: "https://agent402.tools/js/theme-init.js?v=a017322",
+              detail: "Script in <head> without async or defer; the parser waited for it (139 ms to fetch). Add defer, or async when order does not matter.",
+              estimate: {
+                bytes: 453,
+                ms: 139
+              }
+            },
+            {
+              id: "short-cache-lifetime",
+              element: null,
+              url: "https://agent402.tools/js/home-hero.js",
+              detail: "script of 5.1 KB cached for 300 s (max-age=300). Give static assets a long max-age and change the URL when they change.",
+              estimate: {
+                bytes: 5243
+              }
+            },
+            {
+              id: "uncompressed-response",
+              element: null,
+              url: "https://live.agent402.tools/logo/v2/x402%3A0x325bdf6f7efab24a2210c48c1b64cab2eae1d430",
+              detail: "image/svg+xml response of 1.3 KB sent with no content-encoding. Serve it with gzip or brotli.",
+              estimate: {
+                bytes: 1379
+              }
+            },
+            {
+              id: "transfer-by-type",
+              element: null,
+              url: null,
+              detail: "Transferred 568.8 KB: script 327.5 KB in 12 requests, font 147.8 KB in 12 requests, image 50 KB in 14 requests, document 41.6 KB in 2 requests, fetch 1.9 KB in 2 requests, eventsource 0 KB in 1 request.",
+              estimate: {
+                bytes: 582458
+              },
+              byType: {
+                document: {
+                  bytes: 42612,
+                  requests: 2
+                },
+                script: {
+                  bytes: 335322,
+                  requests: 12
+                },
+                font: {
+                  bytes: 151385,
+                  requests: 12
+                },
+                fetch: {
+                  bytes: 1904,
+                  requests: 2
+                },
+                image: {
+                  bytes: 51235,
+                  requests: 14
+                },
+                eventsource: {
+                  bytes: 0,
+                  requests: 1
+                }
+              }
+            },
+            {
+              id: "large-resource",
+              element: null,
+              url: "https://agent402.tools/e/static/array.js",
+              detail: "script of 103.7 KB transferred (application/javascript).",
+              estimate: {
+                bytes: 106160
+              },
+              type: "script"
+            },
+            {
+              id: "third-party-host",
+              element: null,
+              url: "www.googletagmanager.com",
+              detail: "1 request to www.googletagmanager.com (176.9 KB), a host outside agent402.tools.",
+              estimate: {
+                bytes: 181162
+              },
+              requests: 1
+            }
+          ],
+          opportunitiesPartial: {
+            returned: 8,
+            matched: 29,
+            complete: false,
+            truncated: true
+          }
         },
       },
     },
