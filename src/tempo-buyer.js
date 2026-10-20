@@ -199,7 +199,7 @@ export async function tempoBuyerStatus() {
 export async function payTempo(url, {
   maxAtomic, method = "POST", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES,
   trusted = false, createCredential = null, proof = tempoInboundEvidence, minSettled = tempoMinSettled(), minPayers = tempoMinPayers(),
-  memoizeDelivery = false,
+  memoizeDelivery = false, slug = null,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
   if (maxAtomic == null) throw bad("payTempo requires maxAtomic (the margin-guard ceiling)", 500);
@@ -326,7 +326,7 @@ export async function payTempo(url, {
     const sellerOrigin = (() => { try { return new URL(url).origin; } catch { return null; } })();
     // The outbound ledger (src/outbound-ledger.js) records the payment the
     // same way payX402 does: the money left on this rail too, delivered or not.
-    const ledger = (result, tx) => recordOutbound({ chain: "tempo", payTo: recipient, amountAtomic: quotedAtomic, asset: req.currency || null, usd: Number(quotedAtomic) / 1e6, slug: null, origin: sellerOrigin, result, tx });
+    const ledger = (result, tx) => recordOutbound({ chain: "tempo", payTo: recipient, amountAtomic: quotedAtomic, asset: req.currency || null, usd: Number(quotedAtomic) / 1e6, slug: slug || null, origin: sellerOrigin, result, tx });
     if (chargedFailure) ledger("undelivered", null);
     if (memoizeDelivery && chargedFailure && sellerOrigin) noteSellerDeliveryFailure(sellerOrigin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
     if (paid.status === 402 || paid.status === 401) throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
