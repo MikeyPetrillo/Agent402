@@ -1307,6 +1307,8 @@ jobs:
           t node scripts/test-crawl-kit.js
           # page-change kit (fixture server on port 0; a DNS lookup is the only network touch)
           t node scripts/test-page-change-kit.js
+          # email-guard (offline: MIME reader, HTML worker, header, link and text signals)
+          t node scripts/test-email-guard.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
           # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
