@@ -17,11 +17,12 @@ on:
     # schedules). "9,39" was tried 2026-08-30 and did not help, and the wallet
     # balance, credits, drain and Postgres alarms moved to the Cloudflare status
     # Worker (5-minute cron, issues-only token) the same day, which is why the
-    # schedule went back to */15. Every check that still lives ONLY here pages
-    # at this workflow's real cadence, hours late: production DOWN, settlement
-    # freshness, the quota watches, email, serving health and the Stellar legs.
-    # Moving more of them to the Worker is the fix; re-measure before trusting
-    # any number in this comment.
+    # schedule went back to */15. The Worker now also runs every check that
+    # reads a word on /api/gateway-status, plus production DOWN and settlement
+    # freshness. The checks that live ONLY here page at this workflow's real
+    # cadence, hours late: the rail offer (/api/rails), Bazaar validation, the
+    # canary burner, the PayAI and CDP quota watches and serving health
+    # (operator token). Re-measure before trusting any number in this comment.
     - cron: "*/15 * * * *"
   push:
     branches:
@@ -953,6 +954,43 @@ jobs:
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the MPP reconciliation reads ok at $(date -u +%FT%TZ)."
+          fi
+
+      # The rolling seven days (mppReconcile.window7d): the seven UTC days
+      # ending at the latest reconciled day, reconciled as one range. The daily
+      # alarm above closes as soon as the NEXT day reads ok, so a mismatch
+      # nobody resolved drops out of sight while it is still in the window.
+      # This pages on that gap only: window mismatch while the latest day reads
+      # ok. A daily mismatch is the step above (no second issue for one event);
+      # an unknown day says nothing about the window's age, so it does neither.
+      # Window ok closes. Same single retry. The status Worker runs the same
+      # check every five minutes under the same title.
+      - name: MPP reconciliation 7-day window check (alarm when a mismatch stays in the window)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          read_win() { curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null | jq -r '"\(.mppReconcile.window7d // "unknown") \(.mppReconcile.status // "unknown") \(.mppReconcile.day // "?")"' 2>/dev/null || true; }
+          read -r WIN DAILY DAY <<< "$(read_win)" || true
+          WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}
+          if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then echo "mpp reconcile window: first read mismatch - re-reading in 30s before paging"; sleep 30; read -r WIN DAILY DAY <<< "$(read_win)" || true; WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}; fi
+          echo "mpp reconcile 7-day window: $WIN (latest day: $DAILY)"
+          TITLE="MPP reconciliation 7-day window MISMATCH"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then
+            if [ -z "$OPEN" ]; then
+              case "$DAY" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) DAY="the latest day" ;; esac
+              ROWS=""
+              if [ -n "$OP_TOKEN" ]; then
+                ROWS=$(curl -s --max-time 20 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/mpp-reconcile.json" \
+                  | jq -r '[.window.mismatches[]? | select(.category != "charged_failed") | "\((.at // "?")[0:10]) \(.category)"] | group_by(.) | map("- \(.[0]): \(length)") | .[]' 2>/dev/null || echo "")
+              fi
+              BODY=$(printf '/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (%s) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "MPP reconciliation MISMATCH" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx).\n\n%s\n\nRead /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.' "$DAY" "${ROWS:-(the day and category of each item need the operator token)}")
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            fi
+          elif [ "$WIN" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the 7-day MPP reconciliation window reads ok at $(date -u +%FT%TZ)."
           fi
 
       # A paid-but-failed MPP call: settle succeeded and the response was not a
