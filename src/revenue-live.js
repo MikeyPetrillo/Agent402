@@ -669,7 +669,9 @@ async function solanaRail(wallet) {
     const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [tokenAccount, { limit: 6 }], 6000);
     // Decode each recent tx's USDC delta + payer (same helpers as the daily
     // scanner) so internal test money classifies here too. Best-effort under
-    // a budget — an undecodable tx stays a bare signature link.
+    // a budget — an undecodable tx stays a bare signature link. Keyed lane
+    // first: a cold /revenue waits on this card under its own deadline, and
+    // at six reads per snapshot the card carries none of the lane load.
     const deadline = Date.now() + 12_000;
     out.recent = [];
     for (const s of Array.isArray(sigs) ? sigs : []) {
@@ -680,7 +682,7 @@ async function solanaRail(wallet) {
       };
       if (!s.err && Date.now() < deadline) {
         try {
-          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 5000, keyedFirst: true });
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 5000, keyedFirst: true, caller: "revenue-card" });
           const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
           if (usd > 0) {
             item.usd = usd;
@@ -1313,10 +1315,19 @@ export function parseSolanaTransfer(txn, owner) {
 // below carries roughly 180 transactions where the old hard `maxTx = 60`
 // stopped at sixty on every wallet busier than that. maxTx stays as a backstop
 // only - the clock is what stops a long walk here.
-export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PAGES, maxTx = 2000, budgetMs = SCAN_BUDGET_MS } = {}) {
+// Lane choice for the decode reads (src/solana-history-rpc.js): a cold wallet
+// has a page view waiting on it, so the keyed lane answers first and nothing
+// queues for a public slot. `background: true` is a refresh behind a cached
+// chart (stale-while-revalidate in server.js): the public lane is taken
+// whenever its slot is open now and the keyed lane otherwise, still without
+// queueing, so the clock above bounds the walk exactly as before.
+export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PAGES, maxTx = 2000, budgetMs = SCAN_BUDGET_MS, background = false } = {}) {
   const out = { rail: "Solana", wallet: wallet || null, days, buckets: [], totals: { tx: 0, usd: 0, buyers: 0, internalTx: 0, internalUsd: 0 }, truncated: false, error: null };
   if (!wallet) { out.error = "SOLANA_WALLET_ADDRESS unset"; return out; }
   const cutoff = Date.now() - days * 86_400_000;
+  const laneOpts = background
+    ? { timeoutMs: 6000, maxWaitMs: 0, caller: "activity-refresh" }
+    : { timeoutMs: 6000, keyedFirst: true, caller: "activity-cold" };
   const entries = [];
   let tokenAccount;
   try {
@@ -1342,7 +1353,7 @@ export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PA
         if (txBudget <= 0 || Date.now() >= until) { capped = true; break scan; }
         txBudget--;
         try {
-          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 6000, keyedFirst: true });
+          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], laneOpts);
           const entry = parseSolanaTransfer(txn, wallet);
           if (entry) {
             entry.internal = entry.from != null && OUR_SOLANA_WALLETS.has(entry.from);

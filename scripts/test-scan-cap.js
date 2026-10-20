@@ -331,10 +331,42 @@ ok(sol.totals.tx === 400, `solana: reports all 400 transfers, past the old hard 
 ok(sol.totals.tx > 60, `solana: the reported total is past the old ceiling (got ${sol.totals.tx})`);
 ok(sol.truncated === false, `solana: a completed walk is not truncated (got ${sol.truncated})`);
 
+// The history module caches every record the walk above read; cleared so the
+// starved walk below reaches the stub's delay instead of the cache.
 installStub({ total: 400, delayMs: 20 });
+(await import("../src/solana-history-rpc.js")).__resetSolanaHistoryForTest();
 const solStarved = await solanaActivity("SWALLET", { budgetMs: 150 });
 ok(solStarved.truncated === true, `solana: a budget-stopped walk reports truncated:true (got ${solStarved.truncated})`);
 ok(solStarved.totals.tx < 400, `solana: and returns an honest partial floor (got ${solStarved.totals.tx})`);
+
+// Lane choice (src/solana-history-rpc.js): a cold scan has a page view waiting
+// on it and asks the keyed lane first; a background refresh takes the public
+// lane when its slot is open now and the keyed lane otherwise, never queueing,
+// and reports the same chart. The history module's cache is cleared between
+// the two so every read reaches a lane.
+{
+  const H = await import("../src/solana-history-rpc.js");
+  const laneOf = (url) => (/alchemy\.com/.test(url) ? "keyed" : "public");
+  const seen = { cold: { keyed: 0, public: 0 }, refresh: { keyed: 0, public: 0 } };
+  let phase = "cold";
+  installStub({ total: 60 });
+  const stubFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { const b = init?.body ? JSON.parse(init.body) : null; if (b?.method === "getTransaction") seen[phase][laneOf(String(url))]++; return stubFetch(url, init); };
+  H.__resetSolanaHistoryForTest();
+  const cold = await solanaActivity("SWALLET", { budgetMs: 60_000 });
+  ok(cold.totals.tx === 60 && seen.cold.keyed === 60 && seen.cold.public === 0, `solana cold: every decode read asks the keyed lane first (${JSON.stringify(seen.cold)})`);
+  let st = H.solanaHistoryStatus({ full: true });
+  ok(st.callers["activity-cold"]?.keyedBecause.keyedFirst === 60, `solana cold: counted under activity-cold as keyedFirst (${JSON.stringify(st.callers["activity-cold"])})`);
+  phase = "refresh";
+  H.__resetSolanaHistoryForTest();
+  const t0 = Date.now();
+  const warm = await solanaActivity("SWALLET", { budgetMs: 60_000, background: true });
+  const ms = Date.now() - t0;
+  st = H.solanaHistoryStatus({ full: true });
+  ok(JSON.stringify(warm) === JSON.stringify(cold), "solana refresh: the chart is the one the cold scan reported");
+  ok(seen.refresh.public >= 1 && seen.refresh.keyed === 60 - seen.refresh.public && ms < 5_000, `solana refresh: the public lane takes the reads whose slot is open now, the keyed lane the rest, nothing queues (${JSON.stringify(seen.refresh)}, ${ms} ms)`);
+  ok(st.callers["activity-refresh"]?.keyedBecause.paced === seen.refresh.keyed && st.callers["activity-refresh"]?.public === seen.refresh.public, `solana refresh: counted under activity-refresh as public or paced (${JSON.stringify(st.callers["activity-refresh"])})`);
+}
 
 restore();
 console.log(`\n${pass} passed`);
