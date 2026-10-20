@@ -4,9 +4,45 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## Unreleased
+## v2.8.0 - 2026-10-20
 
 ### 2026-10-20
+- New tool `dub` (`POST /api/dub`): translates a text into a target language
+  and speaks the translation in one paid call, priced as the sum of the chat
+  tier and the chosen speech tier and quoted in its 402. The audio comes back
+  as raw bytes with the translation in the `X-Dub-Translation` header, or as
+  JSON with `json: true`. A failed step answers an error naming the step and
+  is not settled on x402. Model-backed.
+- New tool `loop-gate` (`POST /api/loop-gate`): decides whether an agent loop
+  should continue, stop or escalate after an iteration, with the checks behind
+  the answer and a next step. Budget and iteration limits are checked in code
+  first, and repeats are found lexically before any model runs. Model-backed
+  for the goal and stuck judgments.
+- New tool `email-guard` (`POST /api/email-guard`): reads one email the way a
+  mail-triaging agent should before acting on it, reporting hidden text,
+  invisible Unicode, text present in only one part, links whose text names
+  another host, header signals and sentences phrased as instructions to an AI
+  assistant, each with evidence and offsets. No score and no verdict.
+  Deterministic code, no model.
+- New tool `page-change` (`POST /api/page-change`): tells whether a public
+  page changed since the last look, with nothing stored on our side. It
+  answers a fingerprint of the readable text (a selector narrows it, ignore
+  entries drop timestamps and counters), and a line diff with a similarity
+  score when the previous text is sent back. Deterministic code, no model.
+- New tool `mcp-package-check` (`POST /api/mcp-package-check`): the published
+  facts about an npm package that ships an MCP server, read before running it:
+  version and package age, maintainers, provenance, install scripts,
+  dependency counts, deprecation and the GitHub repository the manifest names.
+  Observations only, no score. Deterministic code, no model.
+- `/api/tts` and `/api/tts-hd` back up ElevenLabs with Voxtral, then Grok
+  voice, then MAI-Voice-2 on the same speech wire, each in all six formats.
+- New pages: `/how-to-pay` walks the buyer path on every payment rail, and
+  `/speech` covers the speech tools, with routes, prices and examples read
+  from the catalog.
+- On the MCP connector, audio from a paid call comes back as an audio block,
+  with dub's translation kept.
+- `agent402-mcp` 0.13.14 requires MCP SDK 1.32.1; the server runs
+  follow-redirects 1.16.1 and hono 4.13.13.
 - `html-frames`: an optional `compare` input (`baseline`, an array of
   `{t, png}` stills, or `baselineUrl`, a second document under the same
   render contract fetched through the public-URL guard) adds `similarity`

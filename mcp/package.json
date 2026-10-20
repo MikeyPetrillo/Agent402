@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.13",
+  "version": "0.13.14",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -81,7 +81,7 @@
   "overrides": {
     "qs": "6.16.0",
     "ws": "^8.21.0",
-    "hono": "4.13.7",
+    "hono": "4.13.13",
     "fast-uri": "3.1.8",
     "body-parser": "2.3.0",
     "@hono/node-server": "2.0.12",
