@@ -162,6 +162,39 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(/LEDGER_HOLD_WORDS = new Set\(\["local", "stuck"\]\)/.test(gate), "the quiet gate holds on the same two words");
 }
 
+// --- every marker the parser knows has an output, and the one that spends
+// --- with the operator token never fires from a push ----------------------
+// `payai-solana` runs scripts/payai-listing-pass.js with the Solana burner AND
+// the operator token (the settle-via gate). A job a commit subject can start
+// is a job a branch push can start with a modified script, so that job is
+// dispatch-only: its `if` names workflow_dispatch and no markers output, and
+// it sits in the spending environment. The marker still parses, so the two
+// lists (MARKERS and the outputs block) cannot drift apart.
+{
+  const wfText = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const m = wfText.match(/MARKERS="([^"]+)"/);
+  ok(!!m, "the markers job declares its MARKERS list");
+  const markers = m ? m[1].split(/\s+/).filter(Boolean) : [];
+  const outputs = Object.keys(jobs.markers?.outputs || {});
+  for (const marker of markers) {
+    ok(outputs.includes(marker.replace(/-/g, "_")), `marker [${marker}] has a markers output`);
+  }
+  ok(markers.includes("payai-solana"), "the payai-solana marker is parsed with the others");
+  const job = jobs["payai-solana"];
+  ok(!!job, "the payai-solana job exists");
+  const cond = String(job?.if || "");
+  ok(/workflow_dispatch/.test(cond) && /inputs\.mode == 'payai-solana'/.test(cond), "payai-solana runs on a workflow_dispatch with its mode");
+  ok(!/needs\.markers/.test(cond) && !/push/.test(cond), "payai-solana never fires from a push or a marker");
+  ok(String(job?.environment || "") === "spending", "payai-solana carries the spending environment");
+  const run = (job?.steps || []).map((st) => String(st.run || "")).join("\n");
+  ok(/scripts\/payai-listing-pass\.js --live/.test(run), "payai-solana runs the listing pass live");
+  ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run), "payai-solana masks both secrets in its log");
+  const stepEnv = Object.assign({}, ...(job?.steps || []).map((st) => st.env || {}));
+  ok(/secrets\.AGENT402_OPERATOR_TOKEN/.test(String(stepEnv.AGENT402_OPERATOR_TOKEN || "")), "the operator token comes from the same secret the heartbeat uses");
+  const sibling = jobs["bazaar-solana"];
+  ok(!!sibling && /secrets\.SOLANA_BURNER_KEY/.test(String(Object.assign({}, ...(sibling.steps || []).map((st) => st.env || {})).SOLANA_BURNER_KEY || "")) && /secrets\.SOLANA_BURNER_KEY/.test(String(stepEnv.SOLANA_BURNER_KEY || "")), "payai-solana pays from the same Solana burner as bazaar-solana");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 
 
