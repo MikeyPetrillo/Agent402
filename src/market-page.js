@@ -894,7 +894,12 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // assets/js/market-terminal.js exists to absorb. The cap is still a cap -
   // Base lists well over a thousand sellers - and ?all=1 still opts out.
   const TERMINAL_ROW_CAP = 400;
-  const terminalPool = all ? rosterSellers : rosterSellers.slice(0, TERMINAL_ROW_CAP);
+  // The cap counts independent sellers only: the pinned host row rides
+  // above it, so a capped page shows the host plus the top TERMINAL_ROW_CAP
+  // others, and the note's "of N" is that same independent count.
+  const independentSellers = rosterSellers.filter((s) => !s.local);
+  const terminalCapped = !all && independentSellers.length > TERMINAL_ROW_CAP;
+  const terminalPool = terminalCapped ? [...rosterSellers.filter((s) => s.local), ...independentSellers.slice(0, TERMINAL_ROW_CAP)] : rosterSellers;
   const terminalRows = terminalPool.map((s) => {
     const st = sellerStat(s) || {};
     return {
@@ -911,6 +916,11 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       extra: extraOf(s),
       mpp: s.mpp === true,
       dispatch: dispatchVerdict(s, chainKey),
+      // The seller's own display name and its paid-tool split, which the
+      // card roster showed and the row keeps (the homepage link lives in the
+      // selected seller's panel).
+      name: s.local ? null : (s.name || s.displayName || null),
+      paid: s.paidToolCount != null && s.paidToolCount !== s.toolCount ? Number(s.paidToolCount) : null,
     };
   });
   // Ticker rows are the busiest sellers this page already lists, with the
@@ -941,8 +951,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // leaderboard does not measure), and the cap with its ?all=1 escape.
   const terminalCaption = `
   <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">pick a seller to scope the activity panel · the host row is ours and says so · every other seller is independent, found by the open crawl · ${measured ? `calls = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so the calls, volume and buyers columns show none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>`;
-  const terminalCapNote = !all && rosterSellers.length > TERMINAL_ROW_CAP
-    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${[`showing the top ${TERMINAL_ROW_CAP} of ${rosterSellers.filter((s) => !s.local).length} sellers`, `<a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a>`].map((t) => `<span>${t}</span>`).join("")}</p>`
+  const terminalCapNote = terminalCapped
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${[`showing the top ${TERMINAL_ROW_CAP} of ${independentSellers.length} sellers`, `<a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a>`].map((t) => `<span>${t}</span>`).join("")}</p>`
     : "";
 
   const sellSectionHtml = `

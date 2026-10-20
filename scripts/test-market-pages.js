@@ -484,9 +484,11 @@ for (const c of NEW_CHAINS) {
   const rowCount = (html) => (html.match(/data-t-row data-host=/g) || []).length;
 
   const capped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111" });
-  // The pinned host row is one of the capped rows (it is first in the pool).
-  ok(rowCount(capped) === ROW_CAP, `the terminal caps at ${ROW_CAP} rows (got ${rowCount(capped)})`);
+  // The pinned host row rides above the cap: ROW_CAP independent sellers plus the host.
+  ok(rowCount(capped) === ROW_CAP + 1, `the terminal caps at ${ROW_CAP} independent rows plus the host (got ${rowCount(capped)})`);
   ok(/showing the top 400 of 450 sellers/.test(capped), "cap note states the true total (450), not the capped count");
+  ok(/class="t-name" title="the name this seller publishes">Seller 0</.test(capped), "terminal rows carry the seller's published name beside its host");
+  ok(!/class="t-name"[^>]*>agent402\.tools</.test(capped), "the host row repeats no name mark");
   ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
   ok(/SELLERS LISTED[\s\S]{0,200}>450</.test(capped), "SELLERS LISTED stat stays the full honest count (450 independent sellers, host not counted), unaffected by the render cap");
 

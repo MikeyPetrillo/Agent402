@@ -144,6 +144,21 @@ function rowMarks(r) {
   }
   return out.length ? " " + out.join(" ") : "";
 }
+/** The seller's own display name beside its host, when the seller publishes
+ *  one that is not just the host again. */
+function nameMark(r) {
+  const name = String(r.name || "").trim();
+  if (!name || name.toLowerCase() === String(r.host || "").toLowerCase()) return "";
+  return ` <span class="t-name" title="the name this seller publishes">${esc(name)}</span>`;
+}
+
+/** "N paid" after the tool count when only part of a seller's catalog is
+ *  priced, so a free-heavy catalog is not read as a paid one. */
+function paidMark(r) {
+  if (r.paid == null) return "";
+  return ` <span class="t-paid" title="${esc(String(r.paid))} of these tools are priced; the rest are free">${esc(String(r.paid))} paid</span>`;
+}
+
 /** "+N" after the tool count when N sibling hosts settling to the same wallet
  *  were collapsed into this row, so they are disclosed rather than hidden. */
 function extraMark(r) {
@@ -172,11 +187,11 @@ export function terminalRoster(rows = [], selectedHost = null, { measured = true
        data-buyers="${Number(r.buyers) || 0}" data-tools="${Number(r.tools) || 0}" data-idx="${i}"
        ${sel ? 'aria-current="true"' : ""}>
       <span class="t-c t-c-n" role="cell">${n}</span>
-      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}${rowMarks(r)}</span>
+      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}${nameMark(r)}${rowMarks(r)}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.calls) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? esc(compactUsd(r.usd)) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.buyers) : "-"}</span>
-      <span class="t-c t-c-num" role="cell">${num(r.tools)}${extraMark(r)}</span>
+      <span class="t-c t-c-num" role="cell">${num(r.tools)}${paidMark(r)}${extraMark(r)}</span>
       <span class="t-c t-c-bar" role="cell" aria-hidden="true"><i style="width:${share}%"></i></span>
     </a>`;
   }).join("");
@@ -321,6 +336,8 @@ export const TERMINAL_CSS = `
 .t-mark{flex:none;color:var(--t-ink-faint);font-size:var(--fs-2xs);letter-spacing:.06em;border:1px solid var(--t-rule-2);padding:0 4px;white-space:nowrap;}
 .t-mark.is-on{color:var(--t-up);border-color:var(--t-up);}
 .t-more{color:var(--t-ink-faint);font-size:var(--fs-2xs);}
+.t-name{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:14ch;}
+.t-paid{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;}
 .t-c-num{text-align:right;}
 .t-dot{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:var(--t-rule-2);}
 .t-dot.is-on{background:var(--t-up);}
