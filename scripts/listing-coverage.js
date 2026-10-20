@@ -116,7 +116,7 @@ export function coverageFor({ pricing, bazaarItems = [], payaiItems = [], origin
     seen.add(key);
     const row = {
       method: e.method || "POST", path: e.path, slug: e.slug || null, price: e.price || null,
-      priceUsd: priceToUsd(e.price), quoted: e.quoted === true, identityBound: e.identityBound === true,
+      priceUsd: priceToUsd(e.price), quoted: e.quoted === true, identityBound: e.identityBound === true, computePayable: e.computePayable === true, modelBacked: e.modelBacked === true,
       sells: {}, bazaar: {}, payai: {},
       bazaarRow: registries.bazaar.has(key), payaiRow: registries.payai.has(key),
     };

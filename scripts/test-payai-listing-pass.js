@@ -17,22 +17,26 @@ const ORIGIN = "https://agent402.tools";
 const pricing = {
   payment: { networks: ["base", "solana"] },
   endpoints: [
-    { method: "POST", path: "/api/hash", slug: "hash", price: "$0.001" },
-    { method: "GET", path: "/api/answer", slug: "answer", price: "$0.08" },
-    { method: "POST", path: "/api/premium", slug: "premium", price: "$0.50" },
-    { method: "POST", path: "/api/listed", slug: "listed", price: "$0.001" },
-    { method: "POST", path: "/api/memory", slug: "memory-write", price: "$0.001", identityBound: true },
-    { method: "POST", path: "/api/evm-only", slug: "evm-only", price: "$0.001", networks: [BASE] },
-    { method: "POST", path: "/v1/metered", slug: "metered", price: "$0.001", quoted: true },
-    { method: "POST", path: "/api/free-shape", slug: "free-shape", price: "$0" },
-    { method: "POST", path: "/api/mid", slug: "mid", price: "$0.25" },
+    { method: "POST", path: "/api/hash", slug: "hash", price: "$0.001", computePayable: true },
+    { method: "GET", path: "/api/answer", slug: "answer", price: "$0.08", computePayable: true },
+    { method: "POST", path: "/api/premium", slug: "premium", price: "$0.50", computePayable: true },
+    { method: "POST", path: "/api/listed", slug: "listed", price: "$0.001", computePayable: true },
+    { method: "POST", path: "/api/memory", slug: "memory-write", price: "$0.001", computePayable: true, identityBound: true },
+    { method: "POST", path: "/api/evm-only", slug: "evm-only", price: "$0.001", computePayable: true, networks: [BASE] },
+    { method: "POST", path: "/v1/metered", slug: "metered", price: "$0.001", computePayable: true, quoted: true },
+    { method: "POST", path: "/api/free-shape", slug: "free-shape", price: "$0", computePayable: true },
+    { method: "POST", path: "/api/mid", slug: "mid", price: "$0.25", computePayable: true },
+    { method: "POST", path: "/api/model-call", slug: "model-call", price: "$0.01", modelBacked: true },
   ],
 };
 const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.tools/api/listed", accepts: [{ network: SOL }] }], origin: ORIGIN, chains: ["base", "solana"] });
 
 {
   const plan = selectPass(cov);
-  ok(plan.missing === 6, `six routes sold on Solana lack a PayAI row (${plan.missing}): the identity-bound and EVM-only ones never count`);
+  ok(!plan.selected.some((r) => r.slug === "model-call") && plan.skipped.some((r) => r.slug === "model-call" && /upstream vendor/.test(r.why)), "a route that serves through a vendor call is skipped by default, with the reason");
+  ok(selectPass(cov, { includeUpstream: true }).selected.some((r) => r.slug === "model-call"), "--include-upstream buys it");
+  ok(parseArgs(["--include-upstream"]).includeUpstream === true && parseArgs([]).includeUpstream === false, "the flag parses");
+  ok(plan.missing === 7, `seven routes sold on Solana lack a PayAI row (${plan.missing}): the identity-bound and EVM-only ones never count`);
   ok(plan.selected.map((r) => r.slug).join() === "hash,answer,mid", `selected cheapest first, within the $${DEFAULT_MAX_PRICE_USD} cap inclusive (${plan.selected.map((r) => r.slug).join()})`);
   ok(plan.skipped.find((r) => r.slug === "premium")?.why.includes("cap") && plan.skipped.find((r) => r.slug === "metered")?.why === "quoted per request" && plan.skipped.find((r) => r.slug === "free-shape")?.why === "no fixed price", "the premium, quoted and unpriced routes are skipped with a reason");
   ok(Math.abs(plan.estimateUsd - 0.331) < 1e-9, `the estimate is the list-price sum ($${plan.estimateUsd})`);

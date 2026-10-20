@@ -27,7 +27,9 @@
 // Flags: --max-price USD (default 0.25; a route above it is skipped), --only
 // slug,slug, --limit N, --pause-ms (default 1500 between buys), --out FILE
 // (route/status/tx/charged records as JSON), --include-quoted (a quoted route's
-// 402 prices the request itself; skipped by default), --settle-wait-ms (before
+// 402 prices the request itself; skipped by default), --include-upstream (a
+// route that serves through a vendor call: the list price lands in our own
+// treasury, the vendor call is the real cost, so skipped by default), --settle-wait-ms (before
 // the closing re-measure, default 60000), --chain (default solana).
 //
 // Env: SOLANA_BURNER_KEY (base58 64-byte secret or JSON byte array; never
@@ -51,7 +53,7 @@ export const DEFAULT_MAX_PRICE_USD = 0.25;
  * on the chain, the PayAI registry lacks it there, its price is within the
  * cap, and (unless included) it is not quoted per request.
  */
-export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, only = null, limit = Infinity, includeQuoted = false } = {}) {
+export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, only = null, limit = Infinity, includeQuoted = false, includeUpstream = false } = {}) {
   const onlySet = only ? new Set([...only].map((s) => String(s).trim()).filter(Boolean)) : null;
   const missing = missingIn(coverage, "payai", chain);
   const skipped = [];
@@ -59,6 +61,9 @@ export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_M
   for (const r of missing) {
     if (onlySet && !onlySet.has(r.slug)) continue;
     if (r.quoted && !includeQuoted) { skipped.push({ ...r, why: "quoted per request" }); continue; }
+    // The list price only moves between our own wallets; a route that calls
+    // a vendor while it serves is real spend, so it is bought only on request.
+    if (!r.computePayable && !includeUpstream) { skipped.push({ ...r, why: "serves through an upstream vendor call (pass --include-upstream)" }); continue; }
     if (!(r.priceUsd > 0)) { skipped.push({ ...r, why: "no fixed price" }); continue; }
     if (r.priceUsd > maxPriceUsd) { skipped.push({ ...r, why: `above the $${maxPriceUsd} cap` }); continue; }
     selected.push(r);
@@ -97,6 +102,7 @@ export function parseArgs(argv) {
   const only = flag(argv, "--only", null);
   return {
     live: argv.includes("--live"),
+    includeUpstream: argv.includes("--include-upstream"),
     maxPriceUsd: Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : DEFAULT_MAX_PRICE_USD,
     only: typeof only === "string" ? only.split(",") : null,
     limit: limit != null && limit !== true ? Number(limit) : Infinity,
