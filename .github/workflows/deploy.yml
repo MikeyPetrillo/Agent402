@@ -1759,6 +1759,8 @@ jobs:
           t node scripts/test-algorand-router.js
           # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
           t node scripts/test-solana-router.js
+          # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)
+          t node scripts/test-payai-solana-sweep.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
           # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
