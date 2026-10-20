@@ -150,9 +150,9 @@ for (const c of NEW_CHAINS) {
   const activity = { days: 30, buckets: [{ date: "2026-07-08", tx: 5, usd: 0.5, buyers: 2 }], totals: { tx: 40, usd: 3.2, buyers: 6 } };
   const sel = { local: false, host: "ext1.example", name: "Ext One" };
 
-  // Roster shows the settled-call count for a seller the leaderboard covers.
+  // The terminal row shows the settled-call count for a seller the leaderboard covers.
   const hostView = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, leaderboardSnap, wallet: "0x1" });
-  ok(/42\s*tx/.test(hostView.replace(/&middot;|·/g, " ")), "base: roster shows the seller's settled-call count (42 tx) from the leaderboard join");
+  ok(/data-host="ext1\.example" data-calls="42"/.test(hostView) && /role="cell">42<\/span>/.test(hostView), "base: the terminal row shows the seller's settled-call count (42) from the leaderboard join");
 
   // Seller card renders the SELECTED seller's own numbers (from scoped activity).
   const cardView = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity, selectedSeller: sel, leaderboardSnap, wallet: "0x1" });
@@ -196,7 +196,7 @@ for (const c of NEW_CHAINS) {
   const leaderboardSnap = { leaderboard: [{ name: "Grouped", homepage: "https://a.example", wallet: payTo, wallets: [payTo], callsSettled: 999, totalUsd: 5, uniqueBuyers: 3 }] };
   const html = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, leaderboardSnap, wallet: "0x1" });
   const stripped = html.replace(/&middot;|·/g, " ");
-  ok((stripped.match(/999\s*tx/g) || []).length === 1, "base: shared-wallet group's tx total renders once, not per host");
+  ok((stripped.match(/data-calls="999"/g) || []).length === 1, "base: shared-wallet group's call total renders once, not per host");
   ok(stripped.includes("a.example"), "base: canonical host (real domain) survives the collapse");
   ok(!/svc-b\.up\.railway\.app/.test(stripped), "base: the platform-subdomain sibling is collapsed away, not a second row");
   ok(/\+1 more endpoint\b/.test(stripped), "base: collapsed sibling is disclosed as '+1 more endpoint', not hidden");
@@ -213,7 +213,7 @@ for (const c of NEW_CHAINS) {
   // Another chain is not measured by the Base leaderboard: no Base tx under its name.
   const poly = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL, { ...A, networks: ["eip155:137"], payToByNetwork: { "eip155:137": payTo } }] }, rail: null, activity: null, leaderboardSnap, wallet: "0x1" });
   ok(!/999\s*tx/.test(poly.replace(/&middot;|·/g, " ")) && !/>999</.test(poly), "polygon: a Base-leaderboard figure never renders under Polygon");
-  ok(/measured on Base only/.test(poly) && /Sellers accepting Polygon/.test(poly), "polygon: the roster says per-seller settlements are measured on Base only");
+  ok(/measured on Base only/.test(poly) && /Sellers accepting Polygon/.test(poly), "polygon: the terminal caption says per-seller settlements are measured on Base only");
 }
 
 // Market filter bar — shared chain tabs + sort + search, wired client-side.
@@ -258,11 +258,17 @@ for (const c of NEW_CHAINS) {
   const allHtml = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL, EXT] }, leaderboardSnap });
   ok(/<div data-mfb-row data-local="0" data-health="1" data-calls="42" data-usd="3\.5" data-buyers="7" data-tools="3"/.test(allHtml), "all view: roster row carries numeric data-calls/usd/buyers/tools attributes");
   ok(/<div data-mfb-row data-local="1"/.test(allHtml), "all view: local row is marked data-local=1 (stays pinned through client sorts)");
-  // Per-chain compact view (>12 sellers forces compact rows).
+  // A chain page lists its sellers in the market terminal, which sorts and
+  // searches its own rows: no [data-mfb-row] rows, and no Sort/search
+  // controls or wiring script rendered dead above it. The chain tabs and the
+  // legend stay.
   const many = Array.from({ length: 14 }, (_, i) => ({ origin: `https://e${i}.example`, displayName: `E${i}`, homepage: `https://e${i}.example`, local: false, toolCount: i, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }));
   const chainHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL, ...many] }, rail: null, activity: null, wallet: "0x1" });
-  ok(/<a [^>]*data-mfb-row data-local="0" data-health="1"[^>]*data-tools="13"/.test(chainHtml), "chain view: compact roster rows carry the same data-* payload");
-  ok(chainHtml.includes('<script src="/js/market-filter-bar.js"></script>'), "chain view: filter-bar wiring script is emitted on per-chain pages too");
+  ok(/data-t-row data-host="e13\.example" data-calls="0" data-usd="0"\s+data-buyers="0" data-tools="13"/.test(chainHtml), "chain view: the terminal row carries the numeric data-* payload its own script sorts on");
+  // (`tr[data-mfb-row]` also appears as a selector in the shared chrome CSS; only an element is a row.)
+  ok(!/<(a|div|tr) data-mfb-row/.test(chainHtml) && !/data-mfb-sort/.test(chainHtml) && !/data-mfb-search/.test(chainHtml), "chain view: no roster rows and no dead Sort/search controls");
+  ok(!chainHtml.includes('<script src="/js/market-filter-bar.js"></script>'), "chain view: the filter-bar wiring script is not emitted where it has no rows");
+  ok(/data-chain-tab="base"[^>]*\bon\b|\bon\b[^>]*data-chain-tab="base"/.test(chainHtml) && /class="mfb-legend"/.test(chainHtml), "chain view: the chain tabs and the legend stay");
 }
 
 // Roster row cap (speed P0) — the all-chains roster renders at most
@@ -467,30 +473,25 @@ for (const c of NEW_CHAINS) {
 // unconditionally (measured live on /base: 1,125 sellers -> a 700KB+ page,
 // 56,000px of desktop scroll, 7,500+ DOM nodes before "Sell on Base" is even
 // reachable). Mirrors marketPageAll's already-proven ALL_ROW_CAP=100 pattern;
-// 100 here must match market-page.js's own (unexported) ALL_ROW_CAP.
+// 400 here must match market-page.js's own (unexported) TERMINAL_ROW_CAP.
 {
-  const ROW_CAP = 100;
-  const many = Array.from({ length: 150 }, (_, i) => ({
+  const ROW_CAP = 400;
+  const many = Array.from({ length: 450 }, (_, i) => ({
     origin: `https://seller${i}.example`, displayName: `Seller ${i}`, homepage: `https://seller${i}.example`,
     local: false, toolCount: 1, routable: true, networks: ["eip155:8453"],
   }));
   const snapshot = { sellers: [LOCAL, ...many] };
-  // mlr-host only appears on actual roster rows (compact or card variant,
-  // never both in one render) - data-mfb-row was tried first and rejected:
-  // it also appears as a literal string inside the filter bar's embedded
-  // client-side script (a querySelectorAll call), which isn't a roster row.
-  const rowCount = (html) => (html.match(/class="mlr-host"/g) || []).length;
+  const rowCount = (html) => (html.match(/data-t-row data-host=/g) || []).length;
 
   const capped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111" });
-  // +1 for the pinned local seller, which is never part of the capped count.
-  ok(rowCount(capped) === ROW_CAP + 1, `roster caps at ${ROW_CAP} + pinned local row (got ${rowCount(capped)})`);
-  ok(/showing the top 100 of 150 sellers/.test(capped), "cap note states the true total (150), not the capped count");
-  ok(/class="mlr-host" title="[^"]+">/.test(capped) && /\.mlr-host\{[^}]*white-space:nowrap[^}]*text-overflow:ellipsis/.test(capped), "a seller host stays on one line, ellipsized, with the whole host in its title");
+  // The pinned host row is one of the capped rows (it is first in the pool).
+  ok(rowCount(capped) === ROW_CAP, `the terminal caps at ${ROW_CAP} rows (got ${rowCount(capped)})`);
+  ok(/showing the top 400 of 450 sellers/.test(capped), "cap note states the true total (450), not the capped count");
   ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
-  ok(/SELLERS LISTED[\s\S]{0,200}>150</.test(capped), "SELLERS LISTED stat stays the full honest count (150 independent sellers, host not counted), unaffected by the render cap");
+  ok(/SELLERS LISTED[\s\S]{0,200}>450</.test(capped), "SELLERS LISTED stat stays the full honest count (450 independent sellers, host not counted), unaffected by the render cap");
 
   const uncapped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111", all: true });
-  ok(rowCount(uncapped) === 151, `?all=1 renders every seller (got ${rowCount(uncapped)}, want 151)`);
+  ok(rowCount(uncapped) === 451, `?all=1 renders every seller (got ${rowCount(uncapped)}, want 451)`);
   ok(!/showing the top/.test(uncapped), "?all=1 shows no cap note");
 }
 
@@ -510,17 +511,21 @@ for (const c of NEW_CHAINS) {
   ok(!new RegExp('mpp-absent\\.example[\\s\\S]{0,120}class="mlr-mpp"').test(allHtml), "all view: seller with no mpp field at all gets no badge (undefined !== true)");
   ok(!allHtml.includes('Agent402.Tools (agent402.base.eth)<span class="mlr-mpp"') && !/THIS HOST<\/span>\s*<span class="mlr-mpp"/.test(allHtml), "all view: THIS HOST row (mpp never set) carries no badge either");
 
-  // Per-chain compact view (>12 sellers forces compact rows) - the badge must
-  // render there too, not just the all-chains table row shape.
+  // Per-chain view: the terminal row carries the mark beside the host.
   const many = Array.from({ length: 13 }, (_, i) => mkSeller(`e${i}.example`, i === 0 ? true : false));
   const chainHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL, ...many] }, rail: null, activity: null, wallet: "0x1" });
-  ok(/e0\.example[\s\S]{0,120}class="mlr-mpp"/.test(chainHtml), "chain compact view: mpp:true seller gets the badge");
-  ok(!new RegExp('e1\\.example[\\s\\S]{0,120}class="mlr-mpp"').test(chainHtml), "chain compact view: mpp:false seller gets no badge");
-
-  // Per-chain card view (<=12 sellers).
-  const cardHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL, mkSeller("card-mpp.example", true), mkSeller("card-no.example", false)] }, rail: null, activity: null, wallet: "0x1" });
-  ok(/card-mpp\.example[\s\S]{0,120}class="mlr-mpp"/.test(cardHtml), "chain card view: mpp:true seller gets the badge");
-  ok(!new RegExp('card-no\\.example[\\s\\S]{0,120}class="mlr-mpp"').test(cardHtml), "chain card view: mpp:false seller gets no badge");
+  const hostCell = (html, host) => { const i = html.indexOf(`</span>${host}`); return i < 0 ? "" : html.slice(i, html.indexOf("</span>\n", i + host.length + 8)); };
+  ok(/class="t-mark" title="Also reachable over the native MPP wire">MPP</.test(hostCell(chainHtml, "e0.example")), "chain view: mpp:true seller's terminal row carries the MPP mark");
+  ok(!/MPP/.test(hostCell(chainHtml, "e1.example")), "chain view: mpp:false seller's terminal row carries no MPP mark");
+  ok(!/t-mark/.test(hostCell(chainHtml, "agent402.tools")), "chain view: the host row carries no mark");
+  // The dispatch verdict rides the row the same way, with its reason in the title.
+  const verdictHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL,
+    { ...mkSeller("eligible.example", false), routerDispatchEligible: true, routerDispatchReason: "eligible", routerDispatchByChain: { base: { eligible: true, reason: "eligible" } } },
+    { ...mkSeller("nonet.example", false), routerDispatchEligible: false, routerDispatchReason: "network_unknown", routerDispatchByChain: { base: { eligible: false, reason: "network_unknown" } } },
+    mkSeller("unlabelled.example", false)] }, rail: null, activity: null, wallet: "0x1" });
+  ok(/class="t-mark is-on" title="dispatch: the router will buy from this seller \(eligible\)">dispatch</.test(hostCell(verdictHtml, "eligible.example")), "chain view: an eligible seller's row carries the dispatch mark");
+  ok(/class="t-mark" title="not dispatch-eligible: network unknown">no dispatch</.test(hostCell(verdictHtml, "nonet.example")), "chain view: a non-eligible seller's row names the reason in the mark's title");
+  ok(!/dispatch/.test(hostCell(verdictHtml, "unlabelled.example")), "chain view: a seller the handler did not label gets no dispatch mark");
 }
 
 // The local roster row must never render the host-card figures object as its
