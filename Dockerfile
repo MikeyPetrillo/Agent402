@@ -125,4 +125,10 @@ EXPOSE 3000
 # of MB of RSS for a shorter, quieter boot; it is a launch flag, not a Railway
 # variable, so it cannot trigger the variable-write redeploy race.
 ENV NODE_OPTIONS="--max-semi-space-size=64"
+# glibc gives each thread that calls malloc at once its own arena, sized from
+# the host's core count, and freed arena pages are rarely returned to the OS.
+# Two arenas keep native allocations (libvips, zlib, the browser bridge) in a
+# shared pool that trims back after a burst. The V8 heap is mapped outside
+# malloc and is unaffected.
+ENV MALLOC_ARENA_MAX=2
 CMD ["node", "start.js"]
