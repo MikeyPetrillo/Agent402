@@ -41,6 +41,10 @@ export function assertPngWithin(buf, { maxWidth, maxHeight, label = "png" } = {}
   if (!Buffer.isBuffer(buf) || sniffFormat(buf) !== "png") throw bad(`${label} is not a PNG`);
   const dims = declaredDimensions(buf);
   if (!dims || !(dims.width >= 1) || !(dims.height >= 1)) throw bad(`${label} has no readable PNG header`);
+  // IHDR byte 28 is the interlace method. The decoder bounds its inflate by
+  // the image size only for non-interlaced images, so an interlaced one is
+  // refused rather than inflated without a bound.
+  if (buf.length < 29 || buf[28] !== 0) throw bad(`${label} is an interlaced PNG; send a non-interlaced one`);
   if ((maxWidth && dims.width > maxWidth) || (maxHeight && dims.height > maxHeight)) {
     throw bad(`${label} is ${dims.width}x${dims.height}; the cap is ${maxWidth}x${maxHeight}`, 413);
   }

@@ -342,6 +342,8 @@ const NETWORK = new Set([
   "/api/chain/nonce", "/api/chain/storage", "/api/chain/pending", "/api/chain/total-supply", "/api/chain/erc1155-balance",
   // TTS kit: every call hits OpenAI TTS API upstream.
   "/api/tts", "/api/tts-hd", "/api/tts-lite",
+  // Dub composes the chat gateway and the speech tiers: keyless, the first step answers 503.
+  "/api/dub",
   // STT kit: fetches external audio + hits OpenAI transcription API.
   "/api/transcribe", "/api/transcribe-pro",
   // Embeddings kit: every call hits OpenAI embeddings API upstream.

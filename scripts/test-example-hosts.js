@@ -31,6 +31,7 @@ const OURS = new Set(["agent402.tools", "www.agent402.tools"]);
 const ALLOWED = {
   "example.com": "reserved example name (RFC 2606): DNS, TLS and WHOIS subjects, a card or URL inside an input, the archive lookup subject, and tech-stack (our own home page declares no detectable stack, so the example would be empty)",
   "api.example.com": "reserved example name inside an OpenAPI document passed inline, never fetched",
+  "example.net": "reserved example name (RFC 2606) inside a mail message passed inline to email-guard, never fetched",
   "ex.com": "a string url-parse splits, never fetched",
   "x.com": "a name inside text for entity extraction, never fetched",
   "google.com": "DNS and mail-record subject (SPF, DMARC, DKIM, propagation), never fetched over HTTP",
