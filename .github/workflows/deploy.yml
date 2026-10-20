@@ -2892,6 +2892,8 @@ jobs:
           t node scripts/test-rail-selfheal.js
           # Egress meter (cheap, safe, host-only, never throws on the hot path)
           t node scripts/test-egress-meter.js
+          # Raw fetch audit: every fetch outside the guard is on a classed allowlist
+          t node scripts/test-raw-fetch-audit.js
           # Stellar activity scan tests (offline, fixture Horizon records)
           t node scripts/test-stellar-activity.js
           # Kit2 tool tests (36 tools, exact-output assertions)

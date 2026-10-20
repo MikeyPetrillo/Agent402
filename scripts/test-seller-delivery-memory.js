@@ -302,7 +302,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   ok(fn.includes("const failing = sellerDeliveryFailingRecently(r.seller, chain);"), "the resolver consults the memo for the candidate and chain it is about to pay");
   const after = fn.slice(fn.indexOf("const failing = sellerDeliveryFailingRecently(r.seller, chain);"), fn.indexOf("const failing = sellerDeliveryFailingRecently(r.seller, chain);") + 600);
   ok(/^\s*if \(failing\) \{/m.test(after) && after.includes("continue; }"), "...and a hit SKIPS the candidate - the verdict is acted on, not logged");
-  ok(fn.indexOf("const failing = sellerDeliveryFailingRecently(r.seller, chain);") < fn.indexOf("await assertPublicUrl(r.url)"),
+  ok(fn.indexOf("const failing = sellerDeliveryFailingRecently(r.seller, chain);") < fn.indexOf("await probePublicUrl(r.url"),
      "...BEFORE the live probe, so a failing seller costs no round trip at all");
   ok(/deliveryFailing: local \? null : deliveryFailingByChain\(origin\)/.test(server),
      "and every public row is labelled from the same memo, so the label and the routing decision cannot drift");

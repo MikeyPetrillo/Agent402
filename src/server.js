@@ -1670,7 +1670,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     candidates = ordered.items;
     if ((judgedSelection?.method === "judged" || judgedSelection?.method === "judged-tie") && candidates[0]) candidates[0] = { ...candidates[0], judgedSelection };
   }
-  const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
+  const { probePublicUrl } = await import("./tools/fetch-guard.js");
   const resolved = [];
   const { sellerRouteRefusedRecently, sellerServesModel, refreshSellerMemos } = await import("./x402-buyer.js");
   // Strikes another replica recorded reach this one's memos before they are read.
@@ -1711,16 +1711,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // registered origin could still DNS-rebind to a private address between
       // crawl and now. Guard the PROBE too (payX402 re-guards before spending),
       // so this blind status-only fetch can't be turned into an internal-port
-      // scanner. assertPublicUrl is TOCTOU-rebindable on its own, so pin the
-      // connection to the validated IP with ssrfDispatcher (parity with payX402).
-      await assertPublicUrl(r.url);
-      const probe = await fetch(r.url, {
+      // scanner. probePublicUrl is the guard's own unpaid-probe primitive:
+      // assertPublicUrl before the request, the connection pinned to the
+      // validated IP (parity with payX402), and no redirect followed off the
+      // validated host.
+      const probe = await probePublicUrl(r.url, {
         method: (r.method || "POST").toUpperCase(),
         headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
         ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
-        dispatcher: ssrfDispatcher,
-        redirect: "manual", // never follow a redirect off the validated host
-        signal: AbortSignal.timeout(6000),
+        timeoutMs: 6000,
       });
       live = probe.status === 402;
       if (live && r.dynamic) {
@@ -1930,7 +1929,7 @@ async function diagnoseExternalSeller(task, { cap }) {
   const { settled: settledByOrigin, payers: payersByOrigin } = dispatchEvidence();
   const ourHost = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
   const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
-  const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
+  const { probePublicUrl } = await import("./tools/fetch-guard.js");
   const rows = [];
   for (const r of (results || []).slice(0, 12)) {
     const settled = settledByOrigin.get(norm(r.seller)) || 0;
@@ -1947,12 +1946,11 @@ async function diagnoseExternalSeller(task, { cap }) {
     let probe = null;
     if (passesFilters) {
       try {
-        await assertPublicUrl(r.url);
-        const p = await fetch(r.url, {
+        const p = await probePublicUrl(r.url, {
           method: (r.method || "POST").toUpperCase(),
           headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
           ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
-          dispatcher: ssrfDispatcher, redirect: "manual", signal: AbortSignal.timeout(6000),
+          timeoutMs: 6000,
         });
         probe = { status: p.status, live: p.status === 402 };
       } catch (e) { probe = { error: String(e?.message || e).slice(0, 120) }; }
