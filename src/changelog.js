@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-20",
+    title: "html-frames checks frames against a baseline",
+    items: [
+      "html-frames (POST /api/html-frames) takes an optional compare input: baseline, an array of {t, png} stills, or baselineUrl, a public URL of a second document under the same render contract (window.renderAt(t)), fetched through the public-URL guard and rendered the same way. Each compared frame carries similarity (0 to 1, identical stills score 1) and changedRegions (bounding boxes of the differing cells on a 32x18 grid, largest first, capped and saying so). A compare by baselineUrl renders two documents and is quoted at twice the listed price in its 402; every other body is quoted at the listed price. Deterministic code, no model.",
+    ],
+  },
+  {
     date: "2026-10-19",
     title: "Page speed, HTML frames, and a video retry that collects the clip",
     items: [

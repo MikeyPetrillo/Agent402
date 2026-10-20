@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-20
+- `html-frames`: an optional `compare` input (`baseline`, an array of
+  `{t, png}` stills, or `baselineUrl`, a second document under the same
+  render contract fetched through the public-URL guard) adds `similarity`
+  (0 to 1) and `changedRegions` (bounding boxes on a 32x18 grid) to each
+  compared frame. A compare by `baselineUrl` renders two documents and is
+  quoted at twice the listed price in its 402.
+
 ### 2026-10-19
 - `/v1/videos/generations`: a request that times out answers 504, which is
   not settled on x402. A wallet payer can send the same request again

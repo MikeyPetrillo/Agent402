@@ -87,6 +87,15 @@ const TOP1 = [
   // tag/description rewording can't quietly turn these back into misses.
   ["solidity auditor",              "solidity-scan"],
   ["solidity",                      "solidity-scan"],
+  // html-frames speaks the motion-design vocabulary (2026-10-20): the render
+  // contract (window.renderAt), the contact sheet, a frame check, freeze
+  // frames. Locked against the live catalog, where contract-*, render and
+  // the image tools compete for these words.
+  ["render contract",               "html-frames"],
+  ["renderAt",                      "html-frames"],
+  ["contact sheet",                 "html-frames"],
+  ["motion design frame check",     "html-frames"],
+  ["freeze frames of my animation", "html-frames"],
 ];
 
 const TOPN = [

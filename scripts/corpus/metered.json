@@ -433,6 +433,40 @@
       }
     },
     {
+      "slug": "html-frames",
+      "name": "a frame check against one baseline still reports similarity and changed regions",
+      "input": {
+        "html": "<!doctype html><html><body style=\"margin:0\"><canvas id=\"c\" width=\"64\" height=\"48\"></canvas><script>const x=document.getElementById('c').getContext('2d');window.renderAt=function(t){x.fillStyle='#10243e';x.fillRect(0,0,64,48);x.fillStyle='#4cc38a';x.fillRect(4+t*20,14,12,12);};</script></body></html>",
+        "times": [0, 1],
+        "width": 64,
+        "height": 48,
+        "compare": {
+          "baseline": [
+            { "t": 0, "png": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAAAZUlEQVR4AeXBAQEAIAyAME4CQ5jD/q18ELY5933CJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJE7iJG4BreQB0SRmX+EAAAAASUVORK5CYII=" }
+          ]
+        }
+      },
+      "requires": "WORKER_URL",
+      "expect": {
+        "equals": {
+          "frameCount": 2,
+          "compare.source": "baseline",
+          "compare.framesCompared": 1,
+          "compare.framesWithoutBaseline": 1,
+          "frames.1.similarity": null
+        },
+        "populated": [
+          "frames.0.similarity",
+          "frames.0.changedRegions",
+          "frames.0.changedRegionsPartial.returned",
+          "compare.method"
+        ],
+        "minCount": {
+          "frames.0.changedRegions": 1
+        }
+      }
+    },
+    {
       "slug": "screenshot",
       "name": "png bytes come back",
       "input": {
