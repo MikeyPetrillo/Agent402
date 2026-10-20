@@ -197,7 +197,7 @@ const catalog = {
   const store = srv.slice(srv.indexOf("const storeSettledCount"), srv.indexOf("const storeSettledCount") + 300);
   const fn = srv.slice(srv.indexOf("function settledOnChainCount()"), srv.indexOf("function settledOnChainCount()") + 900);
   const shared = srv.slice(srv.indexOf("const revenueAllTime = "), srv.indexOf("const revenueAllTime = ") + 400);
-  ok(/railThroughput\(\{ allTime, mpp \}\)/.test(store) && /storeSettledCount\(\{ allTime: ledgerSummary\(/.test(fn) && /revenueAllTime\(\)\.then\(storeSettledCount\)/.test(fn) && /ledgerSummary\(/.test(shared) && /mppSales\(\{ detailed: false \}\)/.test(shared), "the homepage hero counter uses the /revenue throughput arithmetic (Tempo once, Base/Celo MPP never twice)");
+  ok(/railThroughput\(\{ allTime, mpp \}\)/.test(store) && /storeSettledCount\(\{ allTime: ledgerSummary\(/.test(fn) && /revenueAllTime\(\{ awaitRebuild: true \}\)\.then\(storeSettledCount\)/.test(fn) && /ledgerSummary\(/.test(shared) && /mppSales\(\{ detailed: false \}\)/.test(shared), "the homepage hero counter uses the /revenue throughput arithmetic (Tempo once, Base/Celo MPP never twice)");
   const hero = await readFile(new URL("../assets/js/home-hero.js", import.meta.url), "utf8");
   ok(/j\.settledOnChain/.test(hero), "the live poll reads the same settledOnChain figure the server renders");
 }

@@ -2305,8 +2305,11 @@ function memoSurface(key, ttlMs, build) {
 }
 // memoSurface for a builder that yields between steps: the first build is
 // awaited, later ones rebuild in the background while the last value serves.
+// `awaitRebuild` is for a builder that reads another memo: it waits for the
+// fresh value instead of taking the stale one. A built value that says it is
+// partial (it read a partial memo) is stored as partial.
 const surfaceBuilds = new Map();
-async function memoSurfaceAsync(key, ttlMs, buildAsync) {
+async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false } = {}) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
   if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
@@ -2314,8 +2317,9 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync) {
   if (!pending) {
     pending = (async () => {
       try {
-        const partial = !stateStoresLoaded();
+        const loading = !stateStoresLoaded();
         const built = await buildAsync();
+        const partial = loading || built?.partial === true;
         const value = partial ? markPartialState(built) : built;
         surfaceMemo.set(key, { at: Date.now(), value, partial });
         return value;
@@ -2324,7 +2328,7 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync) {
     surfaceBuilds.set(key, pending);
     if (hit) pending.catch((e) => console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
   }
-  return hit ? hit.value : pending;
+  return hit && !awaitRebuild ? hit.value : pending;
 }
 function dropSurface(prefix) { for (const k of surfaceMemo.keys()) if (k.startsWith(prefix)) surfaceMemo.delete(k); }
 // Per-route server time (compute vs upstream wait) and the in-flight list a
@@ -3667,23 +3671,24 @@ app.get("/__operator/revenue.json", revenueApi.operatorHandler);
 // built on separate event-loop turns; built in one turn on a stale-memo
 // rebuild they held the loop past a second.
 const revenueTurn = () => new Promise((r) => setImmediate(r));
-const revenueAllTime = () => memoSurfaceAsync("revenue:allTime", 60_000, async () => {
+const revenueAllTime = ({ awaitRebuild = false } = {}) => memoSurfaceAsync("revenue:allTime", 60_000, async () => {
   const allTime = ledgerSummary(revenueWallets()); await revenueTurn();
   const sales = salesSummary(); await revenueTurn();
   const mpp = mppSales({ detailed: false });
   return { allTime, sales, mpp };
-});
+}, { awaitRebuild });
 // The /revenue page's ledger figures, one per turn. The buyer concentration is
 // the daily series' own figure (one shared read of the payment history) rather
 // than a second full read.
 async function buildRevenuePageLedger() {
-  const { allTime, mpp } = await revenueAllTime();
+  const totals = await revenueAllTime({ awaitRebuild: true });
   const card = cardSales({ days: 30 }); await revenueTurn();
   const decide = decideSales({ days: 30 }); await revenueTurn();
-  let agents;
-  try { agents = (await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily)).concentration; } catch { agents = undefined; }
-  if (!agents) agents = ledgerBuyerConcentration(revenueWallets());
-  return { allTime, mpp, card, decide, agents };
+  let daily = null;
+  try { daily = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily, { awaitRebuild: true }); } catch { daily = null; }
+  const agents = daily?.concentration || ledgerBuyerConcentration(revenueWallets());
+  const partial = totals.partial === true || daily?.partial === true;
+  return { allTime: totals.allTime, mpp: totals.mpp, card, decide, agents, ...(partial ? { partial: true } : {}) };
 }
 // The /revenue series, built across event-loop turns: each figure is one
 // synchronous SQLite pass, and together they held the loop 0.6-1.2 s in one
@@ -8280,7 +8285,7 @@ function settledOnChainCount() {
     try { storeSettledCount({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }) }); } catch { /* keep serving the last good count */ }
     return __settledMemo.n;
   }
-  if (!__settledRefresh) __settledRefresh = revenueAllTime().then(storeSettledCount).catch(() => { /* keep serving the last good count */ }).finally(() => { __settledRefresh = null; });
+  if (!__settledRefresh) __settledRefresh = revenueAllTime({ awaitRebuild: true }).then(storeSettledCount).catch(() => { /* keep serving the last good count */ }).finally(() => { __settledRefresh = null; });
   return __settledMemo.n;
 }
 
