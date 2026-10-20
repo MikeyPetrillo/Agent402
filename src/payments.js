@@ -762,7 +762,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }
     payAiClient = addFacilitator("PayAI", new SvmClarifyingFacilitatorClient(await resolvePayAIFacilitatorConfig()));
     console.log(
-      `Multi-chain facilitator routing: ${cdpConfig ? "CDP (Base + Bazaar) → PayAI (remaining chains)" : "PayAI (all chains)"}`
+      `Multi-chain facilitator routing: ${cdpConfig ? "CDP first on every chain its /supported lists (Base, Bazaar; Solana since its table grew), PayAI for the rest and as the settle fallback" : "PayAI (all chains)"}`
     );
   } else if (network === "robinhood" && ROBINHOOD_FACILITATOR_URL) {
     // Robinhood-ONLY server: the dedicated USDG facilitator client (pushed
@@ -2149,12 +2149,12 @@ async function resolvePayAIFacilitatorConfig() {
   // is what scripts/test-supported-guard.js needs to boot a fully offline
   // multi-facilitator server. Unset = stock @payai/facilitator config.
   if (process.env.PAYAI_FACILITATOR_URL) {
-    console.log(`Facilitator (Solana): PayAI at ${process.env.PAYAI_FACILITATOR_URL} (URL override)`);
+    console.log(`Facilitator client PayAI at ${process.env.PAYAI_FACILITATOR_URL} (URL override; tried after CDP on chains CDP lists)`);
     return { url: process.env.PAYAI_FACILITATOR_URL };
   }
   if (process.env.PAYAI_API_KEY_ID && process.env.PAYAI_API_KEY_SECRET) {
     const { createFacilitatorConfig } = await import("@payai/facilitator");
-    console.log("Facilitator (Solana): PayAI (authenticated)");
+    console.log("Facilitator client PayAI (authenticated; tried after CDP on chains CDP lists)");
     return createFacilitatorConfig(process.env.PAYAI_API_KEY_ID, process.env.PAYAI_API_KEY_SECRET);
   }
   // PayAI keyless: from 2026-09-21 the free allowance is a LIFETIME credit
@@ -2163,7 +2163,7 @@ async function resolvePayAIFacilitatorConfig() {
   // free_tier_exhausted. The keyed branch above bills prepaid credits instead;
   // heartbeat.yml's credit watch counts the draw-down either way.
   const { facilitator } = await import("@payai/facilitator");
-  console.log("Facilitator (Solana): PayAI (keyless)");
+  console.log("Facilitator client PayAI (keyless; tried after CDP on chains CDP lists)");
   return facilitator;
 }
 

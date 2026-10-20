@@ -22,7 +22,7 @@ Jobs are selected by commit-message markers or `workflow_dispatch`; every push t
 
 ### Listing sweeps (read-only)
 
-- `node scripts/payai-solana-sweep.js` compares the routes this host sells on Solana (from `/api/pricing`: every priced route except the identity-bound and EVM-only ones) with the rows the PayAI facilitator registry lists under our origin with a Solana mainnet accept, walking the whole registry rather than a first page. It prints the routes missing from the listing and the listed routes no longer served. The registry is settlement-harvested, so a missing route means no Solana payment has settled on it there; the paid registration pass is the `bazaar-solana` job. The script registers nothing and needs no key. `--json` for machine output; `TARGET_URL` to point it at another host.
+- `node scripts/payai-solana-sweep.js` compares the routes this host sells on Solana (from `/api/pricing`: every priced route except the identity-bound and EVM-only ones) with the rows the PayAI facilitator registry lists under our origin with a Solana mainnet accept, walking the whole registry rather than a first page. It prints the routes missing from the listing and the listed routes no longer served. The registry is harvested from settlements PayAI itself facilitates. On this host CDP is tried first on every chain its table lists, Solana included, so a Solana payment settles at CDP and refreshes the Bazaar row, not the PayAI row; a route missing from the PayAI listing stays missing until PayAI settles a payment on it. The script registers nothing and needs no key. `--json` for machine output; `TARGET_URL` to point it at another host.
 
 ## Heartbeat (`.github/workflows/heartbeat.yml`)
 
