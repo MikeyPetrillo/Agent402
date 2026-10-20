@@ -365,6 +365,7 @@ const decideLedger = () => {
 // With the state database on, open the ledger at boot so its one-time import
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
+import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -8972,6 +8973,7 @@ if (FREE_MODE) {
   // feeds both.
   startSanctionsScreen({ firstTickDelayMs: 15_000 });
   const x402PayerScreen = createX402PayerScreen();
+  const settlePreference = settlePreferenceMiddleware({ authed: operatorAuthed });
   // Payment-nonce replay guard (M3, defends "Five Attacks on x402" Attack II).
   // Defense-in-depth over settle-before-grant: rejects a duplicate payment
   // authorization before it reaches the facilitator and closes the concurrent-
@@ -9408,7 +9410,11 @@ if (FREE_MODE) {
         } catch { /* unreadable header: leave it exactly as sent */ }
       }
     }
-    return x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next)));
+    // An operator-tagged request (X-Agent402-Settle-Via plus the operator
+    // token) runs the paywall inside a facilitator-preference scope; every
+    // other request reaches x402mw through a synchronous pass-through
+    // (src/settle-preference.js).
+    return settlePreference(req, res, () => x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next))));
   });
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }

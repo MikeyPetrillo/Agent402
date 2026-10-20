@@ -40,6 +40,12 @@
 //   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05 — skips the
 //                     LLM/image/audio proxies that bill real upstream credit)
 //   SLUGS             comma-separated slug filter for missing-mode (register only these)
+//   MISSING_CHAIN     missing-mode chain filter (alias or CAIP-2, e.g. "solana"),
+//     or --chain       a route is missing when no Bazaar row for it carries an
+//                     accept on that chain, and only routes sold on that chain
+//                     count (identity-bound routes are EVM-only). The payment
+//                     still goes over PAY_NETWORK: the harvester re-reads the
+//                     live 402, with every accept, at any settlement it observes.
 //   TARGET_URL        (default https://agent402.tools)
 //   EXPECT_NAME       (default "Agent402.tools")
 //   MAX_SPEND_USD     missing-mode cost ceiling (default 5)
@@ -63,6 +69,7 @@ const heartbeatHeaders = () => {
 };
 import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { chainOf, routeSellsOn } from "./listing-coverage.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -112,6 +119,17 @@ const UPSTREAM_FREE_EXTRA = new Set((process.env.UPSTREAM_FREE_EXTRA || "memory-
 const costsNothingUpstream = (t) =>
   t.computePayable || [...UPSTREAM_FREE_EXTRA].some((p) => t.slug === p || t.slug.startsWith(p));
 const SLUGS_FILTER = process.env.SLUGS ? new Set(process.env.SLUGS.split(",").map(s => s.trim())) : null;
+// Missing-mode chain filter: `--chain solana` (or MISSING_CHAIN) counts a route
+// as missing until a Bazaar row for it carries that chain's accept, so a row
+// harvested before the chain was offered is refreshed, not just an absent row.
+const MISSING_CHAIN = (() => {
+  const i = process.argv.indexOf("--chain");
+  const raw = (i > -1 && process.argv[i + 1]) || process.env.MISSING_CHAIN || "";
+  if (!raw) return null;
+  const c = chainOf(raw);
+  if (!c) { console.error(`refresh-bazaar: unknown chain "${raw}"`); process.exit(2); }
+  return c;
+})();
 // Deterministic batching for large sweeps: split the (sorted) work list into
 // BATCH_COUNT interleaved groups and run only BATCH_INDEX. Lets a big settlement
 // sweep run in several bounded passes (each ~1/COUNT of the routes + cost) so no
@@ -195,12 +213,15 @@ async function loadCatalog() {
   if (!r.ok) throw new Error(`/api/pricing HTTP ${r.status}`);
   const j = await r.json();
   const tools = j.tools || j.endpoints || [];
+  const rails = Array.isArray(j.payment?.networks) ? j.payment.networks : null;
   return tools.map((t) => ({
     slug: t.slug,
     method: (t.method || "GET").toUpperCase(),
     path: t.path,
     price: t.price,
     priceUsd: priceToUsd(t.price),
+    // Whether the route sells on the --chain filter (always true without one).
+    onChain: MISSING_CHAIN ? routeSellsOn(t, MISSING_CHAIN, rails) : true,
     // The server's own PoW-eligibility flag. A tool is compute-payable only
     // when it makes NO external call - scripts/test-free-tier-egress.js drives
     // every one of them under an egress-recording preload and requires zero
@@ -211,10 +232,13 @@ async function loadCatalog() {
   }));
 }
 
+// Paths with a Bazaar row; under --chain, paths with a row whose accepts carry
+// that chain (a row minted before the chain was offered does not count).
 async function loadRegisteredPaths() {
   const reg = new Set();
   const { matches } = await pageBazaar((it) => (it.resource || "").includes(HOST));
   for (const it of matches) {
+    if (MISSING_CHAIN && !(it.accepts || []).some((a) => a && a.network === MISSING_CHAIN.caip2)) continue;
     try { reg.add(new URL(it.resource).pathname); } catch {}
   }
   return reg;
@@ -285,6 +309,7 @@ async function runMissingMode({ sweep = false } = {}) {
   // Bazaar has never seen, expensive first so skill packs register before a
   // timeout.
   const missing = catalog
+    .filter((t) => t.onChain)
     .filter((t) => sweep || !registered.has(t.path))
     .filter((t) => !SLUGS_FILTER || SLUGS_FILTER.has(t.slug))
     .filter((t) => t.priceUsd <= MAX_PRICE_USD)
@@ -297,10 +322,11 @@ async function runMissingMode({ sweep = false } = {}) {
     // Batch stride (applied after sort so each batch is a price-balanced slice).
     .filter((_, i) => i % BATCH_COUNT === BATCH_INDEX);
   const batchNote = BATCH_COUNT > 1 ? ` · batch ${BATCH_INDEX + 1}/${BATCH_COUNT}` : "";
+  const chainNote = MISSING_CHAIN ? ` (rows carrying ${MISSING_CHAIN.name}, ${catalog.filter((t) => t.onChain).length} routes sold there)` : "";
   console.log(
     sweep
       ? `Catalog: ${catalog.length} · sweeping ${missing.length} routes priced ≤ $${MAX_PRICE_USD} via ${PAY_NETWORK}${batchNote}`
-      : `Catalog: ${catalog.length} · already on Bazaar: ${registered.size} · missing: ${missing.length}${batchNote}`
+      : `Catalog: ${catalog.length} · already on Bazaar: ${registered.size}${chainNote} · missing: ${missing.length}${batchNote}`
   );
   if (!missing.length) {
     console.log("Nothing to register.");
@@ -389,7 +415,7 @@ async function runMissingMode({ sweep = false } = {}) {
   console.log("Waiting 60s for the Bazaar harvester to catch up …");
   await new Promise((r) => setTimeout(r, 60000));
   const afterReg = await loadRegisteredPaths();
-  const stillMissing = catalog.filter((t) => !afterReg.has(t.path));
+  const stillMissing = catalog.filter((t) => t.onChain && !afterReg.has(t.path));
   console.log(`After: ${afterReg.size} registered, ${stillMissing.length} still missing (harvester may continue to catch up).`);
   if (stillMissing.length === 0) return 0;
 

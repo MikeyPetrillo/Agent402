@@ -11,6 +11,7 @@ import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
+import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
@@ -761,6 +762,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       );
     }
     payAiClient = addFacilitator("PayAI", new SvmClarifyingFacilitatorClient(await resolvePayAIFacilitatorConfig()));
+    // An operator-tagged request may settle here on purpose while the boot
+    // order stays CDP first for everyone else (src/settle-preference.js).
+    registerSettlePreference("payai", payAiClient, "PayAI");
     console.log(
       `Multi-chain facilitator routing: ${cdpConfig ? "CDP first on every chain its /supported lists (Base, Bazaar; Solana since its table grew), PayAI for the rest and as the settle fallback" : "PayAI (all chains)"}`
     );
@@ -1218,6 +1222,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   let server = new x402ResourceServer(facilitatorClients)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
+  // Per-request facilitator preference (operator-gated): the three lookups
+  // that name a facilitator read the request's scope first; an untagged
+  // request takes the vendor's own lookup (src/settle-preference.js).
+  installSettlePreference(server);
   for (const caip2 of evmCaip2) {
     const scheme = caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme()
       : caip2 === MONAD_CAIP2 ? makeMonadUsdcScheme()
@@ -2171,6 +2179,13 @@ async function resolvePayAIFacilitatorConfig() {
  *  settles on Base (fee-free) and indexes discoverable endpoints in the
  *  x402 Bazaar — it's the facilitator Base settlement should always prefer. */
 async function resolveCdpFacilitatorConfig() {
+  // URL override, same parity PAYAI_FACILITATOR_URL has: an offline test can
+  // boot the production facilitator ORDER (CDP first, PayAI second) against
+  // two local stubs. Unset in production, where the keyed config below runs.
+  if (process.env.CDP_FACILITATOR_URL) {
+    console.log(`Facilitator: CDP at ${process.env.CDP_FACILITATOR_URL} (URL override)`);
+    return { url: process.env.CDP_FACILITATOR_URL };
+  }
   if (!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET)) return null;
   const { createFacilitatorConfig } = await import("@coinbase/x402");
   console.log("Facilitator: Coinbase CDP (Bazaar discovery enabled)");
