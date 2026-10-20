@@ -368,8 +368,10 @@ for (const [name, over, detail] of failCases) {
   // times), the record, a confirmed alarm reading, and every other alarm
   // closing an open issue (a comment and a PATCH each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" } };
-  const { ALARMS } = await import("../workers/status-probe/src/index.js");
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" },
+    upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
+    mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } };
+  const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -384,7 +386,12 @@ for (const [name, over, detail] of failCases) {
   const out = await run({ PROD, STATUS_PROBE_TOKEN: TOKEN, GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {} });
   check(`worst-case run makes ${calls} subrequests, at least ten under the limit of 50`, () => {
     assert.equal(out.paidCall.observed, true, "the scenario must include the paid-call legs");
-    assert.equal(out.alarms.closed.length, ALARMS.length - 1, "the scenario must include every close");
+    // Every alarm but one wants closing and that one wants opening: more
+    // writes than one run may make, so the scenario reaches the write cap.
+    assert.ok(ALARMS.length > MAX_ISSUE_WRITES, "the scenario must exceed the write cap");
+    assert.deepEqual(out.alarms.opened, ["Upstream buyer wallet LOW (x402)"], "the open goes first");
+    assert.equal(out.alarms.closed.length, MAX_ISSUE_WRITES - 1, "closes fill the rest of the cap");
+    assert.equal(out.alarms.deferred.length, ALARMS.length - MAX_ISSUE_WRITES, "the remainder waits for the next run");
     assert.ok(calls <= 40, `${calls} subrequests`);
   });
 }
@@ -588,6 +595,120 @@ for (const [name, over, detail] of failCases) {
   await acheck("the issue body echoes only a known word", async () => {
     const a = ALARMS.find((x) => x.title === TQ);
     assert.match(a.body({ gateway: { tweetQueue: { status: "<script>" } } }), /tweetQueue\.status=unknown/);
+  });
+
+  // The write cap: opens before closes, and what a run could not write is
+  // written by the next one.
+  await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
+    const titles = ALARMS.map((a) => a.title);
+    const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } }, status: HEALTHY_STATUS };
+    mkGh(allOpen);
+    const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, fetchStatus: feed(everythingHealthy, everythingHealthy) });
+    assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
+    assert.equal(r1.closed.length, 3);
+    assert.equal(created.length + closed.length, 4, "no more than the cap");
+    assert.equal(r1.deferred.length, allOpen.length - 3);
+    const stillOpen = allOpen.filter((x) => !r1.closed.includes(x.title));
+    mkGh([...stillOpen, { number: 999, title: "Upstream buyer wallet LOW (x402)" }]);
+    const r2 = await syncAlarms(ENV, { ...nosleep, maxWrites: 100, fetchStatus: feed(everythingHealthy, everythingHealthy) });
+    assert.deepEqual(r2.opened, [], "the open landed last run and is not repeated");
+    assert.deepEqual(new Set(r2.closed), new Set(r1.deferred), "the next run writes exactly what was deferred");
+  });
+
+  // Words that only heartbeat.yml watched until 2026-10-20. Each maps to
+  // page, clear or quiet exactly as that workflow's step does (unknown and
+  // absent never page and never close).
+  await acheck("each moved gateway-status word maps to page, clear or quiet", async () => {
+    const cases = [
+      ["Solana upstream buyer wallet LOW (x402)", "upstreamBuyerSvm", ["low"], ["ok"]],
+      ["Stellar facilitator fee account LOW (XLM)", "stellarFacilitator", ["low"], ["ok"]],
+      ["Upstream call budget ELEVATED", "upstreamBudgets", ["elevated"], ["ok"]],
+      ["Upstream hard ceiling REACHED", "upstreamHardCaps", ["capped"], ["ok"]],
+      ["Exa prepaid allowance LOW", "exaAllowance", ["low"], ["ok", "unconfigured"]],
+      ["State database DEGRADED (Postgres)", "stateDb", ["degraded"], ["on"]],
+      ["Sanctions lists STALE or UNLOADED (OFAC SDN)", "sanctions", ["stale", "unloaded"], ["ok"]],
+      ["Payment-party screen STALE or MISSING (OFAC SDN)", "sanctionsScreen", ["stale", "missing"], ["fresh"]],
+      ["Transactional email is not sending", "email", ["exhausted", "failing"], ["ok"]],
+      ["Upstream cost table missing or incomplete in production", "upstreamCosts", ["missing", "partial"], ["ok"]],
+    ];
+    for (const [T, field, bad, good] of cases) {
+      assert.ok(ALARMS.some((a) => a.title === T), `the Worker has "${T}"`);
+      for (const w of bad) assert.equal(judge({ gateway: { [field]: { status: w } } })[T], "bad", `${field}=${w}`);
+      for (const w of good) assert.equal(judge({ gateway: { [field]: { status: w } } })[T], "good", `${field}=${w}`);
+      for (const w of ["unknown", "something-new"]) assert.equal(judge({ gateway: { [field]: { status: w } } })[T], "quiet", `${field}=${w}`);
+      assert.equal(judge({ gateway: {} })[T], "quiet", `${field} absent`);
+    }
+    const D = "MPP reconciliation MISMATCH";
+    assert.equal(judge({ gateway: { mppReconcile: { status: "mismatch" } } })[D], "bad");
+    assert.equal(judge({ gateway: { mppReconcile: { status: "ok" } } })[D], "good");
+    assert.equal(judge({ gateway: { mppReconcile: { status: "unknown" } } })[D], "quiet");
+    const C = "MPP paid-but-failed call";
+    assert.equal(judge({ gateway: { mppReconcile: { chargedFailedStatus: "charged_failed" } } })[C], "bad");
+    assert.equal(judge({ gateway: { mppReconcile: { chargedFailedStatus: "ok" } } })[C], "good");
+    assert.equal(judge({ gateway: { mppReconcile: { chargedFailedStatus: "unknown" } } })[C], "quiet");
+  });
+
+  await acheck("issue bodies of the moved words echo only known words", async () => {
+    const body = (T, gateway) => ALARMS.find((a) => a.title === T).body({ gateway });
+    assert.match(body("Sanctions lists STALE or UNLOADED (OFAC SDN)", { sanctions: { status: "<x>" } }), /reads stale on/);
+    assert.match(body("Payment-party screen STALE or MISSING (OFAC SDN)", { sanctionsScreen: { status: "missing" } }), /reads missing on/);
+    assert.match(body("Transactional email is not sending", { email: { status: "<x>" } }), /email\.status=exhausted\./);
+    assert.match(body("Upstream cost table missing or incomplete in production", { upstreamCosts: { status: "partial" } }), /upstreamCosts\.status=partial\./);
+    const rec = body("MPP reconciliation MISMATCH", { mppReconcile: { status: "mismatch", day: "2026-10-14", categories: { paid_unrecorded: "mismatch", served_unpaid: "ok", "<b>": "mismatch" } } });
+    assert.match(rec, /for 2026-10-14 found/);
+    assert.match(rec, /categories: paid_unrecorded\)/);
+    assert.match(body("MPP reconciliation MISMATCH", { mppReconcile: { day: "<script>" } }), /for the latest day found/);
+  });
+
+  // window7d: the seven days ending at the latest reconciled day. A day's
+  // own alarm closes when the next day reads ok; this keeps an unresolved
+  // mismatch visible while it is still in the window.
+  const WIN = "MPP reconciliation 7-day window MISMATCH";
+  await acheck("window7d: mismatch pages only while the latest day reads ok", async () => {
+    const j = (r) => judge({ gateway: { mppReconcile: r } })[WIN];
+    assert.equal(j({ status: "ok", window7d: "mismatch" }), "bad");
+    assert.equal(j({ status: "mismatch", window7d: "mismatch" }), "quiet", "the daily alarm owns a mismatched day: one event, one page");
+    assert.equal(j({ status: "unknown", window7d: "mismatch" }), "quiet", "a stale or unread day says nothing about the window's age");
+    assert.equal(j({ status: "ok", window7d: "ok" }), "good");
+    assert.equal(j({ status: "mismatch", window7d: "ok" }), "good");
+    assert.equal(j({ status: "ok", window7d: "unknown" }), "quiet");
+    assert.equal(judge({ gateway: {} })[WIN], "quiet");
+  });
+  await acheck("window7d: a mismatch confirmed by a second read opens one issue; one read alone opens nothing", async () => {
+    const win = withGateway({ mppReconcile: { status: "ok", day: "2026-10-19", window7d: "mismatch", chargedFailedStatus: "ok" } });
+    mkGh();
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(win, win) });
+    assert.deepEqual(r.opened, [WIN]);
+    assert.match(created[0].body, /latest day \(2026-10-19\) reads ok/);
+    assert.match(created[0].body, /\/__operator\/mpp-reconcile\.json/);
+    mkGh();
+    const r2 = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(win, withGateway({ mppReconcile: { status: "unknown", window7d: "unknown" } })) });
+    assert.deepEqual(r2.opened, []);
+    mkGh([{ number: 41, title: WIN }]);
+    const r3 = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(withGateway({ mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } })) });
+    assert.deepEqual(r3.closed, [WIN]);
+  });
+
+  // The class guard: a heartbeat.yml step that reads a word on the public
+  // /api/gateway-status must also be a Worker alarm, so a new word cannot
+  // again be watched only by a schedule GitHub delivers hours late.
+  await acheck("every heartbeat.yml step that reads /api/gateway-status is also a Worker alarm", async () => {
+    const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const steps = yml.split("\n      - name: ").slice(1);
+    const titles = new Set(ALARMS.map((a) => a.title));
+    let n = 0;
+    for (const s of steps) {
+      if (!s.includes("/api/gateway-status")) continue;
+      for (const m of s.matchAll(/TITLE2?="([^"]+)"/g)) { n++; assert.ok(titles.has(m[1]), `heartbeat-only alarm: "${m[1]}"`); }
+    }
+    assert.ok(n >= 25, `found only ${n} gateway-status titles in heartbeat.yml`);
+  });
+
+  await acheck("the Postgres body names what the leads database still carries, not the retired waitlist", async () => {
+    const b = ALARMS.find((a) => a.title === "Postgres UNREACHABLE (leads/analytics)").body({ gateway: { databases: { leads: { status: "unreachable" }, analytics: { status: "<x>" } } } });
+    assert.doesNotMatch(b, /tollbooth/i);
+    assert.match(b, /leads=unreachable, analytics=unknown/);
   });
 
   await acheck("every alarm title also exists in the GitHub workflow that raises it, so the two never fork", async () => {

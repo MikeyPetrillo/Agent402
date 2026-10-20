@@ -287,11 +287,11 @@ async function record(prod, token, components, url) {
 // five-hour cadence a drained wallet or a dead database goes unseen for hours
 // and a resolved alarm stays open long after the operator fixed it.
 //
-// This Worker's five-minute Cloudflare cron IS honoured, so it takes over the
-// subset of those checks that read a SINGLE public endpoint - /api/gateway-status
-// - which is every balance and reachability alarm. The rest (the production
-// probe, settlement freshness, the quota watches, the canary burner) stay on
-// heartbeat.yml: they need data this Worker cannot cheaply reach.
+// This Worker's five-minute Cloudflare cron IS honored, so it also runs every
+// check that reads a word on /api/gateway-status (plus settlement freshness
+// from /api/status). The rest stay on heartbeat.yml alone: the rail offer
+// (/api/rails), the Bazaar validation, the canary burner and the PayAI and CDP
+// quota watches (third-party reads), and serving health (operator token).
 //
 // The credential is a fine-grained PAT scoped to this one repository with
 // "Issues: Read and write" and NOTHING else. Deliberately not Actions: an
@@ -315,6 +315,8 @@ async function record(prod, token, components, url) {
 // is the whole state that matters, and heartbeat.yml still comments when it runs.
 const ISSUES_REPO = "MikeyPetrillo/Agent402";
 const CONFIRM_DELAY_MS = 30000;
+// Issue opens and closes per run (one subrequest each); the rest wait a run.
+export const MAX_ISSUE_WRITES = 16;
 
 async function gh(path, token, init = {}) {
   return grab(`https://api.github.com${path}`, {
@@ -400,7 +402,7 @@ export const ALARMS = [
       return "quiet";
     },
     body: ({ gateway: b }) =>
-      `A Postgres database is unreachable from production (leads=${b.databases?.leads?.status || "unknown"}, analytics=${b.databases?.analytics?.status || "unknown"}, per /api/gateway-status). The app keeps serving - tollbooth leads and the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port.`,
+      `A Postgres database is unreachable from production (leads=${DB_WORDS.has(b.databases?.leads?.status) ? b.databases.leads.status : "unknown"}, analytics=${DB_WORDS.has(b.databases?.analytics?.status) ? b.databases.analytics.status : "unknown"}, per /api/gateway-status; "leads" is the DATABASE_URL database by its historical name). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port.`,
   },
   {
     title: "Operator token guessing ELEVATED",
@@ -523,6 +525,109 @@ While either lasts the money journals stay on each container's local disk (LEDGE
 Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok.`;
     },
   },
+  // The words below were watched by heartbeat.yml alone, whose schedule
+  // GitHub delivers hours late or not at all. Each is one word on
+  // /api/gateway-status and each title matches heartbeat.yml's exactly.
+  {
+    title: "Solana upstream buyer wallet LOW (x402)",
+    verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerSvm?.status),
+    body: () =>
+      "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
+  },
+  {
+    title: "Stellar facilitator fee account LOW (XLM)",
+    verdict: ({ gateway: b }) => lowOk(b.stellarFacilitator?.status),
+    body: () =>
+      "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
+  },
+  {
+    title: "Upstream call budget ELEVATED",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamBudgets?.status, ["elevated"], ["ok"]),
+    body: () =>
+      "`/api/gateway-status.upstreamBudgets` reports **elevated**: at least one upstream's daily call budget is reached. These are our outbound call counts against a daily budget, not a vendor balance; the per-upstream rows are on the operator view of the same endpoint. Check whether a loop, a new sweep or real demand is behind it, then either fix the cause or raise that upstream's budget variable. The counter is daily and resets on deploy, so the real figure is at or above what the operator view shows.",
+  },
+  {
+    title: "Upstream hard ceiling REACHED",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamHardCaps?.status, ["capped"], ["ok"]),
+    body: () =>
+      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (uncharged) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
+  },
+  {
+    title: "Exa prepaid allowance LOW",
+    verdict: ({ gateway: b }) => wordVerdict(b.exaAllowance?.status, ["low"], ["ok", "unconfigured"]),
+    body: () =>
+      "`/api/gateway-status.exaAllowance` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise `EXA_CREDITS_USD` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported.",
+  },
+  {
+    title: "State database DEGRADED (Postgres)",
+    verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
+    body: () =>
+      "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on.",
+  },
+  {
+    title: "Sanctions lists STALE or UNLOADED (OFAC SDN)",
+    verdict: ({ gateway: b }) => wordVerdict(b.sanctions?.status, ["stale", "unloaded"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads ${b.sanctions?.status === "unloaded" ? "unloaded" : "stale"} on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's SDN.XML export, loaded by src/ofac-sdn.js for src/tools/sanctions-kit.js. Auto-closes when it reads ok.`,
+  },
+  {
+    title: "Payment-party screen STALE or MISSING (OFAC SDN)",
+    verdict: ({ gateway: b }) => wordVerdict(b.sanctionsScreen?.status, ["stale", "missing"], ["fresh"]),
+    body: ({ gateway: b }) =>
+      `The payment-party screen reads ${b.sanctionsScreen?.status === "missing" ? "missing" : "stale"} on /api/gateway-status (sanctionsScreen.status). stale: no successful refresh in two refresh periods (12 h by default) and the screen is checking payments against the last good set. missing: no list is loaded, so Tempo direct mode offers no tempo challenge and x402 payments are served unscreened until one loads. The operator view of /api/gateway-status carries lastError and lastAttemptAt; the source is OFAC's SDN.XML export (src/ofac-sdn.js, read by src/sanctions-screen.js). Auto-closes when it reads fresh.`,
+  },
+  {
+    title: "Transactional email is not sending",
+    verdict: ({ gateway: b }) => wordVerdict(b.email?.status, ["exhausted", "failing"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports email.status=${b.email?.status === "failing" ? "failing" : "exhausted"}. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered.`,
+  },
+  {
+    title: "Upstream cost table missing or incomplete in production",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamCosts?.status, ["missing", "partial"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports upstreamCosts.status=${b.upstreamCosts?.status === "partial" ? "partial" : "missing"}. partial: the private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. missing: production is running without the private cost table, so the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok.`,
+  },
+  {
+    // The daily MPP reconciliation (src/mpp-reconcile.js): the latest
+    // reconciled day. mismatch pages, ok clears, unknown does neither.
+    title: "MPP reconciliation MISMATCH",
+    verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.status, ["mismatch"], ["ok"]),
+    body: ({ gateway: b }) => {
+      const r = b.mppReconcile || {};
+      const cats = Object.entries(r.categories || {}).filter(([k, v]) => MPP_CATEGORIES.has(k) && v === "mismatch").map(([k]) => k);
+      return `The daily MPP reconciliation for ${dayOf(r.day)} found records that disagree (categories: ${cats.join(", ") || "see the operator route"}). Each category is defined in src/mpp-reconcile.js: served_unpaid = booked as settled over Tempo with no transfer on chain; paid_unrecorded = a transfer to our recipient with no sales row; amount_mismatch / wrong_currency / duplicate_tx / missing_tx / evm_unverified / stripe_mismatch as named.
+
+Full detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: POST /__operator/mpp-reconcile/run?day=YYYY-MM-DD. Closes when a reconciliation reads ok.`;
+    },
+  },
+  {
+    // The rolling seven days that end at the latest reconciled day. A
+    // mismatched day's own alarm closes as soon as the NEXT day reads ok, so
+    // a disagreement nobody resolved drops out of sight while it still sits
+    // in the window. This pages on exactly that gap: window mismatch while
+    // the latest day reads ok. A daily mismatch is the alarm above (quiet
+    // here, so one event is one page); an unknown day (stale or unread) says
+    // nothing about the window's age, so it is quiet too. Clears when the
+    // window reads ok, which it does once the mismatched day leaves it.
+    title: "MPP reconciliation 7-day window MISMATCH",
+    verdict: ({ gateway: b }) => {
+      const r = b.mppReconcile;
+      if (!r) return "quiet";
+      if (r.window7d === "ok") return "good";
+      return r.window7d === "mismatch" && r.status === "ok" ? "bad" : "quiet";
+    },
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (${dayOf(b.mppReconcile?.day)}) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "MPP reconciliation MISMATCH" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx). Read /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.`,
+  },
+  {
+    // A paid-but-failed MPP call in the last 24 h, read live from the refund
+    // ledger. charged_failed pages, ok clears, unknown does neither.
+    title: "MPP paid-but-failed call",
+    verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.chargedFailedStatus, ["charged_failed"], ["ok"]),
+    body: () =>
+      "An MPP call (Tempo, Stripe SPT or the MPP evm wire) settled and was then answered with a non-200 in the last 24 hours, so the buyer paid and did not get their answer. The debt is on the refund ledger; see GET /__operator/refunds.json and the [mpp-tempo]/[mpp-stripe] CHARGED-BUT-NOT-SERVED log line for the cause. Closes when the 24-hour count is back to zero.",
+  },
   {
     // Settlement freshness. The daily canary must actually BUY, not merely
     // conclude green: on 2026-08-02 a gate skipped every scheduled purchase for
@@ -560,6 +665,19 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
 const BACKUP_BAD = new Set(["held", "failed", "stale"]);
 const REDIS_PERSISTENCE_BAD = new Set(["off", "degraded"]);
+const DB_WORDS = new Set(["ok", "unreachable", "unconfigured", "unknown"]);
+// src/mpp-reconcile.js CATEGORIES: an issue body names only these.
+const MPP_CATEGORIES = new Set(["served_unpaid", "paid_unrecorded", "charged_failed", "amount_mismatch", "wrong_currency", "duplicate_tx", "missing_tx", "evm_unverified", "stripe_mismatch"]);
+// A day is echoed only in its own shape.
+const dayOf = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? d : "the latest day");
+
+// One word, two sets: a word in `bad` pages, a word in `good` clears, and
+// anything else (unknown, absent, a word this Worker does not know) does
+// neither.
+function wordVerdict(word, bad, good) {
+  if (bad.includes(word)) return "bad";
+  return good.includes(word) ? "good" : "quiet";
+}
 
 // The shape shared by every wallet balance: low pages, ok clears, and
 // unknown/unconfigured do neither.
@@ -599,7 +717,7 @@ async function openIssues(token) {
  * Reconcile every alarm against GitHub issues.
  * @returns {{opened:string[], closed:string[], bad:string[], error?:string}}
  */
-export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null } = {}) {
+export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null, maxWrites = MAX_ISSUE_WRITES } = {}) {
   const token = env.GITHUB_ISSUES_TOKEN;
   if (!token) return { opened: [], closed: [], bad: [], error: "no GITHUB_ISSUES_TOKEN (alarms disabled)" };
   const prod = env.PROD || "https://agent402.tools";
@@ -658,9 +776,23 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
   const closed = [];
   const bad = [];
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  // Every open and close is one subrequest, and an invocation may make 50.
+  // Opens go first, then closes, up to maxWrites; whatever is left waits for
+  // the next run five minutes later (the verdict is recomputed then), so a
+  // page is never starved by recoveries and the run never exceeds the limit.
+  const toOpen = [];
+  const toClose = [];
   for (const a of ALARMS) {
     const v = verdicts[a.title];
     if (v === "bad") bad.push(a.title);
+    const existing = open.get(a.title);
+    if (v === "bad" && !existing) toOpen.push(a);
+    else if (v === "good" && existing) toClose.push(a);
+  }
+  const writes = [...toOpen, ...toClose];
+  const deferred = writes.slice(maxWrites).map((a) => a.title);
+  for (const a of writes.slice(0, maxWrites)) {
+    const v = verdicts[a.title];
     const existing = open.get(a.title);
     if (v === "bad" && !existing) {
       const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, {
@@ -682,7 +814,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
       if (r.ok) closed.push(a.title);
     }
   }
-  return { opened, closed, bad };
+  return { opened, closed, bad, deferred };
 }
 
 // Production DOWN. The api check (GET /health) already failed twice 20 s apart
@@ -764,7 +896,7 @@ export async function run(env, timing = {}) {
     .catch((e) => ({ opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) }));
   const alarmLine = alarms.error
     ? `alarms skipped (${alarms.error})`
-    : `alarms bad=[${alarms.bad.join(" ")}] opened=[${alarms.opened.join(" ")}] closed=[${alarms.closed.join(" ")}]`;
+    : `alarms bad=[${alarms.bad.join(" ")}] opened=[${alarms.opened.join(" ")}] closed=[${alarms.closed.join(" ")}]${alarms.deferred?.length ? ` deferred=[${alarms.deferred.join(" ")}]` : ""}`;
   // A skipped paid-call is logged every time: the component simply ages on
   // /status, so this line is where the reason is readable.
   const paidLine = paidCall?.observed ? "paid-call observed" : `paid-call NOT observed (${paidCall?.reason || "check off"})`;

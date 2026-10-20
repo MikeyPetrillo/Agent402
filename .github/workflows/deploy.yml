@@ -1438,6 +1438,8 @@ jobs:
           t node scripts/test-credits-pg.js
           # A retried settle books what the first one took; another container's sweep leaves a live hold.
           t node scripts/test-credits-failures-pg.js
+          # Erasure on request reaches the rows: alert, follow-up and subscription documents, credit keys and the card failure counter; a dry run writes nothing.
+          t node scripts/test-erase-subject-pg.js
           t node scripts/test-human-checkout-pg.js
           # A report made is never refunded or regenerated over a database failure; a refund is recorded first.
           t node scripts/test-human-checkout-failures-pg.js
@@ -1781,6 +1783,8 @@ jobs:
           # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
           t node scripts/test-chain-block-time.js
           t node scripts/test-payai-credit-watch.js
+          # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
+          t node scripts/test-heartbeat-mpp-window.js
           t node scripts/test-revenue-fresh-recent.js
           t node scripts/test-chain-page-own-settle.js
           t node scripts/test-revenue-cold.js
@@ -4491,7 +4495,7 @@ jobs:
           t node scripts/test-alerts-routes.js
           # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
           t node scripts/test-followups.js
-          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, a leftover weekly digest file, subscriptions) (offline)
+          # Erasure on request, file backend: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, a leftover weekly digest file, card and MPP subscriptions, credit keys, the card failure counter) (offline)
           t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js
@@ -4812,6 +4816,7 @@ jobs:
           t node scripts/test-tempo-push-debts.js
           # Tempo pull credentials: per-buyer bounds key only on a sender the signature (or the chain, for an access key) proves; routes that spend before settlement refuse an unproven one before any relay call (real Tempo transactions, stubbed relay + RPC, boots paid mode, offline)
           t node scripts/test-tempo-sender.js
+          t node scripts/test-ox-single-copy.js
           # MPP discovery parity: every paid route's 402 challenges == its /openapi.json offers; /llms.txt + /.well-known/x402 agree (boots paid mode, offline)
           t node scripts/test-mpp-discovery-parity.js
           # MPP start-here set: every slug offers tempo, and /what-is-mpp, /llms.txt, /openapi.json and MCP payment.info derive from src/mpp-flagship.js at catalog prices (boots FREE_MODE, offline)

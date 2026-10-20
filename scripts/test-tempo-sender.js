@@ -147,7 +147,9 @@ const TX_AGENT = await signWith(agent);
 const TX_P256_AGENT = await signWith(p256Agent);
 const TX_FORGED_KEYCHAIN = await signWith(forger);
 const TX_ROOT_AS_KEYCHAIN = await signWith(TempoAccount.fromSecp256k1(rootKey, { access: root }));
-const TX_MULTISIG = oxSigned({ envelope: (primitive) => SignatureEnvelope.from({ account: victim, signatures: [primitive] }) });
+// A native multisig envelope carries the account, its current config and the
+// owners' signatures; here the attacker names the victim's account.
+const TX_MULTISIG = oxSigned({ envelope: (primitive) => SignatureEnvelope.from({ account: victim, config: { version: 0n, threshold: 1, owners: [{ owner: attacker, weight: 1 }] }, signatures: [primitive] }) });
 const TX_FEE_SLOT_VICTIM = oxSigned({ sender: victim });
 const TX_FEE_SLOT_SELF = oxSigned({ sender: attacker });
 const victimP256 = P256.getPublicKey({ privateKey: P256.randomPrivateKey() });
