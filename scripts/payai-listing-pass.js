@@ -23,22 +23,32 @@
 //   node scripts/payai-listing-pass.js --live --max-price 0.60
 //   node scripts/payai-listing-pass.js --live --only hash,page-speed
 //   node scripts/payai-listing-pass.js --live --limit 5 --out /tmp/pass.json
+//   node scripts/payai-listing-pass.js --live --include-upstream --max-spend 2
 //
-// Flags: --max-price USD (default 0.25; a route above it is skipped), --only
-// slug,slug, --limit N, --pause-ms (default 1500 between buys), --out FILE
-// (route/status/tx/charged records as JSON), --include-quoted (a quoted route's
-// 402 prices the request itself; skipped by default), --include-upstream (a
-// route that serves through a vendor call: the list price lands in our own
-// treasury, the vendor call is the real cost, so skipped by default), --settle-wait-ms (before
-// the closing re-measure, default 60000), --chain (default solana).
+// Flags: --max-price USD (default 0.25; a route above it is skipped), --max-spend
+// USD (a ceiling on the summed list price of one run: the selection is
+// cheapest first and the routes past the ceiling are skipped with
+// "past --max-spend"; no ceiling unless set), --only slug,slug, --limit N,
+// --pause-ms (default 1500 between buys), --out FILE (route/status/tx/charged
+// records as JSON), --include-quoted (a quoted route's 402 prices the request
+// itself; skipped by default), --include-upstream (a route that serves through
+// a vendor call: the list price lands in our own treasury, the vendor call is
+// the real cost, so skipped by default), --settle-wait-ms (before the closing
+// re-measure, default 60000), --chain (default solana).
 //
 // Env: SOLANA_BURNER_KEY (base58 64-byte secret or JSON byte array; never
 // printed), AGENT402_OPERATOR_TOKEN (the gate; never printed), POW_SECRET
 // (optional: the signed X-Heartbeat-Token books the buys as ours), TARGET_URL,
 // LISTING_ORIGIN, PAYAI_REGISTRY_URL, BAZAAR_REGISTRY_URL.
 //
-// Exit: 0 every selected buy settled (registry ingestion lag is theirs);
-// 1 a buy failed; 2 misconfigured or the preference is not honored.
+// Scheduled: .github/workflows/payai-listing.yml runs this live every
+// Wednesday 03:53 UTC (and on dispatch) with --include-upstream, --max-price
+// 0.25 and --max-spend 2, in the spending environment, and keeps one issue
+// ("PayAI listing pass FAILED") open while a run fails.
+//
+// Exit: 0 nothing missing, nothing selected, or every selected buy settled
+// (registry ingestion lag is theirs); 1 a selected buy failed; 2 misconfigured
+// or the preference is not honored (nothing spent).
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -51,9 +61,10 @@ export const DEFAULT_MAX_PRICE_USD = 0.25;
 /**
  * Pure: the routes to buy, cheapest first. A route is selected when it sells
  * on the chain, the PayAI registry lacks it there, its price is within the
- * cap, and (unless included) it is not quoted per request.
+ * cap, and (unless included) it is not quoted per request. `limit` cuts the
+ * cheapest-first order by count, `maxSpendUsd` by summed list price.
  */
-export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, only = null, limit = Infinity, includeQuoted = false, includeUpstream = false } = {}) {
+export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, maxSpendUsd = Infinity, only = null, limit = Infinity, includeQuoted = false, includeUpstream = false } = {}) {
   const onlySet = only ? new Set([...only].map((s) => String(s).trim()).filter(Boolean)) : null;
   const missing = missingIn(coverage, "payai", chain);
   const skipped = [];
@@ -69,9 +80,17 @@ export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_M
     selected.push(r);
   }
   selected.sort((a, b) => a.priceUsd - b.priceUsd || a.path.localeCompare(b.path));
-  const chosen = selected.slice(0, Number.isFinite(limit) ? Math.max(0, limit) : selected.length);
-  for (const r of selected.slice(chosen.length)) skipped.push({ ...r, why: "past --limit" });
-  const estimateUsd = chosen.reduce((s, r) => s + r.priceUsd, 0);
+  const byCount = selected.slice(0, Number.isFinite(limit) ? Math.max(0, limit) : selected.length);
+  for (const r of selected.slice(byCount.length)) skipped.push({ ...r, why: "past --limit" });
+  // The spend ceiling is a prefix of the same cheapest-first order: once the
+  // running sum would pass it, nothing dearer can fit either.
+  const chosen = [];
+  let estimateUsd = 0;
+  for (const r of byCount) {
+    if (estimateUsd + r.priceUsd > maxSpendUsd + 1e-9) { skipped.push({ ...r, why: "past --max-spend" }); continue; }
+    chosen.push(r);
+    estimateUsd += r.priceUsd;
+  }
   return { missing: missing.length, selected: chosen, skipped, estimateUsd };
 }
 
@@ -98,12 +117,16 @@ function flag(argv, name, dflt = null) {
 
 export function parseArgs(argv) {
   const maxPrice = Number(flag(argv, "--max-price", DEFAULT_MAX_PRICE_USD));
+  const maxSpend = flag(argv, "--max-spend", null);
   const limit = flag(argv, "--limit", null);
   const only = flag(argv, "--only", null);
   return {
     live: argv.includes("--live"),
     includeUpstream: argv.includes("--include-upstream"),
     maxPriceUsd: Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : DEFAULT_MAX_PRICE_USD,
+    // Absent: no ceiling. Given but unreadable: NaN, and main refuses to run
+    // rather than buy without the ceiling the caller meant to set.
+    maxSpendUsd: maxSpend == null ? Infinity : (maxSpend !== true && String(maxSpend).trim() !== "" && Number.isFinite(Number(maxSpend)) && Number(maxSpend) >= 0 ? Number(maxSpend) : NaN),
     only: typeof only === "string" ? only.split(",") : null,
     limit: limit != null && limit !== true ? Number(limit) : Infinity,
     pauseMs: Math.max(0, Number(flag(argv, "--pause-ms", 1500)) || 0),
@@ -138,11 +161,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const target = String(env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
   const chain = chainOf(opts.chain);
   if (!chain) { console.error(`payai-listing-pass: unknown chain ${opts.chain}`); return 2; }
+  if (Number.isNaN(opts.maxSpendUsd)) { console.error("payai-listing-pass: --max-spend needs a non-negative USD amount"); return 2; }
   const token = String(env.AGENT402_OPERATOR_TOKEN || "").trim();
   const rawKey = String(env.SOLANA_BURNER_KEY || "").trim();
   const log = (m) => console.log(m);
 
-  log(`target ${target} · chain ${chain.name} (${chain.caip2}) · cap $${opts.maxPriceUsd}${opts.live ? " · LIVE" : " · dry run"}`);
+  log(`target ${target} · chain ${chain.name} (${chain.caip2}) · cap $${opts.maxPriceUsd} per route${Number.isFinite(opts.maxSpendUsd) ? ` · ceiling $${opts.maxSpendUsd} per run` : " · no run ceiling"}${opts.live ? " · LIVE" : " · dry run"}`);
   const before = await measureCoverage({ target, origin: env.LISTING_ORIGIN, chains: ["base", chain.name], bazaarUrl: env.BAZAAR_REGISTRY_URL || undefined, payaiUrl: env.PAYAI_REGISTRY_URL || undefined, log });
   log("");
   log(renderTable(before));
@@ -151,7 +175,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   for (const r of plan.selected) log(`  BUY   ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}`);
   for (const r of plan.skipped) log(`  SKIP  ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  ${r.why}`);
   log(`\nestimated spend from the price list: $${plan.estimateUsd.toFixed(3)} over ${plan.selected.length} buys`);
-  if (!plan.selected.length) { log("Nothing to buy."); return 0; }
+  if (!plan.missing) { log(`nothing missing: every route sold on ${chain.name} has a PayAI row`); return 0; }
+  if (!plan.selected.length) { log(`nothing to buy: ${plan.missing} missing, every one skipped (see SKIP above)`); return 0; }
   if (!opts.live) { log("DRY RUN. Re-run with --live to buy."); return 0; }
 
   if (!token) { console.error("payai-listing-pass: AGENT402_OPERATOR_TOKEN is required (the settle-via gate)"); return 2; }

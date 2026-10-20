@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // The PayAI listing pass (scripts/payai-listing-pass.js), offline: route
-// selection and the price cap, --only and --limit, quoted routes, the
+// selection and the price cap, the run ceiling, --only and --limit, quoted routes, the
 // preflight that refuses to spend when the preference is not honored, the
 // receipt reader, and the flag parser.
 //
 //   node scripts/test-payai-listing-pass.js
 import assert from "node:assert/strict";
 import { CHAINS, coverageFor } from "./listing-coverage.js";
-import { selectPass, preferenceHonored, receiptOf, parseArgs, DEFAULT_MAX_PRICE_USD, SETTLE_VIA } from "./payai-listing-pass.js";
+import { selectPass, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, SETTLE_VIA } from "./payai-listing-pass.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -53,6 +53,18 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
   const plan = selectPass(cov, { only: ["answer", " mid "], limit: 1 });
   ok(plan.selected.map((r) => r.slug).join() === "answer" && plan.skipped.find((r) => r.slug === "mid")?.why === "past --limit", "--only narrows and --limit cuts the cheapest-first order, the rest reported as skipped");
 }
+// --- the run ceiling ----------------------------------------------------------
+{
+  const plan = selectPass(cov, { maxSpendUsd: 0.1 });
+  ok(plan.selected.map((r) => r.slug).join() === "hash,answer" && plan.skipped.find((r) => r.slug === "mid")?.why === "past --max-spend", `--max-spend keeps the cheapest prefix whose list prices fit (${plan.selected.map((r) => r.slug).join()})`);
+  ok(Math.abs(plan.estimateUsd - 0.081) < 1e-9 && plan.estimateUsd <= 0.1, `the estimate is the sum of what fits ($${plan.estimateUsd})`);
+  ok(selectPass(cov, { maxSpendUsd: 0.081 }).selected.length === 2, "a ceiling equal to the prefix sum admits it (inclusive)");
+  ok(selectPass(cov, { maxSpendUsd: 0 }).selected.length === 0 && selectPass(cov, { maxSpendUsd: 0 }).skipped.filter((r) => r.why === "past --max-spend").length === 3, "a zero ceiling selects nothing and says why for every priced route");
+  const both = selectPass(cov, { maxSpendUsd: 0.1, limit: 1 });
+  ok(both.selected.map((r) => r.slug).join() === "hash" && both.skipped.find((r) => r.slug === "answer")?.why === "past --limit", "--limit and --max-spend are both prefix cuts; the tighter one wins and the count cut names itself");
+  const wide = selectPass(cov, { maxSpendUsd: 5 });
+  ok(wide.selected.length === 3 && !wide.skipped.some((r) => r.why === "past --max-spend"), "a ceiling above the estimate changes nothing");
+}
 {
   const plan = selectPass(coverageFor({ pricing, payaiItems: pricing.endpoints.map((e) => ({ resource: `${ORIGIN}${e.path}`, accepts: [{ network: SOL }] })), origin: ORIGIN }));
   ok(plan.missing === 0 && plan.selected.length === 0 && plan.estimateUsd === 0, "a fully listed registry selects nothing");
@@ -81,6 +93,10 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
   const d = parseArgs([]);
   ok(!d.live && d.maxPriceUsd === DEFAULT_MAX_PRICE_USD && d.only === null && d.limit === Infinity && d.pauseMs === 1500 && d.out === null && d.settleWaitMs === 60_000, "defaults: dry run, the default cap, no filter, a pause between buys");
   ok(parseArgs(["--max-price", "-1"]).maxPriceUsd === DEFAULT_MAX_PRICE_USD && parseArgs(["--max-price", "x"]).maxPriceUsd === DEFAULT_MAX_PRICE_USD, "a bad cap falls back to the default");
+  ok(parseArgs(["--max-spend", "2"]).maxSpendUsd === 2 && parseArgs(["--max-spend", "0"]).maxSpendUsd === 0 && d.maxSpendUsd === Infinity, "--max-spend parses, zero included; absent means no ceiling");
+  ok(Number.isNaN(parseArgs(["--max-spend", "two"]).maxSpendUsd) && Number.isNaN(parseArgs(["--max-spend", "-1"]).maxSpendUsd) && Number.isNaN(parseArgs(["--max-spend"]).maxSpendUsd), "a ceiling that was given but does not read is NaN, never silently unbounded");
+  const refused = await main(["--max-spend", "two"], {});
+  ok(refused === 2, `main refuses an unreadable ceiling before any read or buy (exit ${refused})`);
   ok(SETTLE_VIA === "payai", "the pass names the facilitator the server registers");
 }
 
