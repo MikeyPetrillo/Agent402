@@ -2955,6 +2955,8 @@ jobs:
           t node scripts/test-svm-clarify.js
           # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
           t node scripts/test-refund-ledger.js
+          # Outbound new-destination watch (first sighting per chain+recipient, ok/new/burst words, window expiry, file-mode persistence across a restart, word-only public field - offline + boots its own server)
+          t node scripts/test-outbound-destinations.js
           # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
           t node scripts/test-refund-lookup.js
           # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
