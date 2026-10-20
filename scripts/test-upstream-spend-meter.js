@@ -25,7 +25,7 @@ delete process.env.TYPESAFE_API_KEY;
 
 const U = await import("../src/upstream-costs.js");
 const PH = await import("../src/posthog.js");
-const { TTS_TOOLS, __makeHandlerForTest, __resetTtsBreakerForTest, OPENAI_TTS_SHUTDOWN } = await import("../src/tools/tts-kit.js");
+const { TTS_TOOLS, TTS_BACKUP_MODELS, __resetTtsBreakerForTest } = await import("../src/tools/tts-kit.js");
 const { STT_TIERS, makeMultipartHandler } = await import("../src/tools/stt-kit.js");
 const { IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
 const { EMBED_TOOLS } = await import("../src/tools/embed-kit.js");
@@ -58,7 +58,7 @@ const recorded = ({ m, e }, { source, usd, tier, model, priceUsd }, label) => {
 const SPEECH_FRONT = SPEECH_MODELS[0].id;
 const T = {
   models: [["acme/", { completion: 2, prompt: 1 }]],
-  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "tts-1": 0.125, "tts-1-hd": 0.25, [SPEECH_FRONT]: 0.0625 },
+  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
   openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
   sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
@@ -99,20 +99,20 @@ try {
     ok(out.model === "elevenlabs/eleven-v4-turbo", "tts served on the primary ElevenLabs link");
     recorded(await take(), { source: "speech", usd: text.length * T.speech["elevenlabs/eleven-v4-turbo"], tier: "tts", model: "elevenlabs/eleven-v4-turbo", priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts");
   }
-  // ---- tts falling back to the direct speech model: priced at THAT row ----
+  // ---- tts served by a backup speech model: priced at THAT row ----
   {
-    const text = "Fallback speaks here.";
+    const text = "Backup speaks here.";
+    const backup = TTS_BACKUP_MODELS[0];
     __resetTtsBreakerForTest();
-    stub((u) => (hostOf(u) === "api.openai.com" ? audio() : json({ error: { message: "down" } }, 500)));
-    const h = __makeHandlerForTest("tts", { now: () => OPENAI_TTS_SHUTDOWN - 1 });
-    const out = await h({ text, format: "mp3" });
+    stub((_u, init) => (String(JSON.parse(init.body).model).startsWith("elevenlabs/") ? json({ error: { message: "down" } }, 500) : audio()));
+    const out = await bySlug(TTS_TOOLS, "tts").handler({ text, format: "mp3" });
     restore();
-    ok(out.model === "tts-1" && out.provider === "openai", `the direct fallback spoke (${out.model})`);
-    recorded(await take(), { source: "speech", usd: text.length * T.speech["tts-1"], tier: "tts", model: "tts-1", priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts fallback");
+    ok(out.model === backup && out.provider === "openrouter", `the backup spoke (${out.model})`);
+    recorded(await take(), { source: "speech", usd: text.length * T.speech[backup], tier: "tts", model: backup, priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts backup");
   }
   // ---- no rate row for the model that spoke: served, nothing metered, the event says unreported ----
   {
-    U.setUpstreamCostsForTest({ ...T, speech: { "tts-1": 0.125, "tts-1-hd": 0.125 } });
+    U.setUpstreamCostsForTest({ ...T, speech: { "elevenlabs/eleven-v4-turbo": 0.25 } });
     stub(() => audio());
     const out = await bySlug(TTS_TOOLS, "tts-lite").handler({ text: "No row for me", format: "mp3" });
     restore();

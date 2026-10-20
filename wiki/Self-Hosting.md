@@ -85,7 +85,7 @@ Set these on your host. None are committed to the repo.
 | `FRED_API_KEY` | No | Enables macro-kit v1 (FRED economic data) |
 | `FRED_API_KEY_V2` | No | Distinct key for macro-kit v2 bulk endpoints |
 | `OPENROUTER_API_KEY` | No | Enables the `/v1` LLM gateway tiers (chat, metered, embeddings, rerank, images, speech); the routes answer `503` without it |
-| `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/tts*`, `/api/transcribe*` and `/api/embed*` proxies |
+| `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/transcribe*` and `/api/embed*` proxies |
 | `E2B_API_KEY` | No | Enables the `/api/code-run*` sandbox tools |
 | `REDIS_URL` | No | Enables Redis: response caching (see below), and, across replicas, the shared rate limits, breakers and budgets (`SHARED_LIMITS=off` turns those off), the payment replay guard and idempotency store. A plain `redis://` URL to a public host is refused at boot |
 | `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |

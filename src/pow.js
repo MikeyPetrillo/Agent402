@@ -502,7 +502,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Code execution kit: every call spins up an E2B sandbox (compute cost).
   // PoW would let one client farm our E2B quota for free.
   "code-run", "code-run-pro",
-  // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro, OpenAI fallback).
+  // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro and the backup speech models).
   "tts", "tts-hd", "tts-lite",
   // STT kit: fetches external audio + burns OpenAI transcription credit.
   "transcribe", "transcribe-pro",

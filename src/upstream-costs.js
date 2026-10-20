@@ -39,11 +39,9 @@ const REQUIRED = [
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
-  // The speech fallback models the /api/tts tiers reach directly (USD per
-  // character, like every other speech row) and the direct image model
-  // (USD per 1M tokens: prompt for text input, completion for image output),
-  // which the spend meter prices from these rows.
-  ["speech", "tts-1"], ["speech", "tts-1-hd"], ["openai", "gpt-image-2"],
+  // The direct image model (USD per 1M tokens: prompt for text input,
+  // completion for image output), which the spend meter prices from this row.
+  ["openai", "gpt-image-2"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
 ];
