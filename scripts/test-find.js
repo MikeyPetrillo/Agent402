@@ -476,6 +476,21 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(find("perp klines for btc 1h").results[0]?.slug === "perp-klines", "a klines ask still reaches perp-klines");
 }
 
+// ---- html-frames speaks the render-contract vocabulary (2026-10-20) ----
+// The tool's aliases and tags, against the real kit definitions beside the
+// kits that could compete for these words (contract-*, html-*, search).
+{
+  const { BROWSER_MEASURE_TOOLS } = await import("../src/tools/browser-measure-kit.js");
+  const { HTML_TOOLS } = await import("../src/tools/html-kit.js");
+  const C = {};
+  for (const t of [...API_TOOLS, ...CRYPTO_TOOLS, ...MEV_AND_L2_TOOLS, ...SEARCH_TOOLS, ...HTML_TOOLS, ...BROWSER_MEASURE_TOOLS]) C[t.route] = t;
+  for (const q of ["render contract", "renderAt", "contact sheet", "motion design frame check", "freeze frames of my animation"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug === "html-frames", `"${q}" -> html-frames (got ${r.results.slice(0, 3).map((x) => x.slug).join(", ")})`);
+  }
+  ok(findTools(C, "page speed", {}).results[0]?.slug === "page-speed", "the sibling tool keeps its own words");
+}
+
 // ---- typos and misses (2026-10-15, from the demand board) ----
 {
   const { closestCatalogWord, markMissRows } = await import("../src/find.js");

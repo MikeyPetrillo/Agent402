@@ -5,17 +5,24 @@
 //   page-speed   one lab load of a public URL through the same SSRF guard
 //                render uses (assertPublicUrl up front, hostIsPublic on every
 //                request the page makes), reporting what that load measured.
-//   html-frames  a buyer-supplied self-contained HTML document rendered with
-//                every network request refused, stepped through
-//                window.renderAt(t), returned as PNG stills plus a contact sheet.
+//   html-frames  the render contract: a buyer-supplied self-contained HTML
+//                document that defines window.renderAt(t), rendered with every
+//                network request refused, frozen at the requested times and
+//                returned as PNG stills plus a contact sheet. An optional
+//                `compare` (baseline stills, or a second document fetched
+//                through the same public-URL guard and rendered the same way)
+//                adds a frame check: per-frame similarity and changed regions
+//                (src/tools/frame-diff.js).
 //
 // Both are wallet-only: neither is on the free-tier allowlist (src/free-tier.js).
-// This module imports only render.js and pure helpers, so the secretless worker
-// (worker/server.js) runs these handlers unchanged.
+// This module imports only render.js, the fetch guard and pure helpers, so the
+// secretless worker (worker/server.js) runs these handlers unchanged.
 import {
   measurePageSpeed, renderHtmlFrames,
   PAGE_SPEED_DEVICES, PAGE_SPEED_MEASUREMENT, HTML_FRAMES_LIMITS,
 } from "./render.js";
+import { safeFetch } from "./fetch-guard.js";
+import { assertPngWithin, compareStills, decodePng, FRAME_DIFF } from "./frame-diff.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -41,7 +48,53 @@ export function pageSpeedInput(input = {}) {
   return { url, device };
 }
 
-/** Validate html-frames input. Returns { html, times, width, height }. Pure. */
+/**
+ * Validate the optional `compare` of html-frames. Returns null (no compare),
+ * { baselineUrl } or { baseline: [{ t, png: Buffer }] }. Pure: every baseline
+ * still is checked by its header (PNG, within the viewport caps) and by total
+ * bytes (the output cap) before any browser slot is held.
+ */
+export function htmlFramesCompareInput(raw, times, L = HTML_FRAMES_LIMITS) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw bad('"compare" must be an object holding "baseline" (an array of {t, png}) or "baselineUrl"');
+  const hasList = raw.baseline !== undefined && raw.baseline !== null;
+  const hasUrl = raw.baselineUrl !== undefined && raw.baselineUrl !== null && String(raw.baselineUrl).trim() !== "";
+  if (hasList === hasUrl) throw bad('"compare" takes exactly one of "baseline" (an array of {t, png}) or "baselineUrl"');
+  if (hasUrl) {
+    const url = String(raw.baselineUrl).trim();
+    if (!/^https?:\/\//i.test(url)) throw bad('"compare.baselineUrl" must be a public http(s) URL');
+    return { baselineUrl: url };
+  }
+  const list = raw.baseline;
+  if (!Array.isArray(list) || list.length < 1) throw bad(`"compare.baseline" must be an array of 1 to ${L.maxFrames} entries {t, png}`);
+  if (list.length > L.maxFrames) throw bad(`"compare.baseline" has ${list.length} entries; the cap is ${L.maxFrames}`);
+  const wanted = new Set(times);
+  const seen = new Set();
+  let total = 0;
+  const baseline = list.map((e, i) => {
+    const t = typeof e?.t === "string" && e.t.trim() !== "" ? Number(e.t) : e?.t;
+    if (typeof t !== "number" || !Number.isFinite(t)) throw bad(`"compare.baseline[${i}].t" must be a number of seconds`);
+    if (!wanted.has(t)) throw bad(`"compare.baseline[${i}].t" is ${t}, which is not one of the requested times`);
+    if (seen.has(t)) throw bad(`"compare.baseline" lists t = ${t} twice`);
+    seen.add(t);
+    const s = typeof e?.png === "string" ? e.png.replace(/^data:image\/png;base64,/i, "").trim() : "";
+    if (!s) throw bad(`"compare.baseline[${i}].png" must be a base64 PNG`);
+    const png = Buffer.from(s, "base64");
+    total += png.length;
+    if (total > L.maxOutputBytes) throw bad(`"compare.baseline" holds more than ${L.maxOutputBytes / (1024 * 1024)} MB of PNG; the cap is the tool's output cap`, 413);
+    assertPngWithin(png, { maxWidth: L.maxWidth, maxHeight: L.maxHeight, label: `"compare.baseline[${i}].png"` });
+    return { t, png };
+  });
+  return { baseline };
+}
+
+/** True when a body asks for the compare that renders a second document. */
+export function htmlFramesRendersBaseline(body) {
+  const u = body?.compare?.baselineUrl;
+  return typeof u === "string" && u.trim() !== "";
+}
+
+/** Validate html-frames input. Returns { html, times, width, height, compare }. Pure. */
 export function htmlFramesInput(input = {}, L = HTML_FRAMES_LIMITS) {
   const html = input?.html;
   if (typeof html !== "string" || !html.trim()) throw bad('Missing "html": a self-contained HTML document that defines window.renderAt(t)');
@@ -64,7 +117,68 @@ export function htmlFramesInput(input = {}, L = HTML_FRAMES_LIMITS) {
   };
   const width = side(input?.width, 640, L.maxWidth, "width");
   const height = side(input?.height, 360, L.maxHeight, "height");
-  return { html, times, width, height };
+  const compare = htmlFramesCompareInput(input?.compare, times, L);
+  return { html, times, width, height, compare };
+}
+
+const FRAMES_PRICE_USD = 0.02;
+const usd = (n) => `$${Number(n.toFixed(4))}`;
+const FRAME_CHECK_METHOD = `grayscale mean per cell of a ${FRAME_DIFF.columns}x${FRAME_DIFF.rows} grid over each still; similarity is 1 minus the mean absolute difference of the cell means on a 0 to 255 scale; a cell is changed past a difference of ${FRAME_DIFF.changedCellDelta}; changed cells are grouped into 4-connected regions, largest first`;
+
+/**
+ * Fetch the baseline document of a compare by baselineUrl through the public
+ * URL guard (private hosts refused, redirects re-checked), under the html cap.
+ * Runs before any browser slot is held: a refused or absent URL costs nothing.
+ */
+async function fetchBaselineDocument(url, L = HTML_FRAMES_LIMITS) {
+  let got;
+  try {
+    got = await safeFetch(url, { maxBytes: L.maxHtmlBytes, timeoutMs: L.loadTimeoutMs });
+  } catch (e) {
+    if (e?.statusCode === 413) throw bad(`"compare.baselineUrl" document is over the ${L.maxHtmlBytes / 1024} KB cap`, 413);
+    throw bad(`"compare.baselineUrl": ${e?.message || e}`, e?.statusCode || 502);
+  }
+  const html = typeof got?.html === "string" ? got.html : "";
+  if (!html.trim()) throw bad('"compare.baselineUrl" answered an empty document', 422);
+  return { html, finalUrl: got.finalUrl || url };
+}
+
+// Test hook: the frames test stands a fixture server on loopback, which the
+// public-URL guard refuses by design, so it substitutes the fetch to prove
+// the rest of the baselineUrl path (second render, error naming, quote).
+let baselineFetch = fetchBaselineDocument;
+export const __test = { setBaselineFetch: (fn) => { baselineFetch = fn || fetchBaselineDocument; } };
+
+/**
+ * The frame check: each candidate still against the baseline still of the
+ * same t. Mutates `result` (adds the per-frame fields and `compare`).
+ */
+function attachFrameCheck(result, baselineByT, { width, height, source, baselineInfo }) {
+  const L = HTML_FRAMES_LIMITS;
+  let compared = 0;
+  let minSimilarity = null;
+  for (const f of result.frames) {
+    const b = baselineByT.get(f.t);
+    if (!b) { Object.assign(f, { similarity: null, changedCells: null, changedRegions: null, changedRegionsPartial: null }); continue; }
+    const candidate = decodePng(Buffer.from(f.pngBase64, "base64"), { maxWidth: L.maxWidth, maxHeight: L.maxHeight, label: `the still at t = ${f.t}` });
+    const baseline = decodePng(b.png, { maxWidth: L.maxWidth, maxHeight: L.maxHeight, label: `the baseline still at t = ${f.t}` });
+    const d = compareStills(candidate, baseline);
+    Object.assign(f, { similarity: d.similarity, changedCells: d.changedCells, changedRegions: d.changedRegions, changedRegionsPartial: d.changedRegionsPartial });
+    compared++;
+    minSimilarity = minSimilarity === null ? d.similarity : Math.min(minSimilarity, d.similarity);
+  }
+  result.compare = {
+    source,
+    ...baselineInfo,
+    framesCompared: compared,
+    framesWithoutBaseline: result.frames.length - compared,
+    minSimilarity,
+    grid: { columns: FRAME_DIFF.columns, rows: FRAME_DIFF.rows },
+    changedCellDelta: FRAME_DIFF.changedCellDelta,
+    method: FRAME_CHECK_METHOD,
+    viewport: { width, height },
+  };
+  return result;
 }
 
 const FRAMES_EXAMPLE_HTML =
@@ -276,10 +390,16 @@ export const BROWSER_MEASURE_TOOLS = [
     },
   },
   {
-    route: "POST /api/html-frames", name: "HTML frames (render at times)", slug: "html-frames", category: "web", price: "$0.02",
+    route: "POST /api/html-frames", name: "HTML frames (render contract, frame check)", slug: "html-frames", category: "web", price: usd(FRAMES_PRICE_USD),
+    aliases: ["render-contract", "renderat", "renderat-frames", "contact-sheet", "frame-check", "motion-design-frame-check", "freeze-frames", "animation-frames", "animation-stills"],
+    // A compare by baselineUrl renders a second document on the browser pool,
+    // so that body is quoted at twice the listed price; every other body,
+    // including a compare by baseline stills, is quoted at the listed price.
+    quote: (body) => (htmlFramesRendersBaseline(body) ? 2 : 1) * FRAMES_PRICE_USD,
+    quoteMaxUsd: 2 * FRAMES_PRICE_USD,
     description:
-      `Render a self-contained HTML document in headless Chromium with all network access refused, call its window.renderAt(t) for each requested time in seconds, and return a PNG still per time (base64) plus one contact-sheet PNG of every still in a grid. For previews of canvas, SVG or CSS animations an agent wrote itself. The document must carry everything inline: every request it makes (fetch, images, fonts, frames, sockets, navigations) is refused and counted; data: and blob: URLs it builds itself work. A script error while loading, a missing renderAt or a renderAt that throws answers 400. Limits: html up to ${HTML_FRAMES_LIMITS.maxHtmlBytes / 1024} KB, ${HTML_FRAMES_LIMITS.minFrames} to ${HTML_FRAMES_LIMITS.maxFrames} times, width up to ${HTML_FRAMES_LIMITS.maxWidth} and height up to ${HTML_FRAMES_LIMITS.maxHeight} (default 640x360), ${HTML_FRAMES_LIMITS.frameTimeoutMs / 1000} s per renderAt and ${HTML_FRAMES_LIMITS.totalTimeoutMs / 1000} s for loading and every renderAt together, ${HTML_FRAMES_LIMITS.maxOutputBytes / (1024 * 1024)} MB of PNG output in all. Deterministic code, no model. Body: {"html":"<!doctype html>…","times":[0,0.5,1],"width":640?,"height":360?}.`,
-    tags: ["browser", "html", "render", "frames", "animation", "png", "canvas", "contact-sheet"],
+      `Freeze frames of an animation under the render contract: the page defines window.renderAt(t). The tool renders the self-contained HTML document in headless Chromium with all network access refused, calls renderAt for each requested time in seconds and returns a PNG still per time (base64) plus one contact-sheet PNG of every still in a grid. For previews and frame checks of canvas, SVG or CSS animations an agent wrote itself (motion design, motion graphics, generative art). Frame check: the optional compare input holds either baseline, an array of {t, png} stills (base64 PNG, one per requested time, from an earlier call or another renderer), or baselineUrl, the public URL of a second document under the same contract, fetched through the same public-URL guard as page-speed and rendered the same way; each compared frame then carries similarity (0 to 1 from the ${FRAME_DIFF.columns}x${FRAME_DIFF.rows} grid of grayscale cell means; identical stills score 1) and changedRegions (bounding boxes of the differing cells in pixels, largest first, up to ${FRAME_DIFF.maxRegions} with changedRegionsPartial saying how many there were). A compare by baselineUrl renders two documents, so that call is quoted at twice the listed price (${usd(2 * FRAMES_PRICE_USD)}) in its 402; a compare by baseline stills is quoted at the listed price. The document must carry everything inline: every request it makes (fetch, images, fonts, frames, sockets, navigations) is refused and counted; data: and blob: URLs it builds itself work. A script error while loading, a missing renderAt or a renderAt that throws answers 400. Limits: html up to ${HTML_FRAMES_LIMITS.maxHtmlBytes / 1024} KB, ${HTML_FRAMES_LIMITS.minFrames} to ${HTML_FRAMES_LIMITS.maxFrames} times, width up to ${HTML_FRAMES_LIMITS.maxWidth} and height up to ${HTML_FRAMES_LIMITS.maxHeight} (default 640x360), ${HTML_FRAMES_LIMITS.frameTimeoutMs / 1000} s per renderAt and ${HTML_FRAMES_LIMITS.totalTimeoutMs / 1000} s for loading and every renderAt together, ${HTML_FRAMES_LIMITS.maxOutputBytes / (1024 * 1024)} MB of PNG output in all; a baseline of up to ${HTML_FRAMES_LIMITS.maxFrames} stills and ${HTML_FRAMES_LIMITS.maxOutputBytes / (1024 * 1024)} MB of PNG, each still at most ${HTML_FRAMES_LIMITS.maxWidth}x${HTML_FRAMES_LIMITS.maxHeight}. Deterministic code, no model. Body: {"html":"<!doctype html>…","times":[0,0.5,1],"width":640?,"height":360?,"compare":{"baseline":[{"t":0,"png":"iVBORw0KGgo…"}]}?} or "compare":{"baselineUrl":"https://…"}.`,
+    tags: ["browser", "html", "render", "frames", "animation", "png", "canvas", "contact-sheet", "contract", "motion", "baseline", "diff"],
     discovery: {
       bodyType: "json",
       input: { html: FRAMES_EXAMPLE_HTML, times: [0, 1, 2], width: 320, height: 180 },
@@ -289,6 +409,25 @@ export const BROWSER_MEASURE_TOOLS = [
           times: { type: "array", items: { type: "number" }, description: `${HTML_FRAMES_LIMITS.minFrames} to ${HTML_FRAMES_LIMITS.maxFrames} times in seconds (0 to ${HTML_FRAMES_LIMITS.maxTimeSeconds}), one still each` },
           width: { type: "integer", description: `Viewport width in px, ${HTML_FRAMES_LIMITS.minSide} to ${HTML_FRAMES_LIMITS.maxWidth} (default 640)` },
           height: { type: "integer", description: `Viewport height in px, ${HTML_FRAMES_LIMITS.minSide} to ${HTML_FRAMES_LIMITS.maxHeight} (default 360)` },
+          compare: {
+            type: "object",
+            description: `Optional frame check: exactly one of baseline or baselineUrl. Adds similarity (0 to 1) and changedRegions to each compared frame. A baselineUrl renders a second document and is quoted at twice the listed price (${usd(2 * FRAMES_PRICE_USD)})`,
+            properties: {
+              baseline: {
+                type: "array",
+                description: `1 to ${HTML_FRAMES_LIMITS.maxFrames} baseline stills, each {t, png}: t one of the requested times, png a base64 PNG at most ${HTML_FRAMES_LIMITS.maxWidth}x${HTML_FRAMES_LIMITS.maxHeight}; ${HTML_FRAMES_LIMITS.maxOutputBytes / (1024 * 1024)} MB of PNG in all. A still of another size is compared on the same grid`,
+                items: {
+                  type: "object",
+                  properties: {
+                    t: { type: "number", description: "One of the requested times, in seconds" },
+                    png: { type: "string", description: "The baseline still at that time, base64 PNG" },
+                  },
+                  required: ["t", "png"],
+                },
+              },
+              baselineUrl: { type: "string", description: `Public http(s) URL of a second document under the same contract (defines window.renderAt(t), at most ${HTML_FRAMES_LIMITS.maxHtmlBytes / 1024} KB), fetched through the public-URL guard and rendered at the same times, width and height` },
+            },
+          },
         },
         required: ["html", "times"],
       },
@@ -303,8 +442,29 @@ export const BROWSER_MEASURE_TOOLS = [
       },
     },
     handler: async (input, ctx) => {
-      const { html, times, width, height } = htmlFramesInput(input);
-      return renderHtmlFrames(html, times, { width, height, signal: abortSignalOf(ctx) });
+      const { html, times, width, height, compare } = htmlFramesInput(input);
+      const signal = abortSignalOf(ctx);
+      // The baseline document is fetched before any browser slot is held.
+      const baselineDoc = compare?.baselineUrl ? await baselineFetch(compare.baselineUrl) : null;
+      const result = await renderHtmlFrames(html, times, { width, height, signal });
+      if (!compare) return result;
+      const baselineByT = new Map();
+      if (baselineDoc) {
+        let b;
+        try {
+          b = await renderHtmlFrames(baselineDoc.html, times, { width, height, signal });
+        } catch (e) {
+          if (e?.statusCode === 400) e.message = `"compare.baselineUrl" document: ${e.message}`;
+          throw e;
+        }
+        for (const f of b.frames) baselineByT.set(f.t, { png: Buffer.from(f.pngBase64, "base64") });
+        return attachFrameCheck(result, baselineByT, {
+          width, height, source: "baselineUrl",
+          baselineInfo: { baselineUrl: compare.baselineUrl, baselineFinalUrl: baselineDoc.finalUrl, baselineRender: { frameCount: b.frameCount, network: b.network } },
+        });
+      }
+      for (const e of compare.baseline) baselineByT.set(e.t, { png: e.png });
+      return attachFrameCheck(result, baselineByT, { width, height, source: "baseline", baselineInfo: { baselineStills: compare.baseline.length } });
     },
   },
 ];

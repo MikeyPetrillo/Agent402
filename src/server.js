@@ -2964,8 +2964,9 @@ app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
 app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
 app.use("/v1/judge/long", express.json({ limit: "2mb" }));
 // html-frames carries a whole HTML document (512 KB cap, checked by the
-// handler); the limit leaves room for its JSON escaping.
-app.use("/api/html-frames", express.json({ limit: "3mb" }));
+// handler) and, for a frame check, up to 8 MB of baseline PNG as base64
+// (the handler's cap); the limit leaves room for the JSON escaping.
+app.use("/api/html-frames", express.json({ limit: "12mb" }));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", express.json({ limit: "34mb" }));

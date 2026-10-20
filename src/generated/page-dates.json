@@ -98,6 +98,7 @@
     "src/tools/finance-math-kit.js": "2026-09-10",
     "src/tools/flights-kit.js": "2026-10-19",
     "src/tools/forecast-kit.js": "2026-07-24",
+    "src/tools/frame-diff.js": "2026-10-20",
     "src/tools/frankfurter.js": "2026-10-14",
     "src/tools/fund-report-kit.js": "2026-10-19",
     "src/tools/geo-kit.js": "2026-10-11",
