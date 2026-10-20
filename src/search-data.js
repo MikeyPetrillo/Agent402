@@ -462,6 +462,17 @@ export function createSearchData({ env = process.env, fetchImpl = globalThis.fet
     await bing("SubmitFeed", {}, { post: { siteUrl: cfg.bingSite, feedUrl: feed }, counted: false });
     return { ok: true, feed };
   }
+  /** The sitemaps Bing holds for the site: [{ url, status, submitted, lastCrawled, urlCount }]. */
+  async function listBingSitemaps() {
+    const feeds = (await bing("GetFeeds", { siteUrl: cfg.bingSite }, { counted: false })) || [];
+    return (Array.isArray(feeds) ? feeds : []).map((f) => ({
+      url: String(f.Url || f.url || ""),
+      status: f.Status ?? f.status ?? null,
+      submitted: f.Submitted ?? f.submitted ?? null,
+      lastCrawled: f.LastCrawled ?? f.lastCrawled ?? null,
+      urlCount: f.UrlCount ?? f.urlCount ?? null,
+    })).filter((f) => f.url);
+  }
 
   async function runOnce() {
     if (state.running) return { ok: false, reason: "already-running" };
@@ -557,5 +568,5 @@ export function createSearchData({ env = process.env, fetchImpl = globalThis.fet
     return { first, timer, stop: () => { clearTimeout(first); clearInterval(timer); } };
   }
 
-  return { config: cfg, runOnce, summary, status, inspectUrls, submitSitemaps, listSitemaps, start, googleToken, backfillChunks, _gscQuery: gscQuery };
+  return { config: cfg, runOnce, summary, status, inspectUrls, submitSitemaps, listSitemaps, listBingSitemaps, submitBingSitemap, bingOn, start, googleToken, backfillChunks, _gscQuery: gscQuery };
 }

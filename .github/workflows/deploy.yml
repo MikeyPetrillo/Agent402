@@ -1005,6 +1005,8 @@ jobs:
           t node scripts/test-sitemap-coverage.js
           # The sitemap lastmod table matches git history (needs the full-depth checkout above)
           t node scripts/test-page-dates.js
+          # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
+          t node scripts/test-submit-sitemaps.js
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
