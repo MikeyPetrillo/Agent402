@@ -70,7 +70,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@solana/kit": "^8.4.0",
     "@x402/core": "2.28.0",
     "@x402/evm": "2.28.0",
