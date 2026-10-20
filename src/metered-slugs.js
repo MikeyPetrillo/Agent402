@@ -21,6 +21,7 @@ export const METERED_SLUGS = new Set([
   "llm", "llm-pro", "llm-premium",
   "image-gen", "image-gen-hd", "image-gen-premium",
   "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
+  "dub", // dub-kit.js: the v1-chat gateway tier, then a tts tier, both in-process
   "embed", "embed-large", "moderate",
   // OpenRouter gateway
   "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",

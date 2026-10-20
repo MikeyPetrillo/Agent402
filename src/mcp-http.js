@@ -1285,11 +1285,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
         if (result && result.__binary) {
+          // The block type follows the media: audio bytes (the dub tool, the
+          // speech wire) are an audio block, anything else an image block.
+          const kind = /^audio\//i.test(String(result.contentType || "")) ? "audio" : "image";
+          const extra = result.headers && typeof result.headers === "object" ? { headers: result.headers } : {};
           return {
-            content: [{ type: "image", data: Buffer.from(result.__binary).toString("base64"), mimeType: result.contentType }],
+            content: [{ type: kind, data: Buffer.from(result.__binary).toString("base64"), mimeType: String(result.contentType || "").split(";")[0] }],
             structuredContent: {
               slug: entry.def.slug,
-              result: { contentType: result.contentType, encoding: "base64", note: "Binary payload is in the image content block" },
+              result: { contentType: result.contentType, encoding: "base64", note: `Binary payload is in the ${kind} content block`, ...extra },
             },
           };
         }

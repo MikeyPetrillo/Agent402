@@ -59,6 +59,9 @@ function bad(message, statusCode = 400) {
 
 export const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]);
 export const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
+// The media type of each format, for a route that answers the audio as raw
+// bytes (the dub tool) instead of base64 in JSON.
+export const FORMAT_CONTENT_TYPES = Object.freeze({ mp3: "audio/mpeg", opus: "audio/ogg", aac: "audio/aac", flac: "audio/flac", wav: "audio/wav", pcm: "audio/pcm" });
 
 const TIERS = {
   // provider "openrouter" reaches Kokoro; "elevenlabs" is ElevenLabs over the
@@ -99,7 +102,10 @@ const WIRE_FORMATS = new Set(["mp3", "pcm"]);
 // is a contract - 2026-09-06).
 export const LITE_FORMATS = new Set(["mp3", "pcm"]);
 
-function validateInput(input, tierSlug) {
+/** The input checks of a tier (text under its cap, a voice and a format it
+ *  serves), before any model call. Exported for the dub tool, which runs them
+ *  on the source text before it spends on a translation. */
+export function validateInput(input, tierSlug) {
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text) throw bad('"text" is required - the text to convert to speech');
   const cap = TIERS[tierSlug].maxChars;
@@ -403,6 +409,10 @@ function makeServe(tierSlug) {
     }
   };
 }
+/** A tier's handler without the kit's budget wrapper: for a composite that
+ *  runs the speech step inside its own budget (the dub tool), so each read
+ *  spends what that budget has left. Records the spend like the route does. */
+export const makeTtsHandler = makeHandler;
 export const __makeHandlerForTest = makeHandler;
 
 // The lite price, read by the /api/tts description so it is never typed twice.

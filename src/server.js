@@ -491,6 +491,8 @@ const GATEWAY_TOOLS_ENABLED = [
 import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
+// Translate-and-speak: composes the chat gateway and the tts kit in-process (src/tools/dub-kit.js).
+import { DUB_TOOLS } from "./tools/dub-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { solanaIntelToolsEnabled, rugcheckEnabled } from "./tools/solana-intel-kit.js";
@@ -603,7 +605,7 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
 const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger() }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -621,6 +623,7 @@ const MODEL_BACKED_KITS = [
   ...JUDGE_TOOLS, ...JUDGE_PREVIEW_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LOOP_GATE_TOOLS,                       // the loop gate sells the same judgment (its code-only stops are still a model-backed route)
   ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...STT_TOOLS,
+  ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...DUB_TOOLS, ...STT_TOOLS,
   ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
@@ -10198,7 +10201,12 @@ for (const tool of ALL_KIT) {
         enabled: GATEWAY_METER_ON,
         setOverrides: setSettlementOverrides,
       });
-      if (result && result.__binary) return res.type(result.contentType).send(result.__binary);
+      if (result && result.__binary) {
+        // A binary answer may carry headers of its own (the dub tool's
+        // translation rides beside the audio); the content type is set last.
+        if (result.headers && typeof result.headers === "object") for (const [k, v] of Object.entries(result.headers)) if (typeof v === "string") res.setHeader(k, v);
+        return res.type(result.contentType).send(result.__binary);
+      }
       // SSE escape hatch (LLM gateway streaming): the handler returns a
       // writer instead of a body and takes over the response. Runs after the
       // paywall settled; never cached (idempotency hooks res.json only).

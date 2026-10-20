@@ -2973,6 +2973,8 @@ jobs:
           # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
           t node scripts/test-tts-lite.js
           t node scripts/test-tts-elevenlabs.js
+          # Dub (translate, then speak): both steps stubbed, uncharged step failures, the cap before any call, language forms, json mode, the price sum (offline)
+          t node scripts/test-dub-kit.js
           # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
           t node scripts/test-stellar-confirm.js
           # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)

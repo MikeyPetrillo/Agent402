@@ -507,6 +507,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "code-run", "code-run-pro",
   // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro and the backup speech models).
   "tts", "tts-hd", "tts-lite",
+  // Dub: runs a chat gateway tier and a tts tier in-process (both above).
+  "dub",
   // STT kit: fetches external audio + burns OpenAI transcription credit.
   "transcribe", "transcribe-pro",
   // Embeddings kit: every call burns OpenAI embedding credit.
