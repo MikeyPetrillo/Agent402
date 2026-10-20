@@ -554,7 +554,23 @@ export function dedupeByAccession(hits) {
   return out;
 }
 
-async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
+// A first page with no hits is read once more before it is believed: EDGAR's
+// full-text search has answered an empty first page for a query that returns
+// rows on the next read. A search that is really empty costs one extra read.
+export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750 } = {}) {
+  const url = eftsUrl(params);
+  const first = await getJson(url);
+  const empty = !(first?.hits?.hits?.length) && !(first?.hits?.total?.value);
+  if (!empty || params.from) return first;
+  await new Promise((r) => setTimeout(r, pauseMs));
+  return getJson(url);
+}
+
+async function eftsSearch(params) {
+  return eftsSearchWith(params);
+}
+
+function eftsUrl({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
   const qs = new URLSearchParams();
   if (q) qs.set("q", q);
   if (forms) qs.set("forms", forms);
@@ -566,8 +582,7 @@ async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from =
     qs.set("enddt", enddt);
   }
   if (from) qs.set("from", String(from));
-  const url = `https://efts.sec.gov/LATEST/search-index?${qs}`;
-  return edgarGetJson(url);
+  return `https://efts.sec.gov/LATEST/search-index?${qs}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,26 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(tickerSuggestions(map, "zzzz").length === 0, "no match suggests nothing");
 }
 
+// --- an empty first search page is read once more (offline, stubbed reader) ---
+{
+  const { eftsSearchWith } = await import("../src/tools/edgar-kit.js");
+  const empty = { hits: { total: { value: 0 }, hits: [] } };
+  const full = { hits: { total: { value: 2 }, hits: [{ _id: "a" }, { _id: "b" }] } };
+  let calls = [];
+  const reader = (answers) => async (url) => { calls.push(url); return answers[calls.length - 1]; };
+  const r1 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, full]), pauseMs: 0 });
+  ok(calls.length === 2 && calls[0] === calls[1] && r1.hits.hits.length === 2, "an empty first page is read again with the same URL, and the second answer is used");
+  calls = [];
+  const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty]), pauseMs: 0 });
+  ok(calls.length === 2 && r2.hits.hits.length === 0, "a search that is empty twice answers empty after one extra read");
+  calls = [];
+  await eftsSearchWith({ forms: "S-1" }, { getJson: reader([full]), pauseMs: 0 });
+  ok(calls.length === 1, "a first page with hits is read once");
+  calls = [];
+  await eftsSearchWith({ forms: "S-1", from: 100 }, { getJson: reader([empty]), pauseMs: 0 });
+  ok(calls.length === 1 && /from=100/.test(calls[0]), "a later empty page ends paging without a second read");
+}
+
 // --- deterministic validation (no network) ---
 // Each row asserts the handler throws a 400 Error on bad input — we never
 // touch SEC for these.

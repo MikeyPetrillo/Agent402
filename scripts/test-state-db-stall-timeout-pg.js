@@ -115,7 +115,10 @@ try {
     const t1 = performance.now();
     sdb.stallAwareTimeout(150, () => { quick = performance.now() - t1; });
     await sleep(400);
-    ok(quick >= 150 && quick < 350, `with no block it fires on time (${Math.round(quick)} ms)`);
+    // libuv measures a timer from the loop time cached when the loop turn
+    // began, so a 150 ms timer can read up to about 1 ms short on
+    // performance.now(); the floor allows that and nothing more.
+    ok(quick >= 149 && quick < 350, `with no block it fires on time (${Math.round(quick)} ms)`);
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
