@@ -4816,6 +4816,7 @@ jobs:
           t node scripts/test-tempo-push-debts.js
           # Tempo pull credentials: per-buyer bounds key only on a sender the signature (or the chain, for an access key) proves; routes that spend before settlement refuse an unproven one before any relay call (real Tempo transactions, stubbed relay + RPC, boots paid mode, offline)
           t node scripts/test-tempo-sender.js
+          t node scripts/test-ox-single-copy.js
           # MPP discovery parity: every paid route's 402 challenges == its /openapi.json offers; /llms.txt + /.well-known/x402 agree (boots paid mode, offline)
           t node scripts/test-mpp-discovery-parity.js
           # MPP start-here set: every slug offers tempo, and /what-is-mpp, /llms.txt, /openapi.json and MCP payment.info derive from src/mpp-flagship.js at catalog prices (boots FREE_MODE, offline)

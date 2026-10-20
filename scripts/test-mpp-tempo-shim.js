@@ -262,7 +262,8 @@ function buildTempoCredential(o = {}) {
 }
 
 async function listen(app) {
-  const server = app.listen(0);
+  // Bound to the address the URL names, so no other listener on that port answers.
+  const server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   return { server, url: `http://127.0.0.1:${server.address().port}` };
 }
