@@ -264,6 +264,7 @@ const INDEX_ROW_CAP = 100;
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { decodeTagCharacters, hasHiddenCharacters } from "./hidden-chars.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -3867,7 +3868,41 @@ const LIVE_QUOTE_PROBES_PER_CRAWL = Number(process.env.LIVE_QUOTE_PROBES_PER_CRA
 // ever shows up.
 const LIVE_QUOTE_PROBES_PER_CYCLE = Number(process.env.LIVE_QUOTE_PROBES_PER_CYCLE || 10000);
 let liveQuoteBudget = LIVE_QUOTE_PROBES_PER_CYCLE;
-let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is fair
+// The rotation index: the per-cycle visiting order and the per-operator slice
+// both turn on it. It lived only in memory, so every deploy started it at 0,
+// and with a deploy every few hours the rotation never got past the first
+// few slices of a large operator's list: the origins at its tail were due on
+// a cycle number no process lived long enough to reach, and stayed unread for
+// days. It is one small document now (the file on the volume, the row with a
+// database) and is advanced by a read-modify-write, so a boot resumes where
+// the last cycle stopped and a second container that takes the crawl lease
+// continues from the stored count, not from its own stale memory.
+export const CRAWL_CYCLE_FILE = process.env.CRAWL_CYCLE_FILE || "/data/x402-crawl-cycle.json";
+let crawlCycle = 0;
+const cycleOf = (b) => { if (b === null || b === undefined) return null; const n = Number(typeof b === "object" ? b.cycle : b); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; };
+/** Read the stored rotation index (never moves it backwards). */
+export function loadCrawlCycle() {
+  const d = docFor(CRAWL_CYCLE_FILE);
+  const apply = (b) => { const n = cycleOf(b); if (n !== null && n > crawlCycle) crawlCycle = n; };
+  if (d.backend === "pg") return trackStoreReady(d.load(null, { onLoad: apply }));
+  apply(d.loadSync(null));
+  return Promise.resolve();
+}
+/** The rotation index as this process holds it. */
+export function currentCrawlCycle() { return crawlCycle; }
+/**
+ * Move the rotation on by one and store it. The stored count is read first,
+ * so a cycle another container ran since this one last looked is counted;
+ * when the store cannot be written the count still advances in memory, so a
+ * cycle is never repeated within one process.
+ */
+export async function advanceCrawlCycle() {
+  const d = docFor(CRAWL_CYCLE_FILE);
+  const r = await d.update((b) => ({ cycle: Math.max(cycleOf(b) ?? 0, crawlCycle) + 1, at: new Date().toISOString() }), { fallback: null }).catch(() => null);
+  const n = r?.ok ? cycleOf(r.body) : null;
+  crawlCycle = n !== null && n > crawlCycle ? n : crawlCycle + 1;
+  return crawlCycle;
+}
 
 /**
  * Learn price + networks from a live 402 for rows that have neither.
@@ -5763,7 +5798,10 @@ const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
 // matching, twice: as written (so a literal <system> tag is still seen) and
 // with markup/entities/invisible characters turned to spaces (so
 // "Ignore&lt;previous instructions" or a zero-width split cannot slip a phrase
-// past the screen that a later cleaning step would reassemble).
+// past the screen that a later cleaning step would reassemble). Text spelled
+// in the TAG block (U+E0020..U+E007E, a copy of printable ASCII that renders
+// as nothing) is read back as the ASCII it spells first, so the patterns see
+// those words too (src/hidden-chars.js).
 // Plain printable ASCII with no markup, entity or backtick characters: NFKC,
 // entity decoding, invisible-character handling and the lookalike map are all
 // identity on it, so the four forms below reduce to the lowercased text and its
@@ -5778,7 +5816,7 @@ function injectionForms(text) {
     if (!/[\t\n\r]| {2}/.test(lower)) return [lower];
     return [lower, lower.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ")];
   }
-  const decoded = raw.normalize("NFKC")
+  const decoded = decodeTagCharacters(raw).normalize("NFKC")
     .replace(/&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6});/gi, (m) => {
       const e = m.toLowerCase();
       return e === "&lt;" ? "<" : e === "&gt;" ? ">" : e === "&amp;" ? "&" : " ";
@@ -5789,7 +5827,7 @@ function injectionForms(text) {
   // they are: identifiers like max_priority_fee are honest listing text.
   // An invisible character may split a word (delete it) or two words (read it
   // as a space): both readings are checked.
-  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]/g;
+  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u00ad\u180e\ufe00-\ufe0f\ufff9-\ufffb]|[\u{e0100}-\u{e01ef}]/gu;
   const flatten = (x) => x.replace(/[\u0000-\u001f\u007f-\u009f<>`*~|]/g, " ").replace(/\s+/g, " ");
   const forms = [decoded.replace(INVIS, ""), flatten(decoded.replace(INVIS, "")), flatten(decoded.replace(INVIS, " "))];
   if (CONFUSABLE_RE.test(decoded)) { CONFUSABLE_RE.lastIndex = 0; forms.push(flatten(decoded.replace(INVIS, "").replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]))); }
@@ -5802,7 +5840,17 @@ const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source}
 export function looksLikeListingInjection(text) {
   const t = String(text || "");
   if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
-  for (const form of injectionForms(t)) if (INJECTION_ANY.test(form)) return true;
+  // A character that renders as nothing (TAG text, a zero-width or bidi
+  // control, a run of variation selectors, a soft hyphen) is a carrier for
+  // text the reader never sees: the listing is a finding whatever it spells.
+  // Emoji joiners, keycaps and joining scripts are allowed (src/hidden-chars.js).
+  if (hasHiddenCharacters(t)) return true;
+  return matchesInjectionPhrase(t);
+}
+/** The phrase rules alone (no length or hidden-character rule), for a caller
+ *  that screens one sentence and reports hidden characters on its own. */
+export function matchesInjectionPhrase(text) {
+  for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
   return false;
 }
 
@@ -5854,6 +5902,14 @@ const SHARED_HOSTING_SUFFIXES = [
   "deno.dev", "glitch.me", "surge.sh", "web.app", "firebaseapp.com",
   "azurewebsites.net", "appspot.com", "cloudfunctions.net", "koyeb.app",
   "vercel.sh", "netlify.com", "render.com", "streamlit.app", "hf.space",
+  // Added from a read of the index (2026-10-20): each of these carried three
+  // or more hosts paying to distinct wallets, so the hosts are different
+  // sellers. A suffix whose hosts all paid to one wallet is one operator and
+  // stays grouped (the cap is what keeps one actor's many hostnames to one
+  // budget), and a suffix whose hosts had no payTo at all is left as it is
+  // until one does.
+  "supabase.co", "run.app", "sslip.io", "deno.net", "duckdns.org",
+  "ngrok-free.dev", "ngrok.dev", "ts.net",
 ];
 export function operatorKey(origin) {
   let host;
@@ -5907,8 +5963,10 @@ async function runCrawl() {
     // back would never be priced, which is the exact complaint that started
     // this work, reintroduced by the fix for it. Rotation costs nothing (the
     // crawl visits every seed each cycle regardless) and makes the budget fair.
-    const start = seeds.length ? crawlCycle % seeds.length : 0;
-    crawlCycle += 1;
+    // Advanced through the store first (see advanceCrawlCycle), so the number
+    // this cycle runs under is one past the last cycle any container ran.
+    const cycle = await advanceCrawlCycle();
+    const start = seeds.length ? (cycle - 1) % seeds.length : 0;
     const ordered = seeds.length ? [...seeds.slice(start), ...seeds.slice(0, start)] : seeds;
     // Politeness is per OPERATOR, not per origin. We key everything on origin, so
     // an operator running 20 hosts was 20 unrelated crawl targets and felt 20x
@@ -6782,6 +6840,9 @@ export function startCrawler(opts = {}) {
   // recorded to hide, and the seller is listed twice again on the next boot.
   loadSuccessions();
   loadGoneRoutes();
+  // The rotation index resumes from the store, or a deploy restarts it at 0
+  // and the tail of every large operator's list is never reached.
+  loadCrawlCycle();
   // Warm start: the NDJSON twin incrementally when it exists (its own log
   // line says how long and the longest turn), else the legacy JSON in one
   // synchronous parse. The first crawl is deferred below, so the fill has
@@ -8619,6 +8680,11 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       },
       category: t.category,
       description: t.description,
+      // The same field a /api/find row carries: the catalog tool's tags for a
+      // local row, the crawled listing's tags for an external one (text the
+      // seller wrote, under the same untrustedContent marker as its
+      // description), an empty array when the listing had none.
+      tags: Array.isArray(t.tags) ? t.tags.filter((x) => typeof x === "string") : [],
       score,
       health: t.health,
       ...(Array.isArray(t.networks) && t.networks.length ? { networks: t.networks } : {}),

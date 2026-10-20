@@ -425,8 +425,8 @@ a { color: inherit; }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
 .ml-nav-glyph { display: inline-block; vertical-align: -2px; margin-right: 1px; opacity: .8; }
 .ml-nav-link-on .ml-nav-glyph, .ml-nav-link:hover .ml-nav-glyph { opacity: 1; }
-.mlr-row, tr[data-mfb-row] { transition: background-color .12s ease; }
-.mlr-row:hover, tr[data-mfb-row]:hover { background: var(--card-zebra); }
+.mlr-row { transition: background-color .12s ease; }
+.mlr-row:hover { background: var(--card-zebra); }
 .ml-chip { transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
 .ml-faq-mark { transition: transform .15s ease; display: inline-block; }
 @media (max-width: 600px) { .mlnav-g > .mlnav-dd { display: none !important; } }
@@ -548,7 +548,7 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
   .ml-dot { animation: none; }
-  .ml-nav-link, .ml-cta, .mlr-row, tr[data-mfb-row], .ml-chip, .ml-faq-mark { transition: none !important; }
+  .ml-nav-link, .ml-cta, .mlr-row, .ml-chip, .ml-faq-mark { transition: none !important; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
 }
@@ -584,7 +584,6 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
    themes (white on #BF360C is 5.8:1; --ink/--on-panel flip light in dark mode and
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
-.mfb-tab{white-space:nowrap;}
 /* A phone shows the chain tabs as one strip that scrolls sideways, not a wrapped block ending on one stray tab. */
 @media (max-width:600px){.mfb-tabs{flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;}}
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
@@ -782,6 +781,7 @@ function docsPanelNav() {
                 <span class="mlnav-label">BUILD ON AGENT402</span>
                 <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
                 <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call</span></a>
+                <a href="/how-to-pay" class="mlnav-row"><span style="font-weight:700;">how to pay</span><span class="mlnav-faint">every rail, step by step</span></a>
                 <a href="/guides" class="mlnav-row"><span style="font-weight:700;">guides</span><span class="mlnav-faint">hosts, router, selling</span></a>
                 <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks</span></a>
                 <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">refusal diagnostics</span></a>
@@ -812,7 +812,7 @@ function ourToolsPanelNav() {
                 <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, several tools</span></a>
                 <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
                 <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">LLM gateway</span><span class="mlnav-faint">chat · messages · metered · images</span></a>
-                <a href="/tools/category/ai" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
+                <a href="/speech" class="mlnav-row"><span style="font-weight:700;">speech &amp; transcription</span><span class="mlnav-faint">text-to-speech · audio to text</span></a>
                 <a href="/markets" class="mlnav-row"><span style="font-weight:700;">market data</span><span class="mlnav-faint">quotes · funding · on-chain</span></a>
                 <a href="/playground" class="mlnav-row"><span style="font-weight:700;">playground</span><span class="mlnav-faint">try free · PoW</span></a>
                 <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">pricing →</span><span style="color:var(--on-panel-dim);">/pricing</span></a>
@@ -884,6 +884,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/skills", "skill packs", activePath === "/skills")}
       ${mmLink("/tools/category/crypto", "crypto, DeFi & Solana", activePath === "/tools/category/crypto")}
       ${mmLink("/tools/category/llm", "images, video & LLM gateway", activePath === "/tools/category/llm")}
+      ${mmLink("/speech", "speech & transcription", activePath === "/speech")}
       ${mmLink("/playground", "playground · free", activePath === "/playground")}
       ${mmLink("/pricing", "pricing", activePath === "/pricing")}
     </div>
@@ -912,6 +913,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
+      ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}
       ${mmLink("/blog", "blog", activePath === "/blog")}
       ${mmLink("/changelog", "changelog", activePath === "/changelog")}
@@ -942,9 +944,9 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    docs: new Set(["/docs", "/quickstart", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
-    tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
+    tools: new Set(["/tools", "/skills", "/speech", "/playground", "/pricing"]),
   };
 
   const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");

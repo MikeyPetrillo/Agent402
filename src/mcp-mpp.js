@@ -71,6 +71,30 @@ export function challengeIdFromMeta(meta) {
 
 /** Build the loopback caller. `port`/`host` are this process's own listener;
  *  `fetchImpl` is injectable for tests. */
+/** A tool's own answer headers that ride into the MCP result (both paths). */
+export const MCP_ANSWER_HEADERS = ["X-Dub-Translation"];
+
+/** The MCP result for a binary tool answer, on the direct and the paid
+ *  loopback path alike: audio bytes are an audio block, anything else an
+ *  image block, and a named answer header is kept in structuredContent.
+ *  `headers` is a plain object or a fetch Headers. */
+export function mcpBinaryResult({ slug, bytes, contentType, headers }) {
+  const mimeType = String(contentType || "").split(";")[0];
+  const kind = /^audio\//i.test(mimeType) ? "audio" : "image";
+  const read = (name) => {
+    if (!headers) return null;
+    if (typeof headers.get === "function") return headers.get(name);
+    const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+    return key ? headers[key] : null;
+  };
+  const kept = {};
+  for (const name of MCP_ANSWER_HEADERS) { const v = read(name); if (v) kept[name] = String(v); }
+  return {
+    content: [{ type: kind, data: Buffer.from(bytes).toString("base64"), mimeType }],
+    structuredContent: { slug, result: { contentType: mimeType, encoding: "base64", note: `Binary payload is in the ${kind} content block`, ...(Object.keys(kept).length ? { headers: kept } : {}) } },
+  };
+}
+
 export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fetch, timeoutMs = 60_000 } = {}) {
   if (!port) throw new Error("createMcpMppLoopback: port is required");
   const base = `http://${host}:${port}`;

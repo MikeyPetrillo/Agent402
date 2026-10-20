@@ -50,8 +50,8 @@ ok(!html.includes("allo.info/tx/"), "no receipt link invented without rail");
 // Two sellers → no honesty line, seller row rendered
 html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail: null });
 ok(!html.includes("1 seller live"), "honesty line absent with an external algorand seller");
-ok(html.includes("Ext One"), "external algorand seller rendered");
-ok(!html.includes("Ext Two"), "EVM-only seller not rendered");
+ok(html.includes('data-host="ext1.example"'), "external algorand seller rendered as a terminal row");
+ok(!html.includes("ext2.example"), "EVM-only seller not rendered");
 
 // Sole qualifying seller is external → honesty line must not show
 const snapExtOnly = { sellers: [EXT_ALGORAND], totals: { sellers: 1 } };
@@ -61,8 +61,7 @@ ok(!html.includes("1 seller live"), "honesty line requires the sole seller to be
 // Malicious homepage href is neutralized, never rendered raw
 const EXT_EVIL = { ...EXT_ALGORAND, origin: "https://evil.example", displayName: "Evil", homepage: "javascript:alert(1)" };
 html = algorandPage("https://agent402.tools", { snapshot: { sellers: [LOCAL, EXT_EVIL] }, rail: null });
-ok(html.includes('href="#"'), "malicious homepage href replaced with #");
-ok(!html.includes("javascript:alert"), "malicious homepage scheme never rendered raw");
+ok(!/href="javascript:/.test(html) && !html.includes("javascript:alert"), "malicious homepage scheme never rendered raw, and never as an href");
 
 // Seller health markers reflect local/routable state
 html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail: null });
@@ -99,20 +98,20 @@ html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail, activi
 ok(html.includes("EXT1.EXAMPLE · PAST 30 DAYS"), "selected external seller scopes the activity label");
 ok(html.includes("may include non-x402 transfers"), "external-wallet caption is honest about scope");
 ok(!html.includes("all inbound USDC settlements to this host"), "this-host caption absent when external selected");
-ok(html.includes('href="/algorand?seller=ext1.example#activity"'), "seller card links to its activity view");
-ok(html.includes("activity shown above"), "selected seller card marked as shown");
+ok(html.includes('href="?seller=ext1.example#detail"'), "the seller's terminal row links to its detail view");
+ok(/data-host="ext1\.example"[^>]*aria-current="true"/.test(html), "the selected seller's terminal row is marked current");
 html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail, activity: null, selectedSeller: extSel });
 ok(html.includes("no Algorand payTo advertised"), "external seller without a scannable wallet gets the honest line");
 html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail, activity });
 ok(html.includes("THIS HOST · PAST 30 DAYS"), "no selection defaults the activity scope to this host");
 
-// Seller list scales: >12 sellers switches to compact rows
+// Seller list scales: one terminal row per seller at any size
 const many = { sellers: [LOCAL, ...Array.from({ length: 14 }, (_, i) => ({ ...EXT_ALGORAND, origin: "https://ext" + i + ".example", homepage: "https://ext" + i + ".example", displayName: "Ext " + i }))], totals: { sellers: 15 } };
 html = algorandPage("https://agent402.tools", { snapshot: many, rail: null });
-ok(!html.includes("view activity →"), "compact mode drops per-card links (row itself is the link)");
-ok(html.includes("Ext 13") && html.includes("flex-direction:column"), "15 sellers render as compact rows");
+ok((html.match(/data-t-row data-host=/g) || []).length === 15, "15 sellers render as 15 terminal rows");
+ok(html.includes('data-host="ext13.example"'), "the last seller is a row");
 html = algorandPage("https://agent402.tools", { snapshot: snapBoth, rail: null });
-ok(html.includes("view activity →"), "4 sellers keep the card layout");
+ok((html.match(/data-t-row data-host=/g) || []).length === 2, "2 sellers render as 2 terminal rows, no card layout");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

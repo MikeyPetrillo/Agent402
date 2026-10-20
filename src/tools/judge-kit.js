@@ -306,7 +306,9 @@ export function judge(input, opts = {}) {
   return currentBudget() ? judgeUnderBudget(input, opts) : withBudget(() => judgeUnderBudget(input, opts), handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS));
 }
 
-async function judgeUnderBudget(input, { fetchImpl = fetch } = {}) {
+// `tier` names the route the spend is recorded under: "judge" here, and the
+// route's own slug when another kit (the loop gate) sells a judgment.
+async function judgeUnderBudget(input, { fetchImpl = fetch, tier = "judge" } = {}) {
   if (!judgeEnabled()) { const e = new Error("Judgment is not configured on this server."); e.statusCode = 503; throw e; }
   const body = validateJudgeRequest(input);
   const { ids, request } = toDecisions(body);
@@ -319,7 +321,7 @@ async function judgeUnderBudget(input, { fetchImpl = fetch } = {}) {
     const j = await callLuna(request, fetchImpl);
     return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
   });
-  recordJudgeSpend("judge", backend, out);
+  recordJudgeSpend(tier, backend, out);
   return {
     model: out.model,
     ...(backend !== order[0] ? { fallbackFrom: nameOf(order[0]) } : {}),

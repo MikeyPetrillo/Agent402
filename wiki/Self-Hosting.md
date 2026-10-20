@@ -85,7 +85,7 @@ Set these on your host. None are committed to the repo.
 | `FRED_API_KEY` | No | Enables macro-kit v1 (FRED economic data) |
 | `FRED_API_KEY_V2` | No | Distinct key for macro-kit v2 bulk endpoints |
 | `OPENROUTER_API_KEY` | No | Enables the `/v1` LLM gateway tiers (chat, metered, embeddings, rerank, images, speech); the routes answer `503` without it |
-| `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/tts*`, `/api/transcribe*` and `/api/embed*` proxies |
+| `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/transcribe*` and `/api/embed*` proxies |
 | `E2B_API_KEY` | No | Enables the `/api/code-run*` sandbox tools |
 | `REDIS_URL` | No | Enables Redis: response caching (see below), and, across replicas, the shared rate limits, breakers and budgets (`SHARED_LIMITS=off` turns those off), the payment replay guard and idempotency store. A plain `redis://` URL to a public host is refused at boot |
 | `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |
@@ -95,6 +95,7 @@ Set these on your host. None are committed to the repo.
 | `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.13.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
 | `E2B_MAX_CONCURRENT` | No | Sandboxes running at once for the whole service (default 8), split across replicas |
 | `DATABENTO_SUMMARY` | No | `off` makes the stock tools read the three-venue feed instead of the end-of-day summary dataset |
+| `MARKET_TICK` | No | `on` lists `GET /api/market/tick`, a cached per-symbol read of the figures `crypto-price` and `stock-quote` already serve (no source of its own; `MARKET_TICK_CACHE_MS` sets the window, default 15000). Off by default |
 | `X402_UPTO_NETWORKS` | No | `all` or a CSV of CAIP-2 ids that also offer the `upto` scheme; a facilitator must advertise it for that network |
 | `BASE_DENIM_ACTIVATION_TIMESTAMP` | No | When Base's shorter block time takes effect (ISO time); payment windows are counted in seconds either side of it |
 | `ANALYTICS_DATABASE_URL` | No | Postgres connection string for analytics; falls back to `DATABASE_URL` |

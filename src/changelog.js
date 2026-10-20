@@ -2,6 +2,20 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-20",
+    title: "Page speed says what to fix",
+    items: [
+      "page-speed answers an opportunities array from the same single load, so one paid call returns the measurement and what to fix: the LCP element (selector, size, lazy-loaded or waiting for a web font), render-blocking scripts and stylesheets in the head, images without reserved dimensions or larger than shown, fonts without font-display swap, bytes by resource type and resources over 100 KB, responses sent uncompressed or without cache headers, requests to other hosts, long tasks with the script that ran, layout shifts with the element that moved, and console errors. Each carries the measured bytes or milliseconds behind it, null where the load measured neither. Every existing field is unchanged and the price is the same.",
+    ],
+  },
+  {
+    date: "2026-10-20",
+    title: "html-frames checks frames against a baseline",
+    items: [
+      "html-frames (POST /api/html-frames) takes an optional compare input: baseline, an array of {t, png} stills, or baselineUrl, a public URL of a second document under the same render contract (window.renderAt(t)), fetched through the public-URL guard and rendered the same way. Each compared frame carries similarity (0 to 1, identical stills score 1) and changedRegions (bounding boxes of the differing cells on a 32x18 grid, largest first, capped and saying so). A compare by baselineUrl renders two documents and is quoted at twice the listed price in its 402; every other body is quoted at the listed price. Deterministic code, no model.",
+    ],
+  },
+  {
     date: "2026-10-19",
     title: "Page speed, HTML frames, and a video retry that collects the clip",
     items: [

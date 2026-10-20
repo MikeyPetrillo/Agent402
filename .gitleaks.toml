@@ -75,6 +75,10 @@ regexes = [
   '''0xe15fc38f6d8c56af07bbcbe3baf5708a2bf423''',
   # The leak-guard test's own canary tokens (e.g. fredv2-LEAKCANARY0000).
   '''LEAKCANARY''',
+  # Placeholders, not credentials: the Bing sitemap test's stub key and the
+  # how-to-pay page's sample bearer token, pinned exactly.
+  '''stub-bing-key-0123456789''',
+  '''a402_YOUR_KEY''',
   # Two jwt-decode corpus fixtures (scripts/corpus/cpu-text.json): a JWE whose
   # five segments encode the words key/iv/ciphertext/tag, and a JWS whose
   # payload is "hello world". Hand-built shapes pinned exactly; not credentials.

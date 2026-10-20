@@ -1,0 +1,10 @@
+{
+ "about": "Package facts from the public npm registry plus one keyless GitHub read (tier 1). The GitHub read shares a per-IP ceiling; when it is rate limited the answer is partial, never a failure, so no case asserts on the repository block.",
+ "cases": [
+  {"slug": "mcp-package-check", "name": "a provenance-attested MCP SDK package resolves latest", "input": {"package": "@modelcontextprotocol/sdk"}, "expect": {"equals": {"package": "@modelcontextprotocol/sdk", "requestedVersion": "latest", "provenance.attested": true, "reads.registry": "package document"}, "gt": {"versionCount": 50, "maintainers.count": 0, "packageAgeDays": 300}, "populated": ["version", "publishedAt", "signals.0", "repository.github", "sources.0"]}},
+  {"slug": "mcp-package-check", "name": "an npx command line is parsed to its package and tag", "input": {"package": "npx -y agent402-mcp@latest"}, "expect": {"equals": {"package": "agent402-mcp", "requestedVersion": "latest", "binaries.0": "agent402-mcp", "installScripts.present": false, "repository.github": "MikeyPetrillo/Agent402"}, "gt": {"dependencies.runtime": 3}, "populated": ["version", "publishedAt", "maintainers.names.0", "signals.0"]}},
+  {"slug": "mcp-package-check", "name": "an exact version answers that version", "input": {"package": "agent402-mcp", "version": "0.13.13"}, "expect": {"equals": {"version": "0.13.13", "requestedVersion": "0.13.13"}, "populated": ["publishedAt", "versionAgeDays"]}},
+  {"slug": "mcp-package-check", "name": "a version range is refused before any read", "input": {"package": "agent402-mcp", "version": "^0.13.0"}, "expect": {"status": 400, "matches": {"error": "exact version or a dist-tag"}}},
+  {"slug": "mcp-package-check", "name": "a package the registry does not have is a 404", "input": {"package": "agent402-mcp-zzq-no-such-package"}, "expect": {"status": 404, "matches": {"error": "not on the npm registry"}}}
+ ]
+}

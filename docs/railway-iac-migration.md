@@ -1,10 +1,11 @@
 # Railway IaC migration: facilitator and worker services
 
-Two services still read a Config as Code file: `agent402-facilitator`
-(`railway.facilitator.json`) and `agent402-worker` (`railway.worker.json`).
-Railway stops reading those files on 2026-12-01. `.railway/railway.ts` carries
-the same settings as Infrastructure as Code. It is prepared and checked in, and
-nothing reads it until an owner applies it.
+`agent402-facilitator` and `agent402-worker` hold their build and deploy
+settings on the service itself. Railway stops reading Config as Code files on
+2026-12-01, and the repository no longer carries one; the table below is the
+record of what each service is set to. `.railway/railway.ts` declares the same
+settings as Infrastructure as Code. It is prepared and checked in, and nothing
+reads it until an owner applies it.
 
 ## What the file sets
 
@@ -23,13 +24,13 @@ The file exports a named partial (`agent402`), so an apply manages only these
 two services: every other service, database and volume is left alone even
 though the file does not mention it. Variables are unmanaged
 (`variables: { managed: false }`), so no service variable is declared, changed
-or deleted. `scripts/test-railway-iac.js` keeps these settings equal to the
-legacy files while both exist.
+or deleted. `scripts/test-railway-iac.js` keeps this table in step with the
+IaC file and keeps the retired config files out of the repository.
 
-Today every one of these settings comes from the config file; the service-level
-values underneath are unset. That fixes the order below: apply first, so the
-service holds its own values, and only then stop it reading the file. Clearing
-the file path first would leave the worker without a Dockerfile path.
+A service that still reads a Config as Code path has its own values underneath
+unset. That fixes the order below: apply first, so the service holds its own
+values, and only then stop it reading the file. Clearing the path first would
+leave the worker without a Dockerfile path.
 
 ## Owner steps
 
@@ -48,18 +49,15 @@ the Railway CLI at 5.68.0 or newer.
    `railway config apply`, and confirm the same change set the plan showed.
    The first apply also records the `agent402` partial as the owner of the two
    services (`railway config partials list` shows it).
-5. Clear each service's config file path: in each service's Settings, empty
-   the Config as Code path field (`/railway.facilitator.json`,
-   `/railway.worker.json`). `railway config migrate status` should then list
-   no service reading Config as Code.
+5. Clear each service's config file path where it is still set: in each
+   service's Settings, empty the Config as Code path field.
+   `railway config migrate status` should then list no service reading Config
+   as Code.
 6. Verify: re-run `railway config plan`; it should report the configuration
    up to date. Read `GET /health` on each service and on
    https://agent402.tools/health, and check `meta.build` is the build that was
    live before (a settings change can redeploy the service's current source).
-7. In a later change, delete `railway.facilitator.json` and
-   `railway.worker.json` from the repository. Not before step 5: until then
-   the platform still reads them.
-
-To undo before step 5, nothing is needed: the config file still overrides the
-service values. After step 5, restoring a service's config file path returns it
-to the file.
+To undo before step 5 on a service that still reads a config path, nothing is
+needed: the file the path names still overrides the service values. After step
+5 the service's own settings are the only source, and this table and the IaC
+file record them.

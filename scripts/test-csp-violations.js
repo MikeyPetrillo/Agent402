@@ -212,15 +212,25 @@ const interactions = [
     },
   },
   {
-    path: "/base",
+    // The filter bar's Sort and search controls drive the all-chains roster
+    // rows, so they are exercised where those rows render.
+    path: "/marketplace",
     async run(page) {
       await page.waitForTimeout(300);
       const sortSel = await page.$("select[data-mfb-sort]");
       if (sortSel) await sortSel.selectOption("usd");
       const searchIn = await page.$("input[data-mfb-search]");
       if (searchIn) await searchIn.fill("a");
-      const sellerLink = await page.$("[data-seller-link]");
-      if (sellerLink) await sellerLink.click();
+    },
+  },
+  {
+    // A chain page lists its sellers in the market terminal: a row click
+    // scopes the page to that seller.
+    path: "/base",
+    async run(page) {
+      await page.waitForTimeout(300);
+      const row = await page.$("[data-t-row]");
+      if (row) await row.click();
     },
   },
   {

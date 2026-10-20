@@ -62,7 +62,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), demo (run the company one-pager with the funded burner, upload output), or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), bazaar-solana, demo (run the company one-pager with the funded burner, upload output), or deploy"
         default: "deploy"
       demo_ticker:
         description: "Ticker for mode=demo (US symbol)."
@@ -835,6 +835,11 @@ jobs:
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history: scripts/test-page-dates.js dates every page module
+        # from its newest commit, and a shallow checkout would date them all
+        # at the head.
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -996,8 +1001,12 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
           t node scripts/test-x402-economy.js
-          # /sitemap.xml coverage (every skill pack, sample tools, static surfaces)
+          # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
           t node scripts/test-sitemap-coverage.js
+          # The sitemap lastmod table matches git history (needs the full-depth checkout above)
+          t node scripts/test-page-dates.js
+          # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
+          t node scripts/test-submit-sitemaps.js
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
@@ -1151,7 +1160,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1161,6 +1170,8 @@ jobs:
           t node scripts/test-llms-link.js
           # No third-party seller host or counterparty name in any tracked file (hashed list)
           t node scripts/test-no-third-party-names.js
+          # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
+          t node scripts/test-hidden-chars.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -1294,6 +1305,10 @@ jobs:
           t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
+          # page-change kit (fixture server on port 0; a DNS lookup is the only network touch)
+          t node scripts/test-page-change-kit.js
+          # email-guard (offline: MIME reader, HTML worker, header, link and text signals)
+          t node scripts/test-email-guard.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
           # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
@@ -1759,6 +1774,13 @@ jobs:
           t node scripts/test-algorand-router.js
           # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
           t node scripts/test-solana-router.js
+          # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)
+          t node scripts/test-payai-solana-sweep.js
+          # Listing coverage per registry and chain from fixtures; the PayAI pass's selection, cap and preflight (offline)
+          t node scripts/test-listing-coverage.js
+          t node scripts/test-payai-listing-pass.js
+          # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub facilitators, offline)
+          t node scripts/test-settle-preference.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
           # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
@@ -2892,6 +2914,8 @@ jobs:
           t node scripts/test-rail-selfheal.js
           # Egress meter (cheap, safe, host-only, never throws on the hot path)
           t node scripts/test-egress-meter.js
+          # Raw fetch audit: every fetch outside the guard is on a classed allowlist
+          t node scripts/test-raw-fetch-audit.js
           # Stellar activity scan tests (offline, fixture Horizon records)
           t node scripts/test-stellar-activity.js
           # Kit2 tool tests (36 tools, exact-output assertions)
@@ -2949,12 +2973,16 @@ jobs:
           # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
           t node scripts/test-tts-lite.js
           t node scripts/test-tts-elevenlabs.js
+          # Dub (translate, then speak): both steps stubbed, uncharged step failures, the cap before any call, language forms, json mode, the price sum (offline)
+          t node scripts/test-dub-kit.js
           # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
           t node scripts/test-stellar-confirm.js
           # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
           t node scripts/test-svm-clarify.js
           # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
           t node scripts/test-refund-ledger.js
+          # Outbound new-destination watch (first sighting per chain+recipient, ok/new/burst words, window expiry, file-mode persistence across a restart, word-only public field - offline + boots its own server)
+          t node scripts/test-outbound-destinations.js
           # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
           t node scripts/test-refund-lookup.js
           # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
@@ -3197,6 +3225,8 @@ jobs:
           t node scripts/test-discovery-rerank.js
           # Typed judgment tool: the input caps ARE the margin guard, upstream bodies never reach the buyer, model-backed is declared (offline, stubbed)
           t node scripts/test-judge-kit.js
+          # Loop gate: budget and iteration stops in code at the same price, repeats and near-identical outputs found lexically, every refusal a 400 and every model failure an uncharged 5xx, worst case inside the judge's bounds (offline, stubbed)
+          t node scripts/test-loop-gate.js
           # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
           t node scripts/test-judge-luna.js
           t node scripts/test-judge-preview.js
@@ -3380,7 +3410,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (11 scripts, one process each)
+      - name: Offline suites (12 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3396,7 +3426,11 @@ jobs:
           t node scripts/test-solana-intel-kit.js
           # defi kit (offline)
           t node scripts/test-defi-kit.js
+          # market tick: stubbed sources, the per-symbol cache, partial marking, and the MARKET_TICK switch (offline)
+          t node scripts/test-market-tick.js
           t node scripts/test-cve-kit.js
+          # mcp-package kit (offline, stub registry on port 0)
+          t node scripts/test-mcp-package-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js
           # Hyperliquid info cache shared by the two Hyperliquid kits (offline)
@@ -3888,7 +3922,7 @@ jobs:
           t node scripts/test-mcp-sec.js
           # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio package (boots a free server)
           t node scripts/test-mcp-protocol-input-bound.js
-          # Prepared Railway IaC file keeps the facilitator and worker settings from their config files, as a named partial with unmanaged variables (offline: type-stripped load, SDK stubbed)
+          # Prepared Railway IaC file carries the facilitator and worker service settings as a named partial with unmanaged variables; the retired Config as Code files stay out of the repo and the runbook table carries every setting (offline: type-stripped load, SDK stubbed)
           t node scripts/test-railway-iac.js
 
 
@@ -4546,6 +4580,8 @@ jobs:
           t node scripts/test-drain-abort.js
           # Solana SPL leaderboard: batched credits scan, primed gate, payTo list, ranking, persistence (offline stub RPC)
           t node scripts/test-solana-leaderboard.js
+          # Solana board scans survive a restart: cursors checkpointed mid-scan and on drain, next boot resumes without re-reading, newest stored cursors adopted, a read failing scan after scan is skipped visibly (offline stub RPC)
+          t node scripts/test-solana-leaderboard-checkpoint.js
           # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
           t node scripts/test-solana-history-rpc.js
           # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
@@ -4663,6 +4699,9 @@ jobs:
 
       - name: Link integrity (every sitemap URL + every crawled internal href resolves; /mcp never a real <a href>)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-link-integrity.js
+      # Every sitemap page served without its <title> clamped (boots its own server with an operator token, reads /__operator/seo-meta.json)
+      - name: Title clamp (no served page needs its title cut)
+        run: node scripts/test-title-clamp.js
 
       # These four were 210s of test-unit-b's 506s of work, and they share a
       # real property rather than an arbitrary place in the list: each BOOTS ITS
@@ -4687,7 +4726,7 @@ jobs:
         # push, and facilitator/test.js imports only facilitator/* (pinned by
         # scripts/test-ci-facilitator-scope.js - the moment it reaches outside,
         # this scoping is dishonest and CI fails). So it runs only when the push
-        # touched facilitator/**, Dockerfile.facilitator or its Railway config.
+        # touched facilitator/** or Dockerfile.facilitator.
         # FAIL-OPEN: an unreadable diff (first push, force-push, API error) RUNS it.
         run: |
           if [ -z "$TEST_PAYER_STELLAR_SECRET" ]; then
@@ -4697,7 +4736,7 @@ jobs:
           RUN_GATE=yes
           if [ -n "$DIFF_BASE" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
             if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
-              if echo "$CHANGED" | grep -qE '^(facilitator/|Dockerfile\.facilitator$|railway\.facilitator\.json$)'; then
+              if echo "$CHANGED" | grep -qE '^(facilitator/|Dockerfile\.facilitator$)'; then
                 echo "facilitator files changed since $DIFF_BASE - running the gate"
               else
                 echo "no facilitator/** change in $DIFF_BASE...$GITHUB_SHA ($(echo "$CHANGED" | grep -c .) files) - facilitator/test.js imports only facilitator/*, skipping the gate"

@@ -28,8 +28,9 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   ($0.002 to $0.004); broad coin/exchange coverage including price by token
   contract address; indexed EVM chain reads (transfers, balances, allowances,
   decoded receipts, block receipts, token price history); Farcaster social
-  (search, feeds, threads, engagement metrics); and whole-site crawling
-  (`site-map` $0.005, `site-crawl` $0.02).
+  (search, feeds, threads, engagement metrics); whole-site crawling
+  (`site-map` $0.005, `site-crawl` $0.02); and page change detection
+  (`page-change` $0.004).
 - **Images and video, flat per call:** `POST /v1/images/fast` $0.02,
   `POST /v1/images/pro` $0.05, `POST /v1/images/generations` $0.08,
   `POST /v1/videos/generations` $0.20 (one silent 4-second 720p clip). OpenAI

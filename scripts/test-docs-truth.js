@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 // The token brief is served only while its data source switch is on
 // (RUGCHECK_TOOLS, src/rugcheck-switch.js), which a CI boot leaves off; the
 // docs name it with that condition.
-const CONFIG_GATED_ROUTES = new Set(["/api/decide", "/api/decide/execute", "/api/decide/feedback", "/v1/token-brief"]);
+const CONFIG_GATED_ROUTES = new Set(["/api/decide", "/api/decide/execute", "/api/decide/feedback", "/v1/token-brief", "/api/market/tick"]);
 
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

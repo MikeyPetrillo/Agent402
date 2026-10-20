@@ -52,6 +52,8 @@ Market structure an agent can read directly, as deterministic reads at per-call 
 | `asset-transfers`, `token-balances`, `token-allowance`, `tx-receipt`, `block-receipts`, `token-price-history` | $0.002 to $0.005 | Indexed chain reads across the major EVM chains: a filtered transfer log, balances for named contracts, an ERC-20 allowance, a decoded receipt, a whole block summarized, and historical token prices |
 | `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` | $0.003 to $0.005 | Farcaster: search casts, read channel and user feeds, pull a thread, and measure engagement on the onchain social graph (listed when the instance holds a Farcaster API key) |
 | `site-map`, `site-crawl` | $0.005, $0.02 | Whole-site structure on demand: enumerate a site's URLs from robots.txt, its sitemaps and internal links, then crawl breadth-first to clean markdown under hard page, depth and time budgets |
+| `page-change` | $0.004 | Page change detection with nothing stored here: one fetch, the visible text normalized and fingerprinted (sha256) with the origin's ETag and Last-Modified; send the previous fingerprint back for changed true or false, the previous text for a line diff with a similarity score; a CSS selector narrows the region and ignore patterns drop timestamps and counters |
+| `email-guard` | $0.001 | Email triage signals for agents that read mail: one raw RFC 5322 message (multipart, base64 and quoted-printable decoded) or its parts in; hidden HTML text, invisible and TAG-encoded characters, sentences in only the text or only the HTML part, anchor text naming a host other than the href, javascript: and data: links, Reply-To and display-name domain signals, and sentences phrased as instructions to an assistant, each with evidence and an offset, no score |
 
 ## Images and video (flat per call)
 
@@ -83,6 +85,8 @@ When the job is a whole report rather than a call, the `/v1` report routes sell 
 `unit-convert` accepts the other spelling of a unit (plural or singular, British spellings, spaces or underscores, the `statute-` prefix); an unknown unit is still a 400.
 
 `judge` and `decisions` ($0.001 each, listed when the judgment upstream is configured) are model-backed, wallet-only typed judgments: a choice from your named options, a position on levels you describe, or a yes/no as a probability. The image, locate and long-document preview routes are on [[LLM Gateway|LLM-Gateway]].
+
+`loop-gate` ($0.001, wallet-only) is the same judgment shaped for an agent's loop: send the goal, the iteration that just finished, and optionally a budget, a cap on iterations, the earlier iterations and constraints; get back `continue`, `stop` or `escalate` with a reason, a confidence and the checks behind it (goal met, budget exceeded, iterations exhausted, repeating, stuck, constraint breached) plus a typed next step. The budget and iteration checks are decided in code before any model call, at the same price; a repeated output and three near-identical outputs in a row are found lexically first; the rest is model-backed.
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens - and some sandboxes can't execute code at all.
 

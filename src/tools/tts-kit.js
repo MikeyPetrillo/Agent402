@@ -3,25 +3,26 @@
 //
 // Tiers (prices live on each tool below):
 //   tts-lite: Kokoro-82M via OpenRouter (800 chars) [OPENROUTER_API_KEY]
-//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars), OpenAI tts-1 fallback
-//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (2000 chars), OpenAI tts-1-hd fallback
+//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars)
+//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (2000 chars)
 //
-// ELEVENLABS (2026-10-07): OpenAI shuts tts-1 and tts-1-hd down on 2027-01-06.
-// The first replacement chain was turned down because it folded the ten voice
-// names onto five or one and served two of the six formats. ElevenLabs gives
-// each of the ten names its own voice (21 to choose from), and the four
-// formats the speech wire does not serve are encoded here from its PCM
-// (media-kit transcodePcm). The prices moved with the change and the cap
-// stayed; the margin bound is pinned in scripts/test-tts-elevenlabs.js against
-// the private rate rows.
-// When ElevenLabs is busy, throttling or erroring, a backup serves the call
-// (see the breaker below); a timeout or empty answer is final instead, since
-// it may have been billed. The answer always names the model that spoke.
+// ELEVENLABS (2026-10-07): the two premium tiers moved from OpenAI speech to
+// ElevenLabs over the OpenRouter speech wire. The first replacement chain was
+// turned down because it folded the ten voice names onto five or one and
+// served two of the six formats. ElevenLabs gives each of the ten names its
+// own voice (21 to choose from), and the four formats the speech wire does
+// not serve are encoded here from its PCM (media-kit transcodePcm). The
+// prices moved with the change and the cap stayed; the margin bound is pinned
+// in scripts/test-tts-elevenlabs.js against the private rate rows.
+// When ElevenLabs is busy, throttling or erroring, a backup speech model on
+// the same wire serves the call (see the breaker below); a timeout or empty
+// answer is final instead, since it may have been billed. The answer always
+// names the model that spoke. Every tier runs on OPENROUTER_API_KEY alone.
 //
 // WHY A LITE TIER (2026-09-11): a cheaper MODEL - Kokoro-82M, already a
 // proven link in the /v1/audio/speech failover chain (SPEECH_MODELS,
 // live-verified by the TTS probe workflow) - rather than a cut on the premium
-// voice. The premium tiers are untouched - a buyer who wants the OpenAI voice
+// voice. The premium tiers are untouched - a buyer who wants the premium voice
 // still pays for it.
 //
 // CAP CUT 2,000 -> 800 CHARS (2026-09-18): Kokoro gained a second, dearer
@@ -45,7 +46,6 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
-const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
 // The same Kokoro entry the /v1 speech chain uses, so the voice map and the
@@ -57,33 +57,36 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]);
-const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
+export const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]);
+export const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
+// The media type of each format, for a route that answers the audio as raw
+// bytes (the dub tool) instead of base64 in JSON.
+export const FORMAT_CONTENT_TYPES = Object.freeze({ mp3: "audio/mpeg", opus: "audio/ogg", aac: "audio/aac", flac: "audio/flac", wav: "audio/wav", pcm: "audio/pcm" });
 
 const TIERS = {
   // provider "openrouter" reaches Kokoro; "elevenlabs" is ElevenLabs over the
-  // same OpenRouter speech wire, with the OpenAI model it replaced as fallback.
+  // same OpenRouter speech wire, with TTS_BACKUP_MODELS behind it.
   "tts-lite": { model: "hexgrad/kokoro-82m",         provider: "openrouter", maxChars: 800 },
   // `chain`: ElevenLabs models at the SAME per-char rate, tried in order after
   // a server error or a connection that never opened (both unbilled). A 429
   // or a refusal stops the walk and opens the breaker. Same 21 voices on every link.
-  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000, fallback: "tts-1",
+  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000,
                 chain: ["elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-turbo-v2.5", "elevenlabs/eleven-flash-v2.5"] },
-  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000, fallback: "tts-1-hd",
+  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000,
                 chain: ["elevenlabs/eleven-v4", "elevenlabs/eleven-v3", "elevenlabs/eleven-multilingual-v2"] },
 };
 export const TTS_TIERS = TIERS;
 
-// One distinct ElevenLabs voice per OpenAI voice name, chosen by character
+// One distinct ElevenLabs voice per standard voice name, chosen by character
 // (neutral, warm, deep, British, bright...). Buyers may also name any of the
 // ElevenLabs voices directly; the answer always names the voice that spoke.
 export const ELEVENLABS_VOICE_MAP = Object.freeze({
   alloy: "river", ash: "chris", ballad: "callum", coral: "jessica", echo: "eric",
   fable: "george", nova: "sarah", onyx: "brian", sage: "matilda", shimmer: "lily",
 });
-// The OpenAI voice name a backup uses for each ElevenLabs voice: the ten
+// The standard voice name a backup uses for each ElevenLabs voice: the ten
 // mapped ones invert ELEVENLABS_VOICE_MAP; the rest by voice character.
-const ELEVEN_TO_OPENAI = Object.freeze({
+const ELEVEN_TO_STANDARD = Object.freeze({
   adam: "onyx", alice: "shimmer", bella: "coral", bill: "ash", charlie: "echo", daniel: "fable",
   harry: "echo", laura: "sage", liam: "ash", roger: "onyx", will: "echo",
 });
@@ -91,16 +94,18 @@ export const ELEVENLABS_VOICES = new Set([
   "george", "sarah", "adam", "alice", "bella", "bill", "brian", "callum", "charlie", "chris", "daniel",
   "eric", "harry", "jessica", "laura", "liam", "lily", "matilda", "river", "roger", "will",
 ]);
-// OpenAI retires tts-1 and tts-1-hd on this date; after it the fallback is gone.
-export const OPENAI_TTS_SHUTDOWN = Date.parse("2027-01-06T00:00:00Z");
 // The speech wire serves these natively; the rest are encoded from PCM here.
 const WIRE_FORMATS = new Set(["mp3", "pcm"]);
-// OpenRouter's speech wire serves mp3 and pcm only; the OpenAI tiers keep the
-// full set. A format this tier cannot serve is a self-explaining 400, never a
-// silent downgrade to mp3 (a documented default is a contract - 2026-09-06).
-const LITE_FORMATS = new Set(["mp3", "pcm"]);
+// The lite tier serves what the speech wire serves natively; the ElevenLabs
+// tiers encode the rest from PCM. A format this tier cannot serve is a
+// self-explaining 400, never a silent downgrade to mp3 (a documented default
+// is a contract - 2026-09-06).
+export const LITE_FORMATS = new Set(["mp3", "pcm"]);
 
-function validateInput(input, tierSlug) {
+/** The input checks of a tier (text under its cap, a voice and a format it
+ *  serves), before any model call. Exported for the dub tool, which runs them
+ *  on the source text before it spends on a translation. */
+export function validateInput(input, tierSlug) {
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text) throw bad('"text" is required - the text to convert to speech');
   const cap = TIERS[tierSlug].maxChars;
@@ -129,74 +134,8 @@ function validateInput(input, tierSlug) {
   return { text, voice, format };
 }
 
-async function callOpenAI(text, voice, format, tierSlug, model, timeoutMs = 30_000) {
-  const key = OPENAI_KEY();
-  if (!key) throw bad("OpenAI not configured", 503);
-
-  // A read that outlives its cap, or a socket dropped after the request left,
-  // may already have been generated and billed, so it is final (no backup
-  // after it); only a connection that was never set up is not. Both are the
-  // upstream's 503 classes, never a 504.
-  let neverConnected = false;
-  const probe = (url, init) => fetch(url, init).catch((e) => { neverConnected = CONNECT_FAILURES.has(e?.cause?.code || e?.code); throw e; });
-  const ctx = { label: "OpenAI", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe };
-  let res;
-  try {
-    res = await upstreamFetch("https://api.openai.com/v1/audio/speech", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: format,
-      }),
-    }, ctx);
-  } catch (e) {
-    if (!neverConnected) e.final = true;
-    throw e;
-  }
-
-  if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
-    if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);
-    if (res.status >= 500) throw bad(`OpenAI upstream error (HTTP ${res.status})`, 502);
-    const errText = await res.text().catch(() => "");
-    // Redact the FULL body BEFORE slicing/parsing (a secret straddling the
-    // 200-char cut leaves an unredactable prefix); the route binder returns
-    // err.message verbatim to buyers and logs it.
-    const safe = redactSecrets(errText);
-    let msg = safe.slice(0, 200);
-    try { msg = JSON.parse(safe).error?.message || msg; } catch {}
-    // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
-    // temperature, unknown language code, oversized input), not the upstream.
-    // Surfacing it as 502 taught buyers to retry the identical bad request
-    // (observed 2026-07-26: paired retries ~1s apart on temperature:100) and
-    // polluted upstream-failure telemetry. A self-explaining 400 teaches the
-    // agent to fix the request; settlement is cancelled either way.
-    throw bad(`OpenAI rejected the request: ${msg}`, 400);
-  }
-
-  let buf;
-  try { buf = Buffer.from(await bodyUnderDeadline(res.arrayBuffer(), ctx)); }
-  catch (e) { if (e?.statusCode) { e.final = true; throw e; } throw Object.assign(bad("OpenAI response could not be read", 502), { final: true }); }
-  // A 200 with no audio is not an answer; it may have been billed, so final.
-  if (buf.length === 0) throw Object.assign(bad("OpenAI returned no audio - retry, or rephrase the input", 502), { final: true });
-  return {
-    model,
-    provider: "openai",
-    voice,
-    format,
-    audio: buf.toString("base64"),
-    chars: text.length,
-  };
-}
-
 /** Kokoro over OpenRouter's OpenAI-shaped speech wire. Same request/response
- *  contract as callOpenAI, so the three tiers are one interface to a buyer.
+ *  contract as the ElevenLabs tiers, so the three are one interface to a buyer.
  *  No failover: the chain belongs to /v1/audio/speech, which is what a buyer
  *  pays $0.06 for; this tier is one model at one price and says so, and an
  *  upstream failure is a 502 that cancels settlement rather than a silent
@@ -221,8 +160,8 @@ async function callKokoro(text, voice, format, tierSlug) {
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
     // 5xx and 429 are the provider's; anything else is this request being
-    // wrong, and a 400 teaches the agent to fix it (same rule as the OpenAI
-    // tiers). Either way a >= 400 cancels settlement: nobody is charged.
+    // wrong, and a 400 teaches the agent to fix it (same rule as the
+    // ElevenLabs tiers). Either way a >= 400 cancels settlement: nobody is charged.
     // Our key refused or our gateway credit gone is ours, not the request's.
     if (res.status === 401 || res.status === 403) throw bad("Speech upstream temporarily unavailable - retry shortly", 502);
     if (res.status === 402) throw bad("Speech gateway temporarily unavailable - retry shortly", 503);
@@ -240,13 +179,13 @@ async function callKokoro(text, voice, format, tierSlug) {
 /** ElevenLabs over OpenRouter's speech wire. mp3 and pcm come back as is;
  *  wav, flac, opus and aac are encoded here from the PCM.
  *
- *  Only a failure the upstream did not bill moves to the next link or the
- *  OpenAI fallback: a 429, a 5xx, our key refused (401/403), or a connection
+ *  Only a failure the upstream did not bill moves to the next link or a
+ *  backup model: a 429, a 5xx, our key refused (401/403), or a connection
  *  that never reached it. Those are marked `outage`. A timeout or an empty
  *  answer may already have been generated and billed, so each is final: an
  *  uncharged 5xx with no further upstream call, which keeps one paid call to
  *  at most one billed generation. A 4xx is the request's fault: a 400.
- *  The whole call, fallback included, runs inside TTS_DEADLINE_MS, and the
+ *  The whole call, backups included, runs inside TTS_DEADLINE_MS, and the
  *  handler under the route's payment-window budget (src/upstream-deadline.js,
  *  PAYMENT_WINDOW_BUDGET_MS), never the 20 s data-kit budget: the measured
  *  speech tail runs past it. Each link gets TTS_LINK_TIMEOUT_MS or what is
@@ -264,9 +203,8 @@ const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENE
 //   - three failed calls in a row open it too; a server error or a connection
 //     that never opened still tries the next ElevenLabs model (unbilled);
 //   - at most ELEVEN_MAX_IN_FLIGHT calls run at once; the rest use a backup.
-// Backups, in order: the OpenAI model the tier replaced (until OpenAI's
-// shutdown date), then non-ElevenLabs speech models. The answer always names
-// the model that spoke.
+// Backups, in order: the non-ElevenLabs speech models in TTS_BACKUP_MODELS,
+// each on the same wire. The answer always names the model that spoke.
 export const ELEVEN_MAX_IN_FLIGHT = 6;
 const BREAKER_BASE_MS = 60_000;
 const BREAKER_MAX_MS = 15 * 60_000;
@@ -275,8 +213,15 @@ const BREAKER_MAX_MS = 15 * 60_000;
 // (a call in flight when another tripped must not close the breaker).
 const breaker = { openUntil: 0, trips: 0, serverErrors: 0, probing: false, epoch: 0 };
 let elevenInFlight = 0;
-// Grok first: five distinct voices; MAI-Voice-2 has one English voice.
-export const TTS_BACKUP_MODELS = ["x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2"];
+// Voxtral first: its SPEECH_MODELS map (shared with /v1/audio/speech, so the
+// two surfaces cannot drift) gives nine of the ten names their own voice id,
+// three English speakers across their delivery variants; coral and sage share
+// gb_jane_neutral, the one calm variant that speaker has. Then Grok: five
+// distinct voices, so the ten names fold onto five; then MAI-Voice-2, one
+// English voice. Every backup serves all six formats (mp3 and pcm from the
+// wire, the rest encoded here), so a backup never loses a buyer a format,
+// only voice distinctness.
+export const TTS_BACKUP_MODELS = ["mistralai/voxtral-mini-tts-2603", "x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2"];
 
 /** Whether this call may use ElevenLabs, and if so whether it is the probe. */
 function elevenGate(now = Date.now()) {
@@ -390,25 +335,21 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   return { model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
 
-/** The OpenAI voice name for a fallback call: the name the buyer gave, or the
- *  OpenAI name mapped to the ElevenLabs voice they named directly. */
-function openAiVoiceFor(voice) {
+/** The standard voice name for a backup call: the name the buyer gave, or
+ *  the standard name mapped to the ElevenLabs voice they named directly, so
+ *  a backup keeps the character of the voice asked for. */
+function standardVoiceFor(voice) {
   if (VOICES.has(voice)) return voice;
-  return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || ELEVEN_TO_OPENAI[voice] || "alloy";
+  return Object.entries(ELEVENLABS_VOICE_MAP).find(([, v]) => v === voice)?.[0] || ELEVEN_TO_STANDARD[voice] || "alloy";
 }
 
 /** The backups after ElevenLabs, in order, each tried only after the one
- *  before failed in a way that was certainly unbilled. */
-async function callBackups(text, voice, format, tier, deadline, now, first) {
+ *  before failed in a way that was certainly unbilled. A gateway credit
+ *  refusal (402) is shared by every model on the wire, so it ends the walk. */
+async function callBackups(text, voice, format, deadline, first) {
+  if (first?.credit) throw first;
   let last = first;
-  const name = openAiVoiceFor(voice);
-  if (tier.fallback && OPENAI_KEY() && now() < OPENAI_TTS_SHUTDOWN) {
-    const left = deadline - Date.now();
-    if (left >= 3_000) {
-      try { return await callOpenAI(text, name, format, null, tier.fallback, left); }
-      catch (e) { if (e?.final || (e?.statusCode !== 502 && e?.statusCode !== 503)) throw e; last = e; }
-    }
-  }
+  const name = standardVoiceFor(voice);
   for (const id of TTS_BACKUP_MODELS) {
     const entry = SPEECH_MODELS.find((m) => m.id === id);
     const left = deadline - Date.now();
@@ -423,7 +364,7 @@ async function callBackups(text, voice, format, tier, deadline, now, first) {
 const tierPriceUsd = (slug) => { const t = TTS_TOOLS.find((x) => x.slug === slug); return t ? Number(String(t.price).replace("$", "")) || 0 : 0; };
 
 /** Speech bills per character at the private rate of the model that SPOKE
- *  (a backup link or the direct fallback bills at its own row), so the spend is
+ *  (a backup link bills at its own row), so the spend is
  *  priced from the served answer, after every served call, into the same
  *  meter and margin event as the /v1 tiers. Without a row for that model the
  *  call is recorded with no figure: the meter never invents one. */
@@ -436,8 +377,8 @@ function recordSpeechSpend(tierSlug, out) {
   } catch { /* telemetry must never fail a served response */ }
 }
 
-function makeHandler(tierSlug, opts = {}) {
-  const serve = makeServe(tierSlug, opts);
+function makeHandler(tierSlug) {
+  const serve = makeServe(tierSlug);
   return async (input) => {
     const out = await serve(input);
     recordSpeechSpend(tierSlug, out);
@@ -445,14 +386,14 @@ function makeHandler(tierSlug, opts = {}) {
   };
 }
 
-function makeServe(tierSlug, { now = () => Date.now() } = {}) {
+function makeServe(tierSlug) {
   return async (input) => {
     const { text, voice, format } = validateInput(input, tierSlug);
     const tier = TIERS[tierSlug];
     if (tier.provider === "openrouter") return callKokoro(text, voice, format, tierSlug);
     const deadline = Date.now() + TTS_DEADLINE_MS;
     const gate = elevenGate();
-    if (!gate.ok) return callBackups(text, voice, format, tier, deadline, now, null);
+    if (!gate.ok) return callBackups(text, voice, format, deadline, null);
     elevenInFlight++;
     let failure = null;
     try {
@@ -460,7 +401,7 @@ function makeServe(tierSlug, { now = () => Date.now() } = {}) {
     } catch (e) {
       failure = e;
       if (!e?.outage) throw e;
-      return callBackups(text, voice, format, tier, deadline, now, e);
+      return callBackups(text, voice, format, deadline, e);
     } finally {
       elevenInFlight--;
       if (!failure || failure.outage || failure.throttle || failure.unhealthy) noteElevenOutcome(gate, failure);
@@ -468,6 +409,10 @@ function makeServe(tierSlug, { now = () => Date.now() } = {}) {
     }
   };
 }
+/** A tier's handler without the kit's budget wrapper: for a composite that
+ *  runs the speech step inside its own budget (the dub tool), so each read
+ *  spends what that budget has left. Records the spend like the route does. */
+export const makeTtsHandler = makeHandler;
 export const __makeHandlerForTest = makeHandler;
 
 // The lite price, read by the /api/tts description so it is never typed twice.

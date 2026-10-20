@@ -219,6 +219,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume",  // defi-kit.js (egress)
   "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
+  "page-change",  // page-change-kit.js (one fetch of a caller URL: egress)
   // derivatives-kit (Hyperliquid/Deribit/DefiLlama egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
   "perp-markets", "perp-funding", "perp-funding-screener", "perp-open-interest", "perp-klines", "perp-orderbook", "perp-basis",
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
@@ -264,6 +265,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "stock-quote", "stock-history",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
   "crypto-orderbook", "stablecoin-peg",
+  "market-tick",  // calls crypto-price + stock-quote in-process (both wallet-only); listed only with MARKET_TICK=on
   // Composite research tools fan out to multiple paid upstreams; PoW would
   // turn 1 free request into 5+ paid roundtrips. Wallet-only.
   // Network-kit: every tool hits an external resolver (DNS via 1.1.1.1/8.8.8.8/
@@ -488,6 +490,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Typed judgment: a paid third-party model per call, so never PoW-payable.
   "judge",
   "decisions",
+  "loop-gate",     // sells the judge's model call per iteration
   "decide",
   "decide-execute",
   // Image generation kit: every call burns real upstream inference credit
@@ -502,8 +505,10 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Code execution kit: every call spins up an E2B sandbox (compute cost).
   // PoW would let one client farm our E2B quota for free.
   "code-run", "code-run-pro",
-  // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro, OpenAI fallback).
+  // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro and the backup speech models).
   "tts", "tts-hd", "tts-lite",
+  // Dub: runs a chat gateway tier and a tts tier in-process (both above).
+  "dub",
   // STT kit: fetches external audio + burns OpenAI transcription credit.
   "transcribe", "transcribe-pro",
   // Embeddings kit: every call burns OpenAI embedding credit.

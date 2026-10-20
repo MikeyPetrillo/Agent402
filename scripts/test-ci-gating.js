@@ -6,7 +6,7 @@
 //
 // This asserts the property directly - every lane that runs tests gates deploy
 // and publish - so the next lane split fails here instead of in production.
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { load } from "js-yaml";
 
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
@@ -160,6 +160,75 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(/\n\s*""\)[^\n]*continuing/.test(mog), "...and continues when the word is unreadable");
   const gate = readFileSync(new URL("./deploy-quiet-gate.js", import.meta.url), "utf8");
   ok(/LEDGER_HOLD_WORDS = new Set\(\["local", "stuck"\]\)/.test(gate), "the quiet gate holds on the same two words");
+}
+
+// --- every marker the parser knows has an output, and the pass that spends
+// --- with the operator token never runs from a push ------------------------
+// The MARKERS list and the outputs block are two lists of the same names and
+// cannot drift apart. The PayAI listing pass (scripts/payai-listing-pass.js)
+// pays with the Solana burner AND the operator token (the settle-via gate). A
+// job a commit subject can start is a job a branch push can start with a
+// modified script, so it is not a deploy.yml job at all: it lives in its own
+// workflow with a schedule and a dispatch, no push trigger, and sits in the
+// spending environment.
+{
+  const wfText = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const m = wfText.match(/MARKERS="([^"]+)"/);
+  ok(!!m, "the markers job declares its MARKERS list");
+  const markers = m ? m[1].split(/\s+/).filter(Boolean) : [];
+  const outputs = Object.keys(jobs.markers?.outputs || {});
+  for (const marker of markers) {
+    ok(outputs.includes(marker.replace(/-/g, "_")), `marker [${marker}] has a markers output`);
+  }
+  ok(!/node scripts\/payai-listing-pass\.js/.test(wfText), "deploy.yml never runs the listing pass: a push could carry a modified script to the operator token");
+
+  const listing = load(readFileSync(new URL("../.github/workflows/payai-listing.yml", import.meta.url), "utf8"));
+  const on = listing.on || listing[true] || {};
+  const crons = [].concat(on.schedule || []).map((s) => String(s.cron || ""));
+  ok(crons.length === 1 && /^\d{1,2} \d{1,2} \* \* [0-6]$/.test(crons[0]), `the listing pass runs on one weekly cron (${crons.join(", ")})`);
+  ok(!("push" in on) && !("pull_request" in on), "the listing pass has no push or pull_request trigger");
+  const inputs = on.workflow_dispatch?.inputs || {};
+  ok("max_spend_usd" in inputs && "max_price_usd" in inputs, "its dispatch takes the run ceiling and the per-route cap");
+  ok(JSON.stringify(listing.permissions) === JSON.stringify({ contents: "read", issues: "write" }), "its token can read the tree and write issues, nothing else");
+  ok(!!listing.concurrency?.group && listing.concurrency?.["cancel-in-progress"] === false, "one run at a time: a second run queues behind the first instead of racing the burner's nonces");
+  const ljobs = listing.jobs || {};
+  const spender = Object.values(ljobs).find((j) => (j.steps || []).some((st) => /payai-listing-pass\.js/.test(String(st.run || ""))));
+  ok(!!spender, "a job in the listing workflow runs the pass");
+  ok(String(spender?.environment || "") === "spending", "that job carries the spending environment");
+  const run = (spender?.steps || []).map((st) => String(st.run || "")).join("\n");
+  ok(/scripts\/payai-listing-pass\.js --live --include-upstream --max-price "\$MAX_PRICE_USD" --max-spend "\$MAX_SPEND_USD"/.test(run), "it runs the pass live, vendor-calling routes included, under both ceilings");
+  ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run) && /add-mask::\$POW_SECRET/.test(run), "all three secrets are masked in its log");
+  const stepEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {}));
+  ok(!spender?.env?.SOLANA_BURNER_KEY && !spender?.env?.AGENT402_OPERATOR_TOKEN && !spender?.env?.POW_SECRET, "no secret sits at job scope, where the dependency install could read it");
+  ok(/secrets\.AGENT402_OPERATOR_TOKEN/.test(String(stepEnv.AGENT402_OPERATOR_TOKEN || "")) && /secrets\.POW_SECRET/.test(String(stepEnv.POW_SECRET || "")), "the operator token and pow secret come from the same secrets the heartbeat uses");
+  const sibling = jobs["bazaar-solana"];
+  const siblingEnv = Object.assign({}, ...(sibling?.steps || []).map((st) => st.env || {}));
+  ok(!!sibling && /secrets\.SOLANA_BURNER_KEY/.test(String(siblingEnv.SOLANA_BURNER_KEY || "")) && /secrets\.SOLANA_BURNER_KEY/.test(String(stepEnv.SOLANA_BURNER_KEY || "")), "the pass pays from the same Solana burner as bazaar-solana");
+  const installOf = (j) => (j?.steps || []).map((st) => String(st.run || "")).find((r) => /npm install --no-save/.test(r)) || "";
+  ok(installOf(spender) && installOf(spender) === installOf(sibling), "it installs the same client packages as bazaar-solana, one line to keep pinned");
+  const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
+  const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
+  ok(!!reporter && String(reporter.if || "") === "always()" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result");
+  ok(/TITLE="PayAI listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
+
+  // The weekly slot collides with no other schedule in the repository: same
+  // minute and hour on a day the other cron also fires.
+  const field = (f, v) => String(f).split(",").some((part) => {
+    if (part === "*") return true;
+    const step = part.match(/^\*\/(\d+)$/); if (step) return v % Number(step[1]) === 0;
+    const range = part.match(/^(\d+)-(\d+)$/); if (range) return v >= Number(range[1]) && v <= Number(range[2]);
+    return Number(part) === v;
+  });
+  const [min, hour, , , dow] = crons[0].split(" ").map((x, i) => (i === 2 || i === 3 ? x : Number(x)));
+  const dir = new URL("../.github/workflows/", import.meta.url);
+  const clashes = [];
+  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x) && x !== "payai-listing.yml")) {
+    for (const c of readFileSync(new URL(f, dir), "utf8").matchAll(/cron:\s*"([^"]+)"/g)) {
+      const [m2, h2, , , d2] = c[1].trim().split(/\s+/);
+      if (field(m2, min) && field(h2, hour) && field(d2, dow)) clashes.push(`${f} (${c[1]})`);
+    }
+  }
+  ok(clashes.length === 0, clashes.length ? `the listing slot collides with: ${clashes.join(", ")}` : "the listing slot shares its minute and hour with no other schedule");
 }
 
 console.log(`${pass} passed, ${fail} failed`);

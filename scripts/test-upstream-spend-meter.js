@@ -25,7 +25,7 @@ delete process.env.TYPESAFE_API_KEY;
 
 const U = await import("../src/upstream-costs.js");
 const PH = await import("../src/posthog.js");
-const { TTS_TOOLS, __makeHandlerForTest, __resetTtsBreakerForTest, OPENAI_TTS_SHUTDOWN } = await import("../src/tools/tts-kit.js");
+const { TTS_TOOLS, TTS_BACKUP_MODELS, __resetTtsBreakerForTest } = await import("../src/tools/tts-kit.js");
 const { STT_TIERS, makeMultipartHandler } = await import("../src/tools/stt-kit.js");
 const { IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
 const { EMBED_TOOLS } = await import("../src/tools/embed-kit.js");
@@ -58,7 +58,7 @@ const recorded = ({ m, e }, { source, usd, tier, model, priceUsd }, label) => {
 const SPEECH_FRONT = SPEECH_MODELS[0].id;
 const T = {
   models: [["acme/", { completion: 2, prompt: 1 }]],
-  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "tts-1": 0.125, "tts-1-hd": 0.25, [SPEECH_FRONT]: 0.0625 },
+  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
   openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
   sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
@@ -99,20 +99,20 @@ try {
     ok(out.model === "elevenlabs/eleven-v4-turbo", "tts served on the primary ElevenLabs link");
     recorded(await take(), { source: "speech", usd: text.length * T.speech["elevenlabs/eleven-v4-turbo"], tier: "tts", model: "elevenlabs/eleven-v4-turbo", priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts");
   }
-  // ---- tts falling back to the direct speech model: priced at THAT row ----
+  // ---- tts served by a backup speech model: priced at THAT row ----
   {
-    const text = "Fallback speaks here.";
+    const text = "Backup speaks here.";
+    const backup = TTS_BACKUP_MODELS[0];
     __resetTtsBreakerForTest();
-    stub((u) => (hostOf(u) === "api.openai.com" ? audio() : json({ error: { message: "down" } }, 500)));
-    const h = __makeHandlerForTest("tts", { now: () => OPENAI_TTS_SHUTDOWN - 1 });
-    const out = await h({ text, format: "mp3" });
+    stub((_u, init) => (String(JSON.parse(init.body).model).startsWith("elevenlabs/") ? json({ error: { message: "down" } }, 500) : audio()));
+    const out = await bySlug(TTS_TOOLS, "tts").handler({ text, format: "mp3" });
     restore();
-    ok(out.model === "tts-1" && out.provider === "openai", `the direct fallback spoke (${out.model})`);
-    recorded(await take(), { source: "speech", usd: text.length * T.speech["tts-1"], tier: "tts", model: "tts-1", priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts fallback");
+    ok(out.model === backup && out.provider === "openrouter", `the backup spoke (${out.model})`);
+    recorded(await take(), { source: "speech", usd: text.length * T.speech[backup], tier: "tts", model: backup, priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts backup");
   }
   // ---- no rate row for the model that spoke: served, nothing metered, the event says unreported ----
   {
-    U.setUpstreamCostsForTest({ ...T, speech: { "tts-1": 0.125, "tts-1-hd": 0.125 } });
+    U.setUpstreamCostsForTest({ ...T, speech: { "elevenlabs/eleven-v4-turbo": 0.25 } });
     stub(() => audio());
     const out = await bySlug(TTS_TOOLS, "tts-lite").handler({ text: "No row for me", format: "mp3" });
     restore();
@@ -215,6 +215,24 @@ try {
     const dec = await decisions({ input: "a short state", questions: [{ type: "predicate", name: "fine", instructions: "Is it fine?" }] }, { fetchImpl: luna });
     ok(Array.isArray(dec.answers) && dec.answers[0].probability === 0.6, "decisions answered on Luna");
     recorded(await take(), { source: "judge", usd: (lunaTokens / 1e6) * T.vendor.decisions.luna, tier: "decisions", model: "gpt-6-luna", priceUsd: JUDGE_PRICE_USD }, "decisions on Luna");
+    // The loop gate sells the same judgment: its model path records under its
+    // own tier at the same price, from the backend that served.
+    const { loopGate, LOOP_GATE_PRICE_USD } = await import("../src/tools/loop-gate-kit.js");
+    const gateTokens = 350;
+    const gate = async (url, init) => {
+      if (hostOf(url) !== "openrouter.ai") return json({ error: "wrong upstream" }, 500);
+      const q = JSON.parse(init.body).questions;
+      const answers = { goal_met: { type: "noul", noul: 0.2 }, stuck: { type: "noul", noul: 0.1 }, next_step: { type: "choice", choice: "iterate", confidence: 0.8, probabilities: Object.fromEntries(Object.keys(q.next_step.criteria).map((k) => [k, k === "iterate" ? 0.8 : 0])) } };
+      return json({ answers, usage: { input_tokens: gateTokens, output_tokens: 4 }, model: "microsoft/microsoft-decision-1" });
+    };
+    // The gate's request carries its fixed questions, so it is longer than the
+    // one-question judge case; the fake share is widened for it (the rate,
+    // and so the expected figure, is unchanged).
+    U.setUpstreamCostsForTest({ ...T, vendor: { ...T.vendor, decisions: { ...T.vendor.decisions, maxShare: 9 } } });
+    const g = await loopGate({ goal: "finish the report", lastOutput: "two of three sections drafted", iteration: 2, maxIterations: 5 }, { fetchImpl: gate });
+    U.setUpstreamCostsForTest(T);
+    ok(g.decision === "continue" && g.model === DECISION_ONE, "loop-gate answered on Decision-1");
+    recorded(await take(), { source: "judge", usd: (gateTokens / 1e6) * T.vendor.decisions.decisionOne, tier: "loop-gate", model: DECISION_ONE, priceUsd: LOOP_GATE_PRICE_USD }, "loop-gate on Decision-1");
   }
   // ---- exa-answer: what Exa says the call cost (costDollars), a vendor fee row, no margin event ----
   {

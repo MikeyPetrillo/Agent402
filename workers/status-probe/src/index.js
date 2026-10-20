@@ -484,6 +484,22 @@ Auto-closes when the word is ok.`;
       `/api/gateway-status reports ledgerDeadLetter.status=${b?.ledgerDeadLetter?.status === "local" ? "local" : "stuck"}. local: the journals live in Redis but a money write sits on the container's local disk because Redis did not take it (check the Redis service). stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] / [outbound-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none.`,
   },
   {
+    // Recipients our spending wallets paid for the first time
+    // (outboundDestinations on /api/gateway-status,
+    // src/outbound-destinations.js). burst (more first-time recipients
+    // inside the window than the threshold) pages; ok and new (a first buy
+    // from a newly proven seller is expected) clear; unknown does neither.
+    // Title matches heartbeat.yml's.
+    title: "Outbound payments reached a burst of NEW destinations",
+    verdict: ({ gateway: b }) => {
+      const w = b.outboundDestinations?.status;
+      if (w === "burst") return "bad";
+      return w === "ok" || w === "new" ? "good" : "quiet";
+    },
+    body: () =>
+      "/api/gateway-status reports outboundDestinations.status=burst: inside the last OUTBOUND_NEW_DEST_WINDOW_H hours (default 24) our spending wallets paid more recipients for the first time than OUTBOUND_NEW_DEST_BURST (default 10). A normal day reaches a few at most (a seller the router has just proven, a payability probe, the unproven lane). Read /__operator/outbound-destinations.json for the chain, recipient, origin and time of each first sighting, and match them against the proven-seller pool and the route-execute receipts of the same hours; a run of recipients no seller in the pool names is a wallet or a router being steered. The operator read of /api/gateway-status has the counts. Auto-closes when the word is ok or new.",
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does

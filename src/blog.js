@@ -1,3 +1,4 @@
+import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive } from "./ledger-chrome.js";
 import { powCostPhrase } from "./pow.js";
@@ -361,7 +362,8 @@ export function blogPost(baseUrl, slug) {
   if (!post) return null;
 
   const canonical = `${baseUrl}/blog/${post.slug}`;
-  const pageTitle = `${post.title} - Agent402 Blog`;
+  // The blog suffix rides only when the whole title fits the search bar.
+  const pageTitle = fitTitle([`${post.title} - Agent402 Blog`, post.title], META_TITLE_MAX);
 
   const jsonLd = {
     "@context": "https://schema.org",

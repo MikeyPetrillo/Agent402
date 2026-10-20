@@ -35,6 +35,7 @@
 // /api/find returns to anyone.
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
+import { stripFormattingCarriers } from "./hidden-chars.js";
 import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
@@ -152,7 +153,11 @@ export async function rerankMisses(rows, resolve, { fetchImpl = fetch, max = MAX
   if (!rerankEnabled() || !Array.isArray(rows) || !rows.length) return summary;
 
   for (const row of rows) {
-    const query = String(row?.text || "").trim();
+    // Buyer text: the formatting carriers a pasted query brings along (a
+    // zero-width space, a soft hyphen, a bidi mark) are dropped before the
+    // screen and the model read it. TAG text and the other carriers stay, so
+    // a hidden instruction is still screened as hidden text.
+    const query = stripFormattingCarriers(String(row?.text || "")).trim();
     if (!query) continue;
     summary.considered++;
 

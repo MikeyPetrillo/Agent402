@@ -55,6 +55,20 @@ ok(credentialHeaderFromMeta({ [MCP_CREDENTIAL_META]: "Payment abc" }) === "Payme
   ok(/nothing was charged/.test(unpaid) && !/may still have/.test(unpaid) && /Retry/.test(unpaid), "unpaid cut-off text: nothing was charged, retry is fine");
   ok(/could not be completed/.test(paidErr) && /may still have completed and been charged/.test(paidErr), "a paid loopback error is told the same money story");
 }
+{
+  // One binary-result rule for the direct and the paid loopback path: audio is
+  // an audio block, and the dub translation header survives either way.
+  const { mcpBinaryResult } = await import("../src/mcp-mpp.js");
+  const bytes = Buffer.from("ID3audio");
+  const viaLoopback = mcpBinaryResult({ slug: "dub", bytes, contentType: "audio/mpeg", headers: new Headers({ "x-dub-translation": "eyJ0In0=", "content-type": "audio/mpeg" }) });
+  const viaDirect = mcpBinaryResult({ slug: "dub", bytes, contentType: "audio/mpeg", headers: { "X-Dub-Translation": "eyJ0In0=" } });
+  for (const [label, out] of [["loopback", viaLoopback], ["direct", viaDirect]]) {
+    ok(out.content[0].type === "audio" && out.content[0].mimeType === "audio/mpeg" && Buffer.from(out.content[0].data, "base64").equals(bytes), `${label}: audio bytes are an audio block`);
+    ok(out.structuredContent.result.headers?.["X-Dub-Translation"] === "eyJ0In0=" && !("content-type" in out.structuredContent.result.headers), `${label}: the dub translation header is kept, nothing else`);
+  }
+  const img = mcpBinaryResult({ slug: "x", bytes, contentType: "image/png; q=1", headers: new Headers() });
+  ok(img.content[0].type === "image" && img.content[0].mimeType === "image/png" && !("headers" in img.structuredContent.result), "an image stays an image block with no headers field");
+}
 ok(Array.isArray(challengesFromHeader(null)) && challengesFromHeader("garbage").length === 0 && receiptFromHeader("garbage") === null, "challenges/receipt parsers never throw on junk");
 {
   // The loopback forwards our own signed probe marker (so a synthetic check over

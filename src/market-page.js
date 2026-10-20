@@ -10,6 +10,7 @@
 // seller, "unavailable" rather than zeros on a failed scan, truncation
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
+import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -401,11 +402,13 @@ export function marketTools(_chainKey, snapshot) {
 // data — a select with nothing real to filter on would be a dead control.
 //
 // The trailing <script> wires Sort + search client-side over the roster rows'
-// numeric data-* payload (see rowData in marketPage / marketPageAll) — same
+// numeric data-* payload (see rowData in marketPageAll), the same
 // progressive-enhancement style as the seller-panel switch script: the page is
-// fully rendered server-side, and the whole block no-ops when the roster is
-// absent. Rows are re-ordered by moving EXISTING nodes (appendChild) and
-// hidden via style.display — never innerHTML.
+// fully rendered server-side. Rows are re-ordered by moving EXISTING nodes
+// (appendChild) and hidden via style.display, never innerHTML. Only the
+// all-chains roster renders such rows: a chain page lists its sellers in the
+// market terminal, which sorts and searches its own rows, so the controls
+// and the script are left out there rather than rendered dead.
 //
 // EXECUTION ORDER: the bar (and this script) render ABOVE the roster, so at
 // parse time zero [data-mfb-row] elements exist yet — everything is wired on
@@ -418,16 +421,17 @@ export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
   const tabs = [tab("all", "All", "/marketplace", chainKey == null)]
     .concat(Object.keys(CHAIN_PAGES).map((k) =>
       tab(k, CHAIN_PAGES[k].chainName, `/${k}`, k === chainKey)));
+  const rowControls = chainKey == null;
   return `
   <div class="mfb" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 6px;padding:12px;border:1px solid var(--hairline);background:var(--card);">
     <span class="mfb-label">Chain</span>
-    <div class="mfb-tabs" style="display:flex;flex-wrap:wrap;gap:5px;">${tabs.join("")}</div>
+    <div class="mfb-tabs" style="display:flex;flex-wrap:wrap;gap:5px;">${tabs.join("")}</div>${rowControls ? `
     <span class="mfb-label" style="margin-left:6px;">Sort</span>
     <select class="mfb-sel" data-mfb-sort aria-label="Sort sellers by"><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
-    <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">
+    <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">` : ""}
   </div>
   <p class="mfb-legend" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
-  <script src="/js/market-filter-bar.js"></script>`;
+${rowControls ? `  <script src="/js/market-filter-bar.js"></script>` : ""}`;
 }
 
   // Dispatch badge, rendered ONLY when the handler labelled the seller
@@ -437,16 +441,21 @@ export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
 // Anywhere else (a chain it cannot pay on, or the all-chains view) an
 // eligible seller says WHICH chain the router would pay it on, so "dispatch"
 // on /polygon never reads as "the router pays this seller on Polygon".
-export function dispatchBadge(s, chainKey = null) {
-  if (s.local || s.routerDispatchEligible === undefined) return "";
+export function dispatchVerdict(s, chainKey = null) {
+  if (s.local || s.routerDispatchEligible === undefined) return null;
   const byChain = s.routerDispatchByChain && typeof s.routerDispatchByChain === "object" ? s.routerDispatchByChain : {};
   const here = chainKey ? byChain[chainKey] : null;
   const eligible = here ? !!here.eligible : !!s.routerDispatchEligible;
   const reason = String((here ? here.reason : s.routerDispatchReason) || "").replace(/_/g, " ");
   const via = here ? "" : Object.keys(byChain).filter((c) => byChain[c]?.eligible).map(spendChainName).join(", ");
-  return eligible
-    ? ` <span class="mlr-dispatch" title="the router will buy from this seller (${esc(reason)})" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);">dispatch${via ? ` via ${esc(via)}` : ""}</span>`
-    : ` <span class="mlr-dispatch off" title="not dispatch-eligible: ${esc(reason)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">no dispatch &middot; ${esc(reason)}</span>`;
+  return { eligible, reason, via };
+}
+export function dispatchBadge(s, chainKey = null) {
+  const v = dispatchVerdict(s, chainKey);
+  if (!v) return "";
+  return v.eligible
+    ? ` <span class="mlr-dispatch" title="the router will buy from this seller (${esc(v.reason)})" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);">dispatch${v.via ? ` via ${esc(v.via)}` : ""}</span>`
+    : ` <span class="mlr-dispatch off" title="not dispatch-eligible: ${esc(v.reason)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">no dispatch &middot; ${esc(v.reason)}</span>`;
 }
 
 function categoryGroups(tools, { maxCategories = 12, maxPerCategory = 6 } = {}) {
@@ -713,20 +722,6 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     if (!!a.routable !== !!b.routable) return a.routable ? -1 : 1;
     return (b.toolCount || 0) - (a.toolCount || 0);
   });
-  // Roster "· N tx" suffix — only when the leaderboard has settlements for this
-  // seller's payTo on this chain (Base today); silent otherwise.
-  const txSuffix = (s) => { const st = sellerStat(s); return st && st.calls > 0 ? ` &middot; ${Number(st.calls).toLocaleString("en-US")} tx${s.local ? OWN_RUNS_TAG : ""}` : ""; };
-  // "42 tools · 21 paid" when the seller's document distinguishes paid from
-  // free: total surface stays honest (x402scan parity) without letting a
-  // padded free surface read as paid depth. Absent when the split is unknown.
-  const paidSuffix = (s) => (s.paidToolCount != null && s.paidToolCount !== s.toolCount ? ` &middot; ${s.paidToolCount} paid` : "");
-  // Numeric data-* payload each roster row carries for the filter bar's
-  // client-side Sort/search (see the script marketFilterBar emits). Same
-  // attributes on the all-chains <tr> rows in marketPageAll.
-  const rowData = (s) => {
-    const st = sellerStat(s);
-    return ` data-mfb-row data-local="${s.local ? 1 : 0}" data-health="${s.local || s.routable ? 1 : 0}" data-calls="${st?.calls || 0}" data-usd="${st?.usd || 0}" data-buyers="${st?.buyers || 0}" data-tools="${Number(s.toolCount) || 0}"`;
-  };
 
   // Collapse hosts that settle to the SAME leaderboard group into one roster
   // row, so a group's tx total isn't repeated per host (it reads as 2–3× the
@@ -758,24 +753,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // row; every independent seller stays ranked by its own on-chain volume below.
   const localIdx = rosterSellers.findIndex((s) => s.local);
   if (localIdx > 0) { const [loc] = rosterSellers.splice(localIdx, 1); rosterSellers.unshift(loc); }
-  // Cap the RENDERED roster the same way marketPageAll's all-chains view
-  // already does (?all=1 opts out) - a busy chain's full roster (Base:
-  // 1,125+ sellers) rendered unconditionally was a 700KB+ page, 56,000px of
-  // desktop scroll, and 7,500+ DOM nodes to reach "Sell on X" below it. The
-  // FULL rosterSellers/rosterSellers.length stays untouched everywhere else
-  // (SELLERS LISTED stat, the single-seller honesty line, structured-data
-  // counts) - only what actually renders as rows is capped here.
-  const localSellerPinned = rosterSellers[0]?.local ? rosterSellers[0] : null;
-  const rankedForCap = localSellerPinned ? rosterSellers.slice(1) : rosterSellers;
-  const rosterTruncated = !all && rankedForCap.length > ALL_ROW_CAP;
-  const visibleRoster = rosterTruncated
-    ? (localSellerPinned ? [localSellerPinned, ...rankedForCap.slice(0, ALL_ROW_CAP)] : rankedForCap.slice(0, ALL_ROW_CAP))
-    : rosterSellers;
-  const rosterCapNote = rosterTruncated
-    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["showing the top " + ALL_ROW_CAP + " of " + rankedForCap.length + " sellers", `<a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a>`].map((t) => `<span>${t}</span>`).join("")}</p>`
-    : "";
-  // "+N more endpoints" on the surviving row so the collapsed hosts are disclosed, not hidden.
-  const endpointsNote = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; const n = gid ? extraByGid.get(gid) || 0 : 0; return n > 0 ? ` &middot; +${n} more endpoint${n === 1 ? "" : "s"}` : ""; };
+  // How many collapsed hosts the surviving row stands for, so the terminal
+  // row discloses them ("+N") instead of hiding them.
+  const extraOf = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; return gid ? extraByGid.get(gid) || 0 : 0; };
   // What the 402 asks on THIS chain: the catalog price plus the chain's
   // settlement premium, when it carries one.
   const prices = tools.map((t) => withPremium(Number(t.price), premiumUsd)).filter((n) => Number.isFinite(n) && n > 0);
@@ -796,40 +776,6 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // Which seller's activity is on screen: default is this host; an external
   // pick highlights that seller and re-scopes the Activity section.
   const selHost = selectedSeller && !selectedSeller.local ? String(selectedSeller.host || "").toLowerCase() : null;
-  const isSelected = (s) => (selHost ? !s.local && hostOf(s.homepage).toLowerCase() === selHost : !!s.local);
-  const activityHref = (s) => (s.local ? `/${chainKey}#activity` : `/${chainKey}?seller=${encodeURIComponent(hostOf(s.homepage).toLowerCase())}#activity`);
-  // Cards read well up to a dozen sellers; past that, compact rows keep the
-  // roster scannable at any size.
-  const compact = visibleRoster.length > 12;
-  const sellersHtml = compact
-    ? visibleRoster.map((s) => {
-        const good = s.local || s.routable;
-        return `
-    <a href="${activityHref(s)}"${rowData(s)} data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" class="ml-roster-compact mlr-row${isSelected(s) ? " sel" : ""}">
-      <span class="mlr-name">${esc(s.displayName)}${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}</span>
-      <span class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</span>
-      <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
-      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${s.local ? "live" : (s.routable ? "healthy" : "unreachable")}</span>${dispatchBadge(s, chainKey)}
-    </a>`;
-      }).join("")
-    : visibleRoster.map((s) => {
-        const health = s.local ? "live" : (s.routable ? "healthy" : "unreachable");
-        const good = s.local || s.routable;
-        return `
-    <div${rowData(s)} style="border:${isSelected(s) ? "2px solid var(--accent)" : "1px solid var(--hairline)"};background:var(--card);padding:16px 18px;display:flex;flex-direction:column;gap:6px;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">
-        <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;font-size:var(--fs-base);min-width:0;">${sellerNameHtml(s.displayName)}</a>
-        ${s.local ? '<span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? '<span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
-      </div>
-      <div class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-        <span style="color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm);">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
-        <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s, chainKey)}
-      </div>
-      <a href="${activityHref(s)}" data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;margin-top:2px;">${isSelected(s) ? "activity shown above" : "view activity →"}</a>
-    </div>`;
-      }).join("");
-
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
@@ -949,7 +895,12 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // assets/js/market-terminal.js exists to absorb. The cap is still a cap -
   // Base lists well over a thousand sellers - and ?all=1 still opts out.
   const TERMINAL_ROW_CAP = 400;
-  const terminalPool = all ? rosterSellers : rosterSellers.slice(0, TERMINAL_ROW_CAP);
+  // The cap counts independent sellers only: the pinned host row rides
+  // above it, so a capped page shows the host plus the top TERMINAL_ROW_CAP
+  // others, and the note's "of N" is that same independent count.
+  const independentSellers = rosterSellers.filter((s) => !s.local);
+  const terminalCapped = !all && independentSellers.length > TERMINAL_ROW_CAP;
+  const terminalPool = terminalCapped ? [...rosterSellers.filter((s) => s.local), ...independentSellers.slice(0, TERMINAL_ROW_CAP)] : rosterSellers;
   const terminalRows = terminalPool.map((s) => {
     const st = sellerStat(s) || {};
     return {
@@ -960,6 +911,17 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       tools: Number(s.toolCount) || (s.local ? tools.length : 0),
       routable: !!(s.local || s.routable),
       local: !!s.local,
+      // The per-seller facts the card roster used to carry: collapsed sibling
+      // endpoints, the MPP wire, and the router's dispatch verdict with its
+      // reason (read in the mark's title; the legend above explains it).
+      extra: extraOf(s),
+      mpp: s.mpp === true,
+      dispatch: dispatchVerdict(s, chainKey),
+      // The seller's own display name and its paid-tool split, which the
+      // card roster showed and the row keeps (the homepage link lives in the
+      // selected seller's panel).
+      name: s.local ? null : (s.name || s.displayName || null),
+      paid: s.paidToolCount != null && s.paidToolCount !== s.toolCount ? Number(s.paidToolCount) : null,
     };
   });
   // Ticker rows are the busiest sellers this page already lists, with the
@@ -985,14 +947,14 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     noteText: terminalNote, ticker: tickerRows,
   });
 
-  const rosterHtml = `
-  <h2 id="sellers" style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
-  <p style="font-size:var(--fs-sm);color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · ${measured ? `tx = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so this roster shows none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>
-  ${compact
-    ? `<div style="display:flex;flex-direction:column;gap:8px;">${sellersHtml}</div>`
-    : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;">${sellersHtml}</div>`}
-  ${rosterCapNote}
-  ${honesty}`;
+  // What the rows mean, under the terminal: who the host row is, where the
+  // on-chain columns come from (or why they are empty on a rail the
+  // leaderboard does not measure), and the cap with its ?all=1 escape.
+  const terminalCaption = `
+  <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">pick a seller to scope the activity panel · the host row is ours and says so · every other seller is independent, found by the open crawl · ${measured ? `calls = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so the calls, volume and buyers columns show none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>`;
+  const terminalCapNote = terminalCapped
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${[`showing the top ${TERMINAL_ROW_CAP} of ${independentSellers.length} sellers`, `<a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a>`].map((t) => `<span>${t}</span>`).join("")}</p>`
+    : "";
 
   const sellSectionHtml = `
   <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sell on ${esc(C.chainName)}</h2>
@@ -1017,21 +979,14 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
   <section>${headerHtml}</section>
-  <!-- Two surfaces over the same sellers, deliberately, because they answer
-       different questions. The terminal is the INDEX: every seller on the rail
-       as one comparable row, sortable, searchable and keyboard-navigable, for
-       "who is here and how do they compare". The roster below is the per-seller
-       DISCLOSURE: the leaderboard join, collapsed sibling endpoints ("+N more"),
-       the MPP badge, dispatch eligibility and its legend - facts that need a
-       sentence rather than a column, and that the dense grid would have to drop
-       or truncate. Folding those into the terminal rows is the remaining step;
-       until it is done, deleting the roster would quietly lose them. -->
-  <section aria-label="Market terminal">${terminalHtml}</section>
+  <!-- One surface over the sellers: every seller on the rail as one comparable
+       row, sortable, searchable and keyboard-navigable. The per-seller facts
+       the card roster used to add (collapsed sibling endpoints, the MPP wire,
+       the dispatch verdict and its reason) ride the row as marks. -->
+  <section id="sellers" aria-label="Sellers accepting ${esc(C.chainName)}">${terminalHtml}${terminalCaption}${terminalCapNote}${honesty}</section>
 
   <section>
     <div id="market-panel" data-chain="${esc(chainKey)}">${marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, leaderboardSnap })}</div>
-
-    ${rosterHtml}
   </section>
 
   <section>
@@ -1049,7 +1004,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: `The ${C.chainName} x402 marketplace - pay-per-call tools for AI agents`,
+    // A long chain name takes the shorter form rather than a clamp mid-phrase.
+    title: fitTitle([`The ${C.chainName} x402 marketplace - pay-per-call tools for AI agents`, `${C.chainName} x402 marketplace - tools for AI agents`], META_TITLE_MAX),
     description: `The ${C.chainName} x402 marketplace: ${tools.length} pay-per-call tools for AI agents, settled in ${C.asset} on ${C.chainName}.${C.mpp ? " x402 and MPP (Machine Payments Protocol) both accepted." : ""} No signup, no API keys - the wallet is the account.`,
     canonical: `${baseUrl}/${chainKey}`,
     baseUrl,
@@ -1463,7 +1419,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: "x402 marketplace - every indexed seller, tool count, network and health",
+    title: "x402 marketplace: indexed sellers, tools, networks and crawl health",
     description: "The open directory of every x402 seller we can crawl: advertised tools, settlement networks, crawl health and routability. Free to browse, free to query, and the operator is excluded from its own ranking.",
     canonical: `${baseUrl}/marketplace`,
     baseUrl,

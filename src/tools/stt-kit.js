@@ -58,7 +58,7 @@ function bad(message, statusCode = 400) {
 }
 
 // Max audio file size in bytes (25 MB — OpenAI's limit).
-const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
 /** Per-audio-minute upstream rate for the model each tier sends, from the
  *  private table (src/upstream-costs.js, never committed). The margin test

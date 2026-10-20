@@ -111,8 +111,8 @@ export function catalogCrawlSection(budget) {
 
 export function crawlerPage(baseUrl, { unpaidQuoteBudget = unpaidQuoteBudgetPerHour() } = {}) {
   const canonical = `${baseUrl}/crawler`;
-  const title = "Our crawler";
-  const description = "What the Agent402 index reads, how the crawler behaves, how to have a service removed, how to crawl this catalog, and what we publish about payers (counts only, never a roster).";
+  const title = "Agent402 crawler: what our index reads and how to crawl this catalog";
+  const description = "What the Agent402 index reads, how the crawler behaves, how to have a service removed, how to crawl this catalog, and what we publish about payers.";
   const sections = [...SECTIONS, catalogCrawlSection(unpaidQuoteBudget)];
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">

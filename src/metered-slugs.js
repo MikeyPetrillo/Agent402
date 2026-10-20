@@ -11,6 +11,9 @@ export const METERED_SLUGS = new Set([
   // holds no key on purpose, so an unkeyed sweep would 503 here and a keyed
   // one would spend on every push. Same rule as Brave, E2B and CoinGecko.
   "stock-quote", "stock-history",
+  // Reads stock-quote (and crypto-price) in-process: the same key dependency.
+  // Listed only with MARKET_TICK=on (src/market-tick-switch.js).
+  "market-tick",
   // Brave Search subscription
   "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
   "llm-context",      // Brave /llm/context - same subscription, billed per call
@@ -18,6 +21,7 @@ export const METERED_SLUGS = new Set([
   "llm", "llm-pro", "llm-premium",
   "image-gen", "image-gen-hd", "image-gen-premium",
   "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
+  "dub", // dub-kit.js: the v1-chat gateway tier, then a tts tier, both in-process
   "embed", "embed-large", "moderate",
   // OpenRouter gateway
   "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",

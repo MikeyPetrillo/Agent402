@@ -52,7 +52,8 @@ ok(esc.some((f) => f.endsWith("src/server.js")), "control: an import reaching ..
 const yml = readFileSync(join(ROOT, ".github/workflows/deploy.yml"), "utf8");
 const step = yml.slice(yml.indexOf("- name: Gate agent402-facilitator"), yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}"));
 ok(/compare\/\$DIFF_BASE\.\.\.\$GITHUB_SHA/.test(step), "gate diffs DIFF_BASE...GITHUB_SHA");
-ok(/\^\(facilitator\/\|Dockerfile\\\.facilitator\$\|railway\\\.facilitator\\\.json\$\)/.test(step), "gate watches facilitator/**, its Dockerfile and its Railway config");
+ok(/\^\(facilitator\/\|Dockerfile\\\.facilitator\$\)/.test(step), "gate watches facilitator/** and its Dockerfile");
+ok(!/railway\\\.facilitator/.test(step), "gate names no retired Railway config file");
 ok((step.match(/fail-open/g) || []).length >= 2, "both the no-base and the unreadable-diff branches run the gate (fail-open)");
 ok(/grep -qE '\^0\+\$'/.test(step), "an all-zero before SHA (first push / force-push) counts as no base");
 const env = yml.slice(yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}"), yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}") + 400);

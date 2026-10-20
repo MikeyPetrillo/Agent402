@@ -29,6 +29,7 @@
     "test": "node test.js"
   },
   "overrides": {
+    "follow-redirects": "1.16.1",
     "qs": "6.16.0",
     "axios": "1.20.0"
   },

@@ -2978,9 +2978,9 @@ async function imagesHandler(input, req) {
 export const SPEECH_PATH = "/v1/audio/speech";
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
 const SPEECH_PRICE = 0.06;
-const SPEECH_MAX_CHARS = 2_000;
-const SPEECH_FORMATS = { mp3: "audio/mpeg", pcm: "audio/pcm" };
-const OPENAI_SPEECH_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
+export const SPEECH_MAX_CHARS = 2_000;
+export const SPEECH_FORMATS = { mp3: "audio/mpeg", pcm: "audio/pcm" };
+export const OPENAI_SPEECH_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
 // Chain order = failover order. `map` translates the OpenAI wire voice
 // names to the provider's ids (closest gender/accent/tone available);
 // `voices` is the provider's full native set (accepted directly, listed on

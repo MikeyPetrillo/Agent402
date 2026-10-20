@@ -193,7 +193,7 @@ export const LEARN = [
     term: "MPP (Machine Payments Protocol)",
     alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
     glossary: "mpp",
-    title: "MPP challenges and credentials: the Payment auth scheme, header by header",
+    title: "MPP challenges and credentials: the Payment auth scheme by header",
     description: "MPP carries pay-per-request payments in HTTP's standard authentication headers: WWW-Authenticate: Payment, Authorization: Payment and Payment-Receipt. How a challenge is built, with a real one from this server, and how to pay it.",
     summary: "MPP (the Machine Payments Protocol) carries pay-per-request payments through HTTP's standard authentication headers: a 402 challenges with WWW-Authenticate: Payment, the client answers with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles USDC by EIP-3009; its tempo method settles natively on Tempo.",
     sections: [

@@ -6,7 +6,11 @@
 // magnitude, because we key on ORIGIN and their 20 hosts were 20 unrelated crawl
 // targets. Separately three sellers in one week were refused by
 // /api/index/register's 30/hour GLOBAL cap and two gave up and emailed instead.
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { originsDueThisCycle, operatorKey } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
@@ -31,6 +35,19 @@ for (const [a, b, label] of [
   ["https://x.up.railway.app", "https://y.up.railway.app", "up.railway.app"],
   ["https://p.onrender.com", "https://q.onrender.com", "onrender.com"],
   ["https://m.pages.dev", "https://n.pages.dev", "pages.dev"],
+]) ok(operatorKey(a) !== operatorKey(b), `two tenants on ${label} are not one operator`);
+// Suffixes a 2026-10-20 read of the index found hosting three or more sellers
+// paying to distinct wallets. Before this, every project on the first of them
+// shared one budget of four per cycle, and a seller's row waited a day for a
+// read that would have priced it.
+for (const [a, b, label] of [
+  ["https://abcdefghijklmnopqrst.supabase.co/functions/v1/one", "https://tsrqponmlkjihgfedcba.supabase.co/functions/v1/two", "supabase.co"],
+  ["https://svc-a-123456789.us-central1.run.app", "https://svc-b-987654321.europe-west1.run.app", "run.app"],
+  ["https://10-0-0-1.sslip.io", "https://10-0-0-2.sslip.io", "sslip.io"],
+  ["https://app.user-a.deno.net", "https://app.user-b.deno.net", "deno.net"],
+  ["https://a-box.duckdns.org", "https://b-box.duckdns.org", "duckdns.org"],
+  ["https://alpha-beta-gamma.ngrok-free.dev", "https://delta-eps-zeta.ngrok-free.dev", "ngrok-free.dev"],
+  ["https://host.tail000001.ts.net", "https://host.tail000002.ts.net", "ts.net"],
 ]) ok(operatorKey(a) !== operatorKey(b), `two tenants on ${label} are not one operator`);
 ok(operatorKey("https://x.foo.co.uk") === "foo.co.uk", "multi-part suffixes are not split at the wrong label");
 ok(operatorKey("not a url") === "not a url", "an unparseable origin degrades to itself, never throws");
@@ -80,6 +97,58 @@ ok(/const due = originsDueThisCycle\(ordered, crawlCycle\)/.test(index),
    "runCrawl actually applies the per-operator filter");
 ok(/runPool\(due, CRAWL_CONCURRENCY, crawlSeller\)/.test(index),
    "and crawls the FILTERED list, not the full one");
+
+// THE ROTATION INDEX SURVIVES A RESTART. The cycle number picks which slice of
+// a large operator's list is due, so an index that starts at 0 on every boot
+// never reaches the slices a process does not live long enough to count up
+// to. Each "boot" below is a fresh process reading the same store.
+const runCrawl = /async function runCrawl\(\) \{[\s\S]*?\n\}\n/.exec(index)?.[0] || "";
+ok(/const cycle = await advanceCrawlCycle\(\);/.test(runCrawl) && !/crawlCycle \+= 1/.test(runCrawl),
+   "runCrawl advances the rotation through the store, not a bare in-memory increment");
+ok(/export function startCrawler\(opts = \{\}\) \{[\s\S]*?loadCrawlCycle\(\);/.test(index),
+   "the crawler loads the stored rotation index at boot");
+const dir = mkdtempSync(join(tmpdir(), "crawl-cycle-"));
+const cycleFile = join(dir, "x402-crawl-cycle.json");
+const moduleUrl = pathToFileURL(new URL("../src/x402-index.js", import.meta.url).pathname).href;
+// One process: load the store, run `advances` cycles, print the index. When
+// `nested` is given it runs as a second process between the load and the
+// advance, the shape of two containers taking the crawl lease in turn.
+const boot = (advances, nested = null) => {
+  const code = `
+    const m = await import(${JSON.stringify(moduleUrl)});
+    await m.loadCrawlCycle();
+    const before = m.currentCrawlCycle();
+    ${nested ? `const { execFileSync } = await import("node:child_process"); execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(nested)}], { stdio: "pipe" });` : ""}
+    let n = before;
+    for (let i = 0; i < ${advances}; i++) n = await m.advanceCrawlCycle();
+    console.log(JSON.stringify({ before, after: n }));
+    process.exit(0);
+  `;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, CRAWL_CYCLE_FILE: cycleFile, FREE_MODE: "true" }, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }).toString();
+  return JSON.parse(out.trim().split("\n").pop());
+};
+try {
+  const first = boot(3);
+  ok(first.before === 0 && first.after === 3, `a fresh store starts at 0 and three cycles count to 3 (${JSON.stringify(first)})`);
+  const second = boot(1);
+  ok(second.before === 3, `a restarted process resumes at the stored index, 3 (read ${second.before})`);
+  ok(second.after === 4, `and its next cycle is 4, not 1 (got ${second.after})`);
+  // Two containers: the second loaded the index at 4, then the first ran a
+  // cycle (5); the second's own cycle must be 6, read from the store, not 5
+  // from its memory.
+  const nestedCode = `
+    const m = await import(${JSON.stringify(moduleUrl)});
+    await m.loadCrawlCycle();
+    await m.advanceCrawlCycle();
+    process.exit(0);
+  `;
+  const third = boot(1, nestedCode);
+  ok(third.before === 4 && third.after === 6, `a cycle another container ran meanwhile is counted: 4 loaded, 5 ran elsewhere, this one is 6 (${JSON.stringify(third)})`);
+  const stored = JSON.parse(readFileSync(cycleFile, "utf8"));
+  ok(stored.cycle === 6, `the store holds the index the last cycle ran under (${JSON.stringify(stored)})`);
+} finally {
+  rmSync(dir, { recursive: true, force: true });
+}
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

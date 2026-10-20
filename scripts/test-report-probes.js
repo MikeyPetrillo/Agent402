@@ -121,6 +121,24 @@ const LEGS = [
     run: () => import("../src/tools/ticker-pack-kit.js").then((m) => m.probe13G({ cik: MSFT_CIK, maxFilers: 3 })),
     expect: (r) => (r && typeof r === "object" ? null : "no object returned"),
   },
+  {
+    // The loop gate's model path: its published example stops in code (so
+    // the keyless sweeps drive that half); this input does not trip a check,
+    // so the stage that builds the model's request runs, and the request is
+    // then fed to the judge's own validator, the layer the handler hands it
+    // to. No key and no call: the model answer itself is bought by the
+    // paid canary.
+    name: "loop-gate     prepareLoopGate (model path)",
+    run: () => import("../src/tools/loop-gate-kit.js").then((m) => m.prepareLoopGate({
+      goal: "Find three peer-reviewed studies on sleep and memory consolidation published since 2020, with DOIs.",
+      lastOutput: "Found two studies with DOIs (Nature Neuroscience 2021, Sleep 2023). A third search of PubMed returned review articles only.",
+      iteration: 4, maxIterations: 8, budget: { spentUsd: 0.12, maxUsd: 0.5 },
+      history: [{ iteration: 2, summary: "One study found (Nature Neuroscience 2021)." }, { iteration: 3, summary: "Second study found (Sleep 2023); PubMed search for a third in progress." }],
+      constraints: ["Only peer-reviewed primary studies", "Every source carries a DOI"],
+    })),
+    expect: (r) => (r?.verdict ? "a check tripped, so the model path was not built" : r?.request?.state && r.request.questions?.goal_met && r.request.questions?.constraint_breach ? null : "no judge request built"),
+    consumers: [(r) => import("../src/tools/judge-kit.js").then((m) => m.validateJudgeRequest({ state: r.request.state, questions: r.request.questions }))],
+  },
 ];
 
 /** The planted defect: the harness must catch this or a clean sweep proves

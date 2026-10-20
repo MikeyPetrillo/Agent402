@@ -74,10 +74,13 @@ try {
 
   // Per-row shape — every documented field a downstream consumer reads.
   const row = body.results[0];
-  for (const k of ["seller", "sellerHome", "sellerName", "slug", "name", "method", "route", "url", "price", "priceUsd", "category", "description"]) {
+  for (const k of ["seller", "sellerHome", "sellerName", "slug", "name", "method", "route", "url", "price", "priceUsd", "category", "description", "tags"]) {
     ok(k in row, `row carries ${k} (got keys: ${Object.keys(row).join(",")})`);
   }
   ok(typeof row.priceUsd === "number", `row.priceUsd is a number (got ${typeof row.priceUsd})`);
+  // Every row carries tags as an array of strings (empty when the listing
+  // had none), the same field a /api/find row carries.
+  ok(body.results.every((r) => Array.isArray(r.tags) && r.tags.every((x) => typeof x === "string")), "every row carries tags as an array of strings");
   ok(typeof row.url === "string" && row.url.startsWith("http"), `row.url is an http URL (got ${row.url})`);
   // For self-served rows: seller === 'self' and sellerHome matches BASE.
   // 'ocr image' should match image-ocr which is in local catalog.
@@ -85,6 +88,11 @@ try {
   ok(selfRow, `at least one result has seller='self' (image-ocr is in local catalog)`);
   if (selfRow) {
     ok(selfRow.sellerHome === BASE, `self row sellerHome matches BASE (got ${selfRow.sellerHome}, expected ${BASE})`);
+    // A local row's tags are the catalog tool's own: the /api/index/tools
+    // row for the same slug lists the head of that list (capped at six).
+    const ix = await (await fetch(`${BASE}/api/index/tools?q=${encodeURIComponent(selfRow.slug)}&source=ours&limit=50`)).json();
+    const listed = (ix.rows || ix.results || ix.tools || []).find((t) => t.slug === selfRow.slug);
+    ok(listed && Array.isArray(listed.tags) && listed.tags.length > 0 && JSON.stringify(listed.tags) === JSON.stringify(selfRow.tags.slice(0, listed.tags.length)), `self row tags are the catalog's (${selfRow.slug}: ${JSON.stringify(selfRow.tags)}; index row ${JSON.stringify(listed?.tags)})`);
   }
 
   // include='external' must exclude self results. CI may have no external
