@@ -149,6 +149,7 @@ Returns an **object**, not a bare array. The matches are in `results`:
       "priceUsd": 0.005,
       "category": "other",
       "description": "…",
+      "tags": ["screenshot", "browser"],
       "score": 13,
       "health": 1,
       "networks": ["eip155:8453"],
@@ -194,6 +195,8 @@ Returns an **object**, not a bare array. The matches are in `results`:
   `executeViaWhenEligible` with `executeViaCallableNow: false` instead, so a
   tier name never reads as a callable action. `networksInferred: true` marks a
   row whose chains were inherited from its seller rather than read on its own 402.
+- `tags` is the tool's own tag list (the catalog's for a local row, the crawled
+  listing's for an external one), an empty array when the listing has none.
 - `count` is the number of results returned; `sellers` is how many distinct
   sellers they came from.
 - The response echoes back the resolved `include` value (invalid values fall

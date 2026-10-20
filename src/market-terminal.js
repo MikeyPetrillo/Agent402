@@ -130,6 +130,27 @@ export function terminalTicker(rows = []) {
     </div>`;
 }
 
+/** The per-seller marks a row carries beside its host: the MPP wire and the
+ *  router's dispatch verdict, each with its reason in the title. A row with
+ *  no verdict (the host, or a seller the handler did not label) gets none. */
+function rowMarks(r) {
+  const out = [];
+  if (r.mpp === true) out.push(`<span class="t-mark" title="Also reachable over the native MPP wire">MPP</span>`);
+  const d = r.dispatch;
+  if (d && typeof d === "object") {
+    out.push(d.eligible
+      ? `<span class="t-mark is-on" title="dispatch: the router will buy from this seller (${esc(d.reason || "")})">dispatch${d.via ? ` via ${esc(d.via)}` : ""}</span>`
+      : `<span class="t-mark" title="not dispatch-eligible: ${esc(d.reason || "")}">no dispatch</span>`);
+  }
+  return out.length ? " " + out.join(" ") : "";
+}
+/** "+N" after the tool count when N sibling hosts settling to the same wallet
+ *  were collapsed into this row, so they are disclosed rather than hidden. */
+function extraMark(r) {
+  const n = Number(r.extra) || 0;
+  if (n <= 0) return "";
+  return ` <span class="t-more" title="+${n} more endpoint${n === 1 ? "" : "s"} on this seller, collapsed into this row">+${n}</span>`;
+}
 /** Dense roster. Every row is rendered: the windowing in the behaviour script
  *  hides rows it is not showing, so search, sort and deep links keep working
  *  with the script absent or broken. Rows carry their own numbers as data-*
@@ -151,11 +172,11 @@ export function terminalRoster(rows = [], selectedHost = null, { measured = true
        data-buyers="${Number(r.buyers) || 0}" data-tools="${Number(r.tools) || 0}" data-idx="${i}"
        ${sel ? 'aria-current="true"' : ""}>
       <span class="t-c t-c-n" role="cell">${n}</span>
-      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}</span>
+      <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}${r.local ? ` <span class="t-own" title="on-chain figures for our own wallet, our own canary and volume runs included">ours, own runs incl.</span>` : ""}${rowMarks(r)}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.calls) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? esc(compactUsd(r.usd)) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${measured ? num(r.buyers) : "-"}</span>
-      <span class="t-c t-c-num" role="cell">${num(r.tools)}</span>
+      <span class="t-c t-c-num" role="cell">${num(r.tools)}${extraMark(r)}</span>
       <span class="t-c t-c-bar" role="cell" aria-hidden="true"><i style="width:${share}%"></i></span>
     </a>`;
   }).join("");
@@ -297,6 +318,9 @@ export const TERMINAL_CSS = `
 .t-c-n{color:var(--t-ink-faint);font-size:var(--fs-2xs);}
 .t-c-host{display:flex;align-items:center;gap:6px;min-width:0;}
 .t-own{color:var(--t-ink-faint);font-size:var(--fs-2xs);white-space:nowrap;}
+.t-mark{flex:none;color:var(--t-ink-faint);font-size:var(--fs-2xs);letter-spacing:.06em;border:1px solid var(--t-rule-2);padding:0 4px;white-space:nowrap;}
+.t-mark.is-on{color:var(--t-up);border-color:var(--t-up);}
+.t-more{color:var(--t-ink-faint);font-size:var(--fs-2xs);}
 .t-c-num{text-align:right;}
 .t-dot{width:5px;height:5px;flex:0 0 5px;border-radius:50%;background:var(--t-rule-2);}
 .t-dot.is-on{background:var(--t-up);}

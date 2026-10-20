@@ -20,6 +20,10 @@ Jobs are selected by commit-message markers or `workflow_dispatch`; every push t
 | `probe` | Read-only diagnostics: Railway deploy history, on-chain revenue decode |
 | `bazaar-refresh` / `bazaar-register` / `bazaar-solana` | Discovery upkeep: re-walk the Bazaar, pay one tiny call on routes it has never registered so they get harvested, and the Solana-rail equivalent |
 
+### Listing sweeps (read-only)
+
+- `node scripts/payai-solana-sweep.js` compares the routes this host sells on Solana (from `/api/pricing`: every priced route except the identity-bound and EVM-only ones) with the rows the PayAI facilitator registry lists under our origin with a Solana mainnet accept, walking the whole registry rather than a first page. It prints the routes missing from the listing and the listed routes no longer served. The registry is settlement-harvested, so a missing route means no Solana payment has settled on it there; the paid registration pass is the `bazaar-solana` job. The script registers nothing and needs no key. `--json` for machine output; `TARGET_URL` to point it at another host.
+
 ## Heartbeat (`.github/workflows/heartbeat.yml`)
 
 - **Every 15 min (scheduled):** probe production - `/health`, catalog ≥400, a real PoW-paid call, MCP `initialize`. Three consecutive failures → a `Heartbeat: production DOWN` issue (auto-closed on recovery).

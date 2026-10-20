@@ -93,8 +93,10 @@ ok(busyCalls === compared && busyTotal > 0, `onBusy reported the worker's CPU fo
   const entry = (tools) => ({ manifest: { name: "fresh", homepage: origin }, tools: tools.map((t) => ({ seller: origin, method: "POST", route: `/api/${t.slug}`, category: "data", tags: [], price: 0.002, networks: ["eip155:8453"], description: "", ...t })), fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
   const find = async (q) => (await routeQueryAsync({ query: q, top: 10, include: "external", ...ctx })).results.map((r) => `${r.seller}|${r.slug}`);
   ok(!(await find("kumquats")).length, "before the set, nothing answers the new word");
-  cache.set(origin, entry([{ slug: "kumquat-finder", name: "Kumquat finder", description: "Finds kumquats." }]));
+  cache.set(origin, entry([{ slug: "kumquat-finder", name: "Kumquat finder", description: "Finds kumquats.", tags: ["fruit", "citrus"] }]));
   ok((await find("kumquats")).includes(`${origin}|kumquat-finder`), "a seller set on the main thread is routed by the worker on the very next query");
+  const tagged = (await routeQueryAsync({ query: "kumquats", top: 10, include: "external", ...ctx })).results.find((r) => r.seller === origin);
+  ok(tagged && same(tagged.tags, ["fruit", "citrus"]), `a row's tags survive the trip to the worker (${JSON.stringify(tagged?.tags)})`);
   cache.set(origin, entry([{ slug: "quince-finder", name: "Quince finder", description: "Finds quinces now." }]));
   const after = await find("kumquats");
   ok(!after.length && (await find("quinces")).includes(`${origin}|quince-finder`), "a replaced entry's new rows are found and its old rows are gone");

@@ -8628,6 +8628,11 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       },
       category: t.category,
       description: t.description,
+      // The same field a /api/find row carries: the catalog tool's tags for a
+      // local row, the crawled listing's tags for an external one (text the
+      // seller wrote, under the same untrustedContent marker as its
+      // description), an empty array when the listing had none.
+      tags: Array.isArray(t.tags) ? t.tags.filter((x) => typeof x === "string") : [],
       score,
       health: t.health,
       ...(Array.isArray(t.networks) && t.networks.length ? { networks: t.networks } : {}),
