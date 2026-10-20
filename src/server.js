@@ -6391,7 +6391,15 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
 }
+// Remember each /api/route and /api/find answer briefly so a settled call
+// that follows can be attributed to it (src/route-conversion.js; counts only,
+// hashed caller). /api/find is the control for the judged route answer.
+const withRouteAnswerNote = (req, res, source) => {
+  const orig = res.json.bind(res);
+  res.json = (body) => { try { if (res.statusCode === 200) noteRouteAnswer(clientIp(req), body, Date.now(), { source, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a search */ } return orig(body); };
+};
 app.get("/api/find", (req, res) => {
+  withRouteAnswerNote(req, res, "find");
   const q = req.query.q ?? req.query.task ?? req.query.query;
   // `top` as well as `k`: the sibling /api/route accepts BOTH, so a caller that
   // learned one name there and reused it here was silently handed the 5-result
@@ -6401,6 +6409,7 @@ app.get("/api/find", (req, res) => {
   return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
+  withRouteAnswerNote(req, res, "find");
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const k = req.body?.k ?? req.body?.top;
   return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
@@ -7537,14 +7546,8 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
 }
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
-// Remember each /api/route answer briefly so a purchase that follows can be
-// attributed to it (src/route-conversion.js; counts only, hashed caller).
-const withRouteAnswerNote = (req, res) => {
-  const orig = res.json.bind(res);
-  res.json = (body) => { try { if (res.statusCode === 200) noteRouteAnswer(clientIp(req), body); } catch { /* telemetry never breaks a search */ } return orig(body); };
-};
 app.get("/api/route", (req, res) => {
-  withRouteAnswerNote(req, res);
+  withRouteAnswerNote(req, res, "route");
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
@@ -7552,7 +7555,7 @@ app.get("/api/route", (req, res) => {
   return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, (meter) => computeRouteJudged(q, top, include, net, clientIp(req), meter), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
-  withRouteAnswerNote(req, res);
+  withRouteAnswerNote(req, res, "route");
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
@@ -9527,7 +9530,9 @@ app.use((req, res, next) => {
           // "node") so payment_settled can answer "which SDK/client do paying
           // wallets use?". Never the full UA string, never an IP.
           const clientUa = String(req.headers["user-agent"] || "").trim().split(/\s+/)[0].slice(0, 40) || null;
-          if (!synthetic) { try { noteRoutePurchase(clientIp(req), def.slug); } catch { /* telemetry only */ } }
+          // The answer-to-settlement attribution carries this booking's rail,
+          // wire and whether money moved, so a free PoW call is never read as a sale.
+          if (!synthetic) { try { noteRoutePurchase(clientIp(req), def.slug, Date.now(), { rail, wire: rail === "usdc" ? wireFor() : null, paid: rail === "usdc" || rail === "credits" }); } catch { /* telemetry only */ } }
           capturePostHogSettlement({
             slug: def.slug, rail, network, priceUsd, synthetic, payer, clientUa,
             wire: rail === "usdc" ? wireFor() : null,
