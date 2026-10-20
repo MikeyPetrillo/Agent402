@@ -20,8 +20,16 @@
 //     for its slot skips the lane instead. A rate limit or a timeout cools the
 //     lane with exponential backoff (honoring Retry-After), so a busy public
 //     node is skipped rather than hammered.
-//   * Non-null answers are cached by signature (bounded), so a surface that
-//     re-reads the same recent transactions every few minutes reads each once.
+//   * A getTransaction read answers a trimmed record (`trimTransaction`: the
+//     block time and the token balance rows every reader uses), the same
+//     shape from a lane and from the cache. Non-null records are cached by
+//     signature (bounded LRU), so a surface that re-reads the same recent
+//     transactions every few minutes reads each once.
+//   * A caller with a visitor waiting on it passes `keyedFirst` (the keyed
+//     lane first, no queueing for a public slot); a background caller passes
+//     `maxWaitMs: 0` (public when its slot is open now, keyed otherwise).
+//     Every read counts, per caller and by the reason the keyed lane got it
+//     (`solanaHistoryStatus({ full: true })`), and feeds the status word.
 //
 // Lane order (SOLANA_HISTORY_ALCHEMY_FIRST=on restores keyed-first):
 //   1. SOLANA_HISTORY_PUBLIC_RPCS (default: the public mainnet RPC),
@@ -81,9 +89,13 @@ export function solanaHistoryLanes(env = process.env) {
 // ---- per-lane state: pacing, cooldown, counters ---------------------------
 const laneState = new Map();   // url -> { nextAt, coolUntil, strikes }
 const counters = new Map();    // label -> { served, nulls, rateLimited, failed, skipped, keyed }
+const callers = new Map();     // caller -> { public, keyed, none, cacheHits, keyedBecause }
 let cacheHits = 0, allFailed = 0, startedAt = Date.now();
 const recent = [];             // last outcomes: "public" | "keyed" | "none"
 const RECENT_MAX = 200;
+// Why the keyed lane got a read: the caller asked for it first, or what the
+// first public lane did with the read before the keyed lane served it.
+const KEYED_REASONS = ["keyedFirst", "paced", "cooling", "rateLimited", "timeout", "error", "null", "noPublicLane"];
 
 const stateOf = (url) => { let s = laneState.get(url); if (!s) { s = { nextAt: 0, coolUntil: 0, strikes: 0 }; laneState.set(url, s); } return s; };
 const countOf = (lane) => {
@@ -91,6 +103,12 @@ const countOf = (lane) => {
   let c = counters.get(k);
   if (!c) { c = { served: 0, nulls: 0, rateLimited: 0, failed: 0, skipped: 0, keyed: lane.keyed }; counters.set(k, c); }
   return c;
+};
+const newTally = () => ({ public: 0, keyed: 0, none: 0, cacheHits: 0, keyedBecause: Object.fromEntries(KEYED_REASONS.map((r) => [r, 0])) });
+const tallyOf = (caller) => {
+  let t = callers.get(caller);
+  if (!t) { t = newTally(); callers.set(caller, t); }
+  return t;
 };
 const noteOutcome = (o) => { recent.push(o); if (recent.length > RECENT_MAX) recent.shift(); };
 
@@ -100,7 +118,33 @@ function cool(st, baseMs, retryAfterMs = 0) {
   st.coolUntil = Date.now() + Math.min(300_000, Math.max(backoff, retryAfterMs));
 }
 
-// Bounded LRU of non-null transactions by signature (finalized = immutable).
+// The record a getTransaction read answers and the cache holds: the fields the
+// history readers use (the credit rule in solana-buyer.js, the USDC delta and
+// payer helpers in scripts/revenue-scan-solana.js, parseSolanaTransfer in
+// revenue-live.js), the same shape from a lane and from the cache. The full
+// jsonParsed transaction also carries the instructions, account keys and log
+// lines, several times this size. A reader that needs another field adds it
+// here. About 2 KB per cached entry at six balance rows (key, Map slot and
+// record, measured 2026-10-20 on flat strings the way r.json() makes them).
+const trimBalance = (b) => (b && typeof b === "object")
+  ? { accountIndex: b.accountIndex, mint: b.mint, owner: b.owner, uiTokenAmount: (b.uiTokenAmount && typeof b.uiTokenAmount === "object") ? { amount: b.uiTokenAmount.amount, uiAmount: b.uiTokenAmount.uiAmount } : b.uiTokenAmount }
+  : b;
+export function trimTransaction(tx) {
+  if (!tx || typeof tx !== "object") return tx;
+  const m = tx.meta;
+  const meta = (m && typeof m === "object")
+    ? { err: m.err ?? null, preTokenBalances: Array.isArray(m.preTokenBalances) ? m.preTokenBalances.map(trimBalance) : [], postTokenBalances: Array.isArray(m.postTokenBalances) ? m.postTokenBalances.map(trimBalance) : [] }
+    : (m ?? null);
+  return { blockTime: tx.blockTime ?? null, meta };
+}
+
+// Bounded LRU of non-null records by signature (finalized = immutable).
+// Default 2,048 entries: under 4 MB at six balance rows per transaction. That
+// holds the activity refreshes and the revenue card between two board scans,
+// so a wallet's window is read from a lane once per cache lifetime, not once
+// per refresh. SOLANA_HISTORY_CACHE overrides the count (0 disables).
+const CACHE_DEFAULT = 2048;
+const cacheMaxOf = (env) => (env.SOLANA_HISTORY_CACHE != null ? Math.max(0, Number(env.SOLANA_HISTORY_CACHE) || 0) : CACHE_DEFAULT);
 const cache = new Map();
 const cacheKey = (method, params) => (method === "getTransaction" && typeof params?.[0] === "string") ? `${params[0]}|${JSON.stringify(params[1] || {})}` : null;
 function cacheGet(k) { if (!k || !cache.has(k)) return undefined; const v = cache.get(k); cache.delete(k); cache.set(k, v); return v; }
@@ -146,13 +190,16 @@ async function postOnce(url, method, params, timeoutMs, fetchImpl) {
  *   publicTimeoutMs  per-call deadline on a public lane (SOLANA_HISTORY_PUBLIC_TIMEOUT_MS, default 4000)
  *   maxWaitMs        longest a read queues for a public lane's pacing slot before skipping it
  *                    (SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS, default 10000; 0 = never wait)
+ *   keyedFirst       the keyed lane first and no queueing (a visitor is waiting on the answer)
+ *   caller           label for the per-caller counts (default "other")
  *   lanes, fetchImpl test seams
  */
 export async function solanaHistoryRead(method, params, opts = {}) {
   const env = process.env;
-  // keyedFirst: a deadline-bound caller (the revenue card and activity scan)
-  // keeps the keyed lane first and never queues for a public slot; it still
-  // shares the cache, the fallbacks and the counters.
+  // keyedFirst: a caller with a visitor waiting on it (the revenue card, a
+  // cold activity scan) keeps the keyed lane first and never queues for a
+  // public slot; it still shares the cache, the fallbacks and the counters,
+  // and its reads feed the status word like any other (they were served keyed).
   const keyedFirst = !!opts.keyedFirst;
   const ordered = opts.lanes || solanaHistoryLanes(env);
   const lanes = keyedFirst ? [...ordered.filter((l) => l.keyed), ...ordered.filter((l) => !l.keyed)] : ordered;
@@ -160,35 +207,43 @@ export async function solanaHistoryRead(method, params, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 6000;
   const publicTimeoutMs = opts.publicTimeoutMs ?? num(env.SOLANA_HISTORY_PUBLIC_TIMEOUT_MS, 4000);
   const maxWaitMs = opts.maxWaitMs ?? (keyedFirst ? 0 : env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS != null ? Math.max(0, Number(env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS) || 0) : 10_000);
-  const note = (o) => { if (!keyedFirst) noteOutcome(o); };
+  const tally = tallyOf(String(opts.caller || "other"));
+  // What the first public lane did with this read, when a later lane serves it.
+  let publicWhy = null;
+  const settle = (outcome) => {
+    noteOutcome(outcome);
+    tally[outcome]++;
+    if (outcome === "keyed") tally.keyedBecause[keyedFirst ? "keyedFirst" : (publicWhy || "noPublicLane")]++;
+  };
   // The public mainnet RPC answered about ten requests per ten seconds from
   // one IP when measured (the eleventh was rate-limited), under its published
   // per-method figure, so the default pace leaves headroom below that.
   const rps = num(env.SOLANA_HISTORY_PUBLIC_RPS, 0.8);
-  const cacheMax = env.SOLANA_HISTORY_CACHE != null ? Math.max(0, Number(env.SOLANA_HISTORY_CACHE) || 0) : 256;
+  const cacheMax = cacheMaxOf(env);
 
   const ck = cacheKey(method, params);
   const hit = cacheGet(ck);
-  if (hit !== undefined) { cacheHits++; return hit; }
+  if (hit !== undefined) { cacheHits++; tally.cacheHits++; return hit; }
 
   const hasKeyed = lanes.some((l) => l.keyed);
   let sawNull = false;
   const failures = [];
+  const skip = (lane, c, why) => { c.skipped++; failures.push(`${laneLabel(lane.url)}: ${why}`); publicWhy ??= why; };
   for (const lane of lanes) {
     const st = stateOf(lane.url);
     const c = countOf(lane);
     const now = Date.now();
     if (!lane.keyed) {
-      if (st.coolUntil > now) { c.skipped++; failures.push(`${laneLabel(lane.url)}: cooling`); continue; }
+      if (st.coolUntil > now) { skip(lane, c, "cooling"); continue; }
       // Pacing: claim the lane's next slot; skip the lane if it is too far off.
       const at = Math.max(now, st.nextAt);
-      if (at - now > maxWaitMs) { c.skipped++; failures.push(`${laneLabel(lane.url)}: paced`); continue; }
+      if (at - now > maxWaitMs) { skip(lane, c, "paced"); continue; }
       st.nextAt = at + 1000 / rps;
       if (at > now) {
         await sleep(at - now);
         // A rate limit that landed while this read waited for its slot cools
         // the lane for it too.
-        if (st.coolUntil > Date.now()) { c.skipped++; failures.push(`${laneLabel(lane.url)}: cooling`); continue; }
+        if (st.coolUntil > Date.now()) { skip(lane, c, "cooling"); continue; }
       }
     }
     const laneTimeout = lane.keyed ? timeoutMs : publicTimeoutMs;
@@ -211,28 +266,29 @@ export async function solanaHistoryRead(method, params, opts = {}) {
 
     if (out.kind === "ok") {
       c.served++; st.strikes = 0;
-      note(lane.keyed ? "keyed" : "public");
-      cachePut(ck, out.result, cacheMax);
-      return out.result;
+      settle(lane.keyed ? "keyed" : "public");
+      const result = method === "getTransaction" ? trimTransaction(out.result) : out.result;
+      cachePut(ck, result, cacheMax);
+      return result;
     }
     if (out.kind === "null") {
       c.nulls++; st.strikes = 0;
-      if (lane.keyed) { note("keyed"); return null; }
-      sawNull = true;
+      if (lane.keyed) { settle("keyed"); return null; }
+      sawNull = true; publicWhy ??= "null";
       continue;
     }
     if (out.kind === "rateLimited") {
       c.rateLimited++;
-      if (!lane.keyed) cool(st, 5_000, out.retryAfterMs);
+      if (!lane.keyed) { cool(st, 5_000, out.retryAfterMs); publicWhy ??= "rateLimited"; }
       failures.push(`${laneLabel(lane.url)}: rate limited`);
       continue;
     }
     c.failed++;
-    if (!lane.keyed) cool(st, out.timeout ? 10_000 : 2_000);
+    if (!lane.keyed) { cool(st, out.timeout ? 10_000 : 2_000); publicWhy ??= out.timeout ? "timeout" : "error"; }
     failures.push(`${laneLabel(lane.url)}: ${out.why}`);
   }
-  if (sawNull && !hasKeyed) { note("public"); return null; }
-  allFailed++; note("none");
+  if (sawNull && !hasKeyed) { settle("public"); return null; }
+  allFailed++; settle("none");
   const err = new Error(`solana history read failed on every lane - ${failures.join(" | ")}`.slice(0, 300));
   err.lanes = failures;
   throw err;
@@ -244,10 +300,11 @@ export function historyAwareRpc(other, opts = {}) {
 }
 
 /**
- * Counters for /api/gateway-status. Public: one word. Operator: per-lane counts.
+ * Counters for /api/gateway-status. Public: one word. Operator: per-lane
+ * counts, reads per caller and why the keyed lane got each one, the cache.
  *   idle      no history read since restart
  *   publics   public lanes served at least half of the recent reads
- *   fallback  the keyed lane served most recent reads
+ *   fallback  the keyed lane served most recent reads (a keyed-first caller counts here)
  *   failing   most recent reads failed on every lane
  */
 export function solanaHistoryStatus({ full = false } = {}) {
@@ -266,15 +323,24 @@ export function solanaHistoryStatus({ full = false } = {}) {
     if (c.keyed) servedKeyed += c.served + c.nulls; else servedPublic += c.served;
   }
   const total = servedPublic + servedKeyed;
+  // Reads by outcome and reason: the sum over callers, then each caller.
+  const reads = newTally();
+  const byCaller = {};
+  for (const [k, t] of callers) {
+    byCaller[k] = JSON.parse(JSON.stringify(t));
+    for (const f of ["public", "keyed", "none", "cacheHits"]) reads[f] += t[f];
+    for (const r of KEYED_REASONS) reads.keyedBecause[r] += t.keyedBecause[r];
+  }
   return {
     status, sinceRestart: true, since: new Date(startedAt).toISOString(),
     order: onFlag(process.env.SOLANA_HISTORY_ALCHEMY_FIRST) ? "keyed-first" : "public-first",
     lanes, cacheHits, failedEveryLane: allFailed,
     publicShare: total ? Number((servedPublic / total).toFixed(3)) : null,
+    reads, callers: byCaller, cache: { size: cache.size, max: cacheMaxOf(process.env) },
   };
 }
 
 export function __resetSolanaHistoryForTest() {
-  laneState.clear(); counters.clear(); cache.clear(); recent.length = 0;
+  laneState.clear(); counters.clear(); callers.clear(); cache.clear(); recent.length = 0;
   cacheHits = 0; allFailed = 0; startedAt = Date.now();
 }

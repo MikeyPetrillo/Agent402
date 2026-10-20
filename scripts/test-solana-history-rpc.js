@@ -20,13 +20,18 @@ const PAYTO = "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
 const FAC = "FacilitatorAccount11111111111111111111111111";
 const now = Math.floor(Date.now() / 1000);
 const SIGS = Array.from({ length: 30 }, (_, i) => `sig${i}`);
+// A jsonParsed transaction the way a node answers it: the balance rows the
+// readers use plus the bulk they do not (instructions, account keys, logs).
 const txFor = (sig) => {
   const i = Number(sig.slice(3));
   const selfFunded = i % 7 === 6;
   const amt = 1000 + i * 10;
-  return { blockTime: now - 60 * (i + 1), meta: { err: null,
-    preTokenBalances: [{ accountIndex: 0, mint: USDC, owner: PAYTO, uiTokenAmount: { amount: "1000" } }, { accountIndex: 1, mint: USDC, owner: selfFunded ? PAYTO : FAC, uiTokenAmount: { amount: "900000" } }],
-    postTokenBalances: [{ accountIndex: 0, mint: USDC, owner: PAYTO, uiTokenAmount: { amount: String(1000 + amt) } }, { accountIndex: 1, mint: USDC, owner: selfFunded ? PAYTO : FAC, uiTokenAmount: { amount: String(900000 - amt) } }] } };
+  const row = (accountIndex, owner, amount) => ({ accountIndex, mint: USDC, owner, uiTokenAmount: { amount, decimals: 6, uiAmount: Number(amount) / 1e6, uiAmountString: String(Number(amount) / 1e6) } });
+  return { blockTime: now - 60 * (i + 1), slot: 300_000_000 + i,
+    transaction: { signatures: [sig], message: { accountKeys: [{ pubkey: PAYTO, signer: false }, { pubkey: FAC, signer: true }], instructions: [{ program: "spl-token", parsed: { type: "transfer", info: { amount: String(amt) } } }] } },
+    meta: { err: null, fee: 5000, logMessages: ["Program log: Instruction: Transfer", "Program log: ok"], innerInstructions: [], computeUnitsConsumed: 4000,
+    preTokenBalances: [row(0, PAYTO, "1000"), row(1, selfFunded ? PAYTO : FAC, "900000")],
+    postTokenBalances: [row(0, PAYTO, String(1000 + amt)), row(1, selfFunded ? PAYTO : FAC, String(900000 - amt))] } };
 };
 
 // A stub lane. `mode` (ok | http429 | rpc429 | null | hang | error) applies to
@@ -199,14 +204,103 @@ await new Promise((r) => setTimeout(r, 1500));
   ok(pub.txHits === 3, "a null is never cached");
 }
 
-// ---- 7. keyedFirst (the deadline-bound revenue reads) ----------------------
+// ---- 7. lane order per caller path ------------------------------------------
+// keyedFirst (a visitor waiting: the revenue card, a cold activity scan),
+// maxWaitMs 0 (a background refresh: public when the slot is open now, keyed
+// otherwise), and the default (a scan that queues for its public slot).
 {
   reset();
-  await H.solanaHistoryRead("getTransaction", ["sig11", TXARGS], { ...opts, keyedFirst: true });
+  await H.solanaHistoryRead("getTransaction", ["sig11", TXARGS], { ...opts, keyedFirst: true, caller: "card" });
   ok(keyed.txHits === 1 && pub.txHits === 0, "keyedFirst asks the keyed lane first");
+  let s = H.solanaHistoryStatus({ full: true });
+  ok(s.status === "fallback" && s.callers.card?.keyed === 1 && s.callers.card?.keyedBecause.keyedFirst === 1, `a keyed-first read counts: status "${s.status}", caller card ${JSON.stringify(s.callers.card)}`);
   keyed.mode = "error";
-  const tx = await H.solanaHistoryRead("getTransaction", ["sig12", TXARGS], { ...opts, keyedFirst: true });
+  const tx = await H.solanaHistoryRead("getTransaction", ["sig12", TXARGS], { ...opts, keyedFirst: true, caller: "card" });
   ok(tx && pub.txHits === 1, "keyedFirst still falls back to the public lane");
+  s = H.solanaHistoryStatus({ full: true });
+  ok(s.callers.card?.public === 1 && s.reads.public === 1 && s.reads.keyed === 1, `the fallback is a public read for that caller (${JSON.stringify(s.reads)})`);
+
+  // The refresh path at the real pace: the first read finds the slot open and
+  // goes public; the next, with the slot 1.25 s off and no waiting allowed,
+  // goes keyed and is counted as paced. Nothing queues.
+  reset();
+  process.env.SOLANA_HISTORY_PUBLIC_RPS = "0.8";
+  const t0 = Date.now();
+  await H.solanaHistoryRead("getTransaction", ["sig13", TXARGS], { ...opts, maxWaitMs: 0, caller: "refresh" });
+  await H.solanaHistoryRead("getTransaction", ["sig14", TXARGS], { ...opts, maxWaitMs: 0, caller: "refresh" });
+  const ms = Date.now() - t0;
+  s = H.solanaHistoryStatus({ full: true });
+  ok(pub.txHits === 1 && keyed.txHits === 1 && ms < 1000, `maxWaitMs 0: the open slot is taken, the next read goes keyed without waiting (${pub.txHits} public, ${keyed.txHits} keyed, ${ms} ms)`);
+  ok(s.callers.refresh?.keyedBecause.paced === 1 && s.callers.refresh?.public === 1, `the keyed read is counted as paced for that caller (${JSON.stringify(s.callers.refresh)})`);
+  process.env.SOLANA_HISTORY_PUBLIC_RPS = "1000";
+
+  // The default path queues for its slot instead.
+  reset();
+  process.env.SOLANA_HISTORY_PUBLIC_RPS = "4";
+  await H.solanaHistoryRead("getTransaction", ["sig15", TXARGS], { ...opts, caller: "board" });
+  await H.solanaHistoryRead("getTransaction", ["sig16", TXARGS], { ...opts, caller: "board" });
+  ok(pub.txHits === 2 && keyed.txHits === 0, `the default path waits for the public slot (${pub.txHits} public, ${keyed.txHits} keyed)`);
+  process.env.SOLANA_HISTORY_PUBLIC_RPS = "1000";
+}
+
+// ---- 7b. why the keyed lane got a read ---------------------------------------
+{
+  const why = async (mode, label) => {
+    reset(); pub.mode = mode;
+    await H.solanaHistoryRead("getTransaction", ["sig17", TXARGS], { ...opts, caller: "board" });
+    const b = H.solanaHistoryStatus({ full: true }).callers.board;
+    ok(b?.keyed === 1 && b?.keyedBecause[label] === 1, `public ${mode}: the keyed read is counted under ${label} (${JSON.stringify(b?.keyedBecause)})`);
+  };
+  await why("http429", "rateLimited");
+  await why("rpc429", "rateLimited");
+  await why("error", "error");
+  await why("null", "null");
+  await why("hang", "timeout");
+  reset(); pub.mode = "http429";
+  await H.solanaHistoryRead("getTransaction", ["sig18", TXARGS], { ...opts, caller: "board" });   // cools the lane
+  await H.solanaHistoryRead("getTransaction", ["sig19", TXARGS], { ...opts, caller: "board" });
+  let b = H.solanaHistoryStatus({ full: true }).callers.board;
+  ok(b?.keyedBecause.cooling === 1 && b?.keyedBecause.rateLimited === 1, `a read that skips a cooling lane is counted under cooling (${JSON.stringify(b?.keyedBecause)})`);
+  reset();
+  await H.solanaHistoryRead("getTransaction", ["sig20", TXARGS], { ...opts, lanes: [{ url: keyed.url, keyed: true }], caller: "board" });
+  b = H.solanaHistoryStatus({ full: true }).callers.board;
+  ok(b?.keyedBecause.noPublicLane === 1, `with no public lane configured the reason is noPublicLane (${JSON.stringify(b?.keyedBecause)})`);
+  reset(); pub.mode = "error"; keyed.mode = "error";
+  try { await H.solanaHistoryRead("getTransaction", ["sig21", TXARGS], { ...opts, caller: "board" }); } catch { /* expected */ }
+  const s = H.solanaHistoryStatus({ full: true });
+  ok(s.callers.board?.none === 1 && s.reads.none === 1 && s.reads.keyed === 0, `a read that failed on every lane is counted under none (${JSON.stringify(s.reads)})`);
+  ok(s.cache && typeof s.cache.size === "number" && s.cache.max === 2048, `the operator view carries the cache size and its bound (${JSON.stringify(s.cache)})`);
+  reset();
+  await H.solanaHistoryRead("getTransaction", ["sig22", TXARGS], opts);
+  ok(H.solanaHistoryStatus({ full: true }).callers.other?.public === 1, "a read without a caller label is counted under other");
+}
+
+// ---- 7c. the trimmed record: one shape from a lane and from the cache --------
+{
+  reset();
+  const full = txFor("sig23");
+  const fresh = await H.solanaHistoryRead("getTransaction", ["sig23", TXARGS], opts);
+  const hit = await H.solanaHistoryRead("getTransaction", ["sig23", TXARGS], opts);
+  ok(pub.txHits === 1 && JSON.stringify(hit) === JSON.stringify(fresh), "the cache hit is the record the lane read answered");
+  ok(Object.keys(fresh).sort().join(",") === "blockTime,meta" && Object.keys(fresh.meta).sort().join(",") === "err,postTokenBalances,preTokenBalances", `the record is the block time and the balance rows only (${Object.keys(fresh).join(",")}; meta ${Object.keys(fresh.meta).join(",")})`);
+  ok(fresh.transaction === undefined && fresh.meta.logMessages === undefined && fresh.meta.preTokenBalances[0].uiTokenAmount.uiAmountString === undefined, "the instructions, account keys, logs and the string amounts are not kept");
+  const { usdcDeltaForOwner, payerFromMeta } = await import("./revenue-scan-solana.js");
+  const { parseSolanaTransfer } = await import("../src/revenue-live.js");
+  const same = (f) => JSON.stringify(f(full)) === JSON.stringify(f(fresh));
+  ok(same((t) => creditFromTx(t.meta, PAYTO)) && JSON.parse(JSON.stringify(creditFromTx(fresh.meta, PAYTO))).credited === true, "the credit rule reads the same verdict from the record as from the full transaction");
+  ok(same((t) => usdcDeltaForOwner(t.meta, PAYTO)) && same((t) => payerFromMeta(t.meta, PAYTO)) && same((t) => parseSolanaTransfer(t, PAYTO)), "the delta, payer and activity helpers read the same values from the record");
+  ok(JSON.stringify(H.trimTransaction({ blockTime: 1, meta: { err: { InstructionError: [0, "Custom"] }, preTokenBalances: [{ owner: PAYTO }] } })) === JSON.stringify({ blockTime: 1, meta: { err: { InstructionError: [0, "Custom"] }, preTokenBalances: [{ owner: PAYTO }], postTokenBalances: [] } }), "a failed transaction keeps its error and a sparse row keeps what it has");
+  ok(H.trimTransaction(null) === null && H.trimTransaction({ meta: null }).meta === null, "null and a null meta pass through");
+  const big = JSON.stringify(full).length, small = JSON.stringify(fresh).length;
+  ok(small < big, `the record is smaller than the transaction the node sent (${small} of ${big} bytes)`);
+
+  // The bound is the entry count: past it the oldest record is read again.
+  reset();
+  process.env.SOLANA_HISTORY_CACHE = "3";
+  for (const s of ["sig24", "sig25", "sig26", "sig27"]) await H.solanaHistoryRead("getTransaction", [s, TXARGS], opts);
+  await H.solanaHistoryRead("getTransaction", ["sig24", TXARGS], opts);
+  ok(pub.txHits === 5 && H.solanaHistoryStatus({ full: true }).cache.size === 3, `the LRU holds the configured count and evicts the oldest (${pub.txHits} lane reads, size ${H.solanaHistoryStatus({ full: true }).cache.size})`);
+  delete process.env.SOLANA_HISTORY_CACHE;
 }
 
 // ---- 8. public view is one word; operator view carries the counts ----------

@@ -641,7 +641,7 @@ export async function syncSolana(wallet, { maxPages = 5 } = {}) {
       // Public RPC first, keyed lane behind it (src/solana-history-rpc.js);
       // a public null falls through, so a pruned or unindexed answer never
       // reads as "no transfer" here.
-      const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 8000 });
+      const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { timeoutMs: 8000, caller: "revenue-ledger" });
       const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
       if (usd > 0) {
         const payer = payerFromMeta(txn?.meta, wallet);

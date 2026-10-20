@@ -6820,8 +6820,8 @@ function paidScanAllowed() {
   return true;
 }
 
-async function scanActivity(chainKey, wallet, prior = null) {
-  if (chainKey === "solana") return solanaActivity(wallet);
+async function scanActivity(chainKey, wallet, prior = null, { background = false } = {}) {
+  if (chainKey === "solana") return solanaActivity(wallet, { background });
   if (chainKey === "robinhood") return robinhoodActivity(wallet);
   if (chainKey === "base") {
     // Budget checked BEFORE the query, not after: the point is to not spend.
@@ -6862,7 +6862,10 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
         // what is new instead of re-walking the whole window (and re-paying
         // for it) every TTL. Kept on the cache entry rather than in a second
         // map so there is ONE eviction policy, not two.
-        const a = await scanActivity(chainKey, wallet, entry.scanState || null);
+        // A refresh behind a cached chart is background work (the page is
+        // served from the cache meanwhile); only a cold wallet has a view
+        // waiting on it, and the scanner picks its RPC lanes by that.
+        const a = await scanActivity(chainKey, wallet, entry.scanState || null, { background: entry.value != null });
         entry.at = Date.now();
         if (a && !a.error) {
           entry.value = a; // success — refresh the cached value
@@ -10557,7 +10560,7 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
       // getTransaction (immutable, by signature) goes public RPC first with the
       // keyed lane behind it (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
-      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params))),
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard" }),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
