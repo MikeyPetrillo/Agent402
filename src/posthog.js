@@ -767,21 +767,30 @@ export async function shutdownPostHog() {
   } catch { /* swallow */ }
 }
 
-// Did a judged /api/route answer lead to a purchase? (src/route-conversion.js)
-// Counts only: never a query, an ip or a payer.
-export function capturePostHogRouteConversion({ judged, topOurs, boughtTop, viaRouteExecute, slug, minutes }) {
+// Did a /api/route or /api/find answer lead to a settled call?
+// (src/route-conversion.js) Counts only: never a query, an ip or a payer.
+// `rail`, `wire` and `paid` are the sale's own booking (payment_settled uses
+// the same words), so a free PoW call after an answer is not read as a sale.
+export function capturePostHogRouteConversion({ source, judged, topOurs, boughtTop, boughtAnyRow, viaRouteExecute, slug, minutes, rail, wire, paid }) {
   if (!active()) return;
   capture("route_conversion", {
+    source: String(source || "route"),
     judged: String(judged || "none"),
     topOurs: !!topOurs,
     boughtTop: !!boughtTop,
+    boughtAnyRow: !!boughtAnyRow,
     viaRouteExecute: !!viaRouteExecute,
     slug: String(slug || "unknown").slice(0, 80),
     minutes: Number(minutes) || 0,
+    rail: String(rail || "unknown"),
+    wire: wire ? String(wire) : null,
+    paid: !!paid,
   });
 }
-// One event per flush window per judged-kind, carrying `count` (sum it).
-export function capturePostHogRouteAnswers({ judged, topOurs, count }) {
+// One event per flush window per (source, judged kind, topOurs, synthetic),
+// carrying `count` (sum it). `synthetic` is the signed-token fact, as on
+// every other event, so probes can be filtered out of the denominator.
+export function capturePostHogRouteAnswers({ source, judged, topOurs, synthetic, count }) {
   if (!active()) return;
-  capture("route_answers", { judged: String(judged || "none"), topOurs: !!topOurs, count: Number(count) || 0 });
+  capture("route_answers", { source: String(source || "route"), judged: String(judged || "none"), topOurs: !!topOurs, synthetic: !!synthetic, count: Number(count) || 0 });
 }
