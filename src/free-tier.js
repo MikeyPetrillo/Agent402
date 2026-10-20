@@ -18,7 +18,7 @@ export const FREE_TIER_SLUGS = new Set([
   "checksum", "cidr", "color", "compound-interest", "compress-compare", "correlation",
   "count", "country-info", "crc32", "cron-next", "csv-lint", "csv-to-json",
   "csv-to-md", "date-diff", "date-format", "day-of-year", "dedupe-lines", "duration",
-  "easter-date", "effective-annual-rate", "epoch-convert", "extract-entities", "feedback-summary", "finance",
+  "easter-date", "effective-annual-rate", "email-guard", "epoch-convert", "extract-entities", "feedback-summary", "finance",
   "forecast-eval", "forecast-holt", "forecast-holt-winters", "forecast-naive", "forecast-ses", "gcd-lcm", "geo-distance",
   "gunzip", "gzip", "hash", "hex", "hidden-text-scan", "hmac", "html-entities",
   "html-links", "html-meta", "html-select", "html-strip", "html-table", "html-to-markdown",

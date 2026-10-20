@@ -3,6 +3,7 @@
 // payload and result is plain data.
 import { articleFromHtml, pageMetaFromHtml, pageContentFromHtml, markdownFromHtml } from "./html-parse-ops.js";
 import { visibleTextFromHtml } from "./page-change-text.js";
+import { emailHtmlReport } from "./email-guard-html.js";
 
 let toolHandlers = null;
 
@@ -13,6 +14,7 @@ export async function runOp(op, p = {}) {
     case "pageContent": return pageContentFromHtml(p.html, p.url, p.format);
     case "markdown": return markdownFromHtml(p.text, p.mode);
     case "visibleText": return visibleTextFromHtml(p.html, p.url, p.selector);
+    case "emailHtml": return emailHtmlReport(p.html);
     case "tool": {
       // The html-kit tools' own handlers (the catalog entries wrap them in runHtml).
       toolHandlers ||= (await import("./html-kit.js")).HTML_TOOL_HANDLERS;
