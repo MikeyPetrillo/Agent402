@@ -31,7 +31,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-19.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-10-20.</p>
 </section>
 
 <section>
@@ -170,7 +170,7 @@ re-runs per 30 days, above which it alerts without re-running.</p>
 the "last updated" date reflects the current version. Continued use after a change means you accept it.</p>
 
 <h2>Indemnification</h2>
-<p>You agree to indemnify and hold harmless Havok Holdings LLC and the service's maintainers and
+<p>You agree to indemnify and hold harmless Cardhavok LLC (doing business as Havok Holdings LLC) and the service's maintainers and
 contributors from claims, damages, and reasonable costs (including legal fees) arising from your use of
 the service, the inputs you send, the outputs you generate, or your violation of these terms or of
 applicable law.</p>
@@ -207,7 +207,7 @@ exclusive jurisdiction and venue of the state and federal courts located in Nort
 must be filed within one year of when it arose, or it is permanently barred.</p>
 
 <h2>General</h2>
-<p>These terms are the entire agreement between you and Havok Holdings LLC regarding the hosted
+<p>These terms are the entire agreement between you and Cardhavok LLC (doing business as Havok Holdings LLC) regarding the hosted
 service, superseding any prior understanding. If any provision is found unenforceable, it will be
 limited to the minimum extent necessary and the rest remains in effect. Our not enforcing a provision
 is not a waiver of it. You may not assign these terms; we may assign them in connection with a merger,
@@ -217,7 +217,7 @@ Sections on generated content, payments, indemnification, warranty disclaimer, l
 survive any termination of your use.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
 <a href="${REPO_URL}" rel="noopener">the source repository on GitHub</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>
