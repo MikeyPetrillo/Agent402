@@ -3221,6 +3221,8 @@ jobs:
           t node scripts/test-discovery-rerank.js
           # Typed judgment tool: the input caps ARE the margin guard, upstream bodies never reach the buyer, model-backed is declared (offline, stubbed)
           t node scripts/test-judge-kit.js
+          # Loop gate: budget and iteration stops in code at the same price, repeats and near-identical outputs found lexically, every refusal a 400 and every model failure an uncharged 5xx, worst case inside the judge's bounds (offline, stubbed)
+          t node scripts/test-loop-gate.js
           # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
           t node scripts/test-judge-luna.js
           t node scripts/test-judge-preview.js

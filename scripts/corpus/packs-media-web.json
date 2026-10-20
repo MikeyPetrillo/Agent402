@@ -1499,6 +1499,33 @@
         }
       },
       "requires": "OPENAI_API_KEY"
+    },
+    {
+      "slug": "loop-gate",
+      "name": "iterations exhausted stops in code",
+      "input": { "goal": "Rename every test file to the new convention", "lastOutput": "Renamed 11 of 14 files; three are locked by another process.", "iteration": 5, "maxIterations": 5 },
+      "expect": {
+        "equals": { "decision": "stop", "confidence": 1, "model": null, "checks.iterationsExhausted": true, "checks.budgetExceeded": false, "checks.repeating": false, "checks.stuck": false, "checks.goalMet": null },
+        "matches": { "reason": "Iteration 5 of 5" }
+      }
+    },
+    {
+      "slug": "loop-gate",
+      "name": "budget exceeded with a repeated output",
+      "input": {
+        "goal": "Get the build green", "lastOutput": "Build failed: 2 tests failing in auth.spec.ts", "iteration": 4, "budget": { "spentUsd": 0.31, "maxUsd": 0.3 },
+        "history": [{ "iteration": 2, "summary": "Build failed: 5 tests failing" }, { "iteration": 3, "summary": "build failed: 2 tests failing in auth.spec.ts" }]
+      },
+      "expect": {
+        "equals": { "decision": "stop", "checks.budgetExceeded": true, "checks.repeating": true, "model": null },
+        "matches": { "reason": "repeats iteration 3" }
+      }
+    },
+    {
+      "slug": "loop-gate",
+      "name": "an iteration of zero is a 400",
+      "input": { "goal": "g", "lastOutput": "o", "iteration": 0 },
+      "expect": { "status": 400, "matches": { "error": "iteration" } }
     }
   ]
 }

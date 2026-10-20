@@ -85,6 +85,8 @@ When the job is a whole report rather than a call, the `/v1` report routes sell 
 
 `judge` and `decisions` ($0.001 each, listed when the judgment upstream is configured) are model-backed, wallet-only typed judgments: a choice from your named options, a position on levels you describe, or a yes/no as a probability. The image, locate and long-document preview routes are on [[LLM Gateway|LLM-Gateway]].
 
+`loop-gate` ($0.001, wallet-only) is the same judgment shaped for an agent's loop: send the goal, the iteration that just finished, and optionally a budget, a cap on iterations, the earlier iterations and constraints; get back `continue`, `stop` or `escalate` with a reason, a confidence and the checks behind it (goal met, budget exceeded, iterations exhausted, repeating, stuck, constraint breached) plus a typed next step. The budget and iteration checks are decided in code before any model call, at the same price; a repeated output and three near-identical outputs in a row are found lexically first; the rest is model-backed.
+
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens - and some sandboxes can't execute code at all.
 
 ## Signed SQL check results (`sql-guard` + `sql-cert-verify`)

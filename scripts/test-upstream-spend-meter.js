@@ -215,6 +215,24 @@ try {
     const dec = await decisions({ input: "a short state", questions: [{ type: "predicate", name: "fine", instructions: "Is it fine?" }] }, { fetchImpl: luna });
     ok(Array.isArray(dec.answers) && dec.answers[0].probability === 0.6, "decisions answered on Luna");
     recorded(await take(), { source: "judge", usd: (lunaTokens / 1e6) * T.vendor.decisions.luna, tier: "decisions", model: "gpt-6-luna", priceUsd: JUDGE_PRICE_USD }, "decisions on Luna");
+    // The loop gate sells the same judgment: its model path records under its
+    // own tier at the same price, from the backend that served.
+    const { loopGate, LOOP_GATE_PRICE_USD } = await import("../src/tools/loop-gate-kit.js");
+    const gateTokens = 350;
+    const gate = async (url, init) => {
+      if (hostOf(url) !== "openrouter.ai") return json({ error: "wrong upstream" }, 500);
+      const q = JSON.parse(init.body).questions;
+      const answers = { goal_met: { type: "noul", noul: 0.2 }, stuck: { type: "noul", noul: 0.1 }, next_step: { type: "choice", choice: "iterate", confidence: 0.8, probabilities: Object.fromEntries(Object.keys(q.next_step.criteria).map((k) => [k, k === "iterate" ? 0.8 : 0])) } };
+      return json({ answers, usage: { input_tokens: gateTokens, output_tokens: 4 }, model: "microsoft/microsoft-decision-1" });
+    };
+    // The gate's request carries its fixed questions, so it is longer than the
+    // one-question judge case; the fake share is widened for it (the rate,
+    // and so the expected figure, is unchanged).
+    U.setUpstreamCostsForTest({ ...T, vendor: { ...T.vendor, decisions: { ...T.vendor.decisions, maxShare: 9 } } });
+    const g = await loopGate({ goal: "finish the report", lastOutput: "two of three sections drafted", iteration: 2, maxIterations: 5 }, { fetchImpl: gate });
+    U.setUpstreamCostsForTest(T);
+    ok(g.decision === "continue" && g.model === DECISION_ONE, "loop-gate answered on Decision-1");
+    recorded(await take(), { source: "judge", usd: (gateTokens / 1e6) * T.vendor.decisions.decisionOne, tier: "loop-gate", model: DECISION_ONE, priceUsd: LOOP_GATE_PRICE_USD }, "loop-gate on Decision-1");
   }
   // ---- exa-answer: what Exa says the call cost (costDollars), a vendor fee row, no margin event ----
   {
