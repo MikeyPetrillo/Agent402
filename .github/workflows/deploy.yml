@@ -62,7 +62,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), bazaar-solana, payai-solana (one-shot: settle one Solana payment through PayAI on every route its registry lacks), demo (run the company one-pager with the funded burner, upload output), or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), bazaar-solana, demo (run the company one-pager with the funded burner, upload output), or deploy"
         default: "deploy"
       demo_ticker:
         description: "Ticker for mode=demo (US symbol)."
@@ -97,7 +97,6 @@ jobs:
       bazaar_refresh: ${{ steps.parse.outputs.bazaar_refresh }}
       bazaar_register: ${{ steps.parse.outputs.bazaar_register }}
       bazaar_solana: ${{ steps.parse.outputs.bazaar_solana }}
-      payai_solana: ${{ steps.parse.outputs.payai_solana }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -136,7 +135,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          MARKERS="test deploy publish probe drain paytest purl bazaar-refresh bazaar-register bazaar-solana payai-solana"
+          MARKERS="test deploy publish probe drain paytest purl bazaar-refresh bazaar-register bazaar-solana"
           if [ "$EVENT_NAME" != "push" ]; then
             echo "Event is $EVENT_NAME (not push) — emitting all markers as false."
             for m in $MARKERS; do
@@ -521,53 +520,6 @@ jobs:
           [ -n "$SOLANA_BURNER_KEY" ] || { echo "No SOLANA_BURNER_KEY — cannot pay the Solana sweep"; exit 1; }
           echo "::add-mask::$SOLANA_BURNER_KEY"
           node scripts/refresh-bazaar.js
-
-  payai-solana:
-    # One-shot, DISPATCH ONLY: for every route the PayAI registry lacks on
-    # Solana, settle one Solana payment through the PayAI facilitator on
-    # purpose (scripts/payai-listing-pass.js). CDP stays first on Solana for
-    # every other buyer; each buy here carries X-Agent402-Settle-Via plus the
-    # operator token, which src/settle-preference.js honors for that request
-    # alone. The pass reads a 402 with and without the headers first and
-    # spends nothing unless the Solana signer differs. Routes above the price
-    # cap are skipped and listed. The `payai-solana` marker is parsed with the
-    # others so a subject naming it is visible in the markers log, but it never
-    # starts this job: a push cannot spend the burner or present the operator
-    # token. The spending environment asks the operator to approve each run.
-    needs: markers
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'payai-solana'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    environment: spending
-    env:
-      TARGET_URL: https://agent402.tools
-      PAYAI_PASS_MAX_PRICE_USD: "0.25"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-      - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.5.0 viem@2.52.2
-      - name: Settle one Solana payment through PayAI on every route its registry lacks
-        env:
-          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
-          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
-          POW_SECRET: ${{ secrets.POW_SECRET }}
-        run: |
-          [ -n "$SOLANA_BURNER_KEY" ] || { echo "No SOLANA_BURNER_KEY - cannot pay the PayAI pass"; exit 1; }
-          [ -n "$AGENT402_OPERATOR_TOKEN" ] || { echo "No AGENT402_OPERATOR_TOKEN - the settle-via gate cannot be opened"; exit 1; }
-          echo "::add-mask::$SOLANA_BURNER_KEY"
-          echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
-          node scripts/payai-listing-pass.js --live --max-price "$PAYAI_PASS_MAX_PRICE_USD" --out /tmp/payai-pass.json
-      - name: Keep the pass records (route, status, tx; never a key)
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: payai-listing-pass
-          path: /tmp/payai-pass.json
-          if-no-files-found: ignore
-          retention-days: 14
 
   bazaar-refresh:
     # One-shot job: makes a tiny paid request against every Agent402 Bazaar
