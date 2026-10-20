@@ -390,6 +390,56 @@
       "note": "an unresolvable ticker is the caller's input, so a 4xx naming the coverage, never a 502 reading as our outage"
     },
     {
+      "slug": "market-tick",
+      "name": "a coin and an equity in one call, each naming its source tool",
+      "input": {
+        "symbols": "ETH,MSFT"
+      },
+      "expect": {
+        "equals": {
+          "items.0.symbol": "ETH",
+          "items.0.kind": "crypto",
+          "items.0.source": "crypto-price",
+          "items.1.symbol": "MSFT",
+          "items.1.kind": "equity",
+          "items.1.source": "stock-quote",
+          "complete": true,
+          "returned": 2,
+          "matched": 2
+        },
+        "gt": {
+          "items.0.price": 1,
+          "items.1.price": 1
+        },
+        "count": {
+          "items": 2
+        },
+        "populated": [
+          "asOf",
+          "cacheSeconds",
+          "items.0.asOf",
+          "items.1.asOf",
+          "items.1.previousClose"
+        ]
+      },
+      "requires": "DATABENTO_API_KEY",
+      "note": "listed only with MARKET_TICK=on (src/market-tick-switch.js); the equity leg needs the stock-quote key, so the case skips on a keyless boot"
+    },
+    {
+      "slug": "market-tick",
+      "name": "over the symbol cap is a 400 naming the cap, no source read",
+      "input": {
+        "symbols": "BTC,ETH,SOL,XRP,ADA,DOGE,DOT,LINK,AVAX,LTC,UNI"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "at most 10"
+        }
+      },
+      "note": "refused, never clamped: a dropped symbol the caller asked for is the quiet-contract defect"
+    },
+    {
       "slug": "kalshi-live-data",
       "name": "ETH series resolves to its soonest open event and carries a price series",
       "input": {
