@@ -164,7 +164,7 @@ await writeFile("hello." + out.format, Buffer.from(out.audio, "base64"));
 console.log(out.model, out.voice, out.chars);`)}
   ${h3("What comes back")}
   ${pre("the answer", ttsExample || "{ model, provider, voice, format, audio, chars }")}
-  ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 400 is not charged on x402.`)}
+  ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 422 is not charged on x402.`)}
 `, true)}
 
 ${section("voices", `
@@ -207,7 +207,7 @@ ${section("stt", `
   ${h2("Transcription, with speakers and word times on request.")}
   ${p(`Send the URL of an audio file (${esc(listAnd(["mp3", "wav", "m4a", "ogg", "flac", "webm"]))}) and the answer is the transcript with the language detected and the duration read. Add ${code("diarize: true")} and the call runs on the ${esc(DIARIZE_MODEL.split("/").pop())} model instead, adding ${code("words")} (each with start, end and a speaker number), ${code("speakers")} and ${code("language_confidence")}, at the same price and cap.`)}
   ${sttTable}
-  ${p(`The duration cap is enforced before any model is called, from the file's own headers: a recording over the cap is a 400 naming the tier that takes it, and a 400 is not charged on x402. ${proDef ? `${code(proDef.route)} is the same model on a longer cap, for recordings the shorter tier refuses.` : ""}`)}
+  ${p(`The duration cap is enforced before any model is called, from the file's own headers: a recording over the cap is a 422 naming the tier that takes it, and a 422 is not charged on x402. ${proDef ? `${code(proDef.route)} is the same model on a longer cap, for recordings the shorter tier refuses.` : ""}`)}
   ${h3("Example call")}
   ${pre(`${sttDef ? sttDef.slug : "transcribe"}, paid over x402`, `curl -X POST ${baseUrl}${sttDef ? sttDef.route.split(" ")[1] : "/api/transcribe"} \\
   -H 'Content-Type: application/json' \\

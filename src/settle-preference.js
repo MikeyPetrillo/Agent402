@@ -81,8 +81,14 @@ export function settlePreferenceMiddleware({ authed, registry = preferences, log
     if (!via) return next();
     const pref = registry.get(via);
     if (!pref || !authed(req)) return next();
-    let p;
-    try { p = Promise.resolve(pref.client.getSupported()); } catch (e) { p = Promise.reject(e); }
+    // One /supported read per registered client, shared by every tagged
+    // request; a rejected read is dropped so the next request asks again.
+    let p = pref.supported;
+    if (!p) {
+      try { p = Promise.resolve(pref.client.getSupported()); } catch (e) { p = Promise.reject(e); }
+      pref.supported = p;
+      p.catch(() => { if (pref.supported === p) pref.supported = null; });
+    }
     // The chain returns what next() returns, so a caller that awaits the
     // dispatcher (Express 5 forwards a rejection to its error handler) sees
     // the tagged path exactly as it sees the untagged one.

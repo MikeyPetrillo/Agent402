@@ -14,7 +14,7 @@
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
-import { RAILS, x402EvmOnly } from "./rails.js";
+import { RAILS, railKey, x402EvmOnly } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { mppShimEnabled } from "./mpp-shim.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
@@ -69,18 +69,22 @@ function defOf(catalog, slug) {
   return null;
 }
 
-export function howToPayPage(baseUrl, catalog = null) {
+export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) {
+  // The chains this instance takes, from the networks enabled at boot (the
+  // same filter /.well-known/x402 applies); without the list, the full table.
+  const enabledSet = Array.isArray(networks) ? new Set(networks.map((n) => String(n).toLowerCase())) : null;
+  const rails = enabledSet ? RAILS.filter((r) => enabledSet.has(railKey(r))) : RAILS;
   const canonical = `${baseUrl}/how-to-pay`;
   const title = "How to pay for a call: x402, MPP, credits or proof-of-work";
   const description =
     "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, prepaid credits, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
 
   // ---- derived facts -------------------------------------------------------
-  const usdcRails = RAILS.filter((r) => r.asset === "USDC");
-  const otherRails = RAILS.filter((r) => r.asset !== "USDC");
-  const evmRails = RAILS.filter((r) => typeof r.chainId === "number");
-  const nonEvmRails = RAILS.filter((r) => typeof r.chainId !== "number");
-  const railCount = words(RAILS.length);
+  const usdcRails = rails.filter((r) => r.asset === "USDC");
+  const otherRails = rails.filter((r) => r.asset !== "USDC");
+  const evmRails = rails.filter((r) => typeof r.chainId === "number");
+  const nonEvmRails = rails.filter((r) => typeof r.chainId !== "number");
+  const railCount = words(rails.length);
   const railPhrase = `USDC on ${listAnd(usdcRails.map((r) => r.name))}${otherRails.length ? `, plus ${listAnd(otherRails.map((r) => `${r.asset} on ${r.name}`))}` : ""}`;
 
   const probe = defOf(catalog, "hash");
@@ -131,7 +135,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   ).join("");
 
   // ---- rails table -----------------------------------------------------------
-  const railsRows = RAILS.map((r) => row([
+  const railsRows = rails.map((r) => row([
     `<th scope="row" style="text-align:left;font-weight:700;padding:12px 18px;color:var(--ink);white-space:nowrap;">${esc(r.name)}</th>`,
     tdMono(esc(r.asset)),
     td(r.chainId ? "EVM: the facilitator sponsors gas, so the wallet needs only the stablecoin" : `${esc(r.name)} wallet and its own x402 scheme package`),
@@ -189,7 +193,7 @@ ${section("rule", `
 ${section("x402", `
   ${eyebrow("02 / X402")}
   ${h2("x402: a stablecoin from your own wallet.")}
-  ${p(`x402 is served on every paid route. This server settles it on ${railCount} chains: ${esc(railPhrase)}. On the EVM chains the facilitator sponsors gas, so the wallet needs only the stablecoin; ${esc(listAnd(nonEvmRails.map((r) => r.name)))} each use their own wallet and their own scheme package.`)}
+  ${p(`x402 is served on every paid route. This server settles it on ${railCount} chain${rails.length === 1 ? "" : "s"}: ${esc(railPhrase)}. On the EVM chains the facilitator sponsors gas, so the wallet needs only the stablecoin; ${esc(listAnd(nonEvmRails.map((r) => r.name)))} each use their own wallet and their own scheme package.`)}
   ${h3("What you need")}
   ${p(`A private key for a wallet that holds a little of the stablecoin on one chain from the table. The key never leaves your process: the client signs a transfer authorization for exactly the quoted amount, and the facilitator moves the funds wallet to wallet. ${evmOnlyCount ? `${evmOnlyCount} routes (the identity-bound ones such as memory, and the long-running report routes) take an EVM authorization only; ${link("/api/pricing", "/api/pricing")} lists each route's networks and its 402 offers only those.` : ""}`)}
   ${table(["chain", "asset", "wallet", "caip-2"], railsRows)}

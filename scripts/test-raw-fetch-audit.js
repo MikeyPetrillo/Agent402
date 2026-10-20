@@ -101,7 +101,8 @@ const CALLS = {
   ],
   "src/tools/stt-kit.js": [F("transcription vendor A"), F("transcription vendor B")],
   "src/tools/token-risk-kit.js": [F("token risk sources, fixed hosts")],
-  "src/tools/tts-kit.js": [F("speech vendor probe, init from the caller", { t: "init" }), F("speech vendor probe, init from the caller", { t: "init" })],
+  "src/tools/tts-kit.js": [F("speech vendor probe, init from the caller", { t: "init" })],
+  "src/how-to-pay.js": [S, S],
   "src/tools/web-kit.js": [I("unshorten hop: asserted per hop, pinned, redirect manual")],
   "src/tools/x402-kit.js": [
     F("RPC list per network, pinned"),

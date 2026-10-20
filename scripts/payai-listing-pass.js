@@ -203,8 +203,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         if (res.status >= 502 && attempt < 2) { await sleep(5000); continue; }
         break;
       } catch (e) {
+        // A request that threw (a timeout included) may still have settled
+        // on the server, so it is never paid a second time: the record says
+        // what happened and the coverage read at the end shows the row.
         rec.error = String(e?.message || e).slice(0, 160);
-        if (attempt < 2) { await sleep(5000); continue; }
+        break;
       }
     }
     if (rec.charged) { settled++; spent += r.priceUsd; log(`  OK    ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  tx ${String(rec.tx).slice(0, 16)}`); }

@@ -3492,7 +3492,7 @@ app.get("/what-is-x402", (_req, res) => htmlCache(res, 300, 900).send(whatIsX402
 })));
 app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPage(BASE_URL, CATALOG)));
 // The buyer path per rail (x402, MPP, credits, proof-of-work); prices from the live catalog.
-app.get("/how-to-pay", (_req, res) => htmlCache(res, 300, 900).send(howToPayPage(BASE_URL, CATALOG)));
+app.get("/how-to-pay", (_req, res) => htmlCache(res, 300, 900).send(howToPayPage(BASE_URL, CATALOG, { networks: enabledNetworks(NETWORK) })));
 // The speech tools; prices and the served routes from the live catalog.
 app.get("/speech", (_req, res) => htmlCache(res, 300, 900).send(speechPage(BASE_URL, CATALOG)));
 // The category page: Agentic Finance - the moniker the whole surface
