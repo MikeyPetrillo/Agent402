@@ -217,7 +217,7 @@ export const DUB_TOOLS = [
     tags: ["dub", "translate", "translation", "tts", "text-to-speech", "speech", "audio", "voice", "localization"],
     discovery: {
       bodyType: "json",
-      input: { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: 1 },
+      input: { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: true },
       inputSchema: {
         properties: {
           text: { type: "string", description: `Text to translate and speak (max ${standardCap} chars; the cap also applies to the translation)` },

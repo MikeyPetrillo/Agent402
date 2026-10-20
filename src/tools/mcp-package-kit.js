@@ -142,7 +142,7 @@ function remember(map, key, value) {
 
 function encodeName(name) {
   // The scope separator travels as %2F; everything else in a valid name is URL-safe.
-  return name.replace("/", "%2F");
+  return name.replace(/\//g, "%2F");
 }
 
 function parseJson(text, what) {
