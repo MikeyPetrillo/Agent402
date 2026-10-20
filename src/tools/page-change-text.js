@@ -22,6 +22,7 @@ export const MAX_TEXT_CHARS = 200_000;
 export const MAX_IGNORE = 20;
 export const MAX_IGNORE_CHARS = 200;
 const IGNORE_TIMEOUT_MS = 100;
+const IGNORE_TOTAL_MS = 300;
 
 function bad(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
@@ -48,9 +49,15 @@ export function parseIgnore(ignore) {
 
 /** Apply the ignore patterns under a hard time bound. Returns the text and
  *  how many matches were removed. */
+// The patterns run on the request's own thread, so beside the per-pattern
+// timeout the whole set is bounded per text: twenty patterns that each stop
+// just short of the limit would otherwise hold the loop for seconds.
+let ignoreTotalMs = IGNORE_TOTAL_MS;
+export function __setIgnoreTotalMsForTests(ms) { ignoreTotalMs = ms == null ? IGNORE_TOTAL_MS : ms; }
 function applyIgnore(text, patterns) {
   let s = text;
   let removed = 0;
+  const started = performance.now();
   for (const re of patterns) {
     re.lastIndex = 0;
     try {
@@ -65,6 +72,7 @@ function applyIgnore(text, patterns) {
       if (e?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") throw bad(`an "ignore" pattern took longer than ${IGNORE_TIMEOUT_MS} ms on this page - simplify it`);
       throw e;
     }
+    if (performance.now() - started > ignoreTotalMs) throw bad(`the "ignore" patterns took longer than ${ignoreTotalMs} ms together on this page - use fewer or simpler patterns`);
   }
   return { text: s, removed };
 }

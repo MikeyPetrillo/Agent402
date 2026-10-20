@@ -103,6 +103,7 @@ const CALLS = {
   "src/tools/token-risk-kit.js": [F("token risk sources, fixed hosts")],
   "src/tools/tts-kit.js": [F("speech vendor probe, init from the caller", { t: "init" })],
   "src/how-to-pay.js": [S, S],
+  "src/tools/page-change-kit.js": [P],
   "src/tools/web-kit.js": [I("unshorten hop: asserted per hop, pinned, redirect manual")],
   "src/tools/x402-kit.js": [
     F("RPC list per network, pinned"),

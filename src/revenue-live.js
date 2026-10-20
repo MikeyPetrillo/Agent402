@@ -669,7 +669,7 @@ async function solanaRail(wallet) {
     const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [tokenAccount, { limit: 6 }], 6000);
     // Decode each recent tx's USDC delta + payer (same helpers as the daily
     // scanner) so internal test money classifies here too. Best-effort under
-    // a budget — an undecodable tx stays a bare signature link. Keyed lane
+    // a budget: an undecodable tx stays a bare signature link. Keyed lane
     // first: a cold /revenue waits on this card under its own deadline, and
     // at six reads per snapshot the card carries none of the lane load.
     const deadline = Date.now() + 12_000;

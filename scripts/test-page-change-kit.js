@@ -17,7 +17,7 @@
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { PAGE_CHANGE_TOOLS } from "../src/tools/page-change-kit.js";
-import { normalizeText, fingerprintOf, lineDiff, parseIgnore, MAX_TEXT_CHARS } from "../src/tools/page-change-text.js";
+import { normalizeText, fingerprintOf, lineDiff, parseIgnore, MAX_TEXT_CHARS, __setIgnoreTotalMsForTests } from "../src/tools/page-change-text.js";
 import { isPrivateIp } from "../src/tools/fetch-guard.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
@@ -281,6 +281,20 @@ try {
 } finally {
   globalThis.fetch = realFetch;
   srv.close();
+}
+
+// The ignore patterns are bounded as a set, not only one by one: with the
+// per-text budget forced to zero, the second cheap pattern is refused with a
+// 400 that names the budget, and the budget restored lets the same set pass.
+{
+  const text = "alpha 123 beta 456\n".repeat(2000);
+  const patterns = parseIgnore(["/[0-9]+/", "/beta/", "/alpha/"]);
+  __setIgnoreTotalMsForTests(0);
+  let err = null;
+  try { normalizeText(text, patterns); } catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /together/.test(err.message), `the ignore set is bounded per text (${err?.statusCode} ${err?.message})`);
+  __setIgnoreTotalMsForTests(null);
+  ok(normalizeText(text, patterns).text.length < text.length, "with the budget restored the same set is applied");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

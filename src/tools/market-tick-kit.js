@@ -23,8 +23,7 @@
 // the equity kit caches for the session.
 //
 // Switch: listed only while MARKET_TICK=on (src/market-tick-switch.js). It
-// ships off: the data terms of both source tools are under review, and the
-// route is listed only once what it serves is settled.
+// ships off and is listed only once the operator turns it on.
 import { CRYPTO_TOOLS, isKnownCryptoSymbol, resolveCoinId } from "./crypto-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
 import { createCgCache } from "./coingecko-cache.js";
