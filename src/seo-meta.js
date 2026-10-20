@@ -49,6 +49,13 @@ export function trimWords(text, max) {
   return out.replace(/(\s+(in|the|of|and|to|for|a|an|on|with|or|from|by|at))+$/i, "").replace(/[\s,;:\-·]+$/g, "").trim();
 }
 
+/** Titles the clamp shortened since boot, source -> served. A clamp is a
+ *  safety net, not an author: a title written past the bar reads cut
+ *  mid-sentence in a search result, so the operator surface lists them and
+ *  scripts/test-title-clamp.js fails when any served page needs one. */
+export const clampedTitles = new Map();
+const CLAMPED_TITLES_MAX = 500;
+
 export function metaTitle(text, max = META_TITLE_MAX) {
   const s = clean(text);
   if (s.length <= max) return s;
@@ -58,9 +65,12 @@ export function metaTitle(text, max = META_TITLE_MAX) {
     const i = head.lastIndexOf(sep);
     if (i > cut) cut = i;
   }
-  if (cut >= Math.floor(max * 0.4)) return head.slice(0, cut).trim();
   const ws = head.lastIndexOf(" ");
-  return (ws > 0 ? head.slice(0, ws) : head.slice(0, max)).replace(/[\s,;:\-·]+$/g, "").trim();
+  const out = cut >= Math.floor(max * 0.4)
+    ? head.slice(0, cut).trim()
+    : (ws > 0 ? head.slice(0, ws) : head.slice(0, max)).replace(/[\s,;:\-·]+$/g, "").trim();
+  if (clampedTitles.size < CLAMPED_TITLES_MAX && !clampedTitles.has(s)) clampedTitles.set(s, out);
+  return out;
 }
 
 /** For the few pages that hand-write their own <head> instead of using a

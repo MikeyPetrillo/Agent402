@@ -85,6 +85,10 @@ LLC: credit the entity, never a personal name.
   A new key a serving path or a margin test reads goes in `REQUIRED` there, so a table
   without it reads `partial` on `/api/gateway-status` and the heartbeat pages; add it to
   `docs/example-upstream-costs.json` (placeholder numbers only) in the same change.
+- Sitemap `lastmod` is per URL from `src/page-dates.js` (module commit dates, kit dates for
+  tools, the printed date for legal pages, a report's own date; otherwise omitted), read from
+  the committed `src/generated/page-dates.json`: after editing a page module or a tool kit run
+  `node scripts/gen-page-dates.js --write` (`scripts/test-page-dates.js` fails when it is stale).
 - Prices quoted in prose are derived from the catalog, never typed
   (`scripts/test-price-prose.js`). Skill-pack prices are generated
   (`node scripts/pack-prices.js --write`).

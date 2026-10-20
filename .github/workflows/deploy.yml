@@ -835,6 +835,11 @@ jobs:
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history: scripts/test-page-dates.js dates every page module
+        # from its newest commit, and a shallow checkout would date them all
+        # at the head.
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -996,8 +1001,12 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
           t node scripts/test-x402-economy.js
-          # /sitemap.xml coverage (every skill pack, sample tools, static surfaces)
+          # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
           t node scripts/test-sitemap-coverage.js
+          # The sitemap lastmod table matches git history (needs the full-depth checkout above)
+          t node scripts/test-page-dates.js
+          # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
+          t node scripts/test-submit-sitemaps.js
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
@@ -4684,6 +4693,9 @@ jobs:
 
       - name: Link integrity (every sitemap URL + every crawled internal href resolves; /mcp never a real <a href>)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-link-integrity.js
+      # Every sitemap page served without its <title> clamped (boots its own server with an operator token, reads /__operator/seo-meta.json)
+      - name: Title clamp (no served page needs its title cut)
+        run: node scripts/test-title-clamp.js
 
       # These four were 210s of test-unit-b's 506s of work, and they share a
       # real property rather than an arbitrary place in the list: each BOOTS ITS

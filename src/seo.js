@@ -17,8 +17,9 @@ import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
-import { samplePaths } from "./sample-reports.js";
+import { samplePaths, SAMPLES } from "./sample-reports.js";
 import { listPublicReports } from "./human-checkout.js";
+import { pageLastmod, dayOf } from "./page-dates.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -59,21 +60,32 @@ export function reportsParagraph(baseUrl, tools) {
   return `**Finished reports, for agents and people.** Cited, grounded report products with a data appendix - the same endpoint over x402/MPP or by card. An agent pays the tool price per call, ${range(agent)}. ${groups.map(([k, v]) => `${k}: ${v}.`).join(" ")} People buy the same reports by card at ${baseUrl}/reports for ${range(card)}: the card price includes payment processing, so an agent paying per call pays the lower tool price for the same report. Monitors (${usd(monitor)}/month by card at ${baseUrl}/monitors, or over MPP on Tempo) re-run a report on change and email the diff - domain security, SEC filings, ${MONITOR_PRODUCTS["token-monitor"] ? "Solana token risk, " : ""}fund 13F, FDA recall, insider flow, IPO pipeline.`;
 }
 
-// Computed ONCE when this module loads (i.e. once per deploy, since Railway
-// restarts the process), not per-request. Every sitemap lastmod below reuses
-// this so it genuinely reflects "the deploy that regenerated this sitemap" -
-// previously each call recomputed new Date() fresh, so hitting /sitemap.xml
-// on day N+1 of the same deploy claimed everything had "just changed," a
-// signal crawlers learn to discount.
-const BOOT_DATE = new Date().toISOString().slice(0, 10);
+// Every lastmod is per URL and comes from src/page-dates.js: the newest
+// commit touching the page's module, the kit that defines a tool, the date a
+// legal page prints, or a report's own generation date. The sitemap used to
+// stamp the process boot date on every URL, so each deploy (most days) told
+// crawlers the whole site had changed that day, a signal they learn to
+// discount. A URL with no truthful date carries no lastmod at all.
+const lastmodTag = (d) => (d ? `<lastmod>${d}</lastmod>` : "");
+/** An entry whose lastmod comes from its path unless the caller dated it. */
+const dated = (baseUrl, u) => ("lastmod" in u ? u : { ...u, lastmod: pageLastmod(u.loc.slice(baseUrl.length)) });
+const urlTag = (u) => `  <url><loc>${u.loc}</loc>${lastmodTag(u.lastmod)}<changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`;
+/** The newest lastmod among a sitemap's entries, or null when none is dated. */
+const newestLastmod = (urls) => urls.reduce((acc, u) => (u.lastmod && (!acc || u.lastmod > acc) ? u.lastmod : acc), null);
 
 // Programmatic SEO landing pages (one per seeded ticker / 13F manager). ONLY
 // the curated seeds are advertised: an off-list slug still renders when it
 // resolves on EDGAR, but a sitemap that enumerated an open URL space would
 // invite crawlers to mint upstream requests forever. The hub pages get a
-// higher priority than the entity pages that hang off them.
-const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r) => ({ loc: `${baseUrl}/reports/public/${r.publicId}`, priority: "0.6" })); } catch { return []; } };
-const programmaticUrls = (baseUrl) => [...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8" })), ...publicReportUrls(baseUrl), ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6" }))];
+// higher priority than the entity pages that hang off them. A sample report
+// is dated by its fixture and a public report by its publication; the seeded
+// entity pages read EDGAR live and carry no lastmod.
+const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r) => ({ loc: `${baseUrl}/reports/public/${r.publicId}`, priority: "0.6", lastmod: dayOf(r.at) })); } catch { return []; } };
+const programmaticUrls = (baseUrl) => [
+  ...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8", lastmod: dayOf(SAMPLES[p.split("/").pop()]?.at) })),
+  ...publicReportUrls(baseUrl),
+  ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6", lastmod: null })),
+];
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -201,9 +213,6 @@ Sitemap: ${baseUrl}/sitemapindex.xml
 }
 
 export function sitemapXml(baseUrl, catalog) {
-  // lastmod reflects the deploy that regenerated this sitemap (the pages are
-  // server-rendered, so a deploy is the freshness signal crawlers should see).
-  const lastmod = BOOT_DATE;
   const staticUrls = [
     { loc: `${baseUrl}/`, priority: "1.0" },
     { loc: `${baseUrl}/tools`, priority: "0.9" },
@@ -276,17 +285,8 @@ export function sitemapXml(baseUrl, catalog) {
     ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     ...learnIntegrationUrls(baseUrl),
   ];
-  const guideUrls = [
-    { loc: `${baseUrl}/guides`, priority: "0.8" },
-    ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" })),
-  ];
-  const skillUrls = [
-    { loc: `${baseUrl}/skills`, priority: "0.8" },
-    ...skillSlugs().map((s) => ({ loc: `${baseUrl}/skills/${s}`, priority: "0.8" })),
-  ];
-  const toolUrls = toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
-  const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls, ...skillUrls, ...categoryUrls(baseUrl, catalog), ...toolUrls]
-    .map((u) => `  <url><loc>${u.loc}</loc><lastmod>${lastmod}</lastmod><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`)
+  const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
+    .map((u) => urlTag(dated(baseUrl, u)))
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -298,26 +298,38 @@ ${entries}
 // Sitemap index - splits the single sitemap into sub-sitemaps so crawlers
 // don't have to parse 1,400+ URLs in one file. /sitemap.xml stays as the
 // monolith for backwards compat; /sitemapindex.xml points to the splits.
-function subSitemap(urls, lastmod) {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${u.loc}</loc><lastmod>${lastmod}</lastmod><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`).join("\n")}\n</urlset>`;
+function subSitemap(baseUrl, urls) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => urlTag(dated(baseUrl, u))).join("\n")}\n</urlset>`;
 }
-/** One /tools/category/<key> page per category the live catalog uses. */
+/** One /tools/category/<key> page per category the live catalog uses. A
+ *  category page is assembled from the catalog and carries no lastmod. */
 function categoryUrls(baseUrl, catalog) {
   const used = new Set(toolList(catalog).map((t) => t.category));
-  return Object.keys(CATEGORIES).filter((k) => used.has(k) && k !== "convert").map((k) => ({ loc: `${baseUrl}/tools/category/${k}`, priority: "0.7" }));
+  return Object.keys(CATEGORIES).filter((k) => used.has(k) && k !== "convert").map((k) => ({ loc: `${baseUrl}/tools/category/${k}`, priority: "0.7", lastmod: null }));
 }
 export function sitemapCategories(baseUrl, catalog) {
-  return subSitemap(categoryUrls(baseUrl, catalog), BOOT_DATE);
+  return subSitemap(baseUrl, categoryUrls(baseUrl, catalog));
 }
-export function sitemapIndex(baseUrl) {
-  const lastmod = BOOT_DATE;
-  const subs = ["sitemap-pages.xml", "sitemap-reports.xml", "sitemap-tools.xml", "sitemap-categories.xml", "sitemap-guides.xml", "sitemap-skills.xml", "sitemap-learn.xml"];
-  const entries = subs.map((s) => `  <sitemap><loc>${baseUrl}/${s}</loc><lastmod>${lastmod}</lastmod></sitemap>`).join("\n");
+const guideUrls = (baseUrl) => [{ loc: `${baseUrl}/guides`, priority: "0.8" }, ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" }))];
+const skillUrls = (baseUrl) => [{ loc: `${baseUrl}/skills`, priority: "0.8" }, ...skillSlugs().map((s) => ({ loc: `${baseUrl}/skills/${s}`, priority: "0.8" }))];
+const toolUrls = (baseUrl, catalog) => toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
+/** The index dates each child sitemap by the newest entry inside it (the
+ *  same lists the children serve), and leaves it undated when none is. */
+export function sitemapIndex(baseUrl, catalog = {}) {
+  const subs = [
+    ["sitemap-pages.xml", pageUrls(baseUrl, catalog)],
+    ["sitemap-reports.xml", programmaticUrls(baseUrl)],
+    ["sitemap-tools.xml", toolUrls(baseUrl, catalog)],
+    ["sitemap-categories.xml", categoryUrls(baseUrl, catalog)],
+    ["sitemap-guides.xml", guideUrls(baseUrl)],
+    ["sitemap-skills.xml", skillUrls(baseUrl)],
+    ["sitemap-learn.xml", learnIntegrationUrls(baseUrl)],
+  ];
+  const entries = subs.map(([s, urls]) => `  <sitemap><loc>${baseUrl}/${s}</loc>${lastmodTag(newestLastmod(urls.map((u) => dated(baseUrl, u))))}</sitemap>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</sitemapindex>`;
 }
-export function sitemapPages(baseUrl, catalog) {
-  const lastmod = BOOT_DATE;
-  const urls = [
+function pageUrls(baseUrl, catalog) {
+  return [
     { loc: `${baseUrl}/`, priority: "1.0" },
     { loc: `${baseUrl}/tools`, priority: "0.9" },
     { loc: `${baseUrl}/reports`, priority: "0.9" },
@@ -371,18 +383,18 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
   ];
-  return subSitemap(urls, lastmod);
+}
+export function sitemapPages(baseUrl, catalog) {
+  return subSitemap(baseUrl, pageUrls(baseUrl, catalog));
 }
 export function sitemapTools(baseUrl, catalog) {
-  const lastmod = BOOT_DATE;
-  return subSitemap(toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" })), lastmod);
+  return subSitemap(baseUrl, toolUrls(baseUrl, catalog));
 }
 export function sitemapReports(baseUrl) {
-  return subSitemap(programmaticUrls(baseUrl), BOOT_DATE);
+  return subSitemap(baseUrl, programmaticUrls(baseUrl));
 }
 export function sitemapGuides(baseUrl) {
-  const lastmod = BOOT_DATE;
-  return subSitemap([{ loc: `${baseUrl}/guides`, priority: "0.8" }, ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" }))], lastmod);
+  return subSitemap(baseUrl, guideUrls(baseUrl));
 }
 // /learn explainers and the per-package /integrations pages. One list feeds
 // both this sub-sitemap and the /sitemap.xml monolith (which is what
@@ -395,11 +407,10 @@ export function learnIntegrationUrls(baseUrl) {
   ];
 }
 export function sitemapLearn(baseUrl) {
-  return subSitemap(learnIntegrationUrls(baseUrl), BOOT_DATE);
+  return subSitemap(baseUrl, learnIntegrationUrls(baseUrl));
 }
 export function sitemapSkills(baseUrl) {
-  const lastmod = BOOT_DATE;
-  return subSitemap([{ loc: `${baseUrl}/skills`, priority: "0.8" }, ...skillSlugs().map((s) => ({ loc: `${baseUrl}/skills/${s}`, priority: "0.8" }))], lastmod);
+  return subSitemap(baseUrl, skillUrls(baseUrl));
 }
 
 // Trims a tier dollar amount to the shortest exact representation (2 decimals
