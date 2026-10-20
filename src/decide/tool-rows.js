@@ -26,9 +26,11 @@ const MAX_NAME = 120;
 const MAX_DESC = 600;
 const MAX_FIELDS = 24;
 
-// Control characters, zero-width and bidi overrides, then the characters that
-// build markup or fake role tags. What remains is plain prose.
-const STRIP_RE = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁤﻿<>`]/g;
+// Control characters, zero-width and bidi controls, TAG text, variation
+// selectors and the soft hyphen (the hidden carriers src/hidden-chars.js
+// names), then the characters that build markup or fake role tags. What
+// remains is plain prose.
+const STRIP_RE = /[\u0000-\u001f\u007f-\u009f\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufe00-\ufe0f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}<>`]/gu;
 
 export function cleanText(s, max) {
   if (typeof s !== "string") return "";

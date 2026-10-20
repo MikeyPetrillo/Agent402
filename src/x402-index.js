@@ -264,6 +264,7 @@ const INDEX_ROW_CAP = 100;
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { decodeTagCharacters, hasHiddenCharacters } from "./hidden-chars.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -5763,7 +5764,10 @@ const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
 // matching, twice: as written (so a literal <system> tag is still seen) and
 // with markup/entities/invisible characters turned to spaces (so
 // "Ignore&lt;previous instructions" or a zero-width split cannot slip a phrase
-// past the screen that a later cleaning step would reassemble).
+// past the screen that a later cleaning step would reassemble). Text spelled
+// in the TAG block (U+E0020..U+E007E, a copy of printable ASCII that renders
+// as nothing) is read back as the ASCII it spells first, so the patterns see
+// those words too (src/hidden-chars.js).
 // Plain printable ASCII with no markup, entity or backtick characters: NFKC,
 // entity decoding, invisible-character handling and the lookalike map are all
 // identity on it, so the four forms below reduce to the lowercased text and its
@@ -5778,7 +5782,7 @@ function injectionForms(text) {
     if (!/[\t\n\r]| {2}/.test(lower)) return [lower];
     return [lower, lower.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ")];
   }
-  const decoded = raw.normalize("NFKC")
+  const decoded = decodeTagCharacters(raw).normalize("NFKC")
     .replace(/&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6});/gi, (m) => {
       const e = m.toLowerCase();
       return e === "&lt;" ? "<" : e === "&gt;" ? ">" : e === "&amp;" ? "&" : " ";
@@ -5789,7 +5793,7 @@ function injectionForms(text) {
   // they are: identifiers like max_priority_fee are honest listing text.
   // An invisible character may split a word (delete it) or two words (read it
   // as a space): both readings are checked.
-  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]/g;
+  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u00ad\u180e\ufe00-\ufe0f\ufff9-\ufffb]|[\u{e0100}-\u{e01ef}]/gu;
   const flatten = (x) => x.replace(/[\u0000-\u001f\u007f-\u009f<>`*~|]/g, " ").replace(/\s+/g, " ");
   const forms = [decoded.replace(INVIS, ""), flatten(decoded.replace(INVIS, "")), flatten(decoded.replace(INVIS, " "))];
   if (CONFUSABLE_RE.test(decoded)) { CONFUSABLE_RE.lastIndex = 0; forms.push(flatten(decoded.replace(INVIS, "").replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]))); }
@@ -5802,6 +5806,11 @@ const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source}
 export function looksLikeListingInjection(text) {
   const t = String(text || "");
   if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
+  // A character that renders as nothing (TAG text, a zero-width or bidi
+  // control, a run of variation selectors, a soft hyphen) is a carrier for
+  // text the reader never sees: the listing is a finding whatever it spells.
+  // Emoji joiners, keycaps and joining scripts are allowed (src/hidden-chars.js).
+  if (hasHiddenCharacters(t)) return true;
   for (const form of injectionForms(t)) if (INJECTION_ANY.test(form)) return true;
   return false;
 }
