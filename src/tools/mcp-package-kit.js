@@ -426,7 +426,7 @@ export const MCP_PACKAGE_TOOLS = [
     tags: ["data", "npm", "mcp", "package", "supply-chain", "provenance", "github", "dev"],
     discovery: {
       bodyType: "json",
-      input: { package: "agent402-mcp" },
+      input: { package: "@modelcontextprotocol/server-filesystem" },
       inputSchema: {
         properties: {
           package: { type: "string", description: "npm package name, name@version, or an npx / npm exec command line (\"npx -y agent402-mcp@latest\")." },
@@ -436,48 +436,95 @@ export const MCP_PACKAGE_TOOLS = [
       },
       output: {
         example: {
-          package: "agent402-mcp",
-          requestedVersion: "latest",
-          version: "0.13.13",
-          distTags: ["latest"],
-          publishedAt: "2026-10-15T04:42:59.873Z",
-          versionAgeDays: 5,
-          createdAt: "2026-06-12T01:18:13.860Z",
-          packageAgeDays: 130,
-          versionCount: 51,
-          maintainers: { count: 1, names: ["agenttools1775"] },
-          provenance: {
-            attested: true, predicateType: "https://slsa.dev/provenance/v1",
-            attestationsUrl: "https://registry.npmjs.org/-/npm/v1/attestations/agent402-mcp@0.13.13",
-            registrySignatures: 2, integrity: "sha512-...",
+          "package": "@modelcontextprotocol/server-filesystem",
+          "requestedVersion": "latest",
+          "version": "2.0.0",
+          "distTags": [
+            "latest"
+          ],
+          "publishedAt": "2026-10-19T06:49:57.471Z",
+          "versionAgeDays": 1,
+          "createdAt": "2024-11-21T19:14:54.330Z",
+          "packageAgeDays": 697,
+          "versionCount": 21,
+          "maintainers": {
+            "count": 6,
+            "names": [
+              "jspahrsummers",
+              "pcarleton",
+              "fweinberger",
+              "thedsp",
+              "ochafik-ant",
+              "cliffhall"
+            ]
           },
-          installScripts: { present: false, runOnInstall: [], otherHooks: [] },
-          dependencies: { runtime: 7, optional: 0, peer: 0, bundled: [] },
-          binaries: ["agent402-mcp"],
-          deprecated: null,
-          license: "MIT",
-          engines: { node: ">=20" },
-          repository: {
-            declared: "git+https://github.com/MikeyPetrillo/Agent402.git", directory: "mcp", github: "MikeyPetrillo/Agent402",
-            read: true, matchesManifest: true, resolvedName: "MikeyPetrillo/Agent402", url: "https://github.com/MikeyPetrillo/Agent402",
-            archived: false, fork: false, disabled: false, createdAt: "2026-06-11T01:46:01Z", pushedAt: "2026-10-20T13:23:16Z",
-            stars: 43, defaultBranch: "main", license: "AGPL-3.0",
+          "provenance": {
+            "attested": true,
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "attestationsUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@modelcontextprotocol%2fserver-filesystem@2.0.0",
+            "registrySignatures": 2,
+            "integrity": "sha512-..."
           },
-          signals: [
-            "version 0.13.13 published 5 days ago",
-            "package first published 130 days ago, 51 versions",
-            "single maintainer",
+          "installScripts": {
+            "present": false,
+            "runOnInstall": [],
+            "otherHooks": [
+              "prepare"
+            ]
+          },
+          "dependencies": {
+            "runtime": 5,
+            "optional": 0,
+            "peer": 0,
+            "bundled": []
+          },
+          "binaries": [
+            "mcp-server-filesystem"
+          ],
+          "deprecated": null,
+          "license": "SEE LICENSE IN LICENSE",
+          "engines": {
+            "node": ">=24"
+          },
+          "repository": {
+            "declared": "git+https://github.com/modelcontextprotocol/servers.git",
+            "directory": null,
+            "github": "modelcontextprotocol/servers",
+            "read": true,
+            "matchesManifest": true,
+            "resolvedName": "modelcontextprotocol/servers",
+            "url": "https://github.com/modelcontextprotocol/servers",
+            "archived": false,
+            "fork": false,
+            "disabled": false,
+            "createdAt": "2024-11-19T01:10:17Z",
+            "pushedAt": "2026-10-19T06:46:48Z",
+            "stars": 91406,
+            "defaultBranch": "main",
+            "license": "Other"
+          },
+          "signals": [
+            "version 2.0.0 published 1 day ago",
+            "package first published 697 days ago, 21 versions",
+            "6 maintainers",
             "provenance attestation present (https://slsa.dev/provenance/v1)",
             "no install script declared",
-            "declares 1 binary: agent402-mcp",
-            "7 runtime dependencies, 0 optional",
-            "GitHub repository matches the manifest",
+            "prepare script declared (runs for a git or local install, not a registry install)",
+            "declares 1 binary: mcp-server-filesystem",
+            "5 runtime dependencies, 0 optional",
+            "GitHub repository matches the manifest"
           ],
-          reads: { registry: "package document", github: "read" },
-          skippedReads: [],
-          complete: true,
-          partial: false,
-          sources: ["registry.npmjs.org", "api.github.com"],
+          "reads": {
+            "registry": "package document",
+            "github": "read"
+          },
+          "skippedReads": [],
+          "complete": true,
+          "partial": false,
+          "sources": [
+            "registry.npmjs.org",
+            "api.github.com"
+          ]
         },
       },
     },
