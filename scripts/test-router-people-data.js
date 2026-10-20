@@ -170,7 +170,7 @@ const pool = await import("../src/router-pool.js");
   ok(err && err.statusCode === 404 && /personal data about individuals/.test(err.message) && /Nothing was spent/.test(err.message) && !paid, `route-execute names the reason and pays nothing (${err?.statusCode}: ${err?.message})`);
 
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const fn = serverSrc.slice(serverSrc.indexOf("async function resolveExternalSeller("), serverSrc.indexOf("const { assertPublicUrl, ssrfDispatcher } = await import(\"./tools/fetch-guard.js\");"));
+  const fn = serverSrc.slice(serverSrc.indexOf("async function resolveExternalSeller("), serverSrc.indexOf("const { probePublicUrl } = await import(\"./tools/fetch-guard.js\");"));
   const filterAt = fn.indexOf("if (!routeExcludedCategory(r)) return true;");
   ok(filterAt > fn.indexOf('} else if (chain === "algorand") {') && filterAt > fn.indexOf('} else if (chain === "solana") {') && filterAt < fn.indexOf("orderByJudgment("), "the resolver filters the candidates of every chain branch, before judging or probing any");
   ok(/description: r\.description, tags: r\.tags,/.test(fn) && /\/\/ The route's own text, for the category filter below\.\n\s+description: r\.description,\n\s+\}\)\);/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");

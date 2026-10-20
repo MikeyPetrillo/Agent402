@@ -27,7 +27,7 @@ ok(/r\.unproven = true/.test(fn) && /Number\.isFinite\(gate\.inbound\)/.test(fn)
 ok(/resolved\.filter\(\(x\) => !x\.unproven\)\.length >= Math\.max\(1, limit\)/.test(fn), "only PROVEN candidates count toward the limit");
 ok(/resolved\.sort\(\(a, b\) => \(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\)/.test(fn) && fn.indexOf("resolved.sort(") < fn.indexOf("resolved.splice("),
   "proven candidates are ordered before unproven ones, then the limit applies");
-ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await assertPublicUrl(r.url)"),
+ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await probePublicUrl(r.url"),
   "the resolve loop skips a ROUTE whose payment layer refused our payment on this chain BEFORE probing it (the memo x402-buyer writes after a chain-verified refusal)");
 ok(!/sellerRefusedRecently\(r\.seller/.test(fn), "the resolver does not bench a whole origin for one route's refusals");
 ok(/resolved\.push\(\{[^\n]*wire: r\.wire/.test(fn), "the resolved candidate carries its wire (a Tempo seller settles over MPP; the receipt said x402 before)");
@@ -36,7 +36,7 @@ ok(/resolved\.push\(\{[^\n]*wire: r\.wire/.test(fn), "the resolved candidate car
 // the resolver from route-execute's params. Pinned from source because the
 // offline router tests inject the resolver and cannot see the call site.
 ok(/wantModel = null(?:, onlyUrl = null)? \} = \{\}\)/.test(fn.slice(0, 220)), "resolveExternalSeller accepts wantModel");
-ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await assertPublicUrl(r.url)"),
+ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await probePublicUrl(r.url"),
   "a not-served verdict skips the candidate BEFORE probing it, and only that verdict skips (unknown never does)");
 ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerServesModel(r.url, wantModel)"), "the refusal memo is consulted first (cheaper: no fetch)");
 // A pinned endpoint is searched again by its own URL words when the task's
