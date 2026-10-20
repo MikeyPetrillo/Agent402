@@ -52,6 +52,7 @@ Market structure an agent can read directly, as deterministic reads at per-call 
 | `asset-transfers`, `token-balances`, `token-allowance`, `tx-receipt`, `block-receipts`, `token-price-history` | $0.002 to $0.005 | Indexed chain reads across the major EVM chains: a filtered transfer log, balances for named contracts, an ERC-20 allowance, a decoded receipt, a whole block summarized, and historical token prices |
 | `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` | $0.003 to $0.005 | Farcaster: search casts, read channel and user feeds, pull a thread, and measure engagement on the onchain social graph (listed when the instance holds a Farcaster API key) |
 | `site-map`, `site-crawl` | $0.005, $0.02 | Whole-site structure on demand: enumerate a site's URLs from robots.txt, its sitemaps and internal links, then crawl breadth-first to clean markdown under hard page, depth and time budgets |
+| `page-change` | $0.004 | Page change detection with nothing stored here: one fetch, the visible text normalized and fingerprinted (sha256) with the origin's ETag and Last-Modified; send the previous fingerprint back for changed true or false, the previous text for a line diff with a similarity score; a CSS selector narrows the region and ignore patterns drop timestamps and counters |
 
 ## Images and video (flat per call)
 

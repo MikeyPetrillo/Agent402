@@ -219,6 +219,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume",  // defi-kit.js (egress)
   "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
+  "page-change",  // page-change-kit.js (one fetch of a caller URL: egress)
   // derivatives-kit (Hyperliquid/Deribit/DefiLlama egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
   "perp-markets", "perp-funding", "perp-funding-screener", "perp-open-interest", "perp-klines", "perp-orderbook", "perp-basis",
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
