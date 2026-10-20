@@ -1833,6 +1833,7 @@ jobs:
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them
           t node scripts/test-revenue-no-balances.js
+          t node scripts/test-revenue-memo-chain.js
           # Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)

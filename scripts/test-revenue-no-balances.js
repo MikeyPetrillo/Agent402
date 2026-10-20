@@ -82,6 +82,12 @@ try {
   ok(/app\.get\("\/__operator\/revenue\.json", revenueApi\.operatorHandler\)/.test(server), "server.js serves the operator view through the operator handler");
   const decl = server.slice(server.indexOf("const revenueApi = revenueApiHandlers("), server.indexOf("const revenueApi = revenueApiHandlers(") + 600);
   ok(/authed: \(req\) => operatorAuthed\(req\)/.test(decl), "the operator view is gated by operatorAuthed");
+  // The ledger figures behind /revenue, /api/revenue and the home count are
+  // built one per event-loop turn, never several synchronous passes in one.
+  ok(/memoSurfaceAsync\("revenue:page-ledger", 60_000, buildRevenuePageLedger\)/.test(server), "the /revenue ledger figures build across turns");
+  ok(/memoSurfaceAsync\("revenue:allTime", 60_000, async \(\) => \{\n  const allTime = ledgerSummary\(revenueWallets\(\)\); await revenueTurn\(\);/.test(server), "the all-time totals yield between figures");
+  ok(!/memoSurface\("revenue:[^"]+", [\d_]+, \(\) => \(\{[^\n]*ledgerSummary\(/.test(server), "no synchronous memo builds the ledger totals in one turn");
+  ok(!/agents: ledgerBuyerConcentration\(revenueWallets\(\)\) \}/.test(server), "the page reuses the daily series' buyer concentration");
   ok(!/publicRevenueSnapshot|\.balance\b|totalUsd/.test(server.slice(server.indexOf('app.get("/revenue"'), server.indexOf('app.get("/revenue"') + 3000)), "the /revenue route publishes nothing balance-shaped itself");
 }
 

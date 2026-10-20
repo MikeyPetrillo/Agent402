@@ -597,7 +597,7 @@ export function revenueApiHandlers({ snapshot, ledger, authed }) {
   return {
     publicHandler: async (_req, res) => {
       try {
-        const body = publicRevenueBody(await snapshot(), ledger());
+        const body = publicRevenueBody(await snapshot(), await ledger());
         res.set("Cache-Control", "public, max-age=30").json(body);
       } catch (e) { fail(res, e); }
     },
@@ -605,7 +605,7 @@ export function revenueApiHandlers({ snapshot, ledger, authed }) {
       if (!authed(req)) return res.status(404).json({ error: "Not found" });
       res.set("Cache-Control", "no-store");
       try {
-        res.json(operatorRevenueBody(await snapshot(), ledger()));
+        res.json(operatorRevenueBody(await snapshot(), await ledger()));
       } catch (e) { fail(res, e); }
     },
   };

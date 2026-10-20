@@ -2305,8 +2305,11 @@ function memoSurface(key, ttlMs, build) {
 }
 // memoSurface for a builder that yields between steps: the first build is
 // awaited, later ones rebuild in the background while the last value serves.
+// `awaitRebuild` is for a builder that reads another memo: it waits for the
+// fresh value instead of taking the stale one. A built value that says it is
+// partial (it read a partial memo) is stored as partial.
 const surfaceBuilds = new Map();
-async function memoSurfaceAsync(key, ttlMs, buildAsync) {
+async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false } = {}) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
   if (hit && memoFresh(hit, now, ttlMs)) return hit.value;
@@ -2314,8 +2317,9 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync) {
   if (!pending) {
     pending = (async () => {
       try {
-        const partial = !stateStoresLoaded();
+        const loading = !stateStoresLoaded();
         const built = await buildAsync();
+        const partial = loading || built?.partial === true;
         const value = partial ? markPartialState(built) : built;
         surfaceMemo.set(key, { at: Date.now(), value, partial });
         return value;
@@ -2324,7 +2328,7 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync) {
     surfaceBuilds.set(key, pending);
     if (hit) pending.catch((e) => console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
   }
-  return hit ? hit.value : pending;
+  return hit && !awaitRebuild ? hit.value : pending;
 }
 function dropSurface(prefix) { for (const k of surfaceMemo.keys()) if (k.startsWith(prefix)) surfaceMemo.delete(k); }
 // Per-route server time (compute vs upstream wait) and the in-flight list a
@@ -3657,11 +3661,35 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
 // publicRevenueSnapshot, /__operator/revenue.json carries the full reading.
 const revenueApi = revenueApiHandlers({
   snapshot: async () => withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn),
-  ledger: () => memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() })),
+  ledger: async () => { const { mpp: _mpp, ...rest } = await revenueAllTime(); return rest; },
   authed: (req) => operatorAuthed(req),
 });
 app.get("/api/revenue", revenueApi.publicHandler);
 app.get("/__operator/revenue.json", revenueApi.operatorHandler);
+// The all-time ledger totals and the MPP sales, shared by /revenue, /api/revenue
+// and the home page count. Each figure is one synchronous pass, so they are
+// built on separate event-loop turns; built in one turn on a stale-memo
+// rebuild they held the loop past a second.
+const revenueTurn = () => new Promise((r) => setImmediate(r));
+const revenueAllTime = ({ awaitRebuild = false } = {}) => memoSurfaceAsync("revenue:allTime", 60_000, async () => {
+  const allTime = ledgerSummary(revenueWallets()); await revenueTurn();
+  const sales = salesSummary(); await revenueTurn();
+  const mpp = mppSales({ detailed: false });
+  return { allTime, sales, mpp };
+}, { awaitRebuild });
+// The /revenue page's ledger figures, one per turn. The buyer concentration is
+// the daily series' own figure (one shared read of the payment history) rather
+// than a second full read.
+async function buildRevenuePageLedger() {
+  const totals = await revenueAllTime({ awaitRebuild: true });
+  const card = cardSales({ days: 30 }); await revenueTurn();
+  const decide = decideSales({ days: 30 }); await revenueTurn();
+  let daily = null;
+  try { daily = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily, { awaitRebuild: true }); } catch { daily = null; }
+  const agents = daily?.concentration || ledgerBuyerConcentration(revenueWallets());
+  const partial = totals.partial === true || daily?.partial === true;
+  return { allTime: totals.allTime, mpp: totals.mpp, card, decide, agents, ...(partial ? { partial: true } : {}) };
+}
 // The /revenue series, built across event-loop turns: each figure is one
 // synchronous SQLite pass, and together they held the loop 0.6-1.2 s in one
 // turn (production stall profiler, 2026-09-25). The buyer figures share one
@@ -3818,7 +3846,7 @@ app.get("/revenue", async (req, res) => {
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
-    const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
+    const ledger = await memoSurfaceAsync("revenue:page-ledger", 60_000, buildRevenuePageLedger);
     // no-cache: the body changes on every request, so a browser-cached
     // copy showed the previous reading until a second refresh.
     // The charts' date range, read from the URL so a view can be shared. The
@@ -8243,15 +8271,21 @@ if (!POW_SLUGS.has(PROBE_POW_SLUG)) {
 // process witnessed, and the chain is the ground truth. 60s memo because
 // homepage traffic must never pay a sqlite aggregate per render.
 let __settledMemo = { at: 0, n: 0 };
+// railThroughput is the /revenue hero's own arithmetic: on-chain inbound
+// plus Tempo MPP once, never Base/Celo MPP (already on-chain).
+// Stored even at 0: an empty ledger used to recompute on every homepage hit.
+const storeSettledCount = ({ allTime, mpp }) => { const n = railThroughput({ allTime, mpp }).total; if (n >= 0) __settledMemo = { at: Date.now(), n }; };
+let __settledRefresh = null;
 function settledOnChainCount() {
   if (Date.now() - __settledMemo.at < 60_000) return __settledMemo.n;
-  try {
-    // railThroughput is the /revenue hero's own arithmetic: on-chain inbound
-    // plus Tempo MPP once, never Base/Celo MPP (already on-chain).
-    const n = railThroughput({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }) }).total;
-    // Stored even at 0: an empty ledger used to recompute on every homepage hit.
-    if (n >= 0) __settledMemo = { at: Date.now(), n };
-  } catch { /* keep serving the last good count */ }
+  // The first reading is taken in line so the page never shows a zero it has
+  // not measured; later ones refresh from the shared totals between turns
+  // while the last count serves.
+  if (!__settledMemo.at) {
+    try { storeSettledCount({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }) }); } catch { /* keep serving the last good count */ }
+    return __settledMemo.n;
+  }
+  if (!__settledRefresh) __settledRefresh = revenueAllTime({ awaitRebuild: true }).then(storeSettledCount).catch(() => { /* keep serving the last good count */ }).finally(() => { __settledRefresh = null; });
   return __settledMemo.n;
 }
 
