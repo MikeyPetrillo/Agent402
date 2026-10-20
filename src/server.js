@@ -42,7 +42,7 @@ import {
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
-import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
+import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
@@ -10701,8 +10701,11 @@ let shuttingDown = false;
 // `code`/`deadlineMs` default to the graceful-redeploy values. The fatal path
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
+// The Solana board's cursors, saved by shutdown() while the scan's lease still
+// reads held; the flush round below waits on that write with the others.
+let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => flushJsonDocuments({ timeoutMs })]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => flushJsonDocuments({ timeoutMs })]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
@@ -10731,6 +10734,9 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // signal aborts, leaseStillHeld reads false) so it stops before its next
   // external effect. The rows are released just before exit (below), so the
   // other container picks the loops up at once instead of at the ttl.
+  // The Solana board's scan in progress saves its cursors first, while its
+  // lease still reads held; flushStateQueues waits on that write, bounded.
+  try { boardSaveAtDrain = checkpointSolanaLeaderboard(); } catch { /* never blocks the drain */ }
   try { stopLeases(); } catch { /* never blocks the drain */ }
   // The last step, once: release every lease this process holds, then close
   // the pool. Each step is bounded; the exit never waits on the database.

@@ -31,8 +31,18 @@
 // Measures match the Base board: settled calls, USDC settled, distinct buyers,
 // over 24h / 7d / 30d. The buyer is the owner of the USDC account the payment
 // was debited from. Self-funded transfers are excluded (creditFromTx).
+//
+// PROGRESS IS CHECKPOINTED. A scan over every payTo runs for as long as its
+// reads take at the public lane's pace, and a container can be replaced or
+// restarted while one is running. The per-payTo cursors used to reach the
+// store only when a whole scan finished, so a scan cut off by a restart lost
+// every read it had made and the next one made them again. Now the cursors are
+// saved every CHECKPOINT_MS during a scan and once more on drain, a scan starts
+// from the newest saved cursors (its own or the other container's), and a read
+// that fails the same way scan after scan is skipped visibly instead of
+// holding that payTo's history open forever.
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady, leased } from "./state-db.js";
+import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
 const docs = new Map();
@@ -55,6 +65,17 @@ const RETAIN_DAYS = 30;
 const NO_ACCOUNT_RECHECK_MS = Number(process.env.SOLANA_LB_NO_ACCOUNT_RECHECK_MS) || 24 * 60 * 60_000;
 const SIG_PAGE = 1000;
 const STALE_MS = 3 * REFRESH_MS;
+// How often a running scan saves its cursors (0 = after every payTo).
+const CHECKPOINT_MS = process.env.SOLANA_LB_CHECKPOINT_MS != null ? Math.max(0, Number(process.env.SOLANA_LB_CHECKPOINT_MS) || 0) : 5 * 60_000;
+const LEASE_NAME = "solana-leaderboard-refresh";
+// A transaction read that fails on every lane in this many scans in a row is
+// counted as skipped (as a null answer is) and the cursor moves past it. One
+// such read used to fail its payTo's whole batch every scan, so the cursor
+// never moved and the payTo's history stayed open.
+export const STUCK_READ_SCANS = Math.max(1, Number(process.env.SOLANA_LB_STUCK_READ_SCANS) || 3);
+const STUCK_MAX = 200;
+const STUCK = Symbol("stuck");
+let scanSeq = 0;
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const SOLANA_WINDOWS = { "24h": 24, "7d": 168, "30d": 720 };
 const STATE_VERSION = 2;
@@ -132,7 +153,7 @@ function mergeHours(into, from) {
  * the fold, so a failure part-way leaves nothing half-counted - the next
  * cycle repeats that batch.
  */
-export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windowMs = 168 * 3600e3, now = Date.now(), noAccountRecheckMs = NO_ACCOUNT_RECHECK_MS, txConcurrency = 12, budget = { left: BACKFILL_TX_PER_CYCLE }, backfillDays = BACKFILL_DAYS } = {}) {
+export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windowMs = 168 * 3600e3, now = Date.now(), noAccountRecheckMs = NO_ACCOUNT_RECHECK_MS, txConcurrency = 12, budget = { left: BACKFILL_TX_PER_CYCLE }, backfillDays = BACKFILL_DAYS, scanId = null, stuckScans = STUCK_READ_SCANS } = {}) {
   let rpcCalls = 0, txReads = 0;
   const call = async (m, p) => { rpcCalls++; return rpc(m, p); };
   const nowSec = Math.floor(now / 1000);
@@ -172,14 +193,32 @@ export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windo
       const chunk = live.slice(off, off + txConcurrency);
       const got = await Promise.all(chunk.map(async (s) => {
         const args = [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }];
-        try { return await call("getTransaction", args); }
-        catch { return call("getTransaction", args); }          // one retry; a second failure fails the batch
+        let tx;
+        try { tx = await call("getTransaction", args); }
+        catch {
+          // One retry; a second failure fails the batch, unless this read has
+          // now failed in `stuckScans` scans: then it is skipped like a null.
+          try { tx = await call("getTransaction", args); }
+          catch (e) {
+            const stuck = (st.stuck ||= {});
+            const rec = stuck[s.signature] || { n: 0, scan: null };
+            if (scanId == null || rec.scan !== scanId) { rec.n++; rec.scan = scanId; }
+            stuck[s.signature] = rec;
+            for (const k of Object.keys(stuck)) { if (Object.keys(stuck).length <= STUCK_MAX) break; delete stuck[k]; }
+            if (rec.n < stuckScans) throw e;
+            delete stuck[s.signature];
+            return STUCK;
+          }
+        }
+        if (st.stuck?.[s.signature]) delete st.stuck[s.signature];
+        return tx;
       }));
       txReads += chunk.length;
       got.forEach((tx, i) => {
         // A transaction the RPC answers null for (pruned or not yet indexed) is
         // counted as skipped, visibly, rather than blocking the cursor forever.
-        if (!tx) { st.skipped++; return; }
+        // So is one that failed on every lane in scan after scan (above).
+        if (!tx || tx === STUCK) { st.skipped++; return; }
         const v = creditFromTx(tx.meta, payTo);
         if (v?.credited) addTo(into, chunk[i].blockTime || tx.blockTime, v.amount, v.funder);
       });
@@ -237,7 +276,7 @@ export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windo
  * then the previous row is kept marked stale (one hiccup never zeroes a
  * proven seller).
  */
-export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRENCY, now = Date.now(), previous = current.rows, maxPayTos = MAX_PAYTOS, windowHours = null, retryPauseMs = RETRY_PAUSE_MS } = {}) {
+export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRENCY, now = Date.now(), previous = current.rows, maxPayTos = MAX_PAYTOS, windowHours = null, retryPauseMs = RETRY_PAUSE_MS, onRow = null } = {}) {
   const prevBy = new Map((previous || []).map((r) => [r.payTo, r]));
   const all = [...payTos.entries()];
   // How many there WERE to scan, kept beside how many we read. Without it the
@@ -274,6 +313,8 @@ export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRE
         if (prev) rows.push({ ...prev, origins: [...origins].sort(), stale: true, error: String(e?.message || e).slice(0, 80) });
         else rows.push({ payTo, origins: [...origins].sort(), credits: 0, payers: 0, truncated: false, stale: false, at: Date.now(), unreadable: true, error: String(e?.message || e).slice(0, 80) });
       }
+      // After every row, read or not: the caller checkpoints the cursors.
+      if (onRow) { try { onRow(rows.length, list.length); } catch { /* a checkpoint never fails the scan */ } }
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
@@ -349,7 +390,25 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now(), wi
 }
 
 export function persistSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
+  // `stateAt` dates the cursors (a checkpoint moves them without a new
+  // board), so a reader can tell the newest copy apart from an older one
+  // that carries the same `at`.
+  current.stateAt = Date.now();
   try { docFor(file).saveSync(current); } catch { /* the volume is best-effort; the next scan rebuilds */ }
+}
+/**
+ * Save the cursors of the scan in progress (and the board as it stands):
+ * every CHECKPOINT_MS from the scan, and once from the drain. Only while this
+ * process still holds the scan's lease; a scan whose lease was lost keeps
+ * reading but never overwrites the holder's progress. Returns false when
+ * nothing is saved, else a promise that resolves once the save landed (the
+ * drain waits on it; the scan does not).
+ */
+export function checkpointSolanaLeaderboard({ file = SOLANA_LB_CACHE_FILE } = {}) {
+  if (!inFlight) return false;
+  if (!leaseStillHeld(LEASE_NAME)) return false;
+  current.stateAt = Date.now();
+  try { return docFor(file).save(current).then((r) => r === true, () => false); } catch { return false; }
 }
 export function loadPersistedSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
   const d = docFor(file);
@@ -364,7 +423,7 @@ export function loadPersistedSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
   return false;
 }
 export function __setSolanaLeaderboardForTest(snap) { current = { ...current, ...snap }; }
-export function __resetSolanaLeaderboardForTest() { current = emptyBoard(); }
+export function __resetSolanaLeaderboardForTest() { current = emptyBoard(); inFlight = null; }
 export function _stateForTest() { return current.state; }
 
 /** Rebuild: list payTos, scan incrementally against the persisted per-payTo state, prime the gate, persist. Deduped in flight. */
@@ -377,27 +436,59 @@ export async function refreshSolanaLeaderboard(opts = {}) {
   if (r && r.skipped) await adoptPeerSolanaLeaderboard({ prime: opts.prime }).catch(() => {});
   return r;
 }
-export async function adoptPeerSolanaLeaderboard({ prime, file = SOLANA_LB_CACHE_FILE } = {}) {
+/**
+ * Take the stored board and cursors when they are newer than ours: the other
+ * container's finished scan, or a checkpoint of a scan a restart cut off.
+ * Never while this process is scanning (its cursors are the live ones).
+ */
+export async function adoptPeerSolanaLeaderboard(opts = {}) {
+  if (inFlight) return false;
+  return adoptStoredSolanaLeaderboard(opts);
+}
+async function adoptStoredSolanaLeaderboard({ prime, file = SOLANA_LB_CACHE_FILE } = {}) {
   const d = docFor(file);
-  if (d.backend !== "pg") return false;
   const r = await d.read({ quiet: true });
   const j = r?.ok && r.exists ? r.body : null;
-  if (!j || !Array.isArray(j.rows) || !(Number(j.at) > Number(current.at || 0))) return false;
+  if (!j || !Array.isArray(j.rows)) return false;
+  const ours = Math.max(Number(current.stateAt) || 0, Number(current.at) || 0);
+  const theirs = Math.max(Number(j.stateAt) || 0, Number(j.at) || 0);
+  if (!(theirs > ours)) return false;
   current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true };
   if (typeof prime === "function") for (const row of current.rows) if (!row.unreadable && !row.stale) { try { prime(row.payTo, row.credits); } catch { /* priming is a nicety */ } }
   return true;
 }
-async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168 } = {}) {
+async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168, checkpointMs = CHECKPOINT_MS } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
+      // Start from the newest cursors in the store: a restart lands this
+      // container on the board it loaded at boot, which a checkpoint of the
+      // scan the restart cut off (ours or the other container's) can postdate.
+      await adoptStoredSolanaLeaderboard({ prime }).catch(() => {});
       const payTos = await listPayTos();
-      const state = current.state || {};
+      const state = (current.state ||= {});
       const budget = { left: BACKFILL_TX_PER_CYCLE };
-      const read = readFn || ((payTo) => readPayToIncremental(payTo, (state[payTo] ||= {}), { rpc, creditFromTx, windowMs: windowHours * 3600_000, budget }));
-      const next = await scanSolanaSellers(payTos, { readFn: read, windowHours });
+      // Unique across restarts too: a stuck record is persisted with the scan
+      // it last failed in, and a new process must not read its own first
+      // scan as that one.
+      const scanId = `${Date.now()}.${++scanSeq}`;
+      const read = readFn || ((payTo) => readPayToIncremental(payTo, (state[payTo] ||= {}), { rpc, creditFromTx, windowMs: windowHours * 3600_000, budget, scanId }));
+      let lastCheckpoint = Date.now();
+      const onRow = () => {
+        if (Date.now() - lastCheckpoint < checkpointMs) return;
+        lastCheckpoint = Date.now();
+        checkpointSolanaLeaderboard();
+      };
+      const next = await scanSolanaSellers(payTos, { readFn: read, windowHours, onRow });
       // Forget state for payTos no longer listed (bounded memory).
       for (const k of Object.keys(state)) if (!payTos.has(k)) delete state[k];
+      if (!leaseStillHeld(LEASE_NAME)) {
+        // Another container took the scan over; its cursors are the ones in
+        // the store. This board is served here but not written over them.
+        current = { ...next, state, stateAt: current.stateAt };
+        console.warn(`[solana-leaderboard] scanned ${next.scanned} payTos after the lease was lost: board kept here, cursors not saved`);
+        return;
+      }
       current = { ...next, state };
       if (typeof prime === "function") for (const r of next.rows) if (!r.unreadable && !r.stale) { try { prime(r.payTo, r.credits); } catch { /* priming is a nicety */ } }
       persistSolanaLeaderboard();

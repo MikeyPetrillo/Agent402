@@ -32,7 +32,7 @@ const txFor = (sig) => {
 // A stub lane. `mode` (ok | http429 | rpc429 | null | hang | error) applies to
 // getTransaction; account and signature reads always answer.
 function stubLane(name) {
-  const lane = { name, mode: "ok", hits: 0, txHits: 0, nullFor: new Set(), server: null, url: "" };
+  const lane = { name, mode: "ok", hits: 0, txHits: 0, nullFor: new Set(), v1: new Set(), asked: [], server: null, url: "" };
   lane.server = createServer((req, res) => {
     let body = ""; req.on("data", (d) => body += d); req.on("end", () => {
       lane.hits++;
@@ -43,6 +43,9 @@ function stubLane(name) {
       if (method === "getTransaction" && lane.mode === "http429") { res.statusCode = 429; res.setHeader("retry-after", "1"); return res.end("Too Many Requests"); }
       if (method === "getTransaction" && lane.mode === "rpc429") return send({ jsonrpc: "2.0", id: 1, error: { code: -32429, message: "rate limit exceeded" } });
       if (method === "getTransaction" && lane.mode === "error") return send({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "internal" } }, 500);
+      // A version-1 transaction is refused unless the caller supports it, the way a node answers.
+      if (method === "getTransaction") lane.asked.push(params[1]?.maxSupportedTransactionVersion ?? null);
+      if (method === "getTransaction" && lane.v1.has(params[0]) && !((params[1]?.maxSupportedTransactionVersion ?? -1) >= 1)) return send({ jsonrpc: "2.0", id: 1, error: { code: -32015, message: "Transaction version (1) is not supported by the requesting client. Please try the request again with the following configuration parameter: \"maxSupportedTransactionVersion\": 1" } });
       if (method === "getTokenAccountsByOwner") return send({ jsonrpc: "2.0", id: 1, result: { value: [{ pubkey: "ATA-1", account: {} }] } });
       if (method === "getSignaturesForAddress") {
         const until = params[1]?.until;
@@ -75,7 +78,7 @@ const { creditFromTx } = await import("../src/solana-buyer.js");
 
 const LANES = () => [{ url: pub.url, keyed: false }, { url: keyed.url, keyed: true }];
 const opts = { lanes: LANES(), publicTimeoutMs: 400, timeoutMs: 2000, maxWaitMs: 10_000 };
-const reset = () => { H.__resetSolanaHistoryForTest(); for (const l of [pub, keyed]) { l.mode = "ok"; l.hits = 0; l.txHits = 0; l.nullFor.clear(); } };
+const reset = () => { H.__resetSolanaHistoryForTest(); for (const l of [pub, keyed]) { l.mode = "ok"; l.hits = 0; l.txHits = 0; l.nullFor.clear(); l.v1.clear(); l.asked.length = 0; } };
 const TXARGS = { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 };
 
 // The board, read the way the server reads it: getTransaction through the
@@ -212,6 +215,28 @@ await new Promise((r) => setTimeout(r, 1500));
   ok(Object.keys(p).join(",") === "status", `the public view is the status word only (${JSON.stringify(p)})`);
   reset();
   ok(H.solanaHistoryStatus().status === "idle", "idle before any read");
+}
+
+// ---- 10. a transaction newer than the version asked for ----------------------
+// The node names the version it needs; the read is made once more with it,
+// the lane remembers it, and the board reads such a payment like any other.
+{
+  reset();
+  pub.v1.add("sig7"); pub.v1.add("sig8");
+  const tx = await H.solanaHistoryRead("getTransaction", ["sig7", TXARGS], opts);
+  ok(tx?.meta && pub.txHits === 2 && keyed.txHits === 0 && pub.asked.join(",") === "0,1", `a version-1 transaction is read on the same lane with the version the node named (asked ${pub.asked.join(",")}, keyed ${keyed.txHits})`);
+  await H.solanaHistoryRead("getTransaction", ["sig8", TXARGS], opts);
+  ok(pub.txHits === 3 && pub.asked.at(-1) === 1, `the lane is then asked with that version up front (asked ${pub.asked.join(",")})`);
+  const s = H.solanaHistoryStatus({ full: true });
+  ok((s.lanes[H.laneLabel(pub.url)]?.failed || 0) === 0 && s.status === "publics", "the refusal is not a lane failure: nothing cooled, status publics");
+  reset();
+  pub.v1.add("sig3"); pub.v1.add("sig9");
+  const b = await board(H.historyAwareRpc(direct(pub.url), opts));
+  ok(b.r === baseline.r && b.hours === baseline.hours && b.lastSig === baseline.lastSig && keyed.txHits === 0, "the board over a history with version-1 payments is identical to the keyed-only board");
+  reset();
+  pub.mode = "error"; keyed.v1.add("sig12");
+  const k = await H.solanaHistoryRead("getTransaction", ["sig12", TXARGS], opts);
+  ok(k?.meta && keyed.asked.join(",") === "0,1", `the keyed lane bumps the version the same way (asked ${keyed.asked.join(",")})`);
 }
 
 // ---- 9. lane order, env, rollback ------------------------------------------

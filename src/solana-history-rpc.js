@@ -113,6 +113,13 @@ function cachePut(k, v, max) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RATE_LIMIT_RE = /too many requests|rate.?limit/i;
 const isRateLimitError = (e) => e && (e.code === 429 || e.code === -32429 || RATE_LIMIT_RE.test(String(e.message || "")));
+// A node refuses a transaction newer than the version the caller said it
+// supports, and names the version to ask for. The answer is read once more
+// with that version (the parsed form a caller reads is the same for every
+// version), and the lane remembers it for its later reads.
+const TX_VERSION_RE = /Transaction version \((\d+)\) is not supported/i;
+const txVersionOf = (params) => Number(params?.[1]?.maxSupportedTransactionVersion ?? -1);
+const withTxVersion = (params, v) => [params[0], { ...(params[1] || {}), maxSupportedTransactionVersion: v }];
 
 async function postOnce(url, method, params, timeoutMs, fetchImpl) {
   const r = await fetchImpl(url, {
@@ -184,9 +191,23 @@ export async function solanaHistoryRead(method, params, opts = {}) {
         if (st.coolUntil > Date.now()) { c.skipped++; failures.push(`${laneLabel(lane.url)}: cooling`); continue; }
       }
     }
-    let out;
-    try { out = await postOnce(lane.url, method, params, lane.keyed ? timeoutMs : publicTimeoutMs, fetchImpl); }
-    catch (e) { out = { kind: "failed", why: redactSecrets(String(e?.name === "TimeoutError" ? "timeout" : (e?.message || e))).slice(0, 80), timeout: e?.name === "TimeoutError" || e?.name === "AbortError" }; }
+    const laneTimeout = lane.keyed ? timeoutMs : publicTimeoutMs;
+    const post = async (p) => {
+      try { return await postOnce(lane.url, method, p, laneTimeout, fetchImpl); }
+      catch (e) { return { kind: "failed", why: redactSecrets(String(e?.name === "TimeoutError" ? "timeout" : (e?.message || e))).slice(0, 80), timeout: e?.name === "TimeoutError" || e?.name === "AbortError" }; }
+    };
+    // A version this lane already answered with is asked for up front.
+    let laneParams = (method === "getTransaction" && Number(st.txVersion) > txVersionOf(params)) ? withTxVersion(params, st.txVersion) : params;
+    let out = await post(laneParams);
+    if (out.kind === "failed" && method === "getTransaction") {
+      const m = TX_VERSION_RE.exec(out.why || "");
+      const v = m ? Number(m[1]) : NaN;
+      if (Number.isInteger(v) && v > txVersionOf(laneParams)) {
+        laneParams = withTxVersion(laneParams, v);
+        out = await post(laneParams);
+        if (out.kind === "ok" || out.kind === "null") st.txVersion = v;
+      }
+    }
 
     if (out.kind === "ok") {
       c.served++; st.strikes = 0;

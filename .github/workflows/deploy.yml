@@ -4546,6 +4546,8 @@ jobs:
           t node scripts/test-drain-abort.js
           # Solana SPL leaderboard: batched credits scan, primed gate, payTo list, ranking, persistence (offline stub RPC)
           t node scripts/test-solana-leaderboard.js
+          # Solana board scans survive a restart: cursors checkpointed mid-scan and on drain, next boot resumes without re-reading, newest stored cursors adopted, a read failing scan after scan is skipped visibly (offline stub RPC)
+          t node scripts/test-solana-leaderboard-checkpoint.js
           # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
           t node scripts/test-solana-history-rpc.js
           # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
