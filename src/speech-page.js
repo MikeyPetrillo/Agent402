@@ -164,7 +164,7 @@ await writeFile("hello." + out.format, Buffer.from(out.audio, "base64"));
 console.log(out.model, out.voice, out.chars);`)}
   ${h3("What comes back")}
   ${pre("the answer", ttsExample || "{ model, provider, voice, format, audio, chars }")}
-  ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 422 is not charged on x402.`)}
+  ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 400 is not charged on x402.`)}
 `, true)}
 
 ${section("voices", `
