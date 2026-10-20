@@ -12,6 +12,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { TTS_TOOLS, TTS_TIERS, VOICES, FORMATS, LITE_FORMATS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, TTS_DEADLINE_MS } from "./tools/tts-kit.js";
 import { STT_TOOLS, STT_TIERS, DIARIZE_MODEL, MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
+import { DUB_TOOLS, DUB_TIERS, TRANSLATE_SLUG, dubPriceUsd } from "./tools/dub-kit.js";
 import { SPEECH_MODELS, SPEECH_PATH, SPEECH_MAX_CHARS, SPEECH_FORMATS, OPENAI_SPEECH_VOICES } from "./tools/llm-gateway-kit.js";
 import { ORG_SAME_AS } from "./repo-link.js";
 
@@ -76,6 +77,20 @@ export function speechPage(baseUrl, catalog = null) {
   ])).join(""));
 
   const ttsDef = ttsRows.find((r) => r.def.slug === "tts")?.live || ttsRows[0]?.live || null;
+
+  // ---- dub: translate, then speak (src/tools/dub-kit.js) -----------------------
+  const dubDef = served(catalog, DUB_TOOLS[0]);
+  const translateRoute = catalog ? catalog[Object.keys(catalog).find((k) => catalog[k]?.slug === TRANSLATE_SLUG) || ""]?.route : null;
+  const dubRows = dubDef ? table(["tier", "price", "translation", "speech", "max chars"], Object.entries(DUB_TIERS).map(([tier, slug]) => {
+    const speech = ttsRows.find((r) => r.def.slug === slug);
+    return row([
+      tdMono(esc(tier)),
+      tdPrice(`$${dubPriceUsd(tier).toFixed(3)}`),
+      tdMono(esc(translateRoute || `the ${TRANSLATE_SLUG} tier`)),
+      tdMono(speech ? routeLink(speech.live) : esc(`/api/${slug}`)),
+      td(fmtInt(TTS_TIERS[slug].maxChars), `${mono}font-size:var(--fs-sm);color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;`),
+    ]);
+  }).join("")) : "";
   const ttsExample = ttsDef ? JSON.stringify(ttsDef.discovery?.output?.example || {}, null, 2) : "";
   const ttsInput = ttsDef ? JSON.stringify(ttsDef.discovery?.input || {}) : "";
 
@@ -110,7 +125,7 @@ export function speechPage(baseUrl, catalog = null) {
   // ---- structured data ---------------------------------------------------------------
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const crumbsLd = breadcrumbLd(baseUrl, [["Agent402", "/"], ["Speech", "/speech"]]);
-  const listLd = { "@type": "ItemList", "@id": `${canonical}#tools`, name: "Agent402 speech tools", itemListElement: [...ttsRows.map((r) => r.live), ...sttRows.map((r) => r.live), ...(speechWire ? [speechWire] : [])].map((d, i) => ({ "@type": "ListItem", position: i + 1, name: d.name, url: `${baseUrl}/tools/${d.slug}` })) };
+  const listLd = { "@type": "ItemList", "@id": `${canonical}#tools`, name: "Agent402 speech tools", itemListElement: [...ttsRows.map((r) => r.live), ...(dubDef ? [dubDef] : []), ...sttRows.map((r) => r.live), ...(speechWire ? [speechWire] : [])].map((d, i) => ({ "@type": "ListItem", position: i + 1, name: d.name, url: `${baseUrl}/tools/${d.slug}` })) };
 
   const extraCss = `
 .sp-scroll{overflow-x:auto;max-width:100%;margin:0 0 22px}
@@ -165,6 +180,9 @@ console.log(out.model, out.voice, out.chars);`)}
   ${h3("What comes back")}
   ${pre("the answer", ttsExample || "{ model, provider, voice, format, audio, chars }")}
   ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 400 is not charged on x402.`)}
+  ${dubDef ? `${h3("Translate and speak in one call")}
+  ${p(`${routeLink(dubDef)} takes ${code("text")} and a ${code("targetLanguage")} (a BCP-47 tag or an English name), translates the text on the chat gateway and speaks the translation on the speech tier its ${code("tier")} names; the price is the sum of the two tiers, read from the catalog. The answer is the audio as raw bytes with the translation, the detected source language and the models that served in the ${code("X-Dub-Translation")} header, or JSON with the audio base64 when the call says ${code("json: 1")}. The speech tier's cap applies to the translation, and the source text is checked against it before any model runs.`)}
+  ${dubRows}` : ""}
 `, true)}
 
 ${section("voices", `
