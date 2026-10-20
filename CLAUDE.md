@@ -97,7 +97,11 @@ LLC: credit the entity, never a personal name.
 - Copy that offers something reads the switch that sells it (`creditsSalesEnabled()`), and is
   guarded by test-static-pages, test-legal-dates, test-wire-count-copy, test-pack-copy-retired
   and copy-absolutes. No third-party seller or counterparty name in any tracked file
-  (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`).
+  (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`). No hidden
+  character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
+  instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
+  the READMEs and `src/mcp-http.js`; the same scan (`src/hidden-chars.js`) is a listing finding
+  in the index's injection screen.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
