@@ -30,6 +30,7 @@
 // interface, not the truth.
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
+import { stripFormattingCarriers } from "./hidden-chars.js";
 import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
@@ -139,7 +140,8 @@ export async function classifyWishes(rows, { fetchImpl = fetch, max = MAX_ROWS, 
   if (!wishClassifyEnabled() || !Array.isArray(rows) || !rows.length) return rows;
   let spent = 0;
   for (const row of rows) {
-    const text = String(row?.text || "");
+    // Buyer text: formatting carriers dropped first (see discovery-rerank).
+    const text = stripFormattingCarriers(String(row?.text || ""));
     if (!text) continue;
     // See the note in discovery-rerank: attacker-controlled text is screened
     // with the crawler's own detector before we pay to judge it.

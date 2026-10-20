@@ -124,3 +124,34 @@ export function hiddenCharacters(text) {
 }
 
 export const hasHiddenCharacters = (text) => hiddenCharacters(text).length > 0;
+
+// Formatting carriers: the invisible characters a copy from a web page or a
+// word processor leaves in ordinary text (a zero-width space at a line-break
+// hint, a soft hyphen, a byte-order mark, a bidi mark around a URL). In text
+// a BUYER wrote (a query, a wish) they are noise, not a message. TAG text,
+// variation-selector runs and the invisible math operators are not on this
+// list: nothing a person types puts them in a sentence, so they stay hidden
+// text for the screen that runs after this.
+const FORMATTING_CARRIERS = new Set([
+  0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0xad,
+  0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+]);
+
+/** `text` with every formatting carrier the scan above reports removed: the
+ *  zero-width space, word joiner and byte-order mark, the soft hyphen, the
+ *  bidi controls, and U+200C / U+200D where no emoji or joining script needs
+ *  them (an allowed joiner is not reported, so it is kept). The hidden text
+ *  that is not a formatting carrier is left in place for the screen. For
+ *  buyer text only; a listing is screened as written. */
+export function stripFormattingCarriers(text) {
+  const s = String(text || "");
+  const drop = hiddenCharacters(s).filter((h) => FORMATTING_CARRIERS.has(h.cp));
+  if (!drop.length) return s;
+  let out = "";
+  let from = 0;
+  for (const h of drop) {
+    out += s.slice(from, h.index);
+    from = h.index + String.fromCodePoint(h.cp).length;
+  }
+  return out + s.slice(from);
+}

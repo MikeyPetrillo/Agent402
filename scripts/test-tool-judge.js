@@ -62,6 +62,20 @@ ok(refused?.statusCode === 404 && /nothing was run or charged/.test(refused.mess
 _jevReset(); globalThis.fetch = async () => { throw new Error("down"); };
 const open = await tool.handler({ task: "extract a web page into structured json", params: {} }, {});
 ok(open.receipt.selection?.method === "lexical", "judge down: find's pick runs, receipt says lexical");
+// A skipped model step is the judge-failure path, not a refusal: the handler
+// answers 200 with find's pick, the receipt says `lexical`, and the price is
+// the flat tier price (route-execute sells one price per tier, judged or not).
+// A 200 settles (CLAUDE.md: x402 settles a <400 response), so the buyer pays
+// the tier price for a keyword-chosen tool, and the receipt says which it was.
+ok(open.receipt.paidUsd === Number(String(tool.price).replace("$", "")) && open.receipt.paidUsd > 0,
+  `judge down: the receipt carries the flat tier price (${open.receipt.paidUsd} for ${tool.price})`);
+ok(ran.at(-1) === open.receipt.slug, "judge down: the lexical pick ran, nothing was refused");
+process.env.ROUTE_JUDGE = "off";
+ran.length = 0;
+const off = await tool.handler({ task: "extract a web page into structured json", params: {} }, {});
+ok(off.receipt.selection?.method === "lexical" && off.receipt.paidUsd === open.receipt.paidUsd && ran.length === 1,
+  `judge off: the same lexical answer at the same tier price (${JSON.stringify(off.receipt.selection)})`);
+delete process.env.ROUTE_JUDGE;
 globalThis.fetch = orig;
 console.log(`test-tool-judge: ${n} assertions ok`);
 
