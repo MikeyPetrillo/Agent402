@@ -225,6 +225,15 @@ ok(/no score and no verdict/.test(tool.description), "copy says there is no scor
   ok(out.findings.every((f) => f.kind !== "instruction-like" || !/^Hi\.|^Thanks\.|^Hello\./.test(f.evidence)), "ordinary sentences are not findings");
 }
 
+// A long honest line (a newsletter's run of links, one "sentence" over the
+// listing screen's length rule) is not instruction phrasing.
+{
+  const links = Array.from({ length: 300 }, (_, i) => `https://example.com/post/${i}`).join(" ");
+  const out = await run({ text: `Here are this week's links\n${links}\nThanks` });
+  ok(links.length > 8000, "the line is over the listing length rule");
+  ok(!out.findings.some((f) => f.kind === "instruction-like"), "a long line of links is not an instruction-like finding");
+}
+
 // ----------------------------------------------------------------------------
 // Input validation, oversize, bad MIME
 // ----------------------------------------------------------------------------

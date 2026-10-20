@@ -30,6 +30,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
+  mcpBinaryResult,
 } from "./mcp-mpp.js";
 import {
   TASKS_EXTENSION, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
@@ -711,11 +712,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};
       if (r.bytes) {
-        return {
-          content: [{ type: "image", data: r.bytes.toString("base64"), mimeType: r.contentType.split(";")[0] }],
-          structuredContent: { slug: entry.def.slug, result: { contentType: r.contentType.split(";")[0], encoding: "base64", note: "Binary payload is in the image content block" } },
-          ...(receipt ? { _meta: receiptMeta } : {}),
-        };
+        return { ...mcpBinaryResult({ slug: entry.def.slug, bytes: r.bytes, contentType: r.contentType, headers: r.headers }), ...(receipt ? { _meta: receiptMeta } : {}) };
       }
       const result = r.json !== undefined ? r.json : { text: r.text };
       if (isNamed) return { ...mcpJsonResult(result), ...(receipt ? { _meta: receiptMeta } : {}) };
@@ -1285,17 +1282,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
         if (result && result.__binary) {
-          // The block type follows the media: audio bytes (the dub tool, the
-          // speech wire) are an audio block, anything else an image block.
-          const kind = /^audio\//i.test(String(result.contentType || "")) ? "audio" : "image";
-          const extra = result.headers && typeof result.headers === "object" ? { headers: result.headers } : {};
-          return {
-            content: [{ type: kind, data: Buffer.from(result.__binary).toString("base64"), mimeType: String(result.contentType || "").split(";")[0] }],
-            structuredContent: {
-              slug: entry.def.slug,
-              result: { contentType: result.contentType, encoding: "base64", note: `Binary payload is in the ${kind} content block`, ...extra },
-            },
-          };
+          return mcpBinaryResult({ slug: entry.def.slug, bytes: result.__binary, contentType: result.contentType, headers: result.headers });
         }
         // Named flagships: structuredContent is the native tool result (matches
         // FLAGSHIP_OUTPUT_SCHEMAS). call_tool: envelope {slug, result} so the

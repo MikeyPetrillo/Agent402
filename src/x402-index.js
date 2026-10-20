@@ -5845,7 +5845,12 @@ export function looksLikeListingInjection(text) {
   // text the reader never sees: the listing is a finding whatever it spells.
   // Emoji joiners, keycaps and joining scripts are allowed (src/hidden-chars.js).
   if (hasHiddenCharacters(t)) return true;
-  for (const form of injectionForms(t)) if (INJECTION_ANY.test(form)) return true;
+  return matchesInjectionPhrase(t);
+}
+/** The phrase rules alone (no length or hidden-character rule), for a caller
+ *  that screens one sentence and reports hidden characters on its own. */
+export function matchesInjectionPhrase(text) {
+  for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
   return false;
 }
 

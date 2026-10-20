@@ -313,7 +313,7 @@ export const BROWSER_MEASURE_TOOLS = [
             {
               id: "uncompressed-response",
               element: null,
-              url: "https://live.agent402.tools/logo/v2/x402%3A0x325bdf6f7efab24a2210c48c1b64cab2eae1d430",
+              url: "https://agent402.tools/x-header.svg",
               detail: "image/svg+xml response of 1.3 KB sent with no content-encoding. Serve it with gzip or brotli.",
               estimate: {
                 bytes: 1379

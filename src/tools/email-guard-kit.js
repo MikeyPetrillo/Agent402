@@ -143,15 +143,16 @@ function hiddenCharReport(text) {
 const stripHidden = (s) => { const found = hiddenCharacters(s); if (!found.length) return s; let out = ""; let from = 0; for (const h of found) { out += s.slice(from, h.index); from = h.index + String.fromCodePoint(h.cp).length; } return out + s.slice(from); };
 
 /** Sentences that read as instructions to an assistant: the DIRECTIVE table
- *  (hidden-content.js) and the listing-injection screen (x402-index.js). */
+ *  (hidden-content.js) and the listing-injection phrase rules (x402-index.js), without the
+ *  listing screen's length rule, so a long honest line is not a finding. */
 async function instructionLike(text, where, offsetBase = 0) {
   const out = [];
   if (!text) return out;
-  const { looksLikeListingInjection } = await import("../x402-index.js");
+  const { matchesInjectionPhrase } = await import("../x402-index.js");
   for (const s of sentencesOf(text)) {
     const plain = stripHidden(s.text);
     const hit = DIRECTIVE.exec(plain);
-    if (!hit && !looksLikeListingInjection(plain)) continue;
+    if (!hit && !matchesInjectionPhrase(plain)) continue;
     out.push({ kind: "instruction-like", where, offset: offsetBase + s.offset, phrase: hit ? hit[0] : null, evidence: clip(s.text) });
   }
   return out;
