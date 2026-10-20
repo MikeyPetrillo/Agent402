@@ -3868,7 +3868,41 @@ const LIVE_QUOTE_PROBES_PER_CRAWL = Number(process.env.LIVE_QUOTE_PROBES_PER_CRA
 // ever shows up.
 const LIVE_QUOTE_PROBES_PER_CYCLE = Number(process.env.LIVE_QUOTE_PROBES_PER_CYCLE || 10000);
 let liveQuoteBudget = LIVE_QUOTE_PROBES_PER_CYCLE;
-let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is fair
+// The rotation index: the per-cycle visiting order and the per-operator slice
+// both turn on it. It lived only in memory, so every deploy started it at 0,
+// and with a deploy every few hours the rotation never got past the first
+// few slices of a large operator's list: the origins at its tail were due on
+// a cycle number no process lived long enough to reach, and stayed unread for
+// days. It is one small document now (the file on the volume, the row with a
+// database) and is advanced by a read-modify-write, so a boot resumes where
+// the last cycle stopped and a second container that takes the crawl lease
+// continues from the stored count, not from its own stale memory.
+export const CRAWL_CYCLE_FILE = process.env.CRAWL_CYCLE_FILE || "/data/x402-crawl-cycle.json";
+let crawlCycle = 0;
+const cycleOf = (b) => { if (b === null || b === undefined) return null; const n = Number(typeof b === "object" ? b.cycle : b); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; };
+/** Read the stored rotation index (never moves it backwards). */
+export function loadCrawlCycle() {
+  const d = docFor(CRAWL_CYCLE_FILE);
+  const apply = (b) => { const n = cycleOf(b); if (n !== null && n > crawlCycle) crawlCycle = n; };
+  if (d.backend === "pg") return trackStoreReady(d.load(null, { onLoad: apply }));
+  apply(d.loadSync(null));
+  return Promise.resolve();
+}
+/** The rotation index as this process holds it. */
+export function currentCrawlCycle() { return crawlCycle; }
+/**
+ * Move the rotation on by one and store it. The stored count is read first,
+ * so a cycle another container ran since this one last looked is counted;
+ * when the store cannot be written the count still advances in memory, so a
+ * cycle is never repeated within one process.
+ */
+export async function advanceCrawlCycle() {
+  const d = docFor(CRAWL_CYCLE_FILE);
+  const r = await d.update((b) => ({ cycle: Math.max(cycleOf(b) ?? 0, crawlCycle) + 1, at: new Date().toISOString() }), { fallback: null }).catch(() => null);
+  const n = r?.ok ? cycleOf(r.body) : null;
+  crawlCycle = n !== null && n > crawlCycle ? n : crawlCycle + 1;
+  return crawlCycle;
+}
 
 /**
  * Learn price + networks from a live 402 for rows that have neither.
@@ -5863,6 +5897,14 @@ const SHARED_HOSTING_SUFFIXES = [
   "deno.dev", "glitch.me", "surge.sh", "web.app", "firebaseapp.com",
   "azurewebsites.net", "appspot.com", "cloudfunctions.net", "koyeb.app",
   "vercel.sh", "netlify.com", "render.com", "streamlit.app", "hf.space",
+  // Added from a read of the index (2026-10-20): each of these carried three
+  // or more hosts paying to distinct wallets, so the hosts are different
+  // sellers. A suffix whose hosts all paid to one wallet is one operator and
+  // stays grouped (the cap is what keeps one actor's many hostnames to one
+  // budget), and a suffix whose hosts had no payTo at all is left as it is
+  // until one does.
+  "supabase.co", "run.app", "sslip.io", "deno.net", "duckdns.org",
+  "ngrok-free.dev", "ngrok.dev", "ts.net",
 ];
 export function operatorKey(origin) {
   let host;
@@ -5916,8 +5958,10 @@ async function runCrawl() {
     // back would never be priced, which is the exact complaint that started
     // this work, reintroduced by the fix for it. Rotation costs nothing (the
     // crawl visits every seed each cycle regardless) and makes the budget fair.
-    const start = seeds.length ? crawlCycle % seeds.length : 0;
-    crawlCycle += 1;
+    // Advanced through the store first (see advanceCrawlCycle), so the number
+    // this cycle runs under is one past the last cycle any container ran.
+    const cycle = await advanceCrawlCycle();
+    const start = seeds.length ? (cycle - 1) % seeds.length : 0;
     const ordered = seeds.length ? [...seeds.slice(start), ...seeds.slice(0, start)] : seeds;
     // Politeness is per OPERATOR, not per origin. We key everything on origin, so
     // an operator running 20 hosts was 20 unrelated crawl targets and felt 20x
@@ -6791,6 +6835,9 @@ export function startCrawler(opts = {}) {
   // recorded to hide, and the seller is listed twice again on the next boot.
   loadSuccessions();
   loadGoneRoutes();
+  // The rotation index resumes from the store, or a deploy restarts it at 0
+  // and the tail of every large operator's list is never reached.
+  loadCrawlCycle();
   // Warm start: the NDJSON twin incrementally when it exists (its own log
   // line says how long and the longest turn), else the legacy JSON in one
   // synchronous parse. The first crawl is deferred below, so the fill has
