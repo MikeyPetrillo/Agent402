@@ -41,6 +41,7 @@ import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldes
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
+import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -2806,9 +2807,15 @@ if (_subs) {
 }
 
 app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (req, res) => {
+  // Mounted ahead of the security headers, so it sets its own: the browser
+  // never sniffs a relayed body into another type.
+  res.setHeader("X-Content-Type-Options", "nosniff");
   if (!PH_METHODS.has(req.method)) return res.status(405).end();
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (phProxyLimiter.check(ip).limited) return res.status(429).end();
+  // Only the paths the analytics library uses (src/posthog-proxy.js), checked
+  // before any upstream call.
+  if (!posthogProxyPathAllowed(req.params[0] || "")) return res.status(404).end();
   if (phInFlight.live() >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
   const releaseRelay = phInFlight.enter();
   try {
@@ -2824,6 +2831,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
     // Reject an oversized upstream body by its declared length up front.
     const clen = Number(up.headers.get("content-length") || 0);
     if (clen && clen > PH_MAX_RESPONSE_BYTES) return res.status(502).end();
+    // A page is never relayed: this path serves scripts and JSON only.
+    if (!posthogProxyTypeAllowed(up.headers.get("content-type"))) { try { await up.body?.cancel(); } catch { /* */ } return res.status(502).end(); }
     res.status(up.status);
     for (const h of ["content-type", "cache-control"]) { const v = up.headers.get(h); if (v) res.setHeader(h, v); }
     // Perf: fetch() transparently DECOMPRESSES posthog's gzip, and this route
