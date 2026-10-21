@@ -306,16 +306,14 @@ for (const [name, over, detail] of failCases) {
 }
 
 {
-  // A Worker still holding only the ROOT operator token (mid-rotation) records
-  // the other components with it, but never sends it to the public challenge
-  // route: the paid-call check takes STATUS_PROBE_TOKEN or nothing.
+  // A Worker holding only the ROOT operator token does not use it at all: the
+  // probe token is STATUS_PROBE_TOKEN or nothing, so nothing is sent anywhere.
   stub();
   const out = await run({ PROD, OPERATOR_TOKEN: "operator-root-token-aaaaaaaaaaaaaaaa" }, { sleep: async () => {} });
-  check("with only OPERATOR_TOKEN, paid-call is skipped and the root token never leaves for a public route", () => {
-    assert.equal(out.recorded, true);
-    assert.equal(out.paidCall.observed, false);
-    assert.ok(!seen.some((x) => x.u.includes("/api/pow/")), "asked for a challenge");
-    const leaked = seen.filter((x) => !x.u.endsWith("/api/status/probe") && JSON.stringify(x.init?.headers || {}).includes("operator-root-token"));
+  check("with only OPERATOR_TOKEN, the Worker refuses to probe and the root token never leaves", () => {
+    assert.equal(out.ok, false);
+    assert.equal(out.error, "no probe token");
+    const leaked = seen.filter((x) => JSON.stringify(x.init?.headers || {}).includes("operator-root-token"));
     assert.deepEqual(leaked.map((x) => x.u), []);
   });
 }
@@ -380,7 +378,8 @@ for (const [name, over, detail] of failCases) {
     const u = String(url);
     if (u.endsWith("/api/gateway-status")) return Response.json(HEALTHY_GW);
     if (u.endsWith("/api/status")) return Response.json({ components: [{ key: "settlement", current: { state: "operational" } }] });
-    if (u.includes("/issues?state=open")) return Response.json(ALARMS.filter((a) => a.title !== "Upstream buyer wallet LOW (x402)").map((a, i) => ({ number: i + 1, title: a.title })));
+    if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
+    if (u.includes("/issues?state=open")) return Response.json(ALARMS.filter((a) => a.title !== "Upstream buyer wallet LOW (x402)").map((a, i) => ({ number: i + 1, title: a.title, user: { login: "probe-bot" } })));
     if (u.startsWith("https://api.github.com")) return new Response("{}", { status: 200 });
     return prodStub(url, init);
   };
@@ -432,7 +431,9 @@ for (const [name, over, detail] of failCases) {
     globalThis.fetch = async (url, init = {}) => {
       const u = String(url); const m = (init.method || "GET").toUpperCase();
       calls.push(`${m} ${u.replace("https://api.github.com", "")}`);
-      if (u.includes("/issues?state=open")) return Response.json(openIssues);
+      if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
+      // A fixture with no author is one the Worker itself opened.
+      if (u.includes("/issues?state=open")) return Response.json(openIssues.map((x) => ({ user: { login: "probe-bot" }, ...x })));
       if (m === "POST" && /\/issues$/.test(u)) { created.push(JSON.parse(init.body)); return new Response("{}", { status: 201 }); }
       if (m === "POST" && /\/comments$/.test(u)) { comments.push(JSON.parse(init.body)); return new Response("{}", { status: 201 }); }
       if (m === "PATCH" && /\/issues\/\d+$/.test(u)) { closed.push(u); return new Response("{}", { status: 200 }); }
@@ -479,7 +480,32 @@ for (const [name, over, detail] of failCases) {
     assert.equal(comments.length, 0);
   });
 
-  await acheck("recovery closes the open issue, whoever opened it", async () => {
+  await acheck("recovery closes an open alarm issue the heartbeat workflow opened", async () => {
+    mkGh([{ number: 78, title: "Upstream buyer wallet LOW (x402)", user: { login: "github-actions[bot]" } }]);
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
+    assert.deepEqual(r.closed, ["Upstream buyer wallet LOW (x402)"]);
+    assert.ok(closed[0].endsWith("/issues/78"));
+  });
+
+  await acheck("an issue another account opened under an alarm title is not an alarm: never closed, never suppresses a page", async () => {
+    mkGh([{ number: 90, title: "Upstream buyer wallet LOW (x402)", user: { login: "someone-else" } }]);
+    const healthy = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
+    assert.deepEqual(healthy.closed, []);
+    assert.equal(closed.length, 0, `closed: ${closed}`);
+    mkGh([{ number: 90, title: "Upstream buyer wallet LOW (x402)", user: { login: "someone-else" } }]);
+    const low = withGateway({ upstreamBuyer: { status: "low", trend: "ok" } });
+    const paged = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(low, low) });
+    assert.deepEqual(paged.opened, ["Upstream buyer wallet LOW (x402)"], "the Worker opens its own issue");
+  });
+
+  await acheck("GITHUB_ISSUES_LOGIN names the posting account without a /user read", async () => {
+    mkGh([{ number: 91, title: "Upstream buyer wallet LOW (x402)", user: { login: "Named-Bot" } }]);
+    const r = await syncAlarms({ GITHUB_ISSUES_TOKEN: "t2", GITHUB_ISSUES_LOGIN: "named-bot" }, { ...nosleep, fetchStatus: feed(HEALTHY) });
+    assert.deepEqual(r.closed, ["Upstream buyer wallet LOW (x402)"]);
+    assert.ok(!calls.some((c) => c === "GET /user"), `calls: ${calls}`);
+  });
+
+  await acheck("recovery closes the open issue the Worker opened", async () => {
     mkGh([{ number: 77, title: "Upstream buyer wallet LOW (x402)" }]);
     const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
     assert.deepEqual(r.closed, ["Upstream buyer wallet LOW (x402)"]);
@@ -893,6 +919,42 @@ for (const [name, over, detail] of failCases) {
   // The Worker has to actually serve the identity the workflow reads.
   const src = await readFile(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
   acheck("the Worker serves /version with its BUILD_SHA", /"\/version"/.test(src) && /env\.BUILD_SHA/.test(src));
+  acheck("the deploy pins wrangler to an exact version", /npx --yes wrangler@\d+\.\d+\.\d+ deploy/.test(wf) && !/wrangler@\d+ /.test(wf));
+}
+
+{
+  // Manual triggers: STATUS_PROBE_TOKEN only, compared in constant time.
+  const mod = await import("../workers/status-probe/src/index.js");
+  const { tokenEquals, probeToken } = mod;
+  const worker = mod.default;
+  check("tokenEquals: equal matches; a differing byte, a different length, or an empty expected token does not", () => {
+    assert.equal(tokenEquals("abcdef", "abcdef"), true);
+    assert.equal(tokenEquals("abcdeF", "abcdef"), false);
+    assert.equal(tokenEquals("abcdefg", "abcdef"), false);
+    assert.equal(tokenEquals("", ""), false);
+    assert.equal(tokenEquals(null, "abcdef"), false);
+  });
+  check("probeToken reads STATUS_PROBE_TOKEN only, never the root operator token", () => {
+    assert.equal(probeToken({ OPERATOR_TOKEN: "root" }), "");
+    assert.equal(probeToken({ STATUS_PROBE_TOKEN: "narrow", OPERATOR_TOKEN: "root" }), "narrow");
+  });
+  const env = { STATUS_PROBE_TOKEN: "narrow-token", OPERATOR_TOKEN: "root-token" };
+  for (const path of ["/run", "/verify"]) {
+    const wrong = await worker.fetch(new Request(`https://w.test${path}`, { method: "POST", headers: { "X-Operator-Token": "narrow-tokeX" } }), env);
+    const root = await worker.fetch(new Request(`https://w.test${path}`, { method: "POST", headers: { "X-Operator-Token": "root-token" } }), env);
+    const none = await worker.fetch(new Request(`https://w.test${path}`, { method: "POST" }), env);
+    check(`${path}: a wrong token, the root operator token, or none is 401`, () => {
+      assert.equal(wrong.status, 401); assert.equal(root.status, 401); assert.equal(none.status, 401);
+    });
+  }
+  const verifyOk = await worker.fetch(new Request("https://w.test/verify", { method: "POST", headers: { "X-Operator-Token": "narrow-token" } }), { STATUS_PROBE_TOKEN: "narrow-token" });
+  check("/verify: the right token passes the gate (control)", () => {
+    assert.equal(verifyOk.status, 200);
+  });
+  const src = await readFile(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
+  check("no direct !== compare against the trigger token remains", () => {
+    assert.ok(!/get\("X-Operator-Token"\) !== want/.test(src));
+  });
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
