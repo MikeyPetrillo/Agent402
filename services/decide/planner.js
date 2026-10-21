@@ -426,6 +426,8 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     ...(notes.length ? { notes } : {}),
     ranking: { weights: cfg.weights, firstPartyWeight: 0 },
     _rankingLog: rankingLog,
+    // Kept with the decision, never returned: what its plan shape is built from.
+    _shapeMeta: { categories: plan.map((p) => p._row?.category || ""), collapsedToOneStep: !!wholeBest, judgeFailed: !fits },
   };
   if (depth === "full") out.compiledPrompt = compilePrompt(out);
   return out;

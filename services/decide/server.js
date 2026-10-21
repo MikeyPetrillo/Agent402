@@ -23,7 +23,8 @@ import { migrate } from "./migrations.js";
 import { syncIndex, loadIndex } from "./sync.js";
 import { embedTexts, embedBudgetStatus } from "./embed.js";
 import { decideConfig } from "../../src/decide/config.js";
-import { makeLlm, judgeText } from "./llm.js";
+import { makeLlm, judgeText, plannerVersion } from "./llm.js";
+import { planShape } from "../../src/decide/plan-shape.js";
 import { makeJevJudge } from "./jev.js";
 import { buildDecision, parseDecideInput, cacheKeyFor } from "./planner.js";
 import { MemoryDecisionStore, PgDecisionStore, makeGate, makeDecisionCache } from "./decision-store.js";
@@ -39,7 +40,9 @@ const MAX_BODY = 16 * 1024;
 
 export const state = { index: new ToolIndex(), store: null, pool: null, lastSync: null, syncing: false, bootedAt: Date.now(), loadedRows: 0,
   decisions: new MemoryDecisionStore(), reliability: new Reliability(), llm: null, jev: null, gate: makeGate(Number(process.env.DECIDE_MAX_CONCURRENT) || 4, Number(process.env.DECIDE_MAX_QUEUE) || 16),
-  cache: makeDecisionCache(decideConfig().cacheTtlMs) };
+  cache: makeDecisionCache(decideConfig().cacheTtlMs),
+  // The prompt templates and model ids that write plans, hashed once at boot.
+  plannerVersion: plannerVersion(decideConfig()) };
 
 const newDecisionId = () => `dec_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 
@@ -81,10 +84,14 @@ export async function decide(body, { now = Date.now() } = {}) {
     }));
     if (!result.partial) state.cache.set(key, result, now);
   }
-  const { _rankingLog, ...pub } = result;
+  const { _rankingLog, _shapeMeta, ...pub } = result;
   const cost = summarizeCost(meter, { cached, depth: input.depth, ms: Date.now() - t0, partial: !!result.partial });
-  await state.decisions.save(pub, { constraints: input.constraints, cacheKey: key, payer: body.payer || null, rail: body.rail || null, priceUsd: Number(body.priceUsd) || 0, rankingLog: _rankingLog || [], cost });
-  return { ...pub, cached };
+  // The plan's shape (no text) and the planner version: kept past the task
+  // text's retention, and handed to the main app for its run records.
+  const shape = planShape(pub.plan, { gaps: pub.gaps, ...(_shapeMeta || {}) });
+  const synthetic = body.synthetic === true;
+  await state.decisions.save(pub, { constraints: input.constraints, cacheKey: key, payer: body.payer || null, rail: body.rail || null, priceUsd: Number(body.priceUsd) || 0, rankingLog: _rankingLog || [], cost, plannerVersion: state.plannerVersion, shape, synthetic });
+  return { ...pub, cached, plannerVersion: state.plannerVersion, shape };
 }
 
 /** The private network, loopback, or an explicit sslmode=disable: no TLS. */

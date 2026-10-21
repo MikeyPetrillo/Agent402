@@ -8,6 +8,7 @@
 // already cleaned by tool-rows.js. The model's answer is parsed as JSON and
 // every id in it is checked against the ids we offered.
 
+import { createHash } from "node:crypto";
 import { OPENROUTER_ATTRIBUTION } from "../../src/openrouter-attribution.js";
 
 const URL_ = "https://openrouter.ai/api/v1/chat/completions";
@@ -110,4 +111,15 @@ export function paramsPrompt(task, picks) {
     system: `For each step, write the input parameters the agent should send to the chosen tool for this task, matching its inputSchema (property names and types; respect enums). Use values the task states. When a value is not in the task but an earlier step produces it (see that step's purpose and outputFields), write exactly "{{step N}}" for it, never an example value. When the call needs a value that neither the task nor an earlier step gives (no URL was given, say), write "<name>" for it so the agent knows to supply it. ${DATA_RULE} Each listing entry is one tool for one step; backups are other tools for the same step and need the same values in their own field names. Key the answer by each entry's key. Return JSON: {"params":{"1":{...},"1.2":{...},"2":{"address":"{{step 1}}"}}}.`,
     user: `Task: ${task}\n<listings>${JSON.stringify(listing)}</listings>`,
   };
+}
+
+/** A short hash of the prompt templates that write a plan (decompose and
+ *  params fill) and the model ids that answer them: a decision records it, so
+ *  outcomes can be compared across prompt or model changes. Computed once at
+ *  boot from the templates themselves, so it changes whenever they do. */
+export function plannerVersion(cfg) {
+  const d = decomposePrompt("{task}", cfg?.maxSteps);
+  const p = paramsPrompt("{task}", []);
+  const canon = [d.system, d.user, p.system, String(cfg?.model || ""), String(cfg?.modelFallback || "")].join("\n---\n");
+  return `pv_${createHash("sha256").update(canon).digest("hex").slice(0, 12)}`;
 }

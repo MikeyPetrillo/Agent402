@@ -11,6 +11,10 @@ export class MemoryDecisionStore {
     this.costs ||= new Map();
     if (this.costs.size >= 5000) this.costs.delete(this.costs.keys().next().value);
     this.costs.set(d.decisionId, meta.cost || null);
+    // Plan shapes hold no text; bounded here only because memory is.
+    this.shapes ||= new Map();
+    if (this.shapes.size >= 20000) this.shapes.delete(this.shapes.keys().next().value);
+    if (meta.shape) this.shapes.set(d.decisionId, { ...meta.shape, depth: d.depth, plannerVersion: meta.plannerVersion || null, synthetic: meta.synthetic === true, createdAt: Date.now() });
     d.plan.forEach((p) => {
       this.steps.push({ decisionId: d.decisionId, step: p.step, role: "primary", toolId: p.tool.id, seller: p.tool.seller, firstParty: p.tool.firstParty, score: p.score });
       for (const f of p.fallbacks) this.steps.push({ decisionId: d.decisionId, step: p.step, role: "fallback", toolId: f.id, seller: f.seller, firstParty: f.firstParty, score: f.score });
@@ -18,6 +22,7 @@ export class MemoryDecisionStore {
   }
   async get(id) { return this.decisions.get(id) || null; }
   async getCost(id) { return this.costs?.get(id) || null; }
+  async getShape(id) { return this.shapes?.get(id) || null; }
 }
 
 export class PgDecisionStore {
@@ -35,9 +40,16 @@ export class PgDecisionStore {
     try {
       await c.query("BEGIN");
       await c.query(
-        `INSERT INTO decide_decisions (id, task, constraints, depth, cache_key, payer, rail, price_usd, confidence, result, ranking_weights, cost)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [d.decisionId, d.task, meta.constraints || {}, d.depth, meta.cacheKey || null, meta.payer || null, meta.rail || null, meta.priceUsd || 0, d.confidence, d, { weights: d.ranking?.weights, log: meta.rankingLog || [] }, meta.cost || null]);
+        `INSERT INTO decide_decisions (id, task, constraints, depth, cache_key, payer, rail, price_usd, confidence, result, ranking_weights, cost, planner_version, synthetic)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [d.decisionId, d.task, meta.constraints || {}, d.depth, meta.cacheKey || null, meta.payer || null, meta.rail || null, meta.priceUsd || 0, d.confidence, d, { weights: d.ranking?.weights, log: meta.rankingLog || [] }, meta.cost || null, meta.plannerVersion || null, meta.synthetic === true]);
+      const sh = meta.shape;
+      if (sh) {
+        await c.query(
+          `INSERT INTO decide_plan_shapes (decision_id, depth, planner_version, step_count, slugs, categories, edges, gap_count, collapsed_to_one_step, judge_failed, shape_key, synthetic)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (decision_id) DO NOTHING`,
+          [d.decisionId, d.depth, meta.plannerVersion || null, sh.stepCount, JSON.stringify(sh.slugs), JSON.stringify(sh.categories), JSON.stringify(sh.edges), sh.gapCount, sh.collapsedToOneStep === true, sh.judgeFailed === true, sh.shapeKey, meta.synthetic === true]);
+      }
       for (const p of d.plan) {
         const rows = [{ role: "primary", t: p.tool, score: p.score }, ...p.fallbacks.map((f) => ({ role: "fallback", t: f, score: f.score }))];
         for (const r of rows) {
@@ -50,6 +62,11 @@ export class PgDecisionStore {
       await c.query("ROLLBACK").catch(() => {});
       throw e;
     } finally { c.release(); }
+  }
+  async getShape(id) {
+    const { rows } = await this.pool.query("SELECT * FROM decide_plan_shapes WHERE decision_id = $1", [id]);
+    const r = rows[0];
+    return r ? { stepCount: r.step_count, slugs: r.slugs, categories: r.categories, edges: r.edges, gapCount: r.gap_count, collapsedToOneStep: r.collapsed_to_one_step, judgeFailed: r.judge_failed, shapeKey: r.shape_key, depth: r.depth, plannerVersion: r.planner_version, synthetic: r.synthetic, createdAt: new Date(r.created_at).getTime() } : null;
   }
   async getCost(id) {
     const { rows } = await this.pool.query("SELECT cost FROM decide_decisions WHERE id = $1", [id]);
