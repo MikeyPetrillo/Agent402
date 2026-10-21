@@ -18,7 +18,7 @@
 //   • safeFetch hardcodes our own User-Agent (right behavior for HTML scrapers),
 //     so we use assertPublicUrl + native fetch for the EDGAR-specific UA.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, currentBudget, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
 
 // Hard per-request socket bound for every EDGAR read (undici defaults to 300 s).
@@ -36,7 +36,27 @@ function edgarUserAgent() {
   return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools";
 }
 
+// EDGAR answers an occasional 5xx that the next read does not repeat. One
+// short retry, started only while the handler budget still holds the pause
+// plus a full read; a second 5xx stands.
+export const EDGAR_RETRY_PAUSE_MS = 600;
+const EDGAR_RETRY_MIN_LEFT_MS = 3_000;
+export async function withEdgarRetry(readOnce, { pauseMs = EDGAR_RETRY_PAUSE_MS, budget = currentBudget() } = {}) {
+  try {
+    return await readOnce();
+  } catch (err) {
+    if (!(err?.upstreamStatus >= 500)) throw err;
+    if (budget && budget.remaining() < pauseMs + EDGAR_RETRY_MIN_LEFT_MS) throw err;
+    await new Promise((r) => setTimeout(r, pauseMs));
+    return readOnce();
+  }
+}
+
 async function edgarGetJson(url) {
+  return withEdgarRetry(() => edgarGetJsonOnce(url));
+}
+
+async function edgarGetJsonOnce(url) {
   const safeUrl = await assertPublicUrl(url);
   // The read runs under its own cap and the handler budget
   // (src/upstream-deadline.js): without a bound of its own a caller-side
