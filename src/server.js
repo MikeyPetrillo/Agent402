@@ -37,7 +37,8 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // upstream - which is what seven CDP verify failures looked like on 2026-08-30
 // while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
-import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts } from "./request-timing.js";
+import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
+import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import express from "express";
@@ -55,7 +56,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
-import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
+import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
@@ -343,7 +344,7 @@ import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
-import { installEgressMeter, egressReport } from "./egress-meter.js";
+import { installEgressMeter, egressReport, setEgressOutcomeObserver } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
@@ -2266,6 +2267,18 @@ for (const [route, def] of Object.entries(CATALOG)) {
 // by an invoice: they all looked like ordinary traffic until someone totalled
 // it up, and nothing was totalling it up.
 installEgressMeter();
+// Each outbound call to a named upstream is counted by outcome and origin
+// (src/tool-failure-monitor.js): inside a buyer's request, synthetic (our own
+// probes and canaries), or background (no request).
+{
+  const monitor = toolFailureMonitor();
+  if (process.env.RENDER_WORKER_URL) monitor.registerUpstreamHost(process.env.RENDER_WORKER_URL, "render-worker");
+  setEgressOutcomeObserver((host, p, init) => {
+    const scope = currentRequestScope();
+    monitor.observeFetch(host, p, init, !scope ? "background" : scope.synthetic ? "synthetic" : "outside");
+  });
+  monitor.start();
+}
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
 startHardCapSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
@@ -2629,6 +2642,12 @@ startRedisPersistenceMonitor();
 // the store shortly after boot and then on a timer, so sharedLimits on
 // /api/gateway-status is measured (on / memory / degraded), never assumed.
 startSharedLimitsProbe();
+// Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
+// slugs, classes, last messages, upstream outcomes, facilitator refusals.
+app.get("/__operator/tool-failures.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store").json(await toolFailureMonitor().report());
+});
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
@@ -3457,6 +3476,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // threshold and the counts for the operator; never an address (those are
     // on /__operator/outbound-destinations.json).
     outboundDestinations: await outboundDestinationStore().status({ full }).catch(() => ({ status: "unknown" })),
+    // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
+    // toolFailures and upstreamHealth read ok / degraded / failing over the
+    // last hour; facilitatorFunds reads ok / refused (an out-of-funds or
+    // billing settle refusal inside the hour) / demoted (a facilitator in its
+    // settle cool-down). One word each publicly; slugs, upstreams and counts
+    // are on /__operator/tool-failures.json.
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -6267,6 +6293,8 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
   capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
+  // The last 5xx message per slug, for /__operator/tool-failures.json.
+  try { toolFailureMonitor().noteToolMessage(slug, status, message, { synthetic }); } catch { /* bookkeeping only */ }
 }
 // True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
 // Unspoofable: an external caller cannot mint a valid token without POW_SECRET.
@@ -9802,6 +9830,10 @@ if (!FREE_MODE) {
   } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${err?.message || err}`); }
   app.use(async (req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
+    // Every catalog answer past the gates is counted by its final status
+    // (src/tool-failure-monitor.js); our own probes, canaries and wallets
+    // count on their own lane.
+    if (def) noteToolOutcomeOnClose(req, res, def.slug);
     if (!def || res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     if (!(quotedPriceUsd(def, req) > 0)) return next();
     req.__a402Dispatched = true;
@@ -9817,7 +9849,7 @@ if (!FREE_MODE) {
     // Handler start and end for the per-phase timing (every rail); its res.end
     // wrapper is outside every gate's buffering one, so it marks the handler's
     // own end.
-    markPaidHandlerStart(req, res, def.slug);
+    markPaidHandlerStart(req, res, def.slug, { describe: () => ({ payer: paidCallPayer(req), synthetic: callIsOurs(req) }) });
     if (req.tempoSettled) return next();
     // Synchronous without a shared store; a promise with one (the shared
     // budget read). A reservation that throws must still let the call run:
@@ -9852,8 +9884,33 @@ if (!FREE_MODE) {
 // throttling this server" and these six would still answer the old way, which
 // is the shape of every defect in this class: fixed at the instance, alive in
 // the copies. One helper, so there is one place to be right.
+// Our own traffic: a signed heartbeat token or status-probe mark, or a payer
+// that is one of our wallets.
+function paidCallPayer(req) {
+  try { return payerFromRequest(req) || (req.tempoSettled ? tempoLedgerPayer(req) : null) || null; } catch { return null; }
+}
+function callIsOurs(req) {
+  if (isSyntheticRequest(req)) return true;
+  try { return isOwnWallet(paidCallPayer(req)); } catch { return false; }
+}
+function noteToolOutcomeOnClose(req, res, slug) {
+  if (req.__a402OutcomeNoted) return;
+  req.__a402OutcomeNoted = true;
+  const synthetic = callIsOurs(req);
+  if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
+  res.once("close", () => {
+    try {
+      const status = res.headersSent ? res.statusCode : 499;
+      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted });
+    } catch { /* bookkeeping only */ }
+  });
+}
+
 function sendToolError(res, err, slug) {
   const status = err?.statusCode || 502;
+  // Every tool error answer logs through the one function, so a bespoke route's
+  // 5xx reads in "[tool-error]" like a generic one.
+  logToolError(slug || "unknown", status, err?.message, undefined, isSyntheticRequest(res.req));
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
@@ -10068,6 +10125,7 @@ for (const tool of ALL_KIT) {
     // Threaded into analytics + PostHog so test traffic never inflates
     // the public error rate (see /api/analytics ?include_synthetic to override).
     const synthetic = isSyntheticRequest(req);
+    if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
     const payer = payerFromRequest(req);
     let cached = false;
     let errored = false;

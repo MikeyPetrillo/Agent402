@@ -772,6 +772,51 @@ jobs:
               ;;
           esac
 
+      # Tool and upstream failures (src/tool-failure-monitor.js): three words
+      # on /api/gateway-status. toolFailures and upstreamHealth page on
+      # degraded / failing; facilitatorFunds pages on refused / demoted; ok
+      # closes; unknown does neither. With the operator token the toolFailures
+      # issue lists the failing slugs (names and words, never counts); upstream
+      # names stay on the operator endpoint. The status Worker runs the same
+      # checks every five minutes under the same titles.
+      - name: Tool, upstream and facilitator failure checks (alarm on a failing tool or upstream)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          GS=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          SLUGS=""
+          if [ -n "$OP_TOKEN" ]; then
+            SLUGS=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/tool-failures.json" | jq -r '[.issueSummary.tools[]? | select(test("^[a-z0-9][a-z0-9._/-]{0,80} \\((degraded|failing)\\)$"))] | join(", ")' 2>/dev/null || echo "")
+          fi
+          # TITLE is set before each call (the Worker test reads it as written).
+          check_word() {
+            FIELD="$1"; BAD="$2"; GOOD="$3"; BODY="$4"
+            WORD=$(echo "$GS" | jq -r ".${FIELD}.status // \"unknown\"" 2>/dev/null || echo unknown)
+            echo "$FIELD: $WORD"
+            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+            if echo " $BAD " | grep -q " $WORD "; then
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. $BODY" >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+            elif echo " $GOOD " | grep -q " $WORD "; then
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: ${FIELD} reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+            fi
+          }
+          TOOLS_LINE="Read /__operator/tool-failures.json (operator token) for the slugs, counts by class and the last error message."
+          if [ -n "$SLUGS" ]; then TOOLS_LINE="Failing slugs: $SLUGS. Counts by class and the last error message are on /__operator/tool-failures.json."; fi
+          TITLE="toolFailures: a tool is answering 5xx to buyers"
+          check_word toolFailures "degraded failing" "ok" "degraded: one tool answered at least TOOL_FAIL_DEGRADED_5XX (default 3) 5xx to outside buyers in the last hour. failing: one tool's 5xx share passed TOOL_FAIL_RATE (default 25%) over at least TOOL_FAIL_MIN_CALLS (default 8) calls in the hour. Our own probes, canaries and wallets are counted apart and never page. $TOOLS_LINE Auto-closes when the word is ok."
+          TITLE="upstreamHealth: an upstream is timing out or failing"
+          check_word upstreamHealth "degraded failing" "ok" "degraded: one named upstream had at least UPSTREAM_FAIL_DEGRADED (default 5) timeouts, 5xx or refused connections in the last hour. failing: its failure share also passed UPSTREAM_FAIL_RATE (default 25%) over at least UPSTREAM_FAIL_MIN_CALLS (default 8) calls. Read /__operator/tool-failures.json (operator token) for the upstream, its outcomes by origin and the last failure. Auto-closes when the word is ok."
+          TITLE="facilitatorFunds: a facilitator refused settlement for funds"
+          check_word facilitatorFunds "refused demoted" "ok" "refused: a facilitator refused a settlement in the last hour because its own account could not pay for it (out of settlement funds, a spent free tier, a missing payment method); the buyer was answered 402 unless a fallback settled. demoted: a facilitator refused SETTLE_DEMOTE_AFTER (default 3) times in a row and its alternates settle first for SETTLE_DEMOTE_COOLDOWN_MS. Read /__operator/tool-failures.json (operator token) for the network, facilitator and reason, then fund that facilitator account. Auto-closes when the word is ok."
+
       # Money writes (sales, refund debts, card report records, subscription
       # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on

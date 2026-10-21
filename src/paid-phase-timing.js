@@ -22,9 +22,10 @@
 // capture, the credits debit).
 //
 // Output: one log line per paid call (slug, rail, network, status, the phases,
-// whether the buyer left) and a rolling per-rail p50/p95 over the last
-// PAID_TIMING_WINDOW calls for the operator surface. Never a payer, a
-// transaction hash, an input or an IP. In memory, reset by a deploy.
+// whether the buyer left, the payer's first six characters and whether the
+// call is our own synthetic traffic) and a rolling per-rail p50/p95 over the
+// last PAID_TIMING_WINDOW calls for the operator surface. Never a full payer
+// address, a transaction hash, an input or an IP. In memory, reset by a deploy.
 import { performance } from "node:perf_hooks";
 import { railOf } from "./payment-rail.js";
 import { clientGoneBeforeFirstByte } from "./hangup-settlement.js";
@@ -77,11 +78,12 @@ export function registerPhaseTimingHooks(server) {
  * own end is the handler-end mark, and records the call when the response
  * closes (finished or abandoned).
  */
-export function markPaidHandlerStart(req, res, slug) {
+export function markPaidHandlerStart(req, res, slug, { describe = null } = {}) {
   const s = phasesOf(req);
   if (!s || s.handlerStart != null) return;
   s.handlerStart = now();
   s.slug = String(slug || "");
+  s.describe = typeof describe === "function" ? describe : null;
   const record = () => { if (s.recorded) return; s.recorded = true; try { recordPaidCall(req, res, s); } catch { /* never break a response */ } };
   const innerEnd = res.end;
   res.end = function phaseEnd(...args) {
@@ -104,6 +106,15 @@ const HANDLER_WAIT_MS = 120_000;
 
 const ms = (a, b) => (a != null && b != null && b >= a ? Math.round(b - a) : null);
 
+// The payer's first six characters (enough to split buyers in an audit, never
+// the address) and whether the call is our own traffic.
+function whoOf(s) {
+  let w = null;
+  try { w = s.describe ? s.describe() : null; } catch { w = null; }
+  const p = w?.payer ? String(w.payer).slice(0, 6) : null;
+  return { payer: p, synthetic: w?.synthetic === true };
+}
+
 function recordPaidCall(req, res, s) {
   const closedAt = s.closedAt ?? now();
   const finished = res.writableFinished === true;
@@ -121,6 +132,7 @@ function recordPaidCall(req, res, s) {
     afterMs: s.handlerEnd != null && s.handlerEnd <= closedAt ? ms(s.handlerEnd, closedAt) : null,
     totalMs: ms(s.arrived, closedAt),
     gone,
+    ...whoOf(s),
   };
   const ring = rings.get(rail) || [];
   ring.push(row);
@@ -128,7 +140,7 @@ function recordPaidCall(req, res, s) {
   rings.set(rail, ring);
   if (logOn()) {
     const f = (v) => (v == null ? "-" : `${v}ms`);
-    console.log(`[paid-timing] ${row.slug} rail=${row.rail} net=${row.network || "-"} status=${row.status} verify=${f(row.verifyMs)} handler=${f(row.handlerMs)} settle=${f(row.settleMs)} gate=${f(row.gateMs)} after=${f(row.afterMs)} total=${f(row.totalMs)} gone=${row.gone}`);
+    console.log(`[paid-timing] ${row.slug} rail=${row.rail} net=${row.network || "-"} payer=${row.payer || "-"} synthetic=${row.synthetic} status=${row.status} verify=${f(row.verifyMs)} handler=${f(row.handlerMs)} settle=${f(row.settleMs)} gate=${f(row.gateMs)} after=${f(row.afterMs)} total=${f(row.totalMs)} gone=${row.gone}`);
   }
   return row;
 }

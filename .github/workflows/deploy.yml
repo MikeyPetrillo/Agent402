@@ -2897,6 +2897,10 @@ jobs:
           t node scripts/test-llms-route-execute-tiers.js
           # Status probe worker (Cloudflare cron observer mapping; stubbed fetch — offline)
           t node scripts/test-status-probe-worker.js
+          # Tool and upstream failure monitor (counting by class and origin, the word thresholds, the replica merge, the Celo settle demotion and its safety rule, words-only public view, operator endpoint 404 without the token; boots a free server on port 0)
+          t node scripts/test-tool-failure-monitor.js
+          # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
+          t node scripts/test-heartbeat-failure-words.js
           t node scripts/test-charged-failure-leg.js
           # 402 Index price sync (reprices only our own priced listings that drifted; other hosts, unpriced and unsold rows untouched - offline)
           t node scripts/test-index402-sync.js

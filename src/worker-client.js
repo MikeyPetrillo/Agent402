@@ -111,7 +111,9 @@ export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIME
   if (!base) throw Object.assign(new Error("render worker not configured"), { statusCode: 503 });
   const started = Date.now();
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  // The timer's abort carries a TimeoutError, so the failure monitor counts
+  // it as the worker timing out rather than the caller cancelling.
+  const timer = setTimeout(() => ac.abort(new DOMException("render worker timed out", "TimeoutError")), timeoutMs);
   const onAbort = () => ac.abort();
   if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener("abort", onAbort, { once: true }); }
   const token = workerToken();
@@ -129,7 +131,7 @@ export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIME
           signal: ac.signal,
         });
       } catch (e) {
-        if (!isConnectFailure(e)) throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" ? "timeout" : e.message}`), { statusCode: 503 });
+        if (!isConnectFailure(e)) throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" || e.name === "TimeoutError" ? "timeout" : e.message}`), { statusCode: 503 });
         failure = e.cause?.code || e.message;
       }
       if (res && !failure) {
@@ -148,7 +150,7 @@ export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIME
     }
   } catch (e) {
     if (e?.statusCode) throw e;
-    throw Object.assign(new Error(`render worker unreachable: ${e?.name === "AbortError" ? "timeout" : e?.message}`), { statusCode: 503 });
+    throw Object.assign(new Error(`render worker unreachable: ${e?.name === "AbortError" || e?.name === "TimeoutError" ? "timeout" : e?.message}`), { statusCode: 503 });
   } finally { clearTimeout(timer); signal?.removeEventListener?.("abort", onAbort); }
   let body = null;
   try { body = JSON.parse(text); } catch { /* non-JSON */ }

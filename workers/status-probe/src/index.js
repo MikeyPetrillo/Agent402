@@ -515,6 +515,30 @@ Auto-closes when the word is ok.`;
       "/api/gateway-status reports outboundDestinations.status=burst: inside the last OUTBOUND_NEW_DEST_WINDOW_H hours (default 24) our spending wallets paid more recipients for the first time than OUTBOUND_NEW_DEST_BURST (default 10). A normal day reaches a few at most (a seller the router has just proven, a payability probe, the unproven lane). Read /__operator/outbound-destinations.json for the chain, recipient, origin and time of each first sighting, and match them against the proven-seller pool and the route-execute receipts of the same hours; a run of recipients no seller in the pool names is a wallet or a router being steered. The operator read of /api/gateway-status has the counts. Auto-closes when the word is ok or new.",
   },
   {
+    // Tool and upstream failures (src/tool-failure-monitor.js): degraded and
+    // failing page, ok clears, unknown does neither. Titles match
+    // heartbeat.yml's; this Worker holds no operator token, so the body points
+    // at the operator endpoint for the slugs.
+    title: "toolFailures: a tool is answering 5xx to buyers",
+    verdict: ({ gateway: b }) => wordVerdict(b.toolFailures?.status, ["degraded", "failing"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports toolFailures.status=${b.toolFailures?.status === "failing" ? "failing" : "degraded"}. degraded: one tool answered at least TOOL_FAIL_DEGRADED_5XX (default 3) 5xx to outside buyers in the last hour. failing: one tool's 5xx share passed TOOL_FAIL_RATE (default 25%) over at least TOOL_FAIL_MIN_CALLS (default 8) calls in the hour. Our own probes, canaries and wallets are counted apart and never page. Read /__operator/tool-failures.json (operator token) for the slugs, counts by class and the last error message. Auto-closes when the word is ok.`,
+  },
+  {
+    title: "upstreamHealth: an upstream is timing out or failing",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["degraded", "failing"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports upstreamHealth.status=${b.upstreamHealth?.status === "failing" ? "failing" : "degraded"}. degraded: one named upstream had at least UPSTREAM_FAIL_DEGRADED (default 5) timeouts, 5xx or refused connections in the last hour. failing: its failure share also passed UPSTREAM_FAIL_RATE (default 25%) over at least UPSTREAM_FAIL_MIN_CALLS (default 8) calls. Read /__operator/tool-failures.json (operator token) for the upstream, its outcomes by origin and the last failure. Auto-closes when the word is ok.`,
+  },
+  {
+    // Settle refusals for the facilitator's own funds (refused) and a
+    // facilitator in its settle cool-down (demoted, src/settle-demotion.js).
+    title: "facilitatorFunds: a facilitator refused settlement for funds",
+    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["refused", "demoted"], ["ok"]),
+    body: ({ gateway: b }) =>
+      `/api/gateway-status reports facilitatorFunds.status=${b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"}. refused: a facilitator refused a settlement in the last hour because its own account could not pay for it (out of settlement funds, a spent free tier, a missing payment method); the buyer was answered 402 unless a fallback settled. demoted: a facilitator refused SETTLE_DEMOTE_AFTER (default 3) times in a row and its alternates settle first for SETTLE_DEMOTE_COOLDOWN_MS. Read /__operator/tool-failures.json (operator token) for the network, facilitator and reason, then fund that facilitator account. Auto-closes when the word is ok.`,
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does
