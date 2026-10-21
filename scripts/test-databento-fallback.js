@@ -35,6 +35,7 @@ globalThis.fetch = async (url, init) => {
   const kind = u.includes("get_dataset_range") ? "range" : u.includes("get_cost") ? "cost" : u.includes("get_range") ? "data" : "other";
   up.calls.push(`${kind}:${ds}`);
   if (kind === "range") {
+    if (up.rangeAll === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
     if (ds === "EQUS.SUMMARY" && up.summaryRange === "500") return new Response("busy", { status: 500 });
     return new Response(JSON.stringify({ end: up.rangeEnd || "2026-10-14" }), { status: 200 });
   }
@@ -55,7 +56,7 @@ globalThis.fetch = async (url, init) => {
   }
   throw new Error(`unstubbed path ${u}`);
 };
-const reset = () => { db.__resetDatabentoState(); up.calls = []; up.summary = "ok"; up.summaryRange = "ok"; up.dbeq = "ok"; up.rangeEnd = null; };
+const reset = () => { db.__resetDatabentoState(); up.calls = []; up.summary = "ok"; up.summaryRange = "ok"; up.rangeAll = "ok"; up.dbeq = "ok"; up.rangeEnd = null; };
 const dataReads = () => up.calls.filter((c) => c.startsWith("data:"));
 
 try {
@@ -167,6 +168,21 @@ try {
     try { await quote({ symbol: "AAPL" }); ok(false, "an old copy is not served"); }
     catch (e) { ok(e.statusCode === 503, `a copy older than the stale limit is not served (${e.statusCode})`); }
     delete process.env.DATABENTO_QUOTE_STALE_MAX_MS; delete process.env.DATABENTO_RANGE_MAX_AGE_MS;
+  }
+  // ---- a session boundary served from the last confirmed end says so
+  {
+    reset();
+    const fresh = await quote({ symbol: "AAPL" });
+    const freshH = await history({ symbol: "AAPL", days: 2 });
+    ok(!("rangeStale" in fresh) && !("rangeStale" in freshH) && !("rangeCheckedAt" in freshH), "a confirmed boundary adds no stale field to either answer");
+    db.__ageRange(2 * 3600_000);
+    up.rangeAll = "timeout";
+    const q = await quote({ symbol: "AAPL" });
+    const aged = (x) => Date.parse(x) <= Date.now() - 2 * 3600_000 + 5000;
+    ok(q.rangeStale === true && aged(q.rangeCheckedAt), `a quote on the fallback boundary carries rangeStale and the original (aged) rangeCheckedAt (${q.rangeStale}, ${q.rangeCheckedAt})`);
+    const h = await history({ symbol: "AAPL", days: 2 });
+    ok(h.rangeStale === true && aged(h.rangeCheckedAt) && h.bars.length === 2, `history on the fallback boundary carries rangeStale and rangeCheckedAt (${h.rangeStale}, ${h.rangeCheckedAt})`);
+    up.rangeAll = "ok";
   }
 } finally {
   globalThis.fetch = realFetch;
