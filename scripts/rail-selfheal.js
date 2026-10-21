@@ -40,6 +40,8 @@ const FACILITATORS = {
   // (measured 2026-08-09: issue #723, Solvador /supported timed out at boot,
   // then answered again while the healer kept skipping optimism).
   optimism: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
+  // Circle's facilitator (Arc only); its /supported is keyless.
+  arc: "https://api.circle.com/v1/facilitator/x402",
 };
 
 const j = async (url, opts = {}) => {

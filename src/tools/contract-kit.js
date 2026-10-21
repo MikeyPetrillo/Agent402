@@ -467,7 +467,7 @@ function scanSolidity(source) {
 // address-label — curated committed dataset of well-known EVM addresses.
 // Pure CPU. Provenance rides on every response; refresh by editing this table.
 // ============================================================================
-const LABEL_DATASET_UPDATED = "2026-10-02";
+const LABEL_DATASET_UPDATED = "2026-10-20";
 const ADDRESS_LABELS = {
   // --- Stablecoins + majors ---
   "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": [{ label: "USDC", category: "token", network: "base", note: "Circle USD Coin (native)" }],
@@ -484,6 +484,7 @@ const ADDRESS_LABELS = {
   "0x754704bc059f8c67012fed69bc8a327a5aafb603": [{ label: "USDC", category: "token", network: "monad", note: "Circle USD Coin (native)" }],
   "0xceba9300f2b948710d2653dd7b07f33a8b32118c": [{ label: "USDC", category: "token", network: "celo", note: "Circle USD Coin (native)" }],
   "0x5fc5360d0400a0fd4f2af552add042d716f1d168": [{ label: "USDG", category: "token", network: "robinhood", note: "Global Dollar (USDG)" }],
+  "0x3600000000000000000000000000000000000000": [{ label: "USDC", category: "token", network: "arc", note: "Circle USD Coin (native; also Arc's gas token)" }],
   "0xdac17f958d2ee523a2206206994597c13d831ec7": [{ label: "USDT", category: "token", network: "ethereum", note: "Tether USD" }],
   "0x6b175474e89094c44da98b954eedeac495271d0f": [{ label: "DAI", category: "token", network: "ethereum", note: "Dai Stablecoin" }],
   "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": [{ label: "WETH", category: "token", network: "ethereum", note: "Wrapped Ether" }],
@@ -1029,7 +1030,7 @@ export const CONTRACT_TOOLS = [
           address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
           found: true,
           labels: [{ label: "USDC", category: "token", network: "base", note: "Circle USD Coin (native)" }],
-          provenance: { source: "curated in-repo dataset", updated: "2026-10-02", entries: 39 },
+          provenance: { source: "curated in-repo dataset", updated: "2026-10-20", entries: 40 },
         },
       },
     },

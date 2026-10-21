@@ -54,6 +54,7 @@ const CALLS = {
   "src/adapter-docs.js": [P, P],
   "src/algorand-sellers.js": [F("Algorand facilitator, configured base")],
   "src/backup.js": [F("object store endpoint from config, SigV4 signed")],
+  "src/circle-facilitator.js": [F("Circle facilitator: constant base, redirect refused, byte cap; the deadline rides in the request init", { t: "init" })],
   "src/email.js": [F("mail provider A"), F("mail provider B")],
   "src/evm-logs-rpc.js": [F("pass-through default; RPC lanes are configuration", { t: "init" })],
   "src/guides.js": [S, S, S, S, S],

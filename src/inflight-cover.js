@@ -69,7 +69,7 @@ import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } fr
 const CHAIN_BY_CAIP2 = Object.freeze({
   "eip155:8453": "base", "eip155:137": "polygon", "eip155:42161": "arbitrum", "eip155:143": "monad",
   "eip155:42220": "celo", "eip155:43114": "avalanche", "eip155:1329": "sei", "eip155:10": "optimism",
-  "eip155:4663": "robinhood",
+  "eip155:4663": "robinhood", "eip155:5042": "arc",
 });
 const CAIP2_BY_NAME = Object.freeze(Object.fromEntries(Object.entries(CHAIN_BY_CAIP2).map(([c, n]) => [n, c])));
 

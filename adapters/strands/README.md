@@ -4,7 +4,7 @@ Drop-in [Strands Agents](https://strandsagents.com) (TypeScript) tools for
 [Agent402](https://agent402.tools) - turn 500+ pay-per-call web tools into
 Strands `tool({...})` instances your agent can invoke. Payment is handled
 underneath: proof-of-work for the compute-payable tools (no wallet), and the
-payment-wrapped fetch you pass (x402 in USDC on 11 chains or USDG on Robinhood
+payment-wrapped fetch you pass (x402 in USDC on 12 chains or USDG on Robinhood
 Chain, or a stock `mppx` fetch) for wallet-only tools.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
