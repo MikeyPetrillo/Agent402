@@ -37,3 +37,16 @@ function waitHeld(held, holdMaxMs, log) {
   });
   return Promise.race([done, cap]).finally(() => clearTimeout(timer));
 }
+
+// FACILITATOR_SETTLE_HOLD_MAX_MS, read as a positive, bounded cap. Anything
+// that is not a positive number (unset, garbage, zero, negative) takes the
+// default, and the value is held to [1 s, 10 min], so no setting can remove
+// the cap (waitHeld treats a non-positive cap as none).
+export const HOLD_MAX_FLOOR_MS = 1_000;
+export const HOLD_MAX_CEILING_MS = 600_000;
+export function holdMaxFrom(raw, fallbackMs) {
+  const n = Number(raw);
+  const fb = Math.min(HOLD_MAX_CEILING_MS, Math.max(HOLD_MAX_FLOOR_MS, Number(fallbackMs) || HOLD_MAX_FLOOR_MS));
+  if (raw === undefined || raw === null || raw === "" || !Number.isFinite(n) || n <= 0) return fb;
+  return Math.min(HOLD_MAX_CEILING_MS, Math.max(HOLD_MAX_FLOOR_MS, n));
+}

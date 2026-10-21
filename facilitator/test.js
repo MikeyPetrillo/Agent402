@@ -538,8 +538,8 @@ const sorobanRpc = getRpcClient(NETWORK);
   const { createServer } = await import("node:http");
   const { AsyncLocalStorage } = await import("node:async_hooks");
   const { rpc, Account } = await import("@stellar/stellar-sdk");
-  const { installSettleDeadline, PRE_SUBMIT_METHODS } = await import("./settle-deadline.js");
-  const { createSerialQueue } = await import("./queue.js");
+  const { installSettleDeadline, PRE_SUBMIT_METHODS, newSettleContext, settleJob } = await import("./settle-deadline.js");
+  const { createSerialQueue, holdMaxFrom, HOLD_MAX_FLOOR_MS, HOLD_MAX_CEILING_MS } = await import("./queue.js");
   const hits = { getLedgerEntries: 0, sendTransaction: 0 };
   let ledgerDelayMs = 0;
   const node = createServer((req, res) => {
@@ -566,18 +566,13 @@ const sorobanRpc = getRpcClient(NETWORK);
   const ledgerKey = xdr.LedgerKey.account(new xdr.LedgerKeyAccount({ accountId: Keypair.random().xdrPublicKey() }));
   const fakeSettle = async () => { await server.getLedgerEntries(ledgerKey); return server.sendTransaction(tx); };
   const SETTLE_MS = 150;
-  // index.js's /settle job: deadline set when the job starts, the work held, the answer bounded.
-  const job = (ctx, onDone) => (hold) => als.run(ctx, () => {
-    ctx.deadline = Date.now() + SETTLE_MS;
-    const work = fakeSettle().finally(onDone);
-    hold(work);
-    return withTimeout(work, SETTLE_MS, "settle");
-  });
+  // index.js's /settle job (settleJob): deadline from arrival, the work held, the answer bounded.
+  const job = (ctx, onDone, extra = {}) => settleJob(ctx, { run: (c, fn) => als.run(c, fn), settle: () => fakeSettle().finally(onDone), ...extra });
 
   // (a) a normal settle is unchanged: submitted once, answered with the RPC's result
   ledgerDelayMs = 0; hits.sendTransaction = 0;
   const enqueue = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
-  const normalCtx = { deadline: 0 };
+  const normalCtx = newSettleContext(SETTLE_MS);
   const normal = await enqueue(job(normalCtx, () => {}));
   ok(normal?.status === "PENDING" && hits.sendTransaction === 1 && !normalCtx.deadlineRefused, "settle deadline: a settle inside its deadline submits exactly as before");
 
@@ -586,7 +581,7 @@ const sorobanRpc = getRpcClient(NETWORK);
   //     does not start until the abandoned work has stopped
   ledgerDelayMs = 400; hits.sendTransaction = 0;
   const order = [];
-  const slowCtx = { deadline: 0 };
+  const slowCtx = newSettleContext(SETTLE_MS);
   const first = enqueue(job(slowCtx, () => order.push("first work stopped")));
   const second = enqueue(() => { order.push("second started"); return "second"; });
   let err = null;
@@ -597,6 +592,58 @@ const sorobanRpc = getRpcClient(NETWORK);
   await new Promise((r) => setTimeout(r, ledgerDelayMs + 100)); // past the slow read: any late submission would arrive here
   ok(hits.sendTransaction === 0 && slowCtx.deadlineRefused === true && logs.some((m) => /transaction NOT submitted/.test(m)), `settle deadline: pre-submit steps past the deadline -> sendTransaction never called (${hits.sendTransaction} submitted)`);
   ok(order.join(",") === "first answered,first work stopped,second started", `settle deadline: the queue slot is held until the abandoned work stopped (${order.join(" > ")})`);
+
+  // (d) a settle queued behind a hung one: its deadline runs from ARRIVAL, so
+  //     once the held slot is released past that deadline it never starts the
+  //     vendor settle and submits nothing (the caller has given up by then).
+  {
+    ledgerDelayMs = 0; hits.sendTransaction = 0;
+    const ledgerBefore = hits.getLedgerEntries;
+    const q = createSerialQueue({ holdMaxMs: SETTLE_MS * 3, log: () => {} });
+    const hungCtx = newSettleContext(SETTLE_MS);
+    const hung = q(settleJob(hungCtx, { run: (c, fn) => als.run(c, fn), settle: () => new Promise(() => {}) }));
+    const bCtx = newSettleContext(SETTLE_MS);
+    let bStarted = 0;
+    const b = q(job(bCtx, () => {}, { onStart: () => { bStarted = Date.now(); } }));
+    let hungErr = null, bErr = null;
+    try { await hung; } catch (e) { hungErr = e; }
+    try { await b; } catch (e) { bErr = e; }
+    await new Promise((r) => setTimeout(r, 50));
+    ok(hungErr?.code === "FACILITATOR_TIMEOUT", "settle queue: the hung settle is answered at its deadline");
+    ok(bStarted - bCtx.startedAt >= SETTLE_MS, `settle queue: the queued settle's slot came up after its arrival deadline (${bStarted - bCtx.startedAt}ms)`);
+    ok(bErr?.code === "FACILITATOR_TIMEOUT" && bCtx.lateStart === true && bCtx.deadlineRefused === true, "settle queue: a settle whose slot comes up past its arrival deadline is answered as timed out");
+    ok(hits.sendTransaction === 0 && hits.getLedgerEntries === ledgerBefore, `settle queue: past its arrival deadline the queued settle submits nothing (${hits.sendTransaction} submitted)`);
+  }
+  // (e) a queued settle gets only what is left of its arrival deadline
+  {
+    ledgerDelayMs = 400; hits.sendTransaction = 0;
+    const q = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
+    const aCtx = newSettleContext(SETTLE_MS);
+    const a = q(settleJob(aCtx, { settle: () => new Promise((r) => setTimeout(() => r("a"), 100)) }));
+    const bCtx = newSettleContext(SETTLE_MS);
+    const b = q(job(bCtx, () => {}));
+    await a;
+    let bErr = null;
+    try { await b; } catch (e) { bErr = e; }
+    const answeredAfter = Date.now() - bCtx.startedAt;
+    ok(bErr?.code === "FACILITATOR_TIMEOUT" && answeredAfter < SETTLE_MS + 70, `settle queue: a queued settle is answered by its arrival deadline, not a fresh one (${answeredAfter}ms)`);
+    await new Promise((r) => setTimeout(r, ledgerDelayMs + 100));
+    ok(hits.sendTransaction === 0, "settle queue: the bounded queued settle submits nothing past its deadline");
+  }
+  // (f) a caller that hung up while queued: the settle never starts
+  {
+    ledgerDelayMs = 0; hits.sendTransaction = 0;
+    const q = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
+    const ctx = newSettleContext(SETTLE_MS);
+    let started = false;
+    let e1 = null;
+    try { await q(settleJob(ctx, { clientClosed: () => true, settle: () => { started = true; return fakeSettle(); } })); } catch (e) { e1 = e; }
+    ok(e1?.code === "FACILITATOR_TIMEOUT" && !started && hits.sendTransaction === 0, "settle queue: a settle whose caller has gone never starts and submits nothing");
+  }
+  // FACILITATOR_SETTLE_HOLD_MAX_MS: always a positive, bounded cap
+  ok(holdMaxFrom(undefined, 85_000) === 85_000 && holdMaxFrom("", 85_000) === 85_000 && holdMaxFrom("abc", 85_000) === 85_000, "hold max: unset or garbage takes the default");
+  ok(holdMaxFrom("-5", 85_000) === 85_000 && holdMaxFrom("0", 85_000) === 85_000, "hold max: zero or negative never removes the cap");
+  ok(holdMaxFrom("10", 85_000) === HOLD_MAX_FLOOR_MS && holdMaxFrom("99999999", 85_000) === HOLD_MAX_CEILING_MS && holdMaxFrom("30000", 85_000) === 30_000, "hold max: held to its floor and ceiling");
 
   // (c) no settle context (verify, health, payer recovery): never refused
   ledgerDelayMs = 0;

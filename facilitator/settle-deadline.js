@@ -19,6 +19,7 @@
 // refusal is not a transport failure, so it is never retried elsewhere.
 // Calls with no settle context (verify, health, payer recovery) are untouched.
 import { rpc } from "@stellar/stellar-sdk";
+import { TimeoutError, withTimeout } from "./timeout.js";
 
 export const PRE_SUBMIT_METHODS = ["simulateTransaction", "getLatestLedger", "getAccount", "getLedgerEntries", "sendTransaction"];
 
@@ -51,4 +52,33 @@ export function installSettleDeadline(getContext, {
     patched++;
   }
   return patched;
+}
+
+// A settle's deadline runs from the request's ARRIVAL, not from when its
+// queue slot comes up. A settle queued behind a held one (queue.js hold) can
+// wait close to the hold cap; timing its deadline from the job's start would
+// let it submit long after the caller stopped waiting and may have retried
+// the same payment through another facilitator.
+export function newSettleContext(timeoutMs, now = Date.now) {
+  const startedAt = now();
+  return { txHash: "", startedAt, deadline: startedAt + Number(timeoutMs), deadlineRefused: false, lateStart: false };
+}
+
+// The /settle queue job. A job whose request is already past its deadline,
+// or whose caller has hung up, never starts the vendor settle: it is answered
+// as timed out with nothing submitted. Otherwise the work is held (queue.js)
+// and the answer is bounded by what is left of the deadline.
+export function settleJob(ctx, { run = (c, fn) => fn(), settle, clientClosed = () => false, now = Date.now, onStart } = {}) {
+  return (hold) => run(ctx, () => {
+    if (typeof onStart === "function") onStart(ctx);
+    const left = Number(ctx.deadline) - now();
+    if (clientClosed() || !(left > 0)) {
+      ctx.deadlineRefused = true;
+      ctx.lateStart = true;
+      throw new TimeoutError("settle (queued past its deadline)", Math.max(0, now() - ctx.startedAt));
+    }
+    const work = settle();
+    hold(work);
+    return withTimeout(work, left, "settle");
+  });
 }

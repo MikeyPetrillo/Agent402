@@ -14,13 +14,13 @@ import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
 import { getHorizonClient } from "@x402/stellar";
 import { loadSigner, NETWORK, RPC_CONFIG } from "./signer.js";
 import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "./shape.js";
-import { createSerialQueue } from "./queue.js";
+import { createSerialQueue, holdMaxFrom } from "./queue.js";
 import { withTimeout } from "./timeout.js";
 import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
 import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
 import { installSignerReread } from "./signer-reread.js";
-import { installSettleDeadline } from "./settle-deadline.js";
+import { installSettleDeadline, newSettleContext, settleJob } from "./settle-deadline.js";
 import { installPollClamp } from "./settle-poll.js";
 import { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched } from "./fee-bid.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -131,7 +131,7 @@ const SETTLE_TIMEOUT_MS = Number(process.env.FACILITATOR_SETTLE_TIMEOUT_MS) || 2
 // How long the queue slot stays held for a timed-out settle's work after the
 // answer went out (queue.js). Past the deadline nothing new is submitted, so
 // this only waits for a submission already sent, or its poll, to finish.
-const SETTLE_HOLD_MAX_MS = Number(process.env.FACILITATOR_SETTLE_HOLD_MAX_MS) || SETTLE_TIMEOUT_MS + 60_000;
+const SETTLE_HOLD_MAX_MS = holdMaxFrom(process.env.FACILITATOR_SETTLE_HOLD_MAX_MS, SETTLE_TIMEOUT_MS + 60_000);
 const MAX_POLL_ATTEMPTS = Number(process.env.FACILITATOR_MAX_POLL_ATTEMPTS) || 8;
 const VERIFY_TIMEOUT_MS = Number(process.env.FACILITATOR_VERIFY_TIMEOUT_MS) || 30_000;
 const HEALTH_TIMEOUT_MS = Number(process.env.FACILITATOR_HEALTH_TIMEOUT_MS) || 10_000;
@@ -292,13 +292,17 @@ app.post("/settle", requireAuth, async (req, res) => {
     // hold(work) keeps this queue slot until the work has actually stopped
     // (bounded by SETTLE_HOLD_MAX_MS), so the next settle never reads the
     // sequence while this one could still submit or is still landing.
-    const ctx = { txHash: "", startedAt: Date.now(), deadline: 0, deadlineRefused: false };
-    let result = await enqueueSettle((hold) => settleContext.run(ctx, () => {
-      ctx.deadline = Date.now() + SETTLE_TIMEOUT_MS;
-      _currentSettleCtx = ctx;
-      const work = facilitator.settle(paymentPayload, paymentRequirements);
-      hold(work);
-      return withTimeout(work, SETTLE_TIMEOUT_MS, "settle");
+    // The deadline runs from this request's arrival (newSettleContext), so a
+    // settle that waited in the queue behind a held one gets only what is left
+    // of it, and one whose caller has gone or whose time is up never starts.
+    const ctx = newSettleContext(SETTLE_TIMEOUT_MS);
+    let clientGone = false;
+    res.on("close", () => { if (!res.writableEnded) clientGone = true; });
+    let result = await enqueueSettle(settleJob(ctx, {
+      run: (c, fn) => settleContext.run(c, fn),
+      onStart: (c) => { _currentSettleCtx = c; },
+      clientClosed: () => clientGone || req.socket?.destroyed === true,
+      settle: () => facilitator.settle(paymentPayload, paymentRequirements),
     }));
     // The deadline check and the timer can land in either order; a settle
     // that ended because a step was refused at the deadline reads as timed out.
