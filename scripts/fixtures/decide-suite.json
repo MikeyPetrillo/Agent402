@@ -1,0 +1,3187 @@
+{
+ "version": 1,
+ "about": "Synthetic tasks for scripts/decide-evolve.mjs: a made-up tool index and planner-model answers to stub, five clusters, no buyer data. decompose is the base model's answer, decomposeGuided its answer under a planner's guidance, values what the params model writes.",
+ "tools": [
+  {
+   "slug": "ens-resolve",
+   "description": "resolve an ens name to an ethereum address",
+   "props": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "outputFields": [
+    "name",
+    "address",
+    "found"
+   ]
+  },
+  {
+   "slug": "wallet-balances",
+   "description": "token balances of a wallet address on a chain",
+   "props": {
+    "address": {
+     "type": "string"
+    },
+    "chain": {
+     "type": "string",
+     "enum": [
+      "ethereum",
+      "base",
+      "optimism",
+      "arbitrum",
+      "polygon"
+     ]
+    }
+   },
+   "required": [
+    "address",
+    "chain"
+   ],
+   "outputFields": [
+    "address",
+    "balances"
+   ]
+  },
+  {
+   "slug": "contract-info",
+   "description": "contract details verified source creator for a contract address by chain id",
+   "props": {
+    "contract_address": {
+     "type": "string"
+    },
+    "chainId": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "contract_address",
+    "chainId"
+   ],
+   "outputFields": [
+    "contract_address",
+    "creator",
+    "verified"
+   ]
+  },
+  {
+   "slug": "tx-lookup",
+   "description": "transaction details status gas transfers for a transaction hash",
+   "props": {
+    "hash": {
+     "type": "string"
+    },
+    "network": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "hash"
+   ],
+   "outputFields": [
+    "hash",
+    "from",
+    "to",
+    "status"
+   ]
+  },
+  {
+   "slug": "token-holders",
+   "description": "top holders of a token contract address",
+   "props": {
+    "token_address": {
+     "type": "string"
+    },
+    "chain": {
+     "type": "string",
+     "enum": [
+      "ethereum",
+      "base",
+      "optimism",
+      "arbitrum",
+      "polygon"
+     ]
+    }
+   },
+   "required": [
+    "token_address",
+    "chain"
+   ],
+   "outputFields": [
+    "holders"
+   ]
+  },
+  {
+   "slug": "sol-balance",
+   "description": "solana wallet sol spl token balance",
+   "props": {
+    "wallet": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "wallet"
+   ],
+   "outputFields": [
+    "wallet",
+    "lamports"
+   ]
+  },
+  {
+   "slug": "company-lookup",
+   "description": "company ticker symbol cik filer id lookup by company name",
+   "props": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "outputFields": [
+    "name",
+    "ticker",
+    "cik"
+   ]
+  },
+  {
+   "slug": "stock-quote",
+   "description": "latest stock quote price for a ticker symbol",
+   "props": {
+    "symbol": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ],
+   "outputFields": [
+    "symbol",
+    "price"
+   ]
+  },
+  {
+   "slug": "sec-filings",
+   "description": "sec filings list for a company by cik number",
+   "props": {
+    "cik": {
+     "type": "string"
+    },
+    "form": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "cik"
+   ],
+   "outputFields": [
+    "filings"
+   ]
+  },
+  {
+   "slug": "dns-lookup",
+   "description": "dns records lookup for a domain name ip address",
+   "props": {
+    "domain": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "domain"
+   ],
+   "outputFields": [
+    "domain",
+    "ip",
+    "records"
+   ]
+  },
+  {
+   "slug": "ip-geo",
+   "description": "ip address geolocation country city asn",
+   "props": {
+    "ip": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ip"
+   ],
+   "outputFields": [
+    "ip",
+    "country",
+    "city"
+   ]
+  },
+  {
+   "slug": "domain-report",
+   "description": "security risk report for a domain with optional hosting ip",
+   "props": {
+    "domain": {
+     "type": "string"
+    },
+    "ip": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "domain"
+   ],
+   "outputFields": [
+    "domain",
+    "score"
+   ]
+  },
+  {
+   "slug": "coin-search",
+   "description": "crypto coin search id contract by coin name",
+   "props": {
+    "query": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "outputFields": [
+    "coin_id",
+    "symbol",
+    "contract_address"
+   ]
+  },
+  {
+   "slug": "spot-price",
+   "description": "current spot price for a crypto coin now",
+   "props": {
+    "coin": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "coin"
+   ],
+   "outputFields": [
+    "price"
+   ]
+  },
+  {
+   "slug": "price-history",
+   "description": "historical daily price history series for a crypto coin over a range of days",
+   "props": {
+    "coin": {
+     "type": "string"
+    },
+    "days": {
+     "type": "integer"
+    },
+    "interval": {
+     "type": "string",
+     "enum": [
+      "daily",
+      "hourly"
+     ]
+    }
+   },
+   "required": [
+    "coin",
+    "days"
+   ],
+   "outputFields": [
+    "prices"
+   ]
+  },
+  {
+   "slug": "stock-candles",
+   "description": "stock ohlc candles history bars for a ticker over a date range",
+   "props": {
+    "symbol": {
+     "type": "string"
+    },
+    "from": {
+     "type": "string"
+    },
+    "to": {
+     "type": "string"
+    },
+    "resolution": {
+     "type": "string",
+     "enum": [
+      "1d",
+      "1h",
+      "1w"
+     ]
+    }
+   },
+   "required": [
+    "symbol"
+   ],
+   "outputFields": [
+    "candles"
+   ]
+  },
+  {
+   "slug": "rsi-indicator",
+   "description": "compute rsi relative strength indicator from a price series",
+   "props": {
+    "values": {
+     "type": "array"
+    },
+    "period": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "values"
+   ],
+   "outputFields": [
+    "rsi"
+   ]
+  },
+  {
+   "slug": "sma-indicator",
+   "description": "compute simple moving average sma from a price series",
+   "props": {
+    "values": {
+     "type": "array"
+    },
+    "window": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "values"
+   ],
+   "outputFields": [
+    "sma"
+   ]
+  },
+  {
+   "slug": "volatility-calc",
+   "description": "compute volatility standard deviation of returns from a price series",
+   "props": {
+    "values": {
+     "type": "array"
+    }
+   },
+   "required": [
+    "values"
+   ],
+   "outputFields": [
+    "volatility"
+   ]
+  },
+  {
+   "slug": "correlation-calc",
+   "description": "compute correlation between two price series",
+   "props": {
+    "a": {
+     "type": "array"
+    },
+    "b": {
+     "type": "array"
+    }
+   },
+   "required": [
+    "a",
+    "b"
+   ],
+   "outputFields": [
+    "correlation"
+   ]
+  },
+  {
+   "slug": "fx-history",
+   "description": "historical exchange rate fx series between two currencies over a range of days",
+   "props": {
+    "base": {
+     "type": "string"
+    },
+    "quote": {
+     "type": "string"
+    },
+    "days": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "base",
+    "quote"
+   ],
+   "outputFields": [
+    "rates"
+   ]
+  },
+  {
+   "slug": "web-search",
+   "description": "web search sources pages results for a query",
+   "props": {
+    "q": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "q"
+   ],
+   "outputFields": [
+    "results",
+    "url"
+   ]
+  },
+  {
+   "slug": "page-read",
+   "description": "read fetch extract the full text content of a web page url article",
+   "props": {
+    "url": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "outputFields": [
+    "text",
+    "title"
+   ]
+  },
+  {
+   "slug": "cited-answer",
+   "description": "answer a question with cited sources citations",
+   "props": {
+    "question": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "question"
+   ],
+   "outputFields": [
+    "answer",
+    "sources"
+   ]
+  },
+  {
+   "slug": "paper-search",
+   "description": "search academic papers studies literature by topic",
+   "props": {
+    "query": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "outputFields": [
+    "papers",
+    "url"
+   ]
+  },
+  {
+   "slug": "news-search",
+   "description": "news search recent articles headlines on a topic",
+   "props": {
+    "q": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "q"
+   ],
+   "outputFields": [
+    "articles",
+    "url"
+   ]
+  },
+  {
+   "slug": "image-generate",
+   "description": "generate an image picture illustration from a text prompt",
+   "props": {
+    "prompt": {
+     "type": "string"
+    },
+    "size": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "prompt"
+   ],
+   "outputFields": [
+    "url",
+    "image_url"
+   ]
+  },
+  {
+   "slug": "image-convert",
+   "description": "convert resize compress an image file to a format png jpg webp and size",
+   "props": {
+    "url": {
+     "type": "string"
+    },
+    "format": {
+     "type": "string",
+     "enum": [
+      "png",
+      "jpg",
+      "webp",
+      "gif"
+     ]
+    },
+    "width": {
+     "type": "integer"
+    },
+    "height": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "url",
+    "format"
+   ],
+   "outputFields": [
+    "url"
+   ]
+  },
+  {
+   "slug": "bg-remove",
+   "description": "remove the background from an image",
+   "props": {
+    "image_url": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "image_url"
+   ],
+   "outputFields": [
+    "url"
+   ]
+  },
+  {
+   "slug": "tts",
+   "description": "text to speech generate spoken audio voice narration from text",
+   "props": {
+    "text": {
+     "type": "string"
+    },
+    "voice": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "outputFields": [
+    "audio_url"
+   ]
+  },
+  {
+   "slug": "audio-convert",
+   "description": "convert transcode an audio file to a format mp3 wav ogg",
+   "props": {
+    "audio_url": {
+     "type": "string"
+    },
+    "format": {
+     "type": "string",
+     "enum": [
+      "mp3",
+      "wav",
+      "ogg",
+      "opus"
+     ]
+    }
+   },
+   "required": [
+    "audio_url",
+    "format"
+   ],
+   "outputFields": [
+    "url"
+   ]
+  },
+  {
+   "slug": "video-generate",
+   "description": "generate a short video clip from a text prompt",
+   "props": {
+    "prompt": {
+     "type": "string"
+    },
+    "seconds": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "prompt"
+   ],
+   "outputFields": [
+    "video_url"
+   ]
+  },
+  {
+   "slug": "video-transcode",
+   "description": "transcode convert compress a video file to mp4 webm",
+   "props": {
+    "video_url": {
+     "type": "string"
+    },
+    "format": {
+     "type": "string",
+     "enum": [
+      "mp4",
+      "webm"
+     ]
+    }
+   },
+   "required": [
+    "video_url",
+    "format"
+   ],
+   "outputFields": [
+    "url"
+   ]
+  }
+ ],
+ "tasks": [
+  {
+   "id": "chained-01",
+   "cluster": "chained-lookups",
+   "task": "Find the ticker for Apple, then get its latest stock quote",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company ticker lookup for Apple",
+      "query": "company ticker lookup for Apple",
+      "dependsOn": []
+     },
+     {
+      "purpose": "latest stock quote price for the ticker symbol",
+      "query": "latest stock quote price for the ticker symbol",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Apple",
+     "symbol": "<symbol>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "symbol",
+      "value": "{{step 1.ticker}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-02",
+   "cluster": "chained-lookups",
+   "task": "Find the ticker for Microsoft, then get its latest stock quote",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company ticker lookup for Microsoft",
+      "query": "company ticker lookup for Microsoft",
+      "dependsOn": []
+     },
+     {
+      "purpose": "latest stock quote price for the ticker symbol",
+      "query": "latest stock quote price for the ticker symbol",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Microsoft",
+     "symbol": "<symbol>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "symbol",
+      "value": "{{step 1.ticker}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-03",
+   "cluster": "chained-lookups",
+   "task": "Find the ticker for Nvidia, then get its latest stock quote",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company ticker lookup for Nvidia",
+      "query": "company ticker lookup for Nvidia",
+      "dependsOn": []
+     },
+     {
+      "purpose": "latest stock quote price for the ticker symbol",
+      "query": "latest stock quote price for the ticker symbol",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Nvidia",
+     "symbol": "<symbol>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "symbol",
+      "value": "{{step 1.ticker}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-04",
+   "cluster": "chained-lookups",
+   "task": "Find the ticker for Amazon, then get its latest stock quote",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company ticker lookup for Amazon",
+      "query": "company ticker lookup for Amazon",
+      "dependsOn": []
+     },
+     {
+      "purpose": "latest stock quote price for the ticker symbol",
+      "query": "latest stock quote price for the ticker symbol",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Amazon",
+     "symbol": "<symbol>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "symbol",
+      "value": "{{step 1.ticker}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-05",
+   "cluster": "chained-lookups",
+   "task": "Find Tesla's cik filer id, resolve the ip address of tesla.com, then geolocate that ip address",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company cik filer id lookup for Tesla",
+      "query": "company cik filer id lookup for Tesla",
+      "dependsOn": []
+     },
+     {
+      "purpose": "dns lookup ip address for tesla.com",
+      "query": "dns lookup ip address for tesla.com",
+      "dependsOn": []
+     },
+     {
+      "purpose": "ip address geolocation country city",
+      "query": "ip address geolocation country city",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Tesla",
+     "domain": "tesla.com",
+     "ip": "{{step 1}}"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      3,
+      2
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 3,
+      "name": "ip",
+      "value": "{{step 2}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-06",
+   "cluster": "chained-lookups",
+   "task": "Find Netflix's cik filer id, resolve the ip address of netflix.com, then geolocate that ip address",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company cik filer id lookup for Netflix",
+      "query": "company cik filer id lookup for Netflix",
+      "dependsOn": []
+     },
+     {
+      "purpose": "dns lookup ip address for netflix.com",
+      "query": "dns lookup ip address for netflix.com",
+      "dependsOn": []
+     },
+     {
+      "purpose": "ip address geolocation country city",
+      "query": "ip address geolocation country city",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Netflix",
+     "domain": "netflix.com",
+     "ip": "{{step 1}}"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      3,
+      2
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 3,
+      "name": "ip",
+      "value": "{{step 2}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-07",
+   "cluster": "chained-lookups",
+   "task": "Find Adobe's cik filer id, resolve the ip address of adobe.com, then geolocate that ip address",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "company cik filer id lookup for Adobe",
+      "query": "company cik filer id lookup for Adobe",
+      "dependsOn": []
+     },
+     {
+      "purpose": "dns lookup ip address for adobe.com",
+      "query": "dns lookup ip address for adobe.com",
+      "dependsOn": []
+     },
+     {
+      "purpose": "ip address geolocation country city",
+      "query": "ip address geolocation country city",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "Adobe",
+     "domain": "adobe.com",
+     "ip": "{{step 1}}"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      3,
+      2
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 3,
+      "name": "ip",
+      "value": "{{step 2}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-08",
+   "cluster": "chained-lookups",
+   "task": "Resolve the ip address of example.org, then run a domain security risk report including that hosting ip",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "dns lookup ip address for example.org",
+      "query": "dns lookup ip address for example.org",
+      "dependsOn": []
+     },
+     {
+      "purpose": "security risk report for domain example.org with hosting ip",
+      "query": "security risk report for domain example.org with hosting ip",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "domain": "example.org",
+     "ip": "<ip>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "ip",
+      "value": "{{step 1}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-09",
+   "cluster": "chained-lookups",
+   "task": "Resolve the ip address of iana.org, then run a domain security risk report including that hosting ip",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "dns lookup ip address for iana.org",
+      "query": "dns lookup ip address for iana.org",
+      "dependsOn": []
+     },
+     {
+      "purpose": "security risk report for domain iana.org with hosting ip",
+      "query": "security risk report for domain iana.org with hosting ip",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "domain": "iana.org",
+     "ip": "<ip>"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "ip",
+      "value": "{{step 1}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-10",
+   "cluster": "chained-lookups",
+   "task": "Resolve vitalik.eth to an address, then list its token balances on Base",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "resolve ens name vitalik.eth to an ethereum address",
+      "query": "resolve ens name vitalik.eth to an ethereum address",
+      "dependsOn": []
+     },
+     {
+      "purpose": "token balances of the wallet address on base",
+      "query": "token balances of the wallet address on base",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "vitalik.eth",
+     "address": "<address>",
+     "chain": "base"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "address",
+      "value": "{{step 1}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-11",
+   "cluster": "chained-lookups",
+   "task": "Resolve nick.eth to an address, then list its token balances on Optimism",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "resolve ens name nick.eth to an ethereum address",
+      "query": "resolve ens name nick.eth to an ethereum address",
+      "dependsOn": []
+     },
+     {
+      "purpose": "token balances of the wallet address on optimism",
+      "query": "token balances of the wallet address on optimism",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "nick.eth",
+     "address": "<address>",
+     "chain": "optimism"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "address",
+      "value": "{{step 1}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "chained-12",
+   "cluster": "chained-lookups",
+   "task": "Resolve brantly.eth to an address, then list its token balances on Arbitrum",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "resolve ens name brantly.eth to an ethereum address",
+      "query": "resolve ens name brantly.eth to an ethereum address",
+      "dependsOn": []
+     },
+     {
+      "purpose": "token balances of the wallet address on arbitrum",
+      "query": "token balances of the wallet address on arbitrum",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "name": "brantly.eth",
+     "address": "<address>",
+     "chain": "arbitrum"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "paramEquals": [
+     {
+      "step": 2,
+      "name": "address",
+      "value": "{{step 1}}"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-01",
+   "cluster": "onchain-identifiers",
+   "task": "Show the token balances of wallet 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 on Base",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "token balances of a wallet address on base",
+      "query": "token balances of a wallet address on base",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "address": "0x1111111111111111111111111111111111111111",
+     "chain": "Base"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "address",
+      "value": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+     },
+     {
+      "step": 1,
+      "name": "chain",
+      "value": "base"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-02",
+   "cluster": "onchain-identifiers",
+   "task": "Show the token balances of wallet 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 on Ethereum",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "token balances of a wallet address on ethereum",
+      "query": "token balances of a wallet address on ethereum",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "address": "0x1111111111111111111111111111111111111111",
+     "chain": "Ethereum"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "address",
+      "value": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+     },
+     {
+      "step": 1,
+      "name": "chain",
+      "value": "ethereum"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-03",
+   "cluster": "onchain-identifiers",
+   "task": "Show the token balances of wallet 0x4200000000000000000000000000000000000006 on Optimism",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "token balances of a wallet address on optimism",
+      "query": "token balances of a wallet address on optimism",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "address": "0x1111111111111111111111111111111111111111",
+     "chain": "Optimism"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "address",
+      "value": "0x4200000000000000000000000000000000000006"
+     },
+     {
+      "step": 1,
+      "name": "chain",
+      "value": "optimism"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-04",
+   "cluster": "onchain-identifiers",
+   "task": "Get the verified source and creator of contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 on Base",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "contract details verified source creator for a contract address on base",
+      "query": "contract details verified source creator for a contract address on base",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "chainId": "base"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "chainId",
+      "value": 8453
+     },
+     {
+      "step": 1,
+      "name": "contract_address",
+      "value": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-05",
+   "cluster": "onchain-identifiers",
+   "task": "Get the verified source and creator of contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 on Ethereum",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "contract details verified source creator for a contract address on ethereum",
+      "query": "contract details verified source creator for a contract address on ethereum",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "chainId": "ethereum"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "chainId",
+      "value": 1
+     },
+     {
+      "step": 1,
+      "name": "contract_address",
+      "value": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-06",
+   "cluster": "onchain-identifiers",
+   "task": "Get the verified source and creator of contract 0x4200000000000000000000000000000000000006 on Optimism",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "contract details verified source creator for a contract address on optimism",
+      "query": "contract details verified source creator for a contract address on optimism",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "contract_address": "0x4200000000000000000000000000000000000006",
+     "chainId": "optimism"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "chainId",
+      "value": 10
+     },
+     {
+      "step": 1,
+      "name": "contract_address",
+      "value": "0x4200000000000000000000000000000000000006"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-07",
+   "cluster": "onchain-identifiers",
+   "task": "Look up the status and gas of transaction 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 on Ethereum",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "transaction details status gas for a transaction hash",
+      "query": "transaction details status gas for a transaction hash",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "hash": "0x5c504ed432cb51138b",
+     "network": "ethereum"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "hash",
+      "value": "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-08",
+   "cluster": "onchain-identifiers",
+   "task": "Look up the status and gas of transaction 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 on Base",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "transaction details status gas for a transaction hash",
+      "query": "transaction details status gas for a transaction hash",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "hash": "0x5c504ed432cb51138b",
+     "network": "base"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "hash",
+      "value": "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-09",
+   "cluster": "onchain-identifiers",
+   "task": "List the top holders of token contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 on Polygon",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "top holders of a token contract address on polygon",
+      "query": "top holders of a token contract address on polygon",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "token_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "chain": "POLYGON"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "token_address",
+      "value": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+     },
+     {
+      "step": 1,
+      "name": "chain",
+      "value": "polygon"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-10",
+   "cluster": "onchain-identifiers",
+   "task": "List the top holders of token contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 on Arbitrum",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "top holders of a token contract address on arbitrum",
+      "query": "top holders of a token contract address on arbitrum",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "token_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "chain": "ARBITRUM"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "token_address",
+      "value": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+     },
+     {
+      "step": 1,
+      "name": "chain",
+      "value": "arbitrum"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-11",
+   "cluster": "onchain-identifiers",
+   "task": "What is the SOL balance of Solana wallet 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "solana wallet sol balance",
+      "query": "solana wallet sol balance",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "wallet": "9wzdxwbbmkg8ztbnmquxvqrayrzzdsgydlvl9zytawwm"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "wallet",
+      "value": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+     }
+    ]
+   }
+  },
+  {
+   "id": "onchain-12",
+   "cluster": "onchain-identifiers",
+   "task": "Show token balances for 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 on Base and verify contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 on Base",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "token balances of a wallet address on base",
+      "query": "token balances of a wallet address on base",
+      "dependsOn": []
+     },
+     {
+      "purpose": "contract details verified source creator for a contract address on base",
+      "query": "contract details verified source creator for a contract address on base",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+     "chain": "base",
+     "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "chainId": "8453"
+    }
+   },
+   "checks": {
+    "paramEquals": [
+     {
+      "step": 1,
+      "name": "address",
+      "value": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+     },
+     {
+      "step": 2,
+      "name": "chainId",
+      "value": 8453
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-01",
+   "cluster": "market-series",
+   "task": "Compute the 14 period RSI of bitcoin over the last 30 days of daily prices",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "bitcoin crypto coin price",
+      "query": "bitcoin crypto coin price",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "bitcoin",
+     "days": 30,
+     "interval": "daily",
+     "values": "{{step 1}}",
+     "period": 14
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "bitcoin historical daily price history series",
+      "query": "bitcoin historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator from the price series",
+      "query": "compute rsi relative strength indicator from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 30 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-02",
+   "cluster": "market-series",
+   "task": "Compute the 14 period RSI of ethereum over the last 90 days of daily prices",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "ethereum crypto coin price",
+      "query": "ethereum crypto coin price",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "ethereum",
+     "days": 90,
+     "interval": "daily",
+     "values": "{{step 1}}",
+     "period": 14
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "ethereum historical daily price history series",
+      "query": "ethereum historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator from the price series",
+      "query": "compute rsi relative strength indicator from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 90 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-03",
+   "cluster": "market-series",
+   "task": "Compute the 14 period RSI of solana over the last 14 days of daily prices",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "solana crypto coin price",
+      "query": "solana crypto coin price",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "solana",
+     "days": 14,
+     "interval": "daily",
+     "values": "{{step 1}}",
+     "period": 14
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "solana historical daily price history series",
+      "query": "solana historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator from the price series",
+      "query": "compute rsi relative strength indicator from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 14 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-04",
+   "cluster": "market-series",
+   "task": "Compute the 14 period RSI of dogecoin over the last 7 days of daily prices",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "dogecoin crypto coin price",
+      "query": "dogecoin crypto coin price",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "dogecoin",
+     "days": 7,
+     "interval": "daily",
+     "values": "{{step 1}}",
+     "period": 14
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "dogecoin historical daily price history series",
+      "query": "dogecoin historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator from the price series",
+      "query": "compute rsi relative strength indicator from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 7 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-05",
+   "cluster": "market-series",
+   "task": "What was the volatility of bitcoin returns over the past 60 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "bitcoin historical price history series",
+      "query": "bitcoin historical price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute volatility standard deviation of returns",
+      "query": "compute volatility standard deviation of returns",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "bitcoin",
+     "days": 60,
+     "values": "{{step 1}}"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "bitcoin historical daily price history series",
+      "query": "bitcoin historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute volatility standard deviation of returns from the price series",
+      "query": "compute volatility standard deviation of returns from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "past 60 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-06",
+   "cluster": "market-series",
+   "task": "What was the volatility of ethereum returns over the past 180 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "ethereum historical price history series",
+      "query": "ethereum historical price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute volatility standard deviation of returns",
+      "query": "compute volatility standard deviation of returns",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "ethereum",
+     "days": 180,
+     "values": "{{step 1}}"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "ethereum historical daily price history series",
+      "query": "ethereum historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute volatility standard deviation of returns from the price series",
+      "query": "compute volatility standard deviation of returns from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "past 180 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-07",
+   "cluster": "market-series",
+   "task": "Give me the simple moving average of bitcoin for the last 50 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "compute simple moving average sma of bitcoin",
+      "query": "compute simple moving average sma of bitcoin",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "bitcoin",
+     "days": 50,
+     "values": "{{step 1}}",
+     "window": 50
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "bitcoin historical daily price history series",
+      "query": "bitcoin historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute simple moving average sma from the price series",
+      "query": "compute simple moving average sma from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 50 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-08",
+   "cluster": "market-series",
+   "task": "Give me the simple moving average of solana for the last 20 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "compute simple moving average sma of solana",
+      "query": "compute simple moving average sma of solana",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "solana",
+     "days": 20,
+     "values": "{{step 1}}",
+     "window": 20
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "solana historical daily price history series",
+      "query": "solana historical daily price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute simple moving average sma from the price series",
+      "query": "compute simple moving average sma from the price series",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 20 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-09",
+   "cluster": "market-series",
+   "task": "Pull AAPL daily ohlc candles for the last 6 months and compute the rsi",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "AAPL stock ohlc candles history bars",
+      "query": "AAPL stock ohlc candles history bars",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator",
+      "query": "compute rsi relative strength indicator",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "symbol": "AAPL",
+     "resolution": "1d",
+     "values": "{{step 1}}"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 6 months"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-10",
+   "cluster": "market-series",
+   "task": "Pull MSFT daily ohlc candles for the last 3 months and compute the rsi",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "MSFT stock ohlc candles history bars",
+      "query": "MSFT stock ohlc candles history bars",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute rsi relative strength indicator",
+      "query": "compute rsi relative strength indicator",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "symbol": "MSFT",
+     "resolution": "1d",
+     "values": "{{step 1}}"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 3 months"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-11",
+   "cluster": "market-series",
+   "task": "Compute the correlation between bitcoin and ethereum daily prices over the last 30 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "bitcoin historical price history series",
+      "query": "bitcoin historical price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "ethereum historical price history series",
+      "query": "ethereum historical price history series",
+      "dependsOn": []
+     },
+     {
+      "purpose": "compute correlation between two price series",
+      "query": "compute correlation between two price series",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "coin": "bitcoin",
+     "days": 30,
+     "a": "{{step 1}}",
+     "b": "{{step 2}}"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      3,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "last 30 days"
+     },
+     {
+      "step": 2,
+      "text": "last 30 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "market-12",
+   "cluster": "market-series",
+   "task": "Show the euro to dollar exchange rate history for the past 60 days",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "historical exchange rate fx series between two currencies",
+      "query": "historical exchange rate fx series between two currencies",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "base": "EUR",
+     "quote": "USD",
+     "days": 60
+    }
+   },
+   "checks": {
+    "minSteps": 1,
+    "queryIncludes": [
+     {
+      "step": 1,
+      "text": "past 60 days"
+     }
+    ]
+   }
+  },
+  {
+   "id": "research-01",
+   "cluster": "research-sources",
+   "task": "Research the EU AI Act obligations for general purpose models and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on the EU AI Act obligations for general purpose models",
+      "query": "web search sources on the EU AI Act obligations for general purpose models",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "the EU AI Act obligations for general purpose models",
+     "url": "<url>",
+     "question": "the EU AI Act obligations for general purpose models"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on the EU AI Act obligations for general purpose models",
+      "query": "web search sources on the EU AI Act obligations for general purpose models",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on the EU AI Act obligations for general purpose models",
+      "query": "answer the question with cited sources on the EU AI Act obligations for general purpose models",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-02",
+   "cluster": "research-sources",
+   "task": "Research recent findings on intermittent fasting and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on recent findings on intermittent fasting",
+      "query": "web search sources on recent findings on intermittent fasting",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "recent findings on intermittent fasting",
+     "url": "<url>",
+     "question": "recent findings on intermittent fasting"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on recent findings on intermittent fasting",
+      "query": "web search sources on recent findings on intermittent fasting",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on recent findings on intermittent fasting",
+      "query": "answer the question with cited sources on recent findings on intermittent fasting",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-03",
+   "cluster": "research-sources",
+   "task": "Research the state of solid state batteries and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on the state of solid state batteries",
+      "query": "web search sources on the state of solid state batteries",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "the state of solid state batteries",
+     "url": "<url>",
+     "question": "the state of solid state batteries"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on the state of solid state batteries",
+      "query": "web search sources on the state of solid state batteries",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on the state of solid state batteries",
+      "query": "answer the question with cited sources on the state of solid state batteries",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-04",
+   "cluster": "research-sources",
+   "task": "Research how x402 payments settle and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on how x402 payments settle",
+      "query": "web search sources on how x402 payments settle",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "how x402 payments settle",
+     "url": "<url>",
+     "question": "how x402 payments settle"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on how x402 payments settle",
+      "query": "web search sources on how x402 payments settle",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on how x402 payments settle",
+      "query": "answer the question with cited sources on how x402 payments settle",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-05",
+   "cluster": "research-sources",
+   "task": "Research the causes of the 2008 financial crisis and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on the causes of the 2008 financial crisis",
+      "query": "web search sources on the causes of the 2008 financial crisis",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "the causes of the 2008 financial crisis",
+     "url": "<url>",
+     "question": "the causes of the 2008 financial crisis"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on the causes of the 2008 financial crisis",
+      "query": "web search sources on the causes of the 2008 financial crisis",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on the causes of the 2008 financial crisis",
+      "query": "answer the question with cited sources on the causes of the 2008 financial crisis",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-06",
+   "cluster": "research-sources",
+   "task": "Research the latest on carbon capture costs and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on the latest on carbon capture costs",
+      "query": "web search sources on the latest on carbon capture costs",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "the latest on carbon capture costs",
+     "url": "<url>",
+     "question": "the latest on carbon capture costs"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on the latest on carbon capture costs",
+      "query": "web search sources on the latest on carbon capture costs",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on the latest on carbon capture costs",
+      "query": "answer the question with cited sources on the latest on carbon capture costs",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-07",
+   "cluster": "research-sources",
+   "task": "Research what the evidence says about microplastics in drinking water and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on what the evidence says about microplastics in drinking water",
+      "query": "web search sources on what the evidence says about microplastics in drinking water",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "what the evidence says about microplastics in drinking water",
+     "url": "<url>",
+     "question": "what the evidence says about microplastics in drinking water"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on what the evidence says about microplastics in drinking water",
+      "query": "web search sources on what the evidence says about microplastics in drinking water",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on what the evidence says about microplastics in drinking water",
+      "query": "answer the question with cited sources on what the evidence says about microplastics in drinking water",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-08",
+   "cluster": "research-sources",
+   "task": "Research the history of the transistor and answer with cited sources",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "web search sources on the history of the transistor",
+      "query": "web search sources on the history of the transistor",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "the history of the transistor",
+     "url": "<url>",
+     "question": "the history of the transistor"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "web search sources on the history of the transistor",
+      "query": "web search sources on the history of the transistor",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the web page article found",
+      "query": "read the full text content of the web page article found",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on the history of the transistor",
+      "query": "answer the question with cited sources on the history of the transistor",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-09",
+   "cluster": "research-sources",
+   "task": "Find academic papers on sleep and memory consolidation, read the top one, and give a cited answer",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "search academic papers studies literature on sleep and memory consolidation",
+      "query": "search academic papers studies literature on sleep and memory consolidation",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the paper page",
+      "query": "read the full text content of the paper page",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer with cited sources on sleep and memory consolidation",
+      "query": "answer with cited sources on sleep and memory consolidation",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "query": "sleep and memory consolidation",
+     "url": "<url>",
+     "question": "sleep and memory consolidation"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-10",
+   "cluster": "research-sources",
+   "task": "Find academic papers on perovskite solar cell efficiency, read the top one, and give a cited answer",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "search academic papers studies literature on perovskite solar cell efficiency",
+      "query": "search academic papers studies literature on perovskite solar cell efficiency",
+      "dependsOn": []
+     },
+     {
+      "purpose": "read the full text content of the paper page",
+      "query": "read the full text content of the paper page",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer with cited sources on perovskite solar cell efficiency",
+      "query": "answer with cited sources on perovskite solar cell efficiency",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "query": "perovskite solar cell efficiency",
+     "url": "<url>",
+     "question": "perovskite solar cell efficiency"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-11",
+   "cluster": "research-sources",
+   "task": "What does recent news say about central bank rate decisions this week, with citations",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "news search recent articles on central bank rate decisions this week",
+      "query": "news search recent articles on central bank rate decisions this week",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on central bank rate decisions this week",
+      "query": "answer the question with cited sources on central bank rate decisions this week",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "central bank rate decisions this week",
+     "question": "central bank rate decisions this week"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "research-12",
+   "cluster": "research-sources",
+   "task": "What does recent news say about chip export rules, with citations",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "news search recent articles on chip export rules",
+      "query": "news search recent articles on chip export rules",
+      "dependsOn": []
+     },
+     {
+      "purpose": "answer the question with cited sources on chip export rules",
+      "query": "answer the question with cited sources on chip export rules",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "q": "chip export rules",
+     "question": "chip export rules"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "noGaps": true
+   }
+  },
+  {
+   "id": "media-01",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a red fox in snow and convert it to PNG at 512x512",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a red fox in snow from a text prompt",
+      "query": "generate an image of a red fox in snow from a text prompt",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a red fox in snow",
+     "format": "png",
+     "width": 512,
+     "height": 512
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "generate an image of a red fox in snow from a text prompt",
+      "query": "generate an image of a red fox in snow from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert resize the image file to the format",
+      "query": "convert resize the image file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "png"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-02",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a city skyline at dusk and convert it to WEBP at 1024x768",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a city skyline at dusk from a text prompt",
+      "query": "generate an image of a city skyline at dusk from a text prompt",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a city skyline at dusk",
+     "format": "webp",
+     "width": 1024,
+     "height": 768
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "generate an image of a city skyline at dusk from a text prompt",
+      "query": "generate an image of a city skyline at dusk from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert resize the image file to the format",
+      "query": "convert resize the image file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "webp"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-03",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a minimalist coffee logo and convert it to PNG at 256x256",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a minimalist coffee logo from a text prompt",
+      "query": "generate an image of a minimalist coffee logo from a text prompt",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a minimalist coffee logo",
+     "format": "png",
+     "width": 256,
+     "height": 256
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "generate an image of a minimalist coffee logo from a text prompt",
+      "query": "generate an image of a minimalist coffee logo from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert resize the image file to the format",
+      "query": "convert resize the image file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "png"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-04",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a watercolor lighthouse and convert it to JPG at 800x600",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a watercolor lighthouse from a text prompt",
+      "query": "generate an image of a watercolor lighthouse from a text prompt",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a watercolor lighthouse",
+     "format": "jpg",
+     "width": 800,
+     "height": 600
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "generate an image of a watercolor lighthouse from a text prompt",
+      "query": "generate an image of a watercolor lighthouse from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert resize the image file to the format",
+      "query": "convert resize the image file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "jpg"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-05",
+   "cluster": "media-pipeline",
+   "task": "Create speech audio saying 'welcome to the museum tour' and deliver it as mp3",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "text to speech spoken audio for 'welcome to the museum tour'",
+      "query": "text to speech spoken audio for 'welcome to the museum tour'",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "text": "welcome to the museum tour",
+     "format": "mp3"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "text to speech generate spoken audio voice for 'welcome to the museum tour'",
+      "query": "text to speech generate spoken audio voice for 'welcome to the museum tour'",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert transcode the audio file to the format",
+      "query": "convert transcode the audio file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "mp3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-06",
+   "cluster": "media-pipeline",
+   "task": "Create speech audio saying 'your order has shipped' and deliver it as wav",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "text to speech spoken audio for 'your order has shipped'",
+      "query": "text to speech spoken audio for 'your order has shipped'",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "text": "your order has shipped",
+     "format": "wav"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "text to speech generate spoken audio voice for 'your order has shipped'",
+      "query": "text to speech generate spoken audio voice for 'your order has shipped'",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert transcode the audio file to the format",
+      "query": "convert transcode the audio file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "wav"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-07",
+   "cluster": "media-pipeline",
+   "task": "Create speech audio saying 'good morning and welcome' and deliver it as ogg",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "text to speech spoken audio for 'good morning and welcome'",
+      "query": "text to speech spoken audio for 'good morning and welcome'",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "text": "good morning and welcome",
+     "format": "ogg"
+    },
+    "decomposeGuided": [
+     {
+      "purpose": "text to speech generate spoken audio voice for 'good morning and welcome'",
+      "query": "text to speech generate spoken audio voice for 'good morning and welcome'",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert transcode the audio file to the format",
+      "query": "convert transcode the audio file to the format",
+      "dependsOn": []
+     }
+    ]
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "ogg"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-08",
+   "cluster": "media-pipeline",
+   "task": "Generate a 6 seconds video of ocean waves at sunrise and transcode it to webm",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate a short video clip of ocean waves at sunrise",
+      "query": "generate a short video clip of ocean waves at sunrise",
+      "dependsOn": []
+     },
+     {
+      "purpose": "transcode convert compress the video file",
+      "query": "transcode convert compress the video file",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "ocean waves at sunrise",
+     "seconds": 6,
+     "format": "webm"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "webm"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-09",
+   "cluster": "media-pipeline",
+   "task": "Generate a 6 seconds video of a spinning globe and transcode it to mp4",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate a short video clip of a spinning globe",
+      "query": "generate a short video clip of a spinning globe",
+      "dependsOn": []
+     },
+     {
+      "purpose": "transcode convert compress the video file",
+      "query": "transcode convert compress the video file",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a spinning globe",
+     "seconds": 6,
+     "format": "mp4"
+    }
+   },
+   "checks": {
+    "minSteps": 2,
+    "dependsOn": [
+     [
+      2,
+      1
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 2,
+      "text": "mp4"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-10",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a product photo of headphones, remove the background, and export it as png",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a product photo of headphones from a text prompt",
+      "query": "generate an image of a product photo of headphones from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "remove the background from the image",
+      "query": "remove the background from the image",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert the image file to the format",
+      "query": "convert the image file to the format",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a product photo of headphones",
+     "format": "png"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 3,
+      "text": "png"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-11",
+   "cluster": "media-pipeline",
+   "task": "Generate an image of a portrait of a golden retriever, remove the background, and export it as png",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image of a portrait of a golden retriever from a text prompt",
+      "query": "generate an image of a portrait of a golden retriever from a text prompt",
+      "dependsOn": []
+     },
+     {
+      "purpose": "remove the background from the image",
+      "query": "remove the background from the image",
+      "dependsOn": []
+     },
+     {
+      "purpose": "convert the image file to the format",
+      "query": "convert the image file to the format",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a portrait of a golden retriever",
+     "format": "png"
+    }
+   },
+   "checks": {
+    "minSteps": 3,
+    "dependsOn": [
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      2
+     ]
+    ],
+    "queryIncludes": [
+     {
+      "step": 3,
+      "text": "png"
+     }
+    ]
+   }
+  },
+  {
+   "id": "media-12",
+   "cluster": "media-pipeline",
+   "task": "Generate an illustration of a mountain cabin",
+   "depth": "plan",
+   "model": {
+    "decompose": [
+     {
+      "purpose": "generate an image illustration of a mountain cabin from a text prompt",
+      "query": "generate an image illustration of a mountain cabin from a text prompt",
+      "dependsOn": []
+     }
+    ],
+    "values": {
+     "prompt": "a mountain cabin"
+    }
+   },
+   "checks": {
+    "minSteps": 1,
+    "noGaps": true
+   }
+  }
+ ]
+}

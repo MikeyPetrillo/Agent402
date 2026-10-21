@@ -5,12 +5,14 @@
 //   - the output carries a field with the parameter's own name;
 //   - the parameter asks for an address and the output carries exactly one
 //     distinct address-shaped value.
+// "{{step N.field}}" names the field of step N's answer to read, by the same
+// rules with that field's name in place of the parameter's.
 // Anything else is "missing" and the step is skipped with the reason, never
 // filled with a value that merely looks plausible. Only scalars travel, and
 // only up to MAX_LEN characters: an earlier seller's body is untrusted, and
 // the receiving tool's schema is still checked by the caller.
 
-const REF = /^\{\{step (\d+)\}\}$/;
+const REF = /^\{\{step (\d+)(?:\.([A-Za-z_][A-Za-z0-9_]{0,63}))?\}\}$/;
 const MAX_LEN = 2000;
 const MAX_NODES = 2000;
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -68,7 +70,7 @@ export function resolveStepRefs(params, outputs) {
     if (!m) continue;
     const n = m[1];
     if (!Object.hasOwn(outputs, n)) return { ok: false, reason: `needs the output of step ${n}, which did not run: pass params for this step` };
-    const r = valueForParam(name, outputs[n]);
+    const r = valueForParam(m[2] || name, outputs[n]);
     if (!r.ok) return { ok: false, reason: `step ${n}'s output ${r.why}: pass params for this step` };
     out[name] = r.value;
   }
