@@ -876,6 +876,40 @@ await check("paid canary: the Arc leg is gated (absent from the 402 = skipped, n
     assert.equal(left[0].paymentId, uuid(30));
     assert.ok(left[0].nextCheckAt > clock && left[0].failures === 1, "the failing entry backs off instead of heading every pass");
   });
+
+  await check("reconcile: an entry that throws on every pass becomes unresolved (alarm fires), never pending forever", async () => {
+    let clock = 40_000_000;
+    const { FAILURE_LIMIT } = await import("../src/circle-pending.js");
+    const b = createCirclePendingBook({ file: join(dir, "always-throws.json"), now: () => clock, log: () => {},
+      recordOwed: async () => { throw new Error("ledger down"); }, owedRecorded: async () => true });
+    await b.book({ paymentId: uuid(40), payer: acct.address, network: ARC_CAIP2, nonce: nonce(40), amount: "1" });
+    let passes = 0;
+    for (let day = 0; day < 50 && b.list()[0]?.state !== "unresolved"; day++) {
+      clock += 24 * 3600_000;
+      await b.reconcile({ status: async () => ({ status: "completed", transaction: `0x${"7f".repeat(32)}` }) });
+      passes++;
+    }
+    assert.equal(b.list()[0].state, "unresolved");
+    assert.ok(passes <= FAILURE_LIMIT, `unresolved within ${FAILURE_LIMIT} failed passes (${passes})`);
+    assert.equal(await b.alarmStatus(), "unresolved");
+  });
+
+  await check("operator resolve: only a well-formed key the book holds (never __proto__ or constructor)", async () => {
+    const b = createCirclePendingBook({ file: join(dir, "proto.json"), log: () => {} });
+    for (const k of ["__proto__", "constructor", "toString", "hasOwnProperty", "", "eip155:5042|x|y"]) {
+      const r = await b.resolve(k, { outcome: "not_charged", note: "probe" });
+      assert.equal(r.ok, false, `"${k}" is refused`);
+      assert.equal(r.error, "no such entry");
+    }
+  });
+
+  await check("route eligibility: model-backed routes take EOA signatures only", async () => {
+    const { contractWalletEligible, isComputePayablePath, setComputePayablePaths } = await import("../src/payments.js");
+    assert.equal(contractWalletEligible("POST /api/tts", { slug: "tts", modelBacked: true }), false);
+    setComputePayablePaths(new Set(["/api/uuid"]));
+    assert.equal(isComputePayablePath("/api/uuid"), true, "a pure-CPU (PoW-eligible) path");
+    assert.equal(isComputePayablePath("/api/image-gen"), false, "anything that calls out is not");
+  });
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -1153,7 +1187,10 @@ await check("switch on, booted: identity-bound routes refuse a contract wallet w
   st.circle = "full"; st.circleHits = []; st.rpcHits = [];
   const { base, log, proc } = await boot({ CIRCLE_FACILITATOR_API_KEY: KEY, ARC_CONTRACT_WALLETS: "on" });
   try {
-    assert.match(log.text, /contract-wallet signatures accepted \(ARC_CONTRACT_WALLETS=on\) on \d+ routes, except on identity-bound routes and routes that spend first or have a lasting effect/);
+    const m = log.text.match(/contract-wallet signatures accepted \(ARC_CONTRACT_WALLETS=on\) on (\d+) pure-CPU routes/);
+    assert.ok(m, "the boot log names how many routes take contract wallets");
+    console.log(`       (contract wallets eligible on ${m[1]} pure-CPU routes)`);
+    assert.ok(Number(m[1]) > 0, "some pure-CPU routes take them");
     const SCW = "0x00000000000000000000000000000000000c0de1";
     const payWith = async (method, path, body) => {
       const bare = await fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body });
@@ -1177,7 +1214,7 @@ await check("switch on, booted: identity-bound routes refuse a contract wallet w
     // of the treasury balance also uses the Arc RPC once Arc is offered.
     const validatorCalls = () => st.rpcHits.flatMap((b) => (Array.isArray(b) ? b : [b])).filter((b) => b?.method === "eth_call" && !b?.params?.[0]?.to).length;
     assert.equal(validatorCalls(), 0, "no signature RPC call for a payment the route refuses anyway");
-    const other = await payWith("GET", PATH);
+    const other = await payWith("GET", "/api/uuid");
     assert.equal(other.status, 402, `an RPC failure refuses the payment (got ${other.status})`);
     assert.ok(validatorCalls() >= 1, `the contract-wallet check asked the Arc RPC (${JSON.stringify(st.rpcHits).slice(0, 300)})`);
     assert.ok(!st.circleHits.some((h) => h.url === "/verify" || h.url === "/settle"), "nothing reached Circle");

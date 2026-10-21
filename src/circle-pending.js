@@ -45,10 +45,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
+const KEY_RE = /^eip155:[0-9]{1,12}\|0x[0-9a-f]{40}\|0x[0-9a-f]{64}$/;
 
 export const MAX_ENTRIES = 2000;
 export const NEAR_CAPACITY = 0.8;
 export const UNREADABLE_LIMIT = 12;
+/** Consecutive passes whose handling of one entry threw. */
+export const FAILURE_LIMIT = 12;
 export const MAX_AGE_MS = 7 * 24 * 3600_000;
 export const FIRST_CHECK_MS = 60_000;
 export const MAX_BACKOFF_MS = 6 * 3600_000;
@@ -177,7 +180,10 @@ export function createCirclePendingBook({
       if (typeof note !== "string" || !note.trim()) return { ok: false, error: "a note saying what was checked is required" };
       if (!["refunded", "not_charged", "retry"].includes(outcome)) return { ok: false, error: "outcome must be refunded, not_charged or retry" };
       await refresh();
-      const e = state.pending[String(key || "")];
+      // Only a well-formed entry key that the book itself holds: never an
+      // inherited name ("__proto__", "constructor") or anything else.
+      const k = String(key || "");
+      const e = KEY_RE.test(k) && Object.hasOwn(state.pending, k) ? state.pending[k] : null;
       if (!e) return { ok: false, error: "no such entry" };
       const ok = await change((p) => {
         if (!p[e.key]) return;
@@ -208,9 +214,17 @@ export function createCirclePendingBook({
         } catch {
           out.errors++;
           const failures = (e.failures || 0) + 1;
+          // An entry that fails on every pass must not sit "pending" forever
+          // with the alarm reading ok: past FAILURE_LIMIT consecutive failures,
+          // or MAX_AGE_MS, it becomes unresolved (kept, pages an operator).
+          const stuck = failures >= FAILURE_LIMIT || now() - e.at >= MAX_AGE_MS;
           try {
-            await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures, nextCheckAt: now() + backoff(failures) }; });
+            await change((p) => {
+              if (!p[e.key]) return;
+              p[e.key] = { ...p[e.key], failures, nextCheckAt: now() + backoff(failures), ...(stuck ? { state: "unresolved", unresolvedAt: now() } : {}) };
+            });
           } catch { /* the store itself is failing: the next pass retries */ }
+          if (stuck) { out.unresolved++; log(`[circle] Arc settlement ${e.paymentId} unresolved after ${failures} failed passes; operator action needed`); }
         }
       }
       return out;
@@ -235,7 +249,7 @@ export function createCirclePendingBook({
           await change((p) => { delete p[e.key]; });
           out.owed++;
         } else {
-          await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], nextCheckAt: now() + FIRST_CHECK_MS }; });
+          await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures: 0, nextCheckAt: now() + FIRST_CHECK_MS }; });
           out.pending++;
         }
       } else if (s?.status === "failed") {
@@ -247,7 +261,7 @@ export function createCirclePendingBook({
         const stale = unreadable >= UNREADABLE_LIMIT || now() - e.at >= MAX_AGE_MS;
         await change((p) => {
           if (!p[e.key]) return;
-          p[e.key] = { ...p[e.key], checks, unreadable, nextCheckAt: now() + backoff(checks), ...(stale ? { state: "unresolved", unresolvedAt: now() } : {}) };
+          p[e.key] = { ...p[e.key], checks, unreadable, failures: 0, nextCheckAt: now() + backoff(checks), ...(stale ? { state: "unresolved", unresolvedAt: now() } : {}) };
         });
         if (stale) { out.unresolved++; log(`[circle] Arc settlement ${e.paymentId} unresolved after ${checks} checks; operator action needed`); }
         else if (s) out.pending++;

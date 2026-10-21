@@ -969,7 +969,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         await b.refresh();
         if (!b.list().length) return null;
         const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
-        if (r.owed || r.failed || r.served || r.unresolved) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.pending + r.unreadable} still pending`);
+        if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
         return r;
       });
       const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
@@ -1431,10 +1431,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // this hook cannot place on a known non-identity route.
   if (circleClient && evmCaip2.includes(ARC_CAIP2) && arcContractWalletsEnabled()) {
     const contractOkRoutes = new Set(Object.entries(catalog || {})
-      .filter(([route, item]) => contractWalletEligible(route, item))
+      .filter(([route, item]) => contractWalletEligible(route, item) && isComputePayablePath(route.split(" ")[1]))
       .map(([route]) => route));
     registerArcContractWalletRouteGate(server, contractOkRoutes);
-    console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} routes, except on identity-bound routes and routes that spend first or have a lasting effect`);
+    console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} pure-CPU routes (no model, paid upstream, spend-first, lasting effect or identity binding)`);
   }
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -1762,6 +1762,7 @@ export function contractWalletEligible(route, item) {
   if (hasLastingEffect(item.slug)) return false;
   if (path.startsWith("/v1/") || path === "/v1") return false;
   if (typeof item.quote === "function" || typeof item.tierQuote === "function" || item.metered) return false;
+  if (item.modelBacked) return false;
   return true;
 }
 
@@ -1990,6 +1991,11 @@ let railsOffered = [];
 // avoiding is spending money we cannot bill for.
 let _computePayablePaths = null;
 export function setComputePayablePaths(paths) { _computePayablePaths = paths instanceof Set ? paths : new Set(paths || []); }
+/** A pure-CPU route (PoW-eligible: no egress, key, model or paid upstream,
+ *  proven by test-free-tier-egress). False when the set was never published. */
+export function isComputePayablePath(path) {
+  return !!_computePayablePaths && _computePayablePaths.has(String(path || ""));
+}
 function isFreeToServe(resource) {
   if (!_computePayablePaths || !_computePayablePaths.size) return false;
   try { return _computePayablePaths.has(new URL(String(resource)).pathname); } catch { return false; }
