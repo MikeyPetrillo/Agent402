@@ -657,8 +657,15 @@ npx agent402-tollbooth
 Checked locally against tollbooth 0.10.6 with an immutable 0xSplits PushSplit
 on Base: the 402's x402 offer (`scheme: exact`, `network: eip155:8453`, USDC
 `0x8335…2913`) and the MPP `evm` challenge (`chainId: 8453`) both name the
-split contract as `payTo` / `recipient`. A paid settlement into the split has
-not been live-tested here yet.
+split contract as `payTo` / `recipient`. A real Base settlement into that
+split was also tested: a $0.01 USDC x402 `exact` payment (EIP-3009
+`transferWithAuthorization`) landed in the split
+([payment tx](https://basescan.org/tx/0xf5e6ea9ee9a9ef697b8778a346adb7839a7e3d1987d437e82bfc6b2eab090f59)),
+then `distribute` pushed it out as fee 60% / agent 40%, fixed in the agent's
+own split - 0.006 / 0.004 USDC
+([distribute tx](https://basescan.org/tx/0xc0713e367a5411d2f3255f29b4a65393751ffe1d859d3cc20c0e942535d7d083)).
+That payment went through a Base facilitator directly, not through a
+tollbooth instance.
 
 - Use an **immutable** split if recipients must never change after launch.
 - A Push split holds the USDC it receives until someone calls `distribute` on
