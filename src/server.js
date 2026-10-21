@@ -40,6 +40,7 @@ import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
+import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
 import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
@@ -5373,7 +5374,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -5384,6 +5385,9 @@ app.get("/__operator/heap.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const v8 = await import("node:v8");
   const mb = (n) => Math.round(n / 1048576);
+  // ?gc=1 collects first when the process runs with --expose-gc (a test's
+  // heap reading); without the flag it is ignored.
+  if (req.query.gc === "1" && typeof globalThis.gc === "function") globalThis.gc();
   const mem = process.memoryUsage();
   res.set("Cache-Control", "no-store").json({
     heapUsedMb: mb(mem.heapUsed), heapTotalMb: mb(mem.heapTotal), rssMb: mb(mem.rss), externalMb: mb(mem.external), arrayBuffersMb: mb(mem.arrayBuffers),
@@ -7137,12 +7141,35 @@ const chainWallet = (chainKey) => (chainKey === "solana" ? (process.env.SOLANA_W
 // matched by C.isNetwork; getActivityForChain validates the address shape and
 // returns null for an absent one → the honest per-seller "unavailable" line),
 // else this host's wallet. Unknown/empty seller falls back to the host.
+// The host lookup is built once per (snapshot, chain): a caller-chosen
+// ?seller= value is a Map read, not a walk that parses every seller's URL.
+// The first seller per host wins, as the walk it replaces did.
+const marketSellerLookups = new WeakMap(); // snapshot -> Map(chainKey -> { byHost, local })
+const marketHostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
+function marketSellerLookup(chainKey, snapshot) {
+  const key = snapshot && typeof snapshot === "object" ? snapshot : null;
+  let perChain = key ? marketSellerLookups.get(key) : null;
+  if (perChain?.has(chainKey)) return perChain.get(chainKey);
+  const byHost = new Map();
+  let local = null;
+  for (const s of marketSellers(chainKey, snapshot)) {
+    if (s.local) { if (!local) local = s; continue; }
+    const h = marketHostOf(s.homepage || s.origin);
+    if (h && !byHost.has(h)) byHost.set(h, s);
+  }
+  const lookup = { byHost, local };
+  if (key) {
+    if (!perChain) { perChain = new Map(); marketSellerLookups.set(key, perChain); }
+    perChain.set(chainKey, lookup);
+  }
+  return lookup;
+}
 function resolveMarketSeller(chainKey, snapshot, sellerQuery) {
   const C = CHAIN_PAGES[chainKey];
-  const sellers = marketSellers(chainKey, snapshot);
-  const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
+  const { byHost, local } = marketSellerLookup(chainKey, snapshot);
+  const hostOf = marketHostOf;
   const q = String(sellerQuery || "").toLowerCase().slice(0, 253);
-  const picked = (q && sellers.find((s) => !s.local && hostOf(s.homepage || s.origin) === q)) || sellers.find((s) => s.local) || null;
+  const picked = (q && byHost.get(q)) || local || null;
   const sellerWallet = picked && !picked.local
     ? (Object.entries(picked.payToByNetwork || {}).find(([net]) => C.isNetwork(net))?.[1] || null)
     : null;
@@ -7172,12 +7199,29 @@ function chainPayable(chainKey) {
   const caip2 = CHAIN_PAGES[chainKey]?.caip2;
   return caip2 ? catalogPayableOn(Object.values(CATALOG), caip2) : null;
 }
-// ?seller= views render per request; at most this many at once (2026-10-01).
+// ?seller= view builds: at most this many at once. Only a cache miss builds,
+// so the cap applies to misses; hits and callers joining a running build
+// never count.
 const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
 // Same self-healing shape as the discovery gate: a view whose build never
 // settled stops counting toward admission once it is this old.
 const CHAIN_SELLER_VIEW_STALE_MS = 60_000;
 const chainSellerViewsInFlight = createInFlightGauge({ staleMs: CHAIN_SELLER_VIEW_STALE_MS });
+// A view for a KNOWN seller is memoized per (chain, all, resolved seller host)
+// for the plain page's 60 s, stale-while-rebuild, single-flight. The key is a
+// seller the index lists, never the raw query, and the memo is a bounded LRU
+// apart from surfaceMemo (whose keys are a fixed set), so memory is capped
+// however many distinct sellers are asked for.
+const chainSellerViewMemo = createBoundedMemo({
+  max: Number(process.env.CHAIN_SELLER_VIEW_MEMO_MAX) || 256,
+  // Bytes too: an ?all=1 view lists every seller, so a count bound alone
+  // would still let a few hundred large pages add up.
+  maxBytes: (Number(process.env.CHAIN_SELLER_VIEW_MEMO_MAX_MB) || 32) * 1048576,
+  ttlMs: 60_000,
+  partialTtlMs: PARTIAL_MEMO_MS,
+  isPartial: () => !stateStoresLoaded(),
+  onError: (_key, e) => console.warn(`[market] seller view rebuild failed: ${String(e?.message || e).slice(0, 120)}`),
+});
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res, next) => {
     // A gated rail's page (Arc) exists only while the rail is in the live
@@ -7192,17 +7236,25 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
       // a thousand requests each paid for work one build covers. The plain
       // page is now one shared build per 60 s; concurrent callers wait on the
       // same build, and a stale page keeps serving while the next one builds.
-      if (!req.query.seller) {
+      const plainPage = async () => {
         const html = await memoSurfaceAsync(`market:${chainKey}:${all}`, 60_000, () => buildChainPage(chainKey, null, all));
         return htmlCache(res, 120, 600).send(html);
-      }
-      // A ?seller= view is caller-keyed and renders per request, so it is
-      // bounded: past the cap it is shed like other free work.
-      if (chainSellerViewsInFlight.live() >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5, { reason: "chain-seller-view" }); }
-      const releaseView = chainSellerViewsInFlight.enter({ chain: chainKey });
-      try {
-        htmlCache(res, 120, 600).send(await buildChainPage(chainKey, req.query.seller, all));
-      } finally { releaseView(); }
+      };
+      if (!req.query.seller) return plainPage();
+      // The seller is resolved first, against the index snapshot (a Map read).
+      // A value that names no listed seller resolves to this host's own view,
+      // which is the plain page, so it is served from the plain page's memo
+      // and never starts a build.
+      const { selectedSeller } = resolveMarketSeller(chainKey, getIndexSnapshot(), req.query.seller);
+      if (!selectedSeller || selectedSeller.local || !selectedSeller.host) return plainPage();
+      const host = selectedSeller.host;
+      const html = await chainSellerViewMemo.get(`${chainKey}:${all}:${host}`, async () => {
+        const releaseView = chainSellerViewsInFlight.enter({ chain: chainKey });
+        try { return await buildChainPage(chainKey, host, all); } finally { releaseView(); }
+      }, { admit: () => chainSellerViewsInFlight.live() < CHAIN_SELLER_VIEW_MAX_INFLIGHT });
+      // A miss past the build cap is shed like other free work.
+      if (html === SHED) { noteShed("chain-seller-view"); return shedResponse(res, 5, { reason: "chain-seller-view" }); }
+      htmlCache(res, 120, 600).send(html);
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }

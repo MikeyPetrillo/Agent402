@@ -2955,6 +2955,8 @@ jobs:
           # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
           t node scripts/test-analytics-privacy.js
           t node scripts/test-chain-page-cache.js
+          # ?seller= views: unknown sellers never build, one build per listed seller, bounded memo, flat heap
+          t node scripts/test-chain-seller-view-memo.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)
