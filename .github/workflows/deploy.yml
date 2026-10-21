@@ -1884,6 +1884,8 @@ jobs:
           t node scripts/test-ocr-crash.js
           # Secretless worker isolation (F02/F04/F06 — worker auth/dispatch, client round-trip, secret-guard refuses to boot with a payment secret — offline)
           t node scripts/test-worker-isolation.js
+          # Render-worker wake retries (connection refused / edge 502 while the worker starts are retried in the deadline; a worker answer is final - offline)
+          t node scripts/test-worker-wake-retry.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
 
