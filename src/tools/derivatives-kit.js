@@ -16,7 +16,7 @@
 // scripts/test-derivatives-kit.js (stubbed fetch).
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
-import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
+import { hlSharedInfo, labelHlStaleness, HL_HISTORY_TTL_MS, __hlShared } from "./hyperliquid-shared.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -106,7 +106,7 @@ async function rawFetch(url, { method = "GET", body, label, step = "data" }) {
   }, ctx);
   let text = "";
   try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
-  if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
+  if (res.status === 429) throw Object.assign(bad(`${label} rate limit reached upstream - retry shortly`, 503), { rateLimited: true, retryAfter: 5 });
   return { status: res.status, text };
 }
 
@@ -455,7 +455,7 @@ function tickerView(t) {
 }
 
 // --- Tools ----------------------------------------------------------------
-export const DERIVATIVES_TOOLS = [
+const DERIVATIVES_TOOLS_RAW = [
   // ===========================================================================
   // perp-markets - every listed perp: funding, OI, mark/oracle, 24h volume.
   // ===========================================================================
@@ -566,8 +566,12 @@ export const DERIVATIVES_TOOLS = [
       const rows = await perpMarkets();
       const coin = await resolveCoin(i.coin, rows);
       const row = pickRow(rows, coin);
-      const startTime = Date.now() - (limit + 1) * 3_600_000;
-      const hist = await hlInfo({ type: "fundingHistory", coin, startTime });
+      // Hour-aligned, so every call for this coin and window inside the hour
+      // asks for the same document and shares one read for its TTL; the
+      // slice below keeps the last `limit` prints.
+      const startTime = Math.floor((Date.now() - (limit + 1) * 3_600_000) / 3_600_000) * 3_600_000;
+      const hist = await hlSharedInfo({ type: "fundingHistory", coin, startTime }, hlInfoDirect,
+        { cacheKey: `fundingHistory|${coin}|${startTime}`, ttlMs: HL_HISTORY_TTL_MS });
       const points = (Array.isArray(hist) ? hist : [])
         .map((h) => ({ time: h.time ? new Date(Number(h.time)).toISOString() : null, fundingRate: num(h.fundingRate), premium: num(h.premium) }))
         .filter((h) => h.fundingRate != null)
@@ -1386,6 +1390,8 @@ export const DERIVATIVES_TOOLS = [
     },
   },
 ];
+// An answer built from a stale shared read says so in fields.
+export const DERIVATIVES_TOOLS = labelHlStaleness(DERIVATIVES_TOOLS_RAW);
 
 export const __test = {
   resetMetaCache: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },

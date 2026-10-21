@@ -65,27 +65,91 @@ async function readBounded(res, maxBytes) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// A worker service that sleeps when idle refuses or resets connections while
+// its container starts, and the platform edge in front of it answers 502/503/504
+// with a body of its own. Those are retried with backoff; anything the worker
+// itself answers (a JSON body with an `error` string, or a result) is final, so
+// a job the worker accepted never runs twice.
+const WAKE_BACKOFF_MS = [500, 1000, 2000, 4000];
+const WAKE_BACKOFF_CAP_MS = 4000;
+// A retry is attempted only while at least this much of the deadline remains
+// for the job itself after the wait.
+const WORKER_MIN_ATTEMPT_MS = Number(process.env.RENDER_WORKER_MIN_ATTEMPT_MS) || 20_000;
+const CONNECT_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
+
+/** True for a fetch rejection that means the worker never answered. */
+export function isConnectFailure(err) {
+  if (!err || err.name === "AbortError") return false;
+  const code = err.cause?.code || err.code;
+  // A coded cause decides alone: a headers or body timeout means the worker
+  // accepted the job, so it is not retried.
+  if (code) return CONNECT_CODES.has(code);
+  return err instanceof TypeError && /fetch failed/i.test(String(err.message || ""));
+}
+
+/** True for a 502/503/504 that the platform edge produced, not the worker. */
+export function isEdgeUnavailable(status, body) {
+  if (![502, 503, 504].includes(status)) return false;
+  return !(body && typeof body === "object" && typeof body.error === "string");
+}
+
+export function wakeBackoffMs(attempt) {
+  return WAKE_BACKOFF_MS[attempt] ?? WAKE_BACKOFF_CAP_MS;
+}
+
+const sleep = (ms, signal) => new Promise((resolve) => {
+  const t = setTimeout(done, ms);
+  function done() { clearTimeout(t); signal?.removeEventListener?.("abort", done); resolve(); }
+  signal?.addEventListener?.("abort", done, { once: true });
+});
+
 // Dispatch one browser/media job to the worker. Returns the tool's JSON result,
 // or `{ __binary: Buffer, contentType }` for a binary result (screenshot PNG).
-export async function runOnWorker(slug, input, { signal } = {}) {
+// `timeoutMs` is the whole call's deadline, wake retries included.
+export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIMEOUT_MS, minAttemptMs = WORKER_MIN_ATTEMPT_MS } = {}) {
   const base = workerUrl();
   if (!base) throw Object.assign(new Error("render worker not configured"), { statusCode: 503 });
+  const started = Date.now();
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), WORKER_TIMEOUT_MS);
-  if (signal) signal.addEventListener("abort", () => ac.abort(), { once: true });
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const onAbort = () => ac.abort();
+  if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener("abort", onAbort, { once: true }); }
   const token = workerToken();
-  let res;
+  const payload = JSON.stringify({ slug, input });
+  const canRetry = (wait) => !ac.signal.aborted && timeoutMs - (Date.now() - started) - wait >= minAttemptMs;
+  let res, text;
   try {
-    res = await fetch(`${base}/call`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ slug, input }),
-      signal: ac.signal,
-    });
+    for (let attempt = 0; ; attempt++) {
+      let failure;
+      try {
+        res = await fetch(`${base}/call`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: payload,
+          signal: ac.signal,
+        });
+      } catch (e) {
+        if (!isConnectFailure(e)) throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" ? "timeout" : e.message}`), { statusCode: 503 });
+        failure = e.cause?.code || e.message;
+      }
+      if (res && !failure) {
+        text = await readBounded(res, WORKER_MAX_BYTES);
+        let peek = null;
+        try { peek = JSON.parse(text); } catch { /* non-JSON */ }
+        if (!isEdgeUnavailable(res.status, peek)) break;
+        failure = `edge HTTP ${res.status}`;
+      }
+      const wait = wakeBackoffMs(attempt);
+      if (!canRetry(wait)) {
+        throw Object.assign(new Error(`render worker unreachable: ${failure} after ${attempt + 1} attempt${attempt ? "s" : ""}`), { statusCode: 503, retryAfter: 5 });
+      }
+      res = undefined;
+      await sleep(wait, ac.signal);
+    }
   } catch (e) {
-    throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" ? "timeout" : e.message}`), { statusCode: 503 });
-  } finally { clearTimeout(timer); }
-  const text = await readBounded(res, WORKER_MAX_BYTES);
+    if (e?.statusCode) throw e;
+    throw Object.assign(new Error(`render worker unreachable: ${e?.name === "AbortError" ? "timeout" : e?.message}`), { statusCode: 503 });
+  } finally { clearTimeout(timer); signal?.removeEventListener?.("abort", onAbort); }
   let body = null;
   try { body = JSON.parse(text); } catch { /* non-JSON */ }
   if (!res.ok) {

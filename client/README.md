@@ -68,7 +68,7 @@ registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_K
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 const a = new Agent402({ fetch: payFetch });
-const article = await a.call("extract", { url: "https://example.com/article" });
+const article = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
 
 ## Prepaid credits (keys already issued)
