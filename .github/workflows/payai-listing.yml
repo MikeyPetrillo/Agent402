@@ -23,6 +23,11 @@ name: PayAI listing pass
 # that serves through one (--include-upstream), which is why the ceiling is
 # small and the cadence weekly.
 #
+# A route quoted per request is priced by its own 402 (the published example
+# sent unpaid) and bought at that amount, under the same two ceilings. The
+# dispatch input `only` (comma-separated slugs) narrows a run to chosen
+# routes, so a new route can be listed without buying older ones.
+#
 # One issue, "PayAI listing pass FAILED", stays open while a run fails and
 # closes on the next green run.
 on:
@@ -43,6 +48,10 @@ on:
         description: "Per-route price ceiling; a route listed above it is skipped."
         required: false
         default: "0.25"
+      only:
+        description: "Optional comma-separated slugs (for example dub,html-frames): buy only these routes. Empty buys every route the registry lacks."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -72,6 +81,8 @@ jobs:
         env:
           MAX_PRICE_USD: ${{ inputs.max_price_usd || '0.25' }}
           MAX_SPEND_USD: ${{ inputs.max_spend_usd || '2' }}
+          # Read from the environment, never interpolated into the script.
+          ONLY: ${{ inputs.only || '' }}
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
           AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
           # Signs X-Heartbeat-Token so these self-buys are booked as ours.
@@ -82,7 +93,10 @@ jobs:
           echo "::add-mask::$SOLANA_BURNER_KEY"
           echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
-          node scripts/payai-listing-pass.js --live --include-upstream --max-price "$MAX_PRICE_USD" --max-spend "$MAX_SPEND_USD" --out pass.json
+          if [ -n "$ONLY" ]; then
+            printf '%s' "$ONLY" | grep -Eq '^[a-z0-9][a-z0-9,-]*$' || { echo "::error::only must be comma-separated slugs"; exit 1; }
+          fi
+          node scripts/payai-listing-pass.js --live --include-upstream --max-price "$MAX_PRICE_USD" --max-spend "$MAX_SPEND_USD" ${ONLY:+--only "$ONLY"} --out pass.json
       - name: Keep the pass records (route, status, tx; never a key)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
