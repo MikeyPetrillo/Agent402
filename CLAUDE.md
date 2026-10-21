@@ -199,7 +199,7 @@ budget. Refunds stay human-run (`refund.yml`, dry run first); any buyer's owed r
 heartbeat page on it under one issue that closes when nothing is owed.
 
 ## Subsystem pointers
-- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it.
+- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it. Jobs report progress: `status` keeps working/completed/failed, `state` is queued/running/succeeded/failed with `stage`, `progress`, `etaSeconds` and `Retry-After` (`src/job-progress.js`); which routes are slow, and what the 402, /api/pricing, /openapi.json and /llms.txt say about them, comes from `src/slow-routes.js`.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + body, committed only after a settled 200.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
