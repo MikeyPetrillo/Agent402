@@ -1451,6 +1451,8 @@ jobs:
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
+          # A free (proof-of-work or trial) call drops any payment header riding on it before the handler: a forged header naming our wallet keeps the call on the outside lane of the failure monitor, read from its snapshot on REAL redis (needs this lane's Redis; stub facilitator, offline).
+          t node scripts/test-free-call-payment-headers.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
           # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
@@ -2307,8 +2309,6 @@ jobs:
           t node scripts/test-status-probe-token.js
           # The status Worker's paid-call challenge: STATUS_PROBE_TOKEN gets a low-difficulty challenge on the probe slug only, its call is booked internal, the mark cannot be forged or reused, and the token buys nothing else (boots two real servers, offline)
           t node scripts/test-status-probe-pow.js
-          # A free (proof-of-work or trial) call drops any payment header riding on it before the handler, so an unverified header never names the payer (wiring + a paid-mode boot, offline)
-          t node scripts/test-free-call-payment-headers.js
           # /openapi.json header parameters (Idempotency-Key on every op, X-Pow-Solution only where PoW-eligible)
           t node scripts/test-openapi-header-params.js
           # Process lifecycle (A402-10 SIGTERM drains + exits 0; uncaught exception is fatal + exits non-zero — spawns child)
