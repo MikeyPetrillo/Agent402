@@ -2443,6 +2443,8 @@ jobs:
           t node scripts/test-client-mpp.js
           # "Facilitator diagnostics (an HTML error page must name itself: block vs rate limit vs origin failure, and never touch the response — offline)"
           t node scripts/test-facilitator-diagnostics.js
+          # Facilitator access policy (open-mainnet startup warning, constant-time bearer compare; offline)
+          t node scripts/test-facilitator-access-policy.js
 
   test-unit-b4:
     # The second half of test-unit-b2 (2026-08-25, split by the seconds each item
