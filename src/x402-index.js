@@ -24,7 +24,7 @@
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
-import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
+import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, mergeProbeExamples, ProbeExampleMemo, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -34,6 +34,19 @@ import { createJsonDocument } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+
+// The last crawl's probe examples per origin (src/probe-example.js), memory
+// only and module-private: no export, persist, snapshot, state DB or replica
+// path reads it. When an origin's OpenAPI examples leave it (evicted, or over
+// the per-origin bound) the stored /openapi.json validator goes too, so the
+// next read is unconditional and a 304 is answered only while its examples are
+// still here: on a 304, no entry means the document published none.
+const probeExampleMemo = new ProbeExampleMemo({
+  onDrop: (origin, part) => { if (part === "openapi") rememberValidator(origin, "/openapi.json", null); },
+});
+/** Counts only (origins, bytes), never content: for tests. */
+export function __probeExampleMemoStatsForTest() { return probeExampleMemo.stats(); }
+
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
 const docs = new Map();
@@ -1050,6 +1063,7 @@ function purgeOrigin(key) {
   for (const [from, r] of [...successions]) if (match(from) || match(r.to)) { successions.delete(from); held.successions++; }
   for (const o of [...successionScanAt.keys()]) if (match(o)) successionScanAt.delete(o);
   for (const k of [...forcedCrawlAt.keys()]) if (match(k)) forcedCrawlAt.delete(k);
+  probeExampleMemo.purge(match);
   try { clearOriginProbeState(key); } catch { /* best-effort */ }
   try { deleteSellerRegistration(key); } catch { /* best-effort */ }
   return held;
@@ -1547,10 +1561,17 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
         const allowance = repriceAllowance(origin);
         if (allowance > 0) {
           noteReprice(origin);
-          // The examples are re-read from the manifest the crawl kept (packed),
-          // into a Map local to this call: the probe body only.
-          const probeExamples = new Map();
-          try { const doc = await previousManifestDoc(fresh || existing); if (doc) normaliseManifestTools(doc, origin, { examples: probeExamples }); } catch { /* no examples */ }
+          // The examples the last crawl probed with (probeExampleMemo: manifest
+          // first, then OpenAPI), into a Map local to this call: the probe body
+          // only. A memo holding no manifest part (a restart) falls back to the
+          // manifest the crawl kept packed.
+          let probeExamples = probeExampleMemo.merged(origin);
+          if (!probeExampleMemo.get(origin, "manifest")) {
+            try {
+              const doc = await previousManifestDoc(fresh || existing);
+              if (doc) { const own = new Map(); normaliseManifestTools(doc, origin, { examples: own }); probeExamples = mergeProbeExamples(own, probeExamples); }
+            } catch { /* no examples */ }
+          }
           await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, probeExamples, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
           repriced = true;
         }
@@ -5298,6 +5319,7 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
 // a validator it no longer honours.
 const crawlValidators = new Map();
 const vkey = (originUrl, path) => `${originUrl}${path}`;
+
 export function validatorFor(originUrl, path) { return crawlValidators.get(vkey(originUrl, path)) || null; }
 export function rememberValidator(originUrl, path, validators) {
   const k = vkey(originUrl, path);
@@ -5449,6 +5471,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // normalised tool rows and the full operation-route list, and both are
     // small. So those are what the cache carries.
     let openapiTools = null, openapiRoutes = null;
+    // The OpenAPI's probe examples: read from the document, or on a 304 from
+    // probeExampleMemo (the document is not kept). null = no OpenAPI read.
+    let openapiExamples = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
       if (res.notModified && prev?.openapiTools) {
@@ -5456,6 +5481,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         openapiRoutes = prev.openapiRoutes || [];
         tools = openapiTools;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
+        openapiExamples = probeExampleMemo.get(originUrl, "openapi") || new Map();
       } else {
         const body = res.notModified
           ? (rememberValidator(originUrl, "/openapi.json", null),
@@ -5465,6 +5491,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         openapiTools = normaliseOpenapiTools(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
         tools = openapiTools;
+        openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
     } catch {
       /* manifest-only seller — fine */
@@ -5489,7 +5516,10 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // this crawl returns (src/probe-example.js). Manifest first, then OpenAPI.
     const probeExamples = new Map();
     tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl, { examples: probeExamples }), tools);
-    if (openapi && openapi.paths) openapiProbeExamples(openapi, originUrl, probeExamples);
+    // Kept per origin in memory only, for the next 304 and a re-price.
+    probeExampleMemo.set(originUrl, "manifest", probeExamples);
+    mergeProbeExamples(probeExamples, openapiExamples);
+    probeExampleMemo.set(originUrl, "openapi", openapiExamples);
     tools = dropDeclaredFreeEndpoints(tools, manifest);
     tools = dropUnvouchedNonProductRoutes(tools, (bazaarToolsByOrigin.get(originUrl) || []).map((t) => t.route));
     // Which routes the seller's own documents name; the rest must prove
@@ -5628,6 +5658,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       carryForwardLearnedQuotes(tools, prev);
       // Crawl-local, as on the manifest path: the probe body only.
       const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
+      // In memory only, for a re-price; this branch's reads are unconditional.
+      probeExampleMemo.set(originUrl, "manifest", null);
+      probeExampleMemo.set(originUrl, "openapi", probeExamples);
       await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.

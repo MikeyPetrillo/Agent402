@@ -22,9 +22,10 @@ process.env.INDEX_CACHE_FILE = join(TMP, "x402-index-cache.json");
 const { createServer } = await import("node:http");
 const idx = await import("../src/x402-index.js");
 const { normaliseManifestTools, openapiProbeExamples, sellerDetail, persistIndexCache, persistIndexCacheAsync,
-  __setCrawlFetchForTest, __setProbeFetchForTest, __crawlSellerForTest, __resetRobotsCacheForTest, _cacheForTests } = idx;
+  __setCrawlFetchForTest, __setProbeFetchForTest, __crawlSellerForTest, __resetRobotsCacheForTest, _cacheForTests,
+  __probeExampleMemoStatsForTest, __testSetBazaarTools, registerOrigin, __resetForcedCrawlForTest, validatorFor, removeOrigin } = idx;
 const { probeAttemptsFor } = await import("../src/x402-live-quote.js");
-const { boundedProbeExample, manifestEntryExample, openapiOperationExample, probeExampleFor, MAX_EXAMPLE_BYTES } = await import("../src/probe-example.js");
+const { boundedProbeExample, manifestEntryExample, openapiOperationExample, probeExampleFor, noteProbeExample, probeExamplePath, ProbeExampleMemo, MAX_EXAMPLE_BYTES } = await import("../src/probe-example.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -155,7 +156,37 @@ const pathsManifest = (origin, extra = {}) => ({
   ok(openapiOperationExample({ requestBody: { $ref: "#/__proto__/x" } }, doc) === null, "a ref through a reserved key is refused");
   ok(openapiOperationExample({ requestBody: { content: { "text/plain": { example: { a: 1 } } } } }, doc) === null, "only an application/json body is read");
   const oaMap = openapiProbeExamples({ openapi: "3.1.0", servers: [{ url: "/api" }], paths: { "/q": { post: { requestBody: { content: { "application/json": { example: { q: 1 } } } } }, get: {} } } }, "https://seller.example", new Map());
-  ok(oaMap.get("POST /api/q") === '{"q":1}' && oaMap.size === 1, "an OpenAPI POST example is keyed by the route the OpenAPI reader gives it");
+  ok(oaMap.get("POST /api/q") === '{"q":1}' && probeExampleFor(oaMap, "POST", "/api/q") === '{"q":1}' && probeExampleFor(oaMap, "GET", "/api/q") === null, "an OpenAPI POST example is keyed by the route the OpenAPI reader gives it");
+}
+
+// ------------------------------------------------------------ 3b. route matching and the memo
+{
+  eq(["/v1/x", "/v1/x/", "/v1/x?a=1", "/v1/x/?a=1", "/v1/x//", "/", "/?q=1", ""].map(probeExamplePath), ["/v1/x", "/v1/x", "/v1/x", "/v1/x", "/v1/x", "/", "/", "/"], "the matched path drops the query and trailing slashes");
+  const m = new Map();
+  noteProbeExample(m, "POST", "/v1/x", '{"x":1}');
+  for (const r of ["/v1/x?mode=fast", "/v1/x/", "/v1/x/?mode=fast"]) ok(probeExampleFor(m, "POST", r) === '{"x":1}', `a row at ${r} finds the example published for /v1/x`);
+  ok(probeExampleFor(m, "POST", "/v1/xy") === null && probeExampleFor(m, "POST", "/v1") === null, "another path does not");
+  const v = new Map();
+  noteProbeExample(v, "POST", "/v1/y?p=a", '{"p":"a"}');
+  noteProbeExample(v, "POST", "/v1/y?p=b", '{"p":"b"}');
+  ok(probeExampleFor(v, "POST", "/v1/y?p=b") === '{"p":"b"}' && probeExampleFor(v, "POST", "/v1/y?p=a") === '{"p":"a"}', "an exact route still wins over the shared path");
+  ok(probeExampleFor(v, "POST", "/v1/y") === '{"p":"a"}', "the bare path takes the first variant's example");
+
+  // The memo: bounded, by origin and source, with a drop hook.
+  const dropped = [];
+  const memo = new ProbeExampleMemo({ maxBytes: 200, maxOriginBytes: 120, onDrop: (o, p) => dropped.push(`${o} ${p}`) });
+  const ex = (n) => new Map([["POST /a", "x".repeat(n)]]);
+  ok(memo.set("o1", "openapi", ex(40)) && memo.get("o1", "openapi")?.get("POST /a").length === 40, "a set is read back by origin and source");
+  ok(memo.set("o1", "manifest", new Map([["POST /a", "m"]])) && memo.merged("o1").get("POST /a") === "m", "merged reads the manifest before the OpenAPI");
+  ok(memo.set("o2", "openapi", ex(150)) === false && memo.get("o2", "openapi") === null && dropped.includes("o2 openapi"), "an origin over its own bound is not kept, and the drop hook runs");
+  memo.set("o3", "openapi", ex(80)); memo.set("o4", "openapi", ex(80));
+  ok(memo.get("o1", "openapi") === null && dropped.includes("o1 openapi") && dropped.includes("o1 manifest"), "past the total bound the oldest origin is evicted, with its drop hook");
+  ok(memo.stats().bytes <= 200 && memo.get("o4", "openapi") !== null, `the total stays within its bound (${JSON.stringify(memo.stats())})`);
+  memo.set("o4", "openapi", null);
+  ok(memo.get("o4", "openapi") === null, "a null set clears that source");
+  memo.purge((o) => o === "o3");
+  ok(memo.get("o3", "openapi") === null && memo.stats().origins === 0, "purge forgets an origin");
+  ok(!JSON.stringify(memo).includes("x") && Object.keys(memo).length === 0, "the memo serialises to nothing: its state is in private fields");
 }
 
 // ------------------------------------------------------------ 4. end to end, and private
@@ -268,8 +299,120 @@ try {
   } finally { console.log = silence; }
 }
 
+// ------------------------------------------------------------ 5. later crawls keep the example
+// Seller c serves validators, so its second crawl is answered 304 for both
+// documents; its example is only in OpenAPI. Seller d's manifest example is for
+// /v1/d while the row the index keeps is a registry row at /v1/d?mode=x.
+const c = await listen(seller);
+const d = await listen(seller);
+const ETAG = { etag: '"v1"' };
+const conditional = new Set([`${c.origin}/.well-known/x402`, `${c.origin}/openapi.json`]);
+const seen304 = [];
+__setCrawlFetchForTest(async (url, opts = {}) => {
+  if (url.endsWith("/robots.txt")) return { html: "User-agent: *\nAllow: /\n", finalUrl: url, validators: null };
+  const hit = served.get(url);
+  if (!hit) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422 });
+  if (conditional.has(url)) {
+    if (opts.allowNotModified && opts.validators?.etag === ETAG.etag) { seen304.push(url); return { notModified: true, finalUrl: url, validators: ETAG }; }
+    return { html: JSON.stringify(hit), finalUrl: url, validators: ETAG };
+  }
+  return { html: JSON.stringify(hit), finalUrl: url, validators: null };
+});
+served.set(`${c.origin}/.well-known/x402`, { x402Version: 2, resources: [{ resource: `${c.origin}/v1/oa`, method: "POST", description: "One." }] });
+served.set(`${c.origin}/openapi.json`, served.get(`${b.origin}/openapi.json`));
+served.set(`${d.origin}/.well-known/x402`, { x402Version: 2, resources: [{ resource: `${d.origin}/v1/d`, method: "POST", description: "D.", exampleRequest: { intent: MARK } }] });
+__testSetBazaarTools(d.origin, [{ route: "/v1/d?mode=x", method: "POST", slug: "d", name: "d", paid: true, seller: d.origin, networks: [] }]);
+
+const logged2 = [];
+for (const k of Object.keys(orig)) console[k] = (...args) => { logged2.push(args.map((x) => (typeof x === "string" ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })())).join(" ")); if (k === "error") orig.error(...args); };
+const oaPosts = (o) => bodies.filter((x) => `http://${x.headers.host}` === o && x.url === "/v1/oa" && x.method === "POST");
+let vc, vd;
+try {
+  bodies.length = 0;
+  vc = await crawl(c.origin);
+  ok(vc?.tools?.find((t) => t.route === "/v1/oa")?.networks?.includes(ARC), "seller c: the first crawl reached the 402 with the OpenAPI example");
+  ok(validatorFor(c.origin, "/openapi.json")?.etag === ETAG.etag, "seller c sent a validator, so the next OpenAPI read is conditional");
+  // Forget what the first crawl learned, so the second must probe again.
+  const entry = _cacheForTests().get(c.origin);
+  for (const t of entry.tools) { t.networks = []; t.price = null; delete t.lastProbedAt; delete t.livePrice; delete t.probedAt; }
+  idx.clearOriginProbeState(c.origin);
+  idx.rememberValidator(c.origin, "/openapi.json", ETAG);
+  idx.rememberValidator(c.origin, "/.well-known/x402", ETAG);
+  bodies.length = 0; seen304.length = 0;
+  vc = await crawl(c.origin);
+  ok(seen304.includes(`${c.origin}/openapi.json`), "seller c's second crawl was answered 304 for /openapi.json");
+  const posts = oaPosts(c.origin);
+  ok(posts.length > 0 && posts[0].body.includes(`${MARK}-oa`), `the 304 crawl's first POST carried the OpenAPI example (${posts.length} POSTs)`);
+  ok(vc?.tools?.find((t) => t.route === "/v1/oa")?.networks?.includes(ARC), "and the 304 crawl read the live chain");
+
+  // Fix 3: a registry row with a query string takes the manifest's example.
+  bodies.length = 0;
+  vd = await crawl(d.origin);
+  const drow = vd?.tools?.find((t) => String(t.route).startsWith("/v1/d"));
+  ok(drow?.route === "/v1/d?mode=x", `seller d is listed by its registry row (${drow?.route})`);
+  const dPost = bodies.find((x) => x.method === "POST" && x.url.startsWith("/v1/d"));
+  ok(dPost && dPost.body.includes(MARK), "the registry row's first POST carried the manifest example for its path");
+  ok(drow?.networks?.includes(ARC), "and its live chain was recorded");
+
+  // Fix 2: a re-registration re-price, with no packed manifest kept (seller a
+  // sends no validator), still leads with the example; and for seller c the
+  // OpenAPI example comes from the memo.
+  ok(!Buffer.isBuffer(_cacheForTests().get(a.origin)?.manifestBody), "seller a's entry keeps no packed manifest");
+  __resetForcedCrawlForTest();
+  for (const [o, route, want] of [[a.origin, "/v1/task/build", MARK], [c.origin, "/v1/oa", `${MARK}-oa`]]) {
+    const ent = _cacheForTests().get(o);
+    for (const t of ent.tools) { t.networks = []; t.price = null; }
+    bodies.length = 0;
+    const r = await registerOrigin(o, { crawl: async () => {} });
+    ok(r?.listed && r?.reverify?.repriced !== false, `re-registration of ${route} listed and re-priced (${JSON.stringify(r?.reverify)})`);
+    const first = bodies.find((x) => x.method === "POST" && x.url === route);
+    ok(first && first.body.includes(want), `the re-price's first POST to ${route} carried the example`);
+  }
+} finally {
+  for (const k of Object.keys(orig)) console[k] = orig[k];
+}
+{
+  // The memo is the one structure holding examples across crawls: it is
+  // populated, and nothing persisted, snapshotted, exported or projected
+  // reaches its content.
+  const st = __probeExampleMemoStatsForTest();
+  ok(st.origins >= 3 && st.bytes > 0, `the memo holds the crawls' examples in memory (${JSON.stringify(st)})`);
+  ok(!JSON.stringify(st).includes(MARK), "its stats are counts only");
+  const leaks = [];
+  const deep = (v, where, seen = new Set()) => {
+    if (typeof v === "string") { if (v.includes(MARK)) leaks.push(where); return; }
+    if (!v || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    if (Buffer.isBuffer(v)) return;
+    if (v instanceof Map) { for (const [k, x] of v) { deep(k, `${where}<key>`, seen); deep(x, `${where}<${String(k).slice(0, 40)}>`, seen); } return; }
+    if (v instanceof Set) { for (const x of v) deep(x, `${where}<set>`, seen); return; }
+    for (const k of Reflect.ownKeys(v)) { try { deep(v[k], `${where}.${String(k)}`, seen); } catch { /* accessor */ } }
+  };
+  for (const o of [a.origin, b.origin, c.origin, d.origin]) {
+    deep(sellerDetail(o), `seller detail ${o}`);
+    const { manifestBody, ...rest } = _cacheForTests().get(o) || {};
+    deep(rest, `cache entry ${o}`);
+  }
+  // Every exported value of the index module that is not a function.
+  for (const [k, v] of Object.entries(idx)) if (typeof v !== "function") deep(v, `export ${k}`);
+  deep([..._cacheForTests().entries()], "whole cache");
+  ok(leaks.length === 0, `no seller detail, cache entry or exported value reaches an example (${leaks.slice(0, 5).join(", ")})`);
+  ok(persistIndexCache(process.env.INDEX_CACHE_FILE) && !readFileSync(process.env.INDEX_CACHE_FILE, "utf8").includes(MARK), "the persisted index file carries no example after the later crawls");
+  const asyncFile = join(TMP, "async-cache-2.json");
+  await persistIndexCacheAsync(asyncFile);
+  const written = [asyncFile, asyncFile.replace(/\.json$/, "") + ".ndjson"].filter((f) => existsSync(f));
+  ok(written.length > 0 && written.every((f) => !readFileSync(f, "utf8").includes(MARK)), `the async snapshot files carry no example after the later crawls (${written.length} read)`);
+  ok(!logged2.some((l) => l.includes(MARK)), `no log line of the later crawls or re-prices carries the example (${logged2.length} lines read)`);
+  // A removed origin's examples leave the memo.
+  const before = __probeExampleMemoStatsForTest().origins;
+  const silence = console.log; console.log = () => {};
+  try { await removeOrigin(d.origin, { note: "test" }); } finally { console.log = silence; }
+  ok(__probeExampleMemoStatsForTest().origins === before - 1, "removing an origin drops its examples from the memo");
+}
+
+__testSetBazaarTools(d.origin, null);
 __setProbeFetchForTest(null);
 __setCrawlFetchForTest(null);
-a.server.close(); b.server.close();
+a.server.close(); b.server.close(); c.server.close(); d.server.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

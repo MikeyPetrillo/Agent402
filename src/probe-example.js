@@ -9,9 +9,17 @@
 // PRIVATE BY CONSTRUCTION. request-contract.js projects the shape and never the
 // sample, for every projection. This module is the one private use of a
 // sample: the example is read from the seller's document during a crawl into a
-// Map that lives only in that crawl's stack frame, handed to the probe, and
-// dropped. It is never put on a tool row, the crawl cache, the persisted index,
-// a log line, an API, page or MCP answer, or an agent's context.
+// Map handed to the probe. It is never put on a tool row, the crawl cache, the
+// persisted index, a log line, an API, page or MCP answer, or an agent's
+// context.
+//
+// One copy outlives the crawl, in process memory only: ProbeExampleMemo below
+// keeps the last crawl's examples per seller origin (not the documents), so a
+// later crawl answered 304 for the OpenAPI, and a re-registration re-price,
+// probe with the same body the first crawl did. It is a module-private
+// instance in x402-index.js: no exported binding, no persist, snapshot, state
+// DB or replica path reads it, and it is bounded in bytes and emptied for an
+// origin that is removed. A process restart drops it.
 //
 // Bounded: a JSON object only (never an array or a scalar), at most
 // MAX_EXAMPLE_BYTES serialized and MAX_EXAMPLE_DEPTH deep, no
@@ -104,19 +112,124 @@ export function openapiOperationExample(op, doc) {
   return null;
 }
 
-/** Record one example under its route. First writer wins, so a seller's own
- *  manifest (read first) is preferred over its OpenAPI. Keys are
- *  "<METHOD> <route>", plus "* <route>" for an entry that names no verb. */
-export function noteProbeExample(map, method, route, text) {
-  if (!(map instanceof Map) || !text || typeof route !== "string" || !route) return;
-  if (map.size >= MAX_EXAMPLES) return;
-  const k = `${method ? String(method).toUpperCase() : "*"} ${route}`;
-  if (!map.has(k)) map.set(k, text);
+/** The path a probe example is matched on: the route without its query and
+ *  without trailing slashes (the root stays "/"). The index keys a merge by
+ *  pathname (mergeManifestIntoTools), so a row from OpenAPI or a registry may
+ *  carry a query string, or a slash, the manifest entry did not. */
+export function probeExamplePath(route) {
+  const p = String(route ?? "").split("?")[0].split("#")[0].replace(/\/+$/, "");
+  return p || "/";
 }
 
-/** The example for a probe of `route` on `method`, or null. */
+/** Record one example under its route. First writer wins, so a seller's own
+ *  manifest (read first) is preferred over its OpenAPI. Keys are
+ *  "<METHOD> <route>", plus "* <route>" for an entry that names no verb; each
+ *  is recorded under the exact route and under its normalised path. */
+export function noteProbeExample(map, method, route, text) {
+  if (!(map instanceof Map) || !text || typeof route !== "string" || !route) return;
+  const m = method ? String(method).toUpperCase() : "*";
+  for (const k of new Set([`${m} ${route}`, `${m} ~${probeExamplePath(route)}`])) {
+    if (map.size >= MAX_EXAMPLES) return;
+    if (!map.has(k)) map.set(k, text);
+  }
+}
+
+/** The example for a probe of `route` on `method`, or null: the exact route
+ *  first, then the same path with any query string or trailing slash. */
 export function probeExampleFor(map, method, route) {
   if (!(map instanceof Map) || !map.size) return null;
   const r = String(route || "");
-  return map.get(`${String(method || "").toUpperCase()} ${r}`) ?? map.get(`* ${r}`) ?? null;
+  const m = String(method || "").toUpperCase();
+  const p = `~${probeExamplePath(r)}`;
+  return map.get(`${m} ${r}`) ?? map.get(`* ${r}`) ?? map.get(`${m} ${p}`) ?? map.get(`* ${p}`) ?? null;
+}
+
+/** Copy `from`'s entries into `into` where `into` has none (first writer
+ *  wins), within MAX_EXAMPLES. Returns `into`. */
+export function mergeProbeExamples(into, from) {
+  if (!(into instanceof Map) || !(from instanceof Map)) return into;
+  for (const [k, v] of from) {
+    if (into.size >= MAX_EXAMPLES) break;
+    if (!into.has(k)) into.set(k, v);
+  }
+  return into;
+}
+
+const mapBytes = (m) => {
+  let n = 0;
+  if (m instanceof Map) for (const [k, v] of m) n += Buffer.byteLength(k, "utf8") + Buffer.byteLength(v, "utf8");
+  return n;
+};
+
+export const MEMO_MAX_BYTES = 8 * 1024 * 1024;
+export const MEMO_MAX_ORIGIN_BYTES = 256 * 1024;
+
+/**
+ * The last crawl's examples per seller origin, in process memory only, split by
+ * source: `manifest` (read from /.well-known/x402) and `openapi` (from
+ * /openapi.json). Least recently written origin evicted first past
+ * MEMO_MAX_BYTES; an origin whose examples exceed MEMO_MAX_ORIGIN_BYTES is not
+ * kept. `onDrop(origin, part)` runs for each part that leaves (evicted or
+ * refused), so the caller can make the next read of that document
+ * unconditional: a 304 is then answered only while its examples are here.
+ * Holds no document, no row and nothing else about the seller.
+ */
+export class ProbeExampleMemo {
+  #byOrigin = new Map();
+  #bytes = 0;
+  #onDrop;
+  #max;
+  #maxOrigin;
+  constructor({ onDrop = null, maxBytes = MEMO_MAX_BYTES, maxOriginBytes = MEMO_MAX_ORIGIN_BYTES } = {}) {
+    this.#onDrop = typeof onDrop === "function" ? onDrop : null;
+    this.#max = maxBytes;
+    this.#maxOrigin = maxOriginBytes;
+  }
+  #drop(origin, e) {
+    this.#byOrigin.delete(origin);
+    this.#bytes -= e.bytes;
+    if (this.#onDrop) for (const part of ["manifest", "openapi"]) if (e[part]) { try { this.#onDrop(origin, part); } catch { /* best-effort */ } }
+  }
+  /** Replace one source's examples for an origin (an empty or null Map
+   *  clears it). Returns false when they were not kept (over the per-origin
+   *  bound); onDrop has then run for that part. */
+  set(origin, part, examples) {
+    if (typeof origin !== "string" || (part !== "manifest" && part !== "openapi")) return false;
+    const cur = this.#byOrigin.get(origin);
+    const next = { manifest: cur?.manifest ?? null, openapi: cur?.openapi ?? null, bytes: 0 };
+    next[part] = examples instanceof Map && examples.size ? new Map(examples) : null;
+    next.bytes = mapBytes(next.manifest) + mapBytes(next.openapi);
+    let kept = true;
+    if (next.bytes > this.#maxOrigin) {
+      next[part] = null;
+      next.bytes = mapBytes(next.manifest) + mapBytes(next.openapi);
+      kept = false;
+      if (this.#onDrop) { try { this.#onDrop(origin, part); } catch { /* best-effort */ } }
+    }
+    if (cur) { this.#byOrigin.delete(origin); this.#bytes -= cur.bytes; }
+    if (next.manifest || next.openapi) {
+      this.#byOrigin.set(origin, next);
+      this.#bytes += next.bytes;
+    }
+    for (const [o, e] of this.#byOrigin) {
+      if (this.#bytes <= this.#max || o === origin) break;
+      this.#drop(o, e);
+    }
+    return kept;
+  }
+  /** One source's examples for an origin, or null. */
+  get(origin, part) { return this.#byOrigin.get(origin)?.[part] ?? null; }
+  /** Both sources merged, manifest first, into a new Map. */
+  merged(origin) {
+    const e = this.#byOrigin.get(origin);
+    const out = new Map();
+    if (e) { mergeProbeExamples(out, e.manifest); mergeProbeExamples(out, e.openapi); }
+    return out;
+  }
+  /** Forget every origin `match` accepts, with no onDrop (the origin is gone). */
+  purge(match) {
+    for (const [o, e] of [...this.#byOrigin]) if (match(o)) { this.#byOrigin.delete(o); this.#bytes -= e.bytes; }
+  }
+  /** Counts only, never content. */
+  stats() { return { origins: this.#byOrigin.size, bytes: this.#bytes }; }
 }
