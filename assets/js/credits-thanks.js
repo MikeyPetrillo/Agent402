@@ -4,7 +4,7 @@
 (function () {
   var app = document.getElementById("app");
   var id = app && app.getAttribute("data-session");
-  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function render(s) {
     if (s.status === "minted") {
       app.innerHTML = '<div class="status" style="text-align:left">' +

@@ -37,8 +37,7 @@ const fail = (m) => { console.error("FAIL:", m); try { proc.kill("SIGKILL"); } c
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Mirror src/skills.js esc(): escape &, <, >, " — apostrophes are passed
-// through verbatim because the render output uses double-quoted attributes.
+// Mirror src/skills.js esc() (src/ledger-chrome.js): escape &, <, >, " and '.
 // Re-implemented here (instead of imported) so the test stays self-contained,
 // and so a future divergence in escape behavior surfaces as a test failure on
 // the first pack that has any of these characters in a rendered string.
@@ -47,7 +46,8 @@ const esc = (s) =>
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,

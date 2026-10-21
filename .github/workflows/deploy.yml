@@ -1866,6 +1866,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
+          t node scripts/test-escape-quotes.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them
