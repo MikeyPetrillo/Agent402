@@ -42,6 +42,12 @@ free.
 5. When you're ready, change mode to `bots` and save. The same
    classifier, the same UA list, but crawlers now get 402.
 
+**Keep PHP patched.** The plugin runs inside your site's PHP, so your
+host's PHP version is part of its security. Run a PHP release that still
+receives security updates, and apply PHP security releases as soon as your
+host offers them. A vulnerability in PHP itself is fixed by updating PHP;
+no plugin setting can mitigate it.
+
 ## Settings
 
 | Field | What it does |
