@@ -5407,6 +5407,19 @@ app.post("/__operator/mpp-reconcile/run", (req, res) => {
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || "")) ? String(req.query.day) : null;
   mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message).slice(0, 200) }));
 });
+// Mark ONE reconciliation item as explained ({tx, note}) or lift the mark
+// ({tx, action:"restore"}). Writes only the explanations document, then
+// re-runs the affected days (a chain read, so the heavy limiter). The note is
+// stored as given and only ever served as JSON.
+app.post("/__operator/mpp-reconcile/explain", express.json(), (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  mppReconciler.explain({ tx: b.tx, note: b.note, action: b.action === undefined ? "explain" : b.action }).then(
+    (r) => res.set("Cache-Control", "no-store").json(r),
+    (e) => res.status(Number.isInteger(e?.statusCode) ? e.statusCode : 500).set("Cache-Control", "no-store").json({ error: String(e?.message || e).slice(0, 300) }),
+  );
+});
 app.get("/__operator/backup.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json({ status: backupStatus(), plan: backupPlan() });

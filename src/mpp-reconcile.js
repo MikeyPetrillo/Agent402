@@ -34,6 +34,14 @@
 // from 2026-09-28: a one-base-unit ($0.000001) transfer from an unknown sender
 // kept the day "mismatch" as a paid-but-unrecorded sale for two days.
 //
+// Also informational: `explained`, a mismatch item whose settlement reference
+// an operator marked as understood (POST /__operator/mpp-reconcile/explain,
+// {tx, note}). The item is still itemized, under `explained` with its original
+// category and the note, in the operator rows only; it just no longer holds
+// the day or the 7-day window at "mismatch". Nothing in the ledgers or on chain
+// is touched, and removing the mark ({tx, action:"restore"}) returns the item
+// to its original category on the next run (the POST re-runs at once).
+//
 // Rules this module keeps:
 //   * NEVER publishes a payer address. Ledger rows carry the payer only so the
 //     EVM check can bind from == payer; nothing here copies it into a summary.
@@ -50,14 +58,14 @@
 //     answer; nothing accumulates.
 //   * Leaf module: every source is injected (server.js wires the real ones),
 //     so the whole thing runs offline in scripts/test-mpp-reconcile.js.
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 
 export const CATEGORIES = Object.freeze([
   "served_unpaid", "paid_unrecorded", "charged_failed", "amount_mismatch", "wrong_currency",
   "duplicate_tx", "missing_tx", "evm_unverified", "stripe_mismatch",
 ]);
-export const INFO_CATEGORIES = Object.freeze(["non_payment_transfer"]);
+export const INFO_CATEGORIES = Object.freeze(["non_payment_transfer", "explained"]);
 // charged_failed is counted and itemized but does NOT make the day a
 // mismatch: the refund ledger already holds the debt (the books agree), and
 // it has its own live alarm (`chargedFailed24h`). Every other category is a
@@ -79,6 +87,29 @@ const normTx = (tx) => {
   return /^0x[0-9a-fA-F]+$/.test(t) ? t.toLowerCase() : t; // EVM hashes case-fold; anything else stays exact
 };
 const round6 = (n) => Math.round(Number(n) * 1e6) / 1e6;
+
+// The settlement references the reconciler itemizes: a 32-byte EVM transaction
+// hash (Tempo, Base, Celo) or a Stripe PaymentIntent id. Nothing else can be
+// explained, so a payer address (20 bytes) or free text is refused by shape.
+const EXPLAIN_TX_RE = /^(?:0x[0-9a-fA-F]{64}|pi_[A-Za-z0-9]{8,64})$/;
+export const EXPLAIN_NOTE_MAX = 280;
+export const EXPLAIN_MAX_ENTRIES = 200;
+// Control characters and the invisible carriers (zero-width, bidi, TAG,
+// variation selectors, soft hyphen) are refused: a note is plain text.
+const NOTE_BAD_RE = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]|[\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
+/** The stored form of an explainable reference, or null when it has another shape. */
+export function explainTxKey(tx) {
+  if (typeof tx !== "string" || !EXPLAIN_TX_RE.test(tx)) return null;
+  return normTx(tx);
+}
+/** Null when the note is acceptable, else the reason it is not. */
+export function explainNoteProblem(note) {
+  if (typeof note !== "string" || !note.trim()) return "note is required (plain text)";
+  if (note.length > EXPLAIN_NOTE_MAX) return `note is longer than ${EXPLAIN_NOTE_MAX} characters`;
+  if (NOTE_BAD_RE.test(note)) return "note must be plain text (no control or invisible characters)";
+  return null;
+}
+
 export const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 export const dayStartMs = (day) => Date.parse(`${day}T00:00:00.000Z`);
 
@@ -100,13 +131,19 @@ function emptyCounts() {
 export function reconcileRecords({
   start, end, ledgerRows = [], transfers = null, refunds = [], evmChecks = new Map(), stripeChecks = { configured: false, results: new Map() },
   currencies = [], premiumUsd = 0, nonPaymentUsd = 10, minSaleUsd = 0.001, isOwnWallet = () => false,
+  explained = new Map(),
 } = {}) {
   const counts = emptyCounts();
   const mismatches = [];
   const info = [];
   const inDay = (ts) => ts >= start && ts < end;
   const side = (internal) => (internal === true ? "internal" : internal === false ? "external" : "unattributed");
-  const add = (category, item, internal) => {
+  const add = (category0, item0, internal) => {
+    let category = category0, item = item0;
+    // An operator-explained reference moves a mismatch item to `explained`,
+    // keeping its original category and the note (operator rows only).
+    const ex = item0?.tx && MISMATCH_CATEGORIES.includes(category0) ? explained.get(normTx(item0.tx)) : null;
+    if (ex) { category = "explained"; item = { ...item0, explainedCategory: category0, note: String(ex.note), explainedAt: ex.at || null }; }
     const bucket = INFO_CATEGORIES.includes(category) ? info : mismatches;
     const c = counts[category];
     c.total += 1; c[side(internal)] += 1;
@@ -354,11 +391,14 @@ export async function fetchTransfersFromRpc({ rpcFn, recipients, fromMs, toMs, c
  *   premiumUsd()                    documented per-network price premium on Tempo (default 0)
  *   isOwnWallet(address)            internal attribution for chain-only transfers
  *   file                            persisted state (atomic tmp + rename)
+ *   explainedFile                   operator explanations, { entries: [{ tx, note, at }] }
  */
 export function createMppReconciler({
   ledgerRows = () => [], refunds = () => [], recipients = () => [], currencies = () => [],
   fetchTransfers = async () => null, verifyEvm = null, stripeLookup = null, premiumUsd = () => 0,
   isOwnWallet = () => false, file = process.env.MPP_RECONCILE_FILE || "/data/mpp-reconcile.json",
+  explainedFile = process.env.MPP_RECONCILE_EXPLAINED_FILE || "/data/mpp-reconcile-explained.json",
+  maxExplained = EXPLAIN_MAX_ENTRIES,
   nonPaymentUsd = Number(process.env.MPP_RECONCILE_NON_PAYMENT_USD) > 0 ? Number(process.env.MPP_RECONCILE_NON_PAYMENT_USD) : 10,
   maxEvmChecks = 50, maxStripeChecks = 50, keepDays = 14, now = () => Date.now(), log = console.log,
 } = {}) {
@@ -366,7 +406,16 @@ export function createMppReconciler({
   const doc = createJsonDocument({ file, log: () => {} });
   const absorb = (s) => { if (s && typeof s === "object" && s.days && typeof s.days === "object") state = { ...state, ...s }; };
   absorb(doc.loadSync(null));
-  const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then(absorb) : Promise.resolve());
+  // Operator explanations live in their own document: a run never writes
+  // them and an explain never writes a day, so neither can drop the other.
+  let explainedEntries = [];
+  const explDoc = createJsonDocument({ file: explainedFile, log: () => {} });
+  const absorbExplained = (b) => { if (b && typeof b === "object" && Array.isArray(b.entries)) explainedEntries = b.entries.filter((e) => e && explainTxKey(e.tx)); };
+  absorbExplained(explDoc.loadSync(null));
+  const ready = trackStoreReady(doc.backend === "pg"
+    ? Promise.all([doc.load(null).then(absorb), explDoc.load(null).then(absorbExplained)])
+    : Promise.resolve());
+  const explainedMap = () => new Map(explainedEntries.map((e) => [explainTxKey(e.tx), { note: e.note, at: e.at }]));
   let running = null;
   let timer = null, firstTimer = null;
 
@@ -413,14 +462,14 @@ export function createMppReconciler({
     return { configured: true, results };
   }
 
-  async function reconcileRange(start, end, { transfers }) {
+  async function reconcileRange(start, end, { transfers, explained }) {
     const lo = start - MATCH_MARGIN_MS, hi = end + MATCH_MARGIN_MS;
     const rows = await ledgerRows(lo, hi);
     const inRange = rows.filter((r) => r.ts >= start && r.ts < end);
     const [evmChecks, stripeChecks] = await Promise.all([evmChecksFor(inRange), stripeChecksFor(inRange)]);
     const summary = reconcileRecords({
       start, end, ledgerRows: rows, transfers, refunds: await refunds(lo, hi), evmChecks, stripeChecks,
-      currencies: currencies() || [], premiumUsd: Number(premiumUsd()) || 0, nonPaymentUsd, isOwnWallet,
+      currencies: currencies() || [], premiumUsd: Number(premiumUsd()) || 0, nonPaymentUsd, isOwnWallet, explained,
     });
     return summary;
   }
@@ -433,7 +482,11 @@ export function createMppReconciler({
   async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {
-      if (PG) { const r = await doc.read(); if (r.ok && r.exists) absorb(r.body); }
+      if (PG) {
+        const r = await doc.read(); if (r.ok && r.exists) absorb(r.body);
+        const x = await explDoc.read(); if (x.ok && x.exists) absorbExplained(x.body);
+      }
+      const explained = explainedMap();
       const t = now();
       const d = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : utcDay(t - DAY_MS);
       const start = dayStartMs(d), end = start + DAY_MS;
@@ -445,8 +498,8 @@ export function createMppReconciler({
         const transfers = tempoConfigured
           ? await fetchTransfers({ recipients: recips, fromMs: wStart - MATCH_MARGIN_MS, toMs: Math.min(end + MATCH_MARGIN_MS, t) })
           : { complete: true, source: "none", rows: [], error: null };
-        const daySum = await reconcileRange(start, end, { transfers });
-        const winSum = await reconcileRange(wStart, end, { transfers });
+        const daySum = await reconcileRange(start, end, { transfers, explained });
+        const winSum = await reconcileRange(wStart, end, { transfers, explained });
         const pack = (s, extra) => ({ ...extra, generatedAt: new Date(t).toISOString(), tempoConfigured, ...s });
         state.days[d] = pack(daySum, { day: d });
         state.window = pack(winSum, { from: utcDay(wStart), to: d });
@@ -480,7 +533,21 @@ export function createMppReconciler({
    *  one word per category, the chain source, staleness as a boolean. The
    *  counts, the internal/external split and the 7-day totals are full=true
    *  (operator) only. */
+  // With the database another container may have re-run a day (a manual run,
+  // an explain): status re-reads the row at most once a minute so every
+  // container's words follow the stored summaries.
+  let rowReadAt = 0;
+  async function refreshFromRow() {
+    if (!PG || now() - rowReadAt < 60_000) return;
+    rowReadAt = now();
+    try {
+      const r = await doc.read(); if (r.ok && r.exists) absorb(r.body);
+      const x = await explDoc.read(); if (x.ok && x.exists) absorbExplained(x.body);
+    } catch { /* keep memory */ }
+  }
+
   async function status({ full = false } = {}) {
+    await refreshFromRow();
     const s = latestDay();
     const t = now();
     let word = statusWordFor(s);
@@ -523,7 +590,69 @@ export function createMppReconciler({
   /** Full detail for the operator route. Still no payer addresses: the
    *  summaries never held one. */
   function detail() {
-    return { lastRunAt: state.lastRunAt, lastError: state.lastError, runs: state.runs, lastDay: state.lastDay || null, day: latestDay(), window: state.window, days: Object.keys(state.days).sort() };
+    return { lastRunAt: state.lastRunAt, lastError: state.lastError, runs: state.runs, lastDay: state.lastDay || null, day: latestDay(), window: state.window, days: Object.keys(state.days).sort(), explained: explainedEntries.map((e) => ({ tx: e.tx, note: e.note, at: e.at })) };
+  }
+
+  const itemTxs = (sum) => [...(sum?.mismatches || []), ...(sum?.info || [])].map((m) => (m?.tx ? normTx(m.tx) : null));
+  const err = (statusCode, message) => Object.assign(new Error(message), { statusCode });
+
+  /** Operator lever: mark one settlement reference as explained ({ tx, note })
+   *  or lift the mark ({ tx, action: "restore" }). Only the explanations
+   *  document is written; the ledgers and the chain are never touched. The
+   *  days whose stored summaries carry the reference are then re-run (the
+   *  latest day last, so it stays the reported day and its window is the one
+   *  published), so the status words move at once. Throws an Error with
+   *  .statusCode on a refusal. */
+  async function explain({ tx, note, action = "explain" } = {}) {
+    if (action !== "explain" && action !== "restore") throw err(400, 'action must be "explain" (the default) or "restore"');
+    const key = explainTxKey(tx);
+    if (!key) throw err(400, "tx must be a settlement reference as the reconciler reports it: 0x + 64 hex (a transaction hash) or pi_ + 8-64 letters/digits (a PaymentIntent)");
+    if (action === "explain") { const p = explainNoteProblem(note); if (p) throw err(400, p); }
+    const at = new Date(now()).toISOString();
+    let refusal = null, changed = false;
+    const w = await explDoc.update((b) => {
+      const entries = (b && Array.isArray(b.entries) ? b.entries : []).filter((e) => e && explainTxKey(e.tx));
+      const i = entries.findIndex((e) => explainTxKey(e.tx) === key);
+      refusal = null; changed = false;
+      if (action === "restore") {
+        if (i < 0) return SKIP_UPDATE;
+        entries.splice(i, 1);
+      } else if (i >= 0) {
+        entries[i] = { tx: key, note, at };
+      } else {
+        if (entries.length >= maxExplained) { refusal = err(409, `at most ${maxExplained} explained entries; restore one first`); return SKIP_UPDATE; }
+        entries.push({ tx: key, note, at });
+      }
+      changed = true;
+      return { entries };
+    }, { fallback: { entries: [] } });
+    if (!w.ok) throw err(503, "the explanations could not be saved; nothing changed");
+    if (refusal) throw refusal;
+    absorbExplained(w.body);
+    // The other container may hold the newer days: start from the row.
+    if (PG) { const r = await doc.read(); if (r.ok && r.exists) absorb(r.body); }
+    // Re-run: the days whose stored summary itemizes this reference, then the latest day.
+    const reran = [];
+    const last = state.lastDay && state.days[state.lastDay] ? state.lastDay : null;
+    if (changed && last) {
+      const affected = Object.keys(state.days).sort().filter((d) => d !== last && itemTxs(state.days[d]).includes(key));
+      for (const d of [...affected, last]) {
+        if (running) await running.catch(() => {});
+        const r = await runOnce({ day: d });
+        reran.push({ day: d, ok: r?.ok === true, ...(r?.skipped ? { skipped: r.skipped } : {}), ...(r?.ok ? { status: statusWordFor(r.summary) } : {}) });
+      }
+    }
+    const summaries = [...Object.values(state.days), state.window].filter(Boolean);
+    const matched = summaries.some((sum) => itemTxs(sum).includes(key));
+    const pub = await status({ full: false }).catch(() => null);
+    return {
+      ok: true, action, tx: key, changed, matched,
+      ...(matched ? {} : { matchNote: "no reconciliation item in the stored days carries this reference; the explanation is kept and applies if one appears" }),
+      ...(action === "explain" ? { note, at } : {}),
+      explainedCount: explainedEntries.length, maxExplained,
+      reran,
+      status: pub ? { status: pub.status, day: pub.day, window7d: pub.window7d } : null,
+    };
   }
 
   function start({ firstDelayMs = Number(process.env.MPP_RECONCILE_FIRST_DELAY_MS) || 5 * 60_000, everyMs = 60 * 60_000 } = {}) {
@@ -538,5 +667,5 @@ export function createMppReconciler({
   }
   function stop() { if (timer) clearInterval(timer); if (firstTimer) clearTimeout(firstTimer); timer = firstTimer = null; }
 
-  return { runOnce, status, publicStatus, detail, start, stop, ready: () => ready, _state: () => state };
+  return { runOnce, status, publicStatus, detail, explain, start, stop, ready: () => ready, _state: () => state };
 }
