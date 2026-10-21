@@ -6,22 +6,20 @@ import { createHash, timingSafeEqual } from "node:crypto";
 /**
  * A mainnet facilitator with no bearer token and no payTo allowlist settles
  * for any caller, to any payTo, with this signer paying the fees. Returns the
- * startup warning lines for that case, or null when the facilitator is gated,
- * not on mainnet, or the operator acknowledged it with FACILITATOR_ALLOW_OPEN=1.
+ * refusal message for that case (startup exits with it), or null when the
+ * facilitator is gated, not on mainnet, or the operator opted in with
+ * FACILITATOR_ALLOW_OPEN=1.
  */
-export function openFacilitatorWarning({ network, authToken, allowedPayTo, allowOpen }) {
+export function openFacilitatorRefusal({ network, authToken, allowedPayTo, allowOpen }) {
   if (network !== "stellar:pubnet") return null;
   if (authToken || (allowedPayTo && allowedPayTo.length)) return null;
   if (allowOpen) return null;
-  const bar = "!".repeat(78);
   return [
-    bar,
-    "[startup] WARNING: OPEN MAINNET FACILITATOR. FACILITATOR_NETWORK=pubnet with neither",
-    "[startup] FACILITATOR_AUTH_TOKEN nor FACILITATOR_ALLOWED_PAYTO set: any caller can settle",
-    "[startup] to any payTo and this signer pays the fees. Set one of the two, or set",
-    "[startup] FACILITATOR_ALLOW_OPEN=1 to acknowledge an intentionally open facilitator.",
-    bar,
-  ];
+    "[startup] Refusing to start: FACILITATOR_NETWORK=pubnet with neither FACILITATOR_AUTH_TOKEN",
+    "[startup] nor FACILITATOR_ALLOWED_PAYTO set would let any caller settle to any payTo with",
+    "[startup] this signer paying the fees. Set one of the two. To run an intentionally open",
+    "[startup] mainnet facilitator, opt in explicitly with FACILITATOR_ALLOW_OPEN=1.",
+  ].join("\n");
 }
 
 /**

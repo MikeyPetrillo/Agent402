@@ -60,11 +60,11 @@ FACILITATOR_STELLAR_SECRET=S... npm start
   the list, before doing any simulation work. When unset, any `payTo` is
   accepted (same startup-warning treatment as auth), worth knowing an open
   facilitator can otherwise be used by anyone as a free Stellar gas sponsor.
-  On `pubnet` with neither this nor `FACILITATOR_AUTH_TOKEN` set, startup
-  prints a prominent open-facilitator warning; set one of the two.
-- `FACILITATOR_ALLOW_OPEN`: optional. `1` acknowledges an intentionally open
-  mainnet facilitator (no token, no payTo allowlist) and silences the
-  open-facilitator warning. Leave it unset otherwise.
+  On `pubnet` with neither this nor `FACILITATOR_AUTH_TOKEN` set, the server
+  refuses to start; set one of the two.
+- `FACILITATOR_ALLOW_OPEN`: optional. `1` opts in to an intentionally open
+  mainnet facilitator (no token, no payTo allowlist), which otherwise refuses
+  to start. Leave it unset otherwise.
 - `FACILITATOR_LOW_BALANCE_XLM`: optional, default `5`. Threshold for the
   `low` flag on `GET /health`.
 - `FACILITATOR_SETTLE_TIMEOUT_MS` / `FACILITATOR_VERIFY_TIMEOUT_MS` /

@@ -27,7 +27,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import tls from "node:tls";
 import https from "node:https";
 import { createHash, X509Certificate } from "node:crypto";
-import { openFacilitatorWarning, tokenMatches } from "./access-policy.js";
+import { openFacilitatorRefusal, tokenMatches } from "./access-policy.js";
 
 // Distrusted intermediate CAs: refuse any TLS chain (Soroban RPC, Horizon,
 // anything this process connects to) that passes through one of these keys.
@@ -137,13 +137,16 @@ const MAX_POLL_ATTEMPTS = Number(process.env.FACILITATOR_MAX_POLL_ATTEMPTS) || 8
 const VERIFY_TIMEOUT_MS = Number(process.env.FACILITATOR_VERIFY_TIMEOUT_MS) || 30_000;
 const HEALTH_TIMEOUT_MS = Number(process.env.FACILITATOR_HEALTH_TIMEOUT_MS) || 10_000;
 
-// Open on mainnet (no token, no payTo allowlist): an unmissable warning unless
-// the operator acknowledged it with FACILITATOR_ALLOW_OPEN=1 (access-policy.js).
-const openWarning = openFacilitatorWarning({
+// Open on mainnet (no token, no payTo allowlist): refuse to start unless the
+// operator opted in with FACILITATOR_ALLOW_OPEN=1 (access-policy.js).
+const openRefusal = openFacilitatorRefusal({
   network: NETWORK, authToken: AUTH_TOKEN, allowedPayTo: ALLOWED_PAYTO,
   allowOpen: process.env.FACILITATOR_ALLOW_OPEN === "1",
 });
-if (openWarning) console.error(openWarning.join("\n"));
+if (openRefusal) {
+  console.error(openRefusal);
+  process.exit(1);
+}
 if (!AUTH_TOKEN) {
   console.warn("[startup] FACILITATOR_AUTH_TOKEN is not set - /verify, /settle, and /supported are UNAUTHENTICATED.");
 }
