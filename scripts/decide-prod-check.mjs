@@ -34,7 +34,7 @@ for (const g of GOLDEN.filter((g) => !ONLY || ONLY.some((o) => g.task.includes(o
       const open = Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^<[^>]+>$/.test(x));
       if (open && g.data) problems.push(`s${p.step} placeholder`);
     }
-    const linked = (d.plan || []).some((p) => Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^\{\{step \d+\}\}$/.test(x)));
+    const linked = (d.plan || []).some((p) => Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^\{\{step \d+(?:\.\w+)?\}\}$/.test(x)));
     if (g.chain && !linked) problems.push("not chained");
   }
   let run = null;

@@ -11,7 +11,7 @@ const TYPE_OK = {
   object: (v) => v !== null && typeof v === "object" && !Array.isArray(v),
   array: (v) => Array.isArray(v),
 };
-const STEP_REF = /^\{\{step \d+\}\}$/;
+const STEP_REF = /^\{\{step \d+(?:\.[A-Za-z_][A-Za-z0-9_]{0,63})?\}\}$/;
 
 export function validateParams(schema, params) {
   const errors = [];
