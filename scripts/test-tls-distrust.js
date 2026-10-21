@@ -126,6 +126,35 @@ async function child(mode, dir) {
     await opted.f(`${await serve()}`).then((r) => r.text()).catch(() => {});
     rec("client tlsDistrust false sends the fetch as is", { connected: handed === null });
     globalThis.fetch = platformFetch;
+
+    // A caller who installs their own global dispatcher keeps it: its custom
+    // CA (a self-signed server not in any trust store) still works through the
+    // SDK's default fetch and each package's distrustFetch, and the packages
+    // add no dispatcher of their own.
+    const { setGlobalDispatcher, Agent } = await import("undici");
+    const selfCa = readFileSync(join(dir, "self.pem"));
+    const selfSrv = https.createServer({ key: readFileSync(join(dir, "self.key")), cert: selfCa }, (q, r) => { r.setHeader("Connection", "close"); r.end("ok"); });
+    await new Promise((r) => selfSrv.listen(0, "127.0.0.1", r));
+    servers.push(selfSrv);
+    const selfUrl = `https://localhost:${selfSrv.address().port}/`;
+    rec("callerless: self-signed server is not trusted by default", { connected: (await outcome(viaFetch(selfUrl))).connected === false });
+    setGlobalDispatcher(new Agent({ connect: { ca: selfCa } }));
+    rec("caller dispatcher: plain fetch", await outcome(viaFetch(selfUrl)));
+    const sdk2 = new clientIndex.Agent402({ baseUrl: selfUrl.replace(/\/$/, ""), cache: false });
+    rec("caller dispatcher: client default fetch keeps the caller's CA", await outcome(async () => (await sdk2.f(selfUrl)).text()));
+    for (const [pkg, m] of [["client", client], ["mcp", mcp]]) {
+      rec(`${pkg} caller dispatcher: distrustFetch keeps the caller's CA`, await outcome(async () => (await m.distrustFetch()(selfUrl)).text()));
+      rec(`${pkg} caller dispatcher: no dedicated dispatcher`, { connected: m.callerDispatcherInstalled() === true && (await m.distrustDispatcher()) === null });
+    }
+  } else if (mode === "preinstalled") {
+    // A dispatcher already in the slot when the package loads is the caller's.
+    const { setGlobalDispatcher, Agent } = await import("undici");
+    setGlobalDispatcher(new Agent());
+    const client = await import(join(ROOT, "client/tls-distrust.js"));
+    const mcp = await import(join(ROOT, "mcp/networks.js"));
+    for (const [pkg, m] of [["client", client], ["mcp", mcp]]) {
+      rec(`${pkg} preinstalled: treated as the caller's`, { connected: m.callerDispatcherInstalled() === true && (await m.distrustDispatcher()) === null });
+    }
   }
   for (const s of servers) s.close();
   process.stdout.write(JSON.stringify(results));
@@ -223,7 +252,9 @@ try {
   ssl("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "leaf.key");
   ssl("req", "-new", "-key", "leaf.key", "-subj", "/CN=localhost", "-out", "leaf.csr");
   ssl("x509", "-req", "-in", "leaf.csr", "-CA", "int.pem", "-CAkey", "int.key", "-CAcreateserial", "-days", "2", "-extfile", "leaf.ext", "-out", "leaf.pem");
-  ok(true, "generated a throwaway root -> intermediate -> leaf chain");
+  ssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", "self.key", "-out", "self.pem",
+    "-subj", "/CN=localhost", "-days", "2", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1");
+  ok(true, "generated a throwaway root -> intermediate -> leaf chain and a self-signed certificate");
 
   const run = (mode) => {
     const r = spawnSync(process.execPath, [SELF, "--child", mode, dir], {
@@ -243,6 +274,7 @@ try {
   };
   check(run("global"), (n) => (n.startsWith("after:") && n !== "after:rejectUnauthorized false" ? "refuse" : "connect"));
   check(run("packages"), (n) => (n.includes(" after:") ? "refuse" : "connect"));
+  check(run("preinstalled"), () => "connect");
 } catch (e) {
   ok(false, `throwaway chain legs: ${e.message}`);
 } finally {
