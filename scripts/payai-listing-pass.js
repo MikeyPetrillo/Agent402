@@ -90,6 +90,15 @@
 // Wednesday 03:53 UTC (and on dispatch) in the spending environment, and keeps
 // one issue ("Listing pass FAILED") open while a run fails.
 //
+// Purposeful inputs: --inputs FILE is a JSON map, "METHOD /path" -> request
+// body (a query object for a GET). A route with an entry is quoted and bought
+// with that body instead of its published example (scripts/listing-inputs.json:
+// the routes at $0.25 or more, plus the X user lookup, on inputs whose answers
+// serve Agent402 and can be graded); every other route keeps its example. Each record keeps what came
+// back: status, latency, the identifying response headers (request id,
+// model and generation headers, the decoded payment receipt) and the body up
+// to 20 KB. Request headers are never stored.
+//
 // Retries: one, only on a 503 or 504, and never on a route with a lasting
 // effect (hasLastingEffect, the route-execute tiers), a report product, or a
 // route priced at $0.25 or more: those get one attempt. A request that threw
@@ -122,6 +131,59 @@ export const DEFAULT_REBUY_AFTER_DAYS = 14;
 export const ONE_ATTEMPT_MIN_USD = 0.25;
 /** The only statuses a buy is retried on. */
 export const RETRY_STATUSES = Object.freeze([503, 504]);
+/** The most of a response body a record keeps. */
+export const BODY_KEEP_BYTES = 20 * 1024;
+
+/**
+ * Pure: read an --inputs map. Every key is "METHOD /path" and every value a
+ * plain object; anything else throws, so a malformed file stops the run.
+ */
+export function parseInputs(doc, source = "inputs") {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) throw new Error(`${source}: not a JSON object`);
+  const out = new Map();
+  for (const [k, v] of Object.entries(doc)) {
+    if (!/^(GET|POST|PUT|PATCH|DELETE) \/\S*$/.test(k)) throw new Error(`${source}: key ${JSON.stringify(k)} is not "METHOD /path"`);
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${source}: ${k} is not an object`);
+    out.set(k, v);
+  }
+  return out;
+}
+
+/** Pure: the purposeful input for a route, or null (the route keeps its example). */
+export function purposefulInputFor(r, inputs) {
+  return (inputs && r && inputs.get(routeKeyOf(r))) || null;
+}
+
+/**
+ * Pure: the response headers that identify a request and what served it:
+ * request ids, model and generation headers, and the decoded payment
+ * receipt (transaction, network, success, error reason). Nothing else.
+ */
+export function identifyingHeaders(headers) {
+  const out = {};
+  for (const [k, v] of headers.entries()) {
+    const name = k.toLowerCase();
+    if (/request-id|generation|model|^x-agent402-/.test(name) && !/token|secret|key|auth|cookie/.test(name)) out[name] = String(v).slice(0, 500);
+  }
+  const h = headers.get("payment-response") || headers.get("x-payment-response");
+  if (h) {
+    try {
+      const p = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+      out["payment-response"] = { success: p?.success ?? null, transaction: p?.transaction ?? null, network: p?.network ?? null, ...(p?.errorReason ? { errorReason: String(p.errorReason).slice(0, 200) } : {}) };
+    } catch { out["payment-response"] = { unreadable: true }; }
+  }
+  return out;
+}
+
+/** Pure: a response body as a record keeps it: text up to BODY_KEEP_BYTES, binary as a note. */
+export function keptBody(bytes, contentType = "") {
+  const buf = Buffer.from(bytes || new Uint8Array());
+  const textual = !contentType || /json|text|xml|markdown|event-stream|javascript/i.test(contentType);
+  if (!textual) return { body: `<${contentType}, ${buf.length} bytes, not kept>`, bodyBytes: buf.length, bodyTruncated: buf.length > 0 };
+  let body = buf.subarray(0, BODY_KEEP_BYTES).toString("utf8");
+  if (buf.length > BODY_KEEP_BYTES) body = body.replace(/\uFFFD$/, "");
+  return { body, bodyBytes: buf.length, bodyTruncated: buf.length > BODY_KEEP_BYTES };
+}
 
 export const routeKeyOf = (r) => `${r.method} ${r.path}`;
 const usdToAtomic = (usd) => BigInt(Math.round(Number(usd) * 1e6));
@@ -387,6 +449,7 @@ export function parseArgs(argv) {
   const only = flag(argv, "--only", null);
   const bought = flag(argv, "--bought", null);
   const rebuy = flag(argv, "--rebuy-after-days", null);
+  const inputs = flag(argv, "--inputs", null);
   return {
     live: argv.includes("--live"),
     includeUpstream: argv.includes("--include-upstream"),
@@ -404,6 +467,8 @@ export function parseArgs(argv) {
     // The purchase memory directory; `true` (the flag without a value) and
     // main refuses.
     bought: bought == null ? null : bought,
+    // The purposeful inputs file; `true` (no value) and main refuses.
+    inputs: inputs == null ? null : inputs,
     // Days a purchase is remembered: the default, or a larger number. Below
     // the default (or unreadable) is NaN and main refuses: no run may rebuy
     // sooner than the owner's window.
@@ -486,6 +551,12 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   if (Number.isNaN(opts.limit)) { err("payai-listing-pass: --limit needs a whole number of routes"); return 2; }
   if (Number.isNaN(opts.rebuyAfterDays)) { err(`payai-listing-pass: --rebuy-after-days needs a number of days, at least ${DEFAULT_REBUY_AFTER_DAYS}`); return 2; }
   if (opts.bought === true) { err("payai-listing-pass: --bought needs a directory"); return 2; }
+  if (opts.inputs === true) { err("payai-listing-pass: --inputs needs a file"); return 2; }
+  let inputs = null;
+  if (opts.inputs) {
+    try { inputs = parseInputs(JSON.parse(readFileSync(opts.inputs, "utf8")), opts.inputs); }
+    catch (e) { err(`payai-listing-pass: unreadable --inputs: ${String(e?.message || e).slice(0, 200)}. Nothing spent.`); return 2; }
+  }
   if (opts.live && !opts.bought) { err("payai-listing-pass: --live needs --bought DIR, the records of earlier runs (scripts/listing-pass-memory.js fetches them; an empty directory means none). Nothing spent."); return 2; }
   // The purchase memory is read before anything else: a run that cannot read
   // it spends nothing.
@@ -500,6 +571,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   const sol = chainOf("solana");
 
   log(`target ${target} · ${leg} (${chain.caip2}) · ${Number.isFinite(opts.maxPriceUsd) ? `cap $${opts.maxPriceUsd} per route` : "no per-route cap"} · ceiling $${opts.maxSpendUsd} per run${opts.live ? " · LIVE" : " · dry run"}`);
+  if (inputs) log(`purposeful inputs: ${inputs.size} route(s) from ${opts.inputs} (each sent in place of its example)`);
   if (opts.bought) log(`purchase memory: ${memory.records} purchase(s) within ${opts.rebuyAfterDays} days in ${memory.files} record file(s) under ${opts.bought}`);
   const chains = [...new Set(["base", "solana", chain.name])];
   const measureOpts = { target, origin: env.LISTING_ORIGIN, chains, bazaarUrl: env.BAZAAR_REGISTRY_URL || undefined, payaiUrl: env.PAYAI_REGISTRY_URL || undefined };
@@ -520,8 +592,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     }
     return fixture;
   };
+  // A route with a purposeful input is quoted and bought with it; the same body for the quote and the buy, so the price read is
+  // the price signed.
   const urlFor = async (r) => {
-    const ex = examples.get(routeKeyOf(r)) || {};
+    const ex = purposefulInputFor(r, inputs) || examples.get(routeKeyOf(r)) || {};
     if (r.method === "GET") return { url: `${target}${r.path}${Object.keys(ex).length ? "?" + new URLSearchParams(ex).toString() : ""}`, body: undefined };
     if (isMultipartExample(ex)) {
       const form = new FormData();
@@ -627,7 +701,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     const r = plan.selected[i];
     const { url, body } = await urlFor(r);
     ceiling = { caip2: chain.caip2, atomic: r.ceilingAtomic };
-    const rec = { registry, chain: chain.name, slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, status: null, tx: null, charged: false, chargeUnknown: false, attempts: 0, boughtAt: null, error: null };
+    const rec = { registry, chain: chain.name, slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, input: purposefulInputFor(r, inputs) ? "purposeful" : "example", status: null, tx: null, charged: false, chargeUnknown: false, attempts: 0, boughtAt: null, error: null, latencyMs: null, responseHeaders: null, body: null, bodyBytes: null, bodyTruncated: null };
     records.push(rec);
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (signedAtomic + r.ceilingAtomic > maxSpendAtomic) {
@@ -640,6 +714,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       // Until an answer arrives the attempt may have settled.
       rec.chargeUnknown = true;
       writeRecords();
+      const t0 = Date.now();
       try {
         const res = await payFetch(url, {
           method: r.method,
@@ -649,7 +724,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         });
         rec.status = res.status;
         const receipt = receiptOf(res);
-        await res.text().catch(() => "");
+        // What came back, kept for grading: never a request header.
+        rec.responseHeaders = identifyingHeaders(res.headers);
+        const bytes = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
+        rec.latencyMs = Date.now() - t0;
+        Object.assign(rec, keptBody(bytes, res.headers.get("content-type") || ""));
         rec.chargeUnknown = false;
         if (res.status === 200 && receipt?.success === true && receipt.transaction) { rec.tx = receipt.transaction; rec.charged = true; break; }
         if (res.status === 200) { rec.error = "200 without a settlement receipt: served unpaid, no row"; break; }
@@ -662,6 +741,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         // chargeUnknown, the next run's memory skips the route, and the
         // coverage read at the end shows the row.
         rec.error = String(e?.message || e).slice(0, 160);
+        rec.latencyMs = Date.now() - t0;
         break;
       }
     }

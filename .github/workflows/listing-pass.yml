@@ -39,6 +39,12 @@ name: Listing pass (Bazaar and PayAI)
 # registry and chain within 14 days ("bought <date>, awaiting registry"). The
 # records are rewritten after every attempt and kept 15 days.
 #
+# Routes named in scripts/listing-inputs.json (the reports, the premium model
+# tiers, the X user lookup) are bought on those purposeful inputs instead of
+# their published examples, and every record keeps what came back (status,
+# latency, request-id, model and receipt headers, the body up to 20 KB) for
+# grading. Request headers are never recorded.
+#
 # The dispatch input `legs` narrows a run to chosen legs and `only`
 # (comma-separated slugs) to chosen routes. One issue, "Listing pass FAILED",
 # stays open while a run fails and closes on the next green run.
@@ -137,7 +143,7 @@ jobs:
             REGISTRY="${LEG%%-*}"
             CHAIN="${LEG#*-}"
             echo "::group::$REGISTRY / $CHAIN"
-            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
+            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --inputs scripts/listing-inputs.json --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
             echo "::endgroup::"
           done
           if [ -n "$FAILED" ]; then echo "::error::legs that did not complete (exit code):$FAILED"; exit 1; fi

@@ -1780,6 +1780,8 @@ jobs:
           # Listing coverage per registry and chain from fixtures; the PayAI pass's selection, cap and preflight (offline)
           t node scripts/test-listing-coverage.js
           t node scripts/test-payai-listing-pass.js
+          # The listing pass's purposeful inputs validate against each route's published input schema (booted FREE_MODE, offline)
+          t node scripts/test-listing-inputs.js
           # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub facilitators, offline)
           t node scripts/test-settle-preference.js
           # Tool resolver (/api/find ranking, guards)

@@ -12,7 +12,7 @@
 //   node scripts/test-payai-listing-pass.js
 import assert from "node:assert/strict";
 import { CHAINS, coverageFor } from "./listing-coverage.js";
-import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor, boughtKeyOf, purchasesOf, loadPurchaseMemory, oneAttemptOnly, mayRetry, DEFAULT_REBUY_AFTER_DAYS } from "./payai-listing-pass.js";
+import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor, boughtKeyOf, purchasesOf, loadPurchaseMemory, oneAttemptOnly, mayRetry, DEFAULT_REBUY_AFTER_DAYS, parseInputs, purposefulInputFor, identifyingHeaders, keptBody, BODY_KEEP_BYTES } from "./payai-listing-pass.js";
 import { pickArtifacts, fetchMemory, MEMORY_ARTIFACTS } from "./listing-pass-memory.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -264,7 +264,7 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
         return {
           address: "0xburner",
           payFetch: async (url, init) => {
-            buys.push({ path: new URL(url).pathname, headers: init.headers, ceiling: getCeiling() });
+            buys.push({ path: new URL(url).pathname, headers: init.headers, body: init.body, ceiling: getCeiling() });
             if (answer) return answer(new URL(url).pathname, buys.length);
             return new Response("{}", { status: 200, headers: { "payment-response": enc({ success: true, transaction: `tx-${buys.length}` }) } });
           },
@@ -493,6 +493,46 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     const memDir = mkdtempSync(join(tmpdir(), "mint-mem-"));
     writeFileSync(join(memDir, "pass-mint.json"), readFileSync(outFile));
     ok(loadPurchaseMemory(memDir).bought.has("bazaar base GET /api/chain/nonce"), "the listing pass's memory reads the mint record");
+  }
+
+  // --- purposeful inputs, and what came back kept for grading ----------------
+  {
+    let bad = 0;
+    for (const doc of [[], { "report": {} }, { "POST /api/report": "x" }, { "POST /api/report": [] }]) { try { parseInputs(doc); } catch { bad++; } }
+    ok(bad === 4, "an inputs file that is not a map of \"METHOD /path\" to objects is refused");
+    const m = parseInputs({ "POST /api/report": { topic: "agents" } });
+    ok(purposefulInputFor({ method: "POST", path: "/api/report" }, m)?.topic === "agents" && purposefulInputFor({ method: "POST", path: "/api/hash" }, m) === null && purposefulInputFor({ method: "POST", path: "/api/report" }, null) === null, "a route with an entry takes it; any other route keeps its example");
+
+    const dir = mkdtempSync(join(tmpdir(), "listing-inputs-"));
+    const inFile = join(dir, "inputs.json");
+    writeFileSync(inFile, JSON.stringify({ "POST /api/report": { topic: "how agents pay for tools" }, "POST /api/execute-max": { task: "hash the word bazaar" } }));
+    const outFile = join(dir, "pass-payai-base.json");
+    const big = JSON.stringify({ report: "é".repeat(BODY_KEEP_BYTES) });
+    const r = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--inputs", inFile, "--out", outFile], { env: ENV, answer: (p) => new Response(p === "/api/report" ? big : '{"ok":true}', { status: 200, headers: {
+      "content-type": "application/json", "x-request-id": `req-${p}`, "x-agent402-model": "m-1", "openrouter-generation-id": "gen-9", "set-cookie": "s=1", "x-operator-token": "leak",
+      "payment-response": enc({ success: true, transaction: `tx${p}`, network: BASE, payer: "0xburner" }),
+    } }) });
+    ok(r.code === 0 && /purposeful inputs: 2 route/.test(r.out), `the leg reads the inputs file (${r.code})`);
+    const bodyOf = (p) => r.buys.find((b) => b.path === p)?.body;
+    ok(JSON.parse(bodyOf("/api/report")).topic === "how agents pay for tools" && JSON.parse(bodyOf("/api/execute-max")).task === "hash the word bazaar", "a route with an entry is bought with its purposeful body");
+    ok(JSON.parse(bodyOf("/api/hash") || "null") && !("topic" in JSON.parse(bodyOf("/api/hash"))), "a route without one keeps its published example");
+    const doc = JSON.parse(readFileSync(outFile, "utf8"));
+    const rep = doc.records.find((x) => x.path === "/api/report");
+    ok(rep.input === "purposeful" && doc.records.find((x) => x.path === "/api/hash").input === "example", "each record says which input it was bought with");
+    ok(rep.status === 200 && Number.isFinite(rep.latencyMs) && rep.latencyMs >= 0, "the record keeps the status and the latency");
+    ok(rep.responseHeaders["x-request-id"] === "req-/api/report" && rep.responseHeaders["x-agent402-model"] === "m-1" && rep.responseHeaders["openrouter-generation-id"] === "gen-9", "the record keeps the request id and the model and generation headers");
+    ok(rep.responseHeaders["payment-response"]?.transaction === "tx/api/report" && rep.responseHeaders["payment-response"]?.network === BASE && rep.responseHeaders["payment-response"]?.success === true, "the record keeps the decoded receipt: transaction and network");
+    ok(!("set-cookie" in rep.responseHeaders) && !("x-operator-token" in rep.responseHeaders), "no other response header is kept");
+    ok(rep.bodyTruncated === true && Buffer.byteLength(rep.body) <= BODY_KEEP_BYTES && rep.bodyBytes === Buffer.byteLength(big) && !rep.body.endsWith("�"), `the body is kept up to 20 KB, cut on a whole character (${Buffer.byteLength(rep.body)} bytes of ${rep.bodyBytes})`);
+    ok(doc.records.find((x) => x.path === "/api/hash").body === '{"ok":true}' && doc.records.find((x) => x.path === "/api/hash").bodyTruncated === false, "a small body is kept whole");
+    const raw = readFileSync(outFile, "utf8");
+    ok(!/op-token|0xevmkey|X-Operator-Token|X-Agent402-Settle-Via|X-Heartbeat-Token/i.test(raw) && !raw.includes("leak"), "no request header, key or token is in the records");
+    const badInputs = join(dir, "bad.json");
+    writeFileSync(badInputs, "{ nope");
+    const b = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--inputs", badInputs], { env: ENV });
+    ok(b.code === 2 && b.buys.length === 0 && b.built.length === 0, "an unreadable inputs file stops the leg before anything is bought");
+    ok(keptBody(new Uint8Array([1, 2, 3]), "audio/mpeg").body === "<audio/mpeg, 3 bytes, not kept>", "a binary body is noted, not kept");
+    ok(JSON.stringify(identifyingHeaders(new Headers({ "x-request-id": "a", authorization: "b", "x-api-key-model": "c" }))) === JSON.stringify({ "x-request-id": "a" }), "a header that names a key or authorization is never kept");
   }
   // Dry run spends nothing; a chain the pass cannot pay on is refused.
   {

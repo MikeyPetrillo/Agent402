@@ -208,6 +208,7 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(memAt >= 0 && memAt < buyAt, "the purchase memory is downloaded before the step that spends");
   ok(memAt >= 0 && JSON.stringify(steps[memAt].env || {}) === JSON.stringify({ GH_TOKEN: "${{ github.token }}" }) && !steps[memAt].if && steps[memAt]["continue-on-error"] !== true, "the download carries the workflow token and no wallet secret, and a failed download stops the job");
   ok(/--bought bought --rebuy-after-days 14 /.test(run), "every leg reads the memory with the 14-day window");
+  ok(/--inputs scripts\/listing-inputs\.json /.test(run) && existsSync(new URL("./listing-inputs.json", import.meta.url)), "every leg buys with the committed purposeful inputs");
   const uploads = (wf) => Object.values(wf.jobs || {}).flatMap((j) => j.steps || []).filter((st) => /actions\/upload-artifact@/.test(String(st.uses || "")));
   const lUp = uploads(listing);
   ok(lUp.length === 1 && lUp[0].with?.name === "listing-pass" && lUp[0].if === "always()" && Number(lUp[0].with?.["retention-days"]) >= 14 && /pass-\*\.json/.test(String(lUp[0].with?.path)), "the pass records upload as listing-pass on every outcome, kept at least 14 days");
