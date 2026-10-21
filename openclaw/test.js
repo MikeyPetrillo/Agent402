@@ -66,20 +66,30 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
 
 // ---- x402 accept selection (upto = settle actual usage; exact = the quote) ----
 {
-  const accepts = [{ scheme: "exact", network: "eip155:8453", amount: "1000" }, { scheme: "upto", network: "eip155:8453", amount: "1000" }, { scheme: "exact", network: "eip155:137" }];
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const accepts = [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC }, { scheme: "upto", network: "eip155:8453", amount: "1000", asset: BASE_USDC }, { scheme: "exact", network: "eip155:137" }];
   ok(selectAccept(accepts).scheme === "upto", "with a Permit2 allowance the proxy picks upto on Base (the quote becomes a ceiling, actual usage settles)");
   ok(selectAccept(accepts, { preferUpto: false }).scheme === "exact" && selectAccept(accepts, { preferUpto: false }).network === "eip155:8453", "without the allowance it picks exact on Base");
   ok(selectAccept([{ scheme: "exact", network: "eip155:137" }]).network === "eip155:137" && selectAccept([]) === undefined, "falls back to the first accept; an empty list yields nothing");
   // Per-call ceiling: the vendor's 2.23+ $1 default is off on this client, so the
   // package's own ceiling must refuse BEFORE signing, with a message that names
   // the knob; an unreadable quote is refused under a finite ceiling.
-  const big = { scheme: "exact", network: "eip155:8453", amount: "3000000", extra: { decimals: 6 } };
+  const big = { scheme: "exact", network: "eip155:8453", amount: "3000000", asset: BASE_USDC };
   let refused = null; try { selectAccept([big], { maxUsd: 1 }); } catch (e) { refused = String(e.message); }
   ok(refused && /exceeds the per-call ceiling \$1/.test(refused) && /AGENT402_MAX_PER_CALL_USD/.test(refused), `a $3 quote over a $1 ceiling is refused before signing and names the knob (got ${refused})`);
   ok(selectAccept([big], { maxUsd: 5 }) === big && selectAccept([big]) === big, "under the ceiling (and with no ceiling) the same accept is selected");
   let unreadable = null; try { selectAccept([{ scheme: "exact", network: "eip155:8453" }], { maxUsd: 1 }); } catch (e) { unreadable = String(e.message); }
   ok(/unreadable/.test(unreadable || ""), "an accept with no readable amount is refused under a finite ceiling");
-  ok(acceptUsd({ amount: "3000000", extra: { decimals: 6 } }) === 3 && acceptUsd({ maxAmountRequired: "1000" }) === 0.001 && acceptUsd({ amount: "1e6" }) === null, "acceptUsd reads v2 amount and v1 maxAmountRequired over decimals, and refuses non-digit amounts");
+  ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "3000000" }) === 3 && acceptUsd({ network: "eip155:8453", asset: BASE_USDC, maxAmountRequired: "1000" }) === 0.001 && acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "1e6" }) === null, "acceptUsd reads v2 amount and v1 maxAmountRequired over the asset's decimals, and refuses non-digit amounts");
+  // The price comes from the known-asset table, not the seller's decimals hint:
+  // the signer signs 3000000 base units of USDC ($3) whatever the hint says.
+  const hinted = { scheme: "exact", network: "eip155:8453", amount: "3000000", asset: BASE_USDC, extra: { decimals: 18 } };
+  ok(acceptUsd(hinted) === 3, "a decimals hint of 18 does not turn $3 of USDC into dust");
+  let hintedRefused = null; try { selectAccept([hinted], { maxUsd: 1 }); } catch (e) { hintedRefused = String(e.message); }
+  ok(/exceeds the per-call ceiling \$1/.test(hintedRefused || ""), `the hinted $3 quote is refused over a $1 ceiling (got ${hintedRefused})`);
+  const odd = { scheme: "exact", network: "eip155:8453", amount: "1", asset: "0x000000000000000000000000000000000000bEEF", extra: { decimals: 18 } };
+  let oddRefused = null; try { selectAccept([odd], { maxUsd: 1 }); } catch (e) { oddRefused = String(e.message); }
+  ok(acceptUsd(odd) === null && /unreadable/.test(oddRefused || ""), "an accept in an unknown asset cannot be priced and is refused under a finite ceiling");
   ok(maxPerCallUsd({}) === DEFAULT_MAX_PER_CALL_USD && DEFAULT_MAX_PER_CALL_USD === 2, "default ceiling is $2, the gateway's metered quote cap");
   ok(maxPerCallUsd({ maxPerCallUsd: "0.5" }) === 0.5 && maxPerCallUsd({ maxPerCallUsd: "off" }) === Infinity && maxPerCallUsd({ maxPerCallUsd: "abc" }) === DEFAULT_MAX_PER_CALL_USD && maxPerCallUsd({ maxPerCallUsd: -3 }) === DEFAULT_MAX_PER_CALL_USD, "config value honoured; off disables; malformed or negative reads as the default, never as off");
   ok(uptoReady(PERMIT2_READY_MIN) && uptoReady("115792089237316195423570985008687907853269984665640564039457584007913129639935") && !uptoReady(0n) && !uptoReady(999n) && !uptoReady("garbage"), "uptoReady: a max-uint (or any >= 1M USDC) Permit2 allowance counts; dust, zero and junk do not");
@@ -315,7 +325,9 @@ await p.close();
   ok(viaLink.status === 0 && /setup/.test(viaLink.stdout), `the CLI runs when invoked through a bin symlink (got status ${viaLink.status}, stdout ${JSON.stringify(viaLink.stdout.slice(0, 40))})`);
   const spaced = join(home, "sp ace"); mkdirSync(spaced, { recursive: true });
   const copy = join(spaced, "cli.js"); writeFileSync(copy, readFileSync(new URL("./cli.js", import.meta.url)));
-  for (const f of ["index.js", "proxy.js", "models.js", "provider.js", "package.json"]) writeFileSync(join(spaced, f), readFileSync(new URL(`./${f}`, import.meta.url)));
+  // Every module the package ships (its "files" list), so a new one is copied too.
+  const shipped = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).files.filter((f) => f.endsWith(".js") && f !== "cli.js");
+  for (const f of [...shipped, "package.json"]) writeFileSync(join(spaced, f), readFileSync(new URL(`./${f}`, import.meta.url)));
   const viaSpace = await run([copy, "help"], { ...process.env, AGENT402_OPENCLAW_HOME: home });
   ok(viaSpace.status === 0 && /setup/.test(viaSpace.stdout), "the CLI runs from a path containing a space");
   rmSync(home, { recursive: true, force: true });
