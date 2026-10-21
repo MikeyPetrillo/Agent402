@@ -1317,9 +1317,9 @@ jobs:
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
-      # The live-catalog guard (scripts/test-gateway-model-ids.js) runs daily in
-      # model-drift.yml, not on a push: an upstream price change is not a
-      # defect in the change under review.
+      # The live-catalog guard (scripts/test-gateway-model-ids.js) runs every 6
+      # hours in model-drift.yml, not on a push: an upstream price change is
+      # not a defect in the change under review.
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -2876,7 +2876,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (86 scripts, one process each)
+      - name: Offline suites (87 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3020,6 +3020,8 @@ jobs:
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
           t node scripts/test-refund-monitor.js
+          # Model-drift redaction (no dollar figure, bare decimal or exponent reaches the log or issue; stale-high grader on stub rows — offline)
+          t node scripts/test-model-drift-redaction.js
           # Bazaar register verdict (harvester lag is not a failure; a failed or unpaid route is — offline)
           t node scripts/test-bazaar-verdict.js
           # Bazaar feed read (two full passes must agree, a third on disagreement; only routes absent from every pass are bought; short pages never end a walk, offline)

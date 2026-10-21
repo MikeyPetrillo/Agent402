@@ -135,8 +135,10 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   `package.json`.
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
-- `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) daily, never
-  on a push, and keeps one issue open while it fails; its output is redacted before log or issue.
+- `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
+  never on a push, and keeps one issue open while it fails (a cost row under its dearest live
+  endpoint, or more than 15% above it for every servable model the row owns); its output is
+  redacted before log or issue (`scripts/test-model-drift-redaction.js`).
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
 
 ## Splitting work across agents
@@ -190,6 +192,11 @@ before the handler) and for a close during the settle call itself, the charge go
 and `src/hangup-settlement.js` books it as owed. The budget never refuses service. A route
 whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the memory writers,
 `attest`, `feedback`, the route-execute tiers, `seller-payability`); add a new one there.
+A payer's first hang-up in the window is forgiven at any price under the service-wide budget
+when its payer and IP keys hold nothing in flight or abandoned; later ones meet the per-key
+budget. Refunds stay human-run (`refund.yml`, dry run first); any buyer's owed row reads
+`refundsOwed=owed` on `/api/gateway-status` past a short grace, and the status Worker and
+heartbeat page on it under one issue that closes when nothing is owed.
 
 ## Subsystem pointers
 - **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it.

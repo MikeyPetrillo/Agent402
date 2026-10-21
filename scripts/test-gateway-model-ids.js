@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // Live guard for the gateway's model tables. Network test (public OpenRouter
-// catalog, no key): fails the daily model-drift workflow when a model id we ADVERTISE or FAIL OVER TO no
-// longer exists upstream, or when MODEL_COST underestimates a live price
-// inside a tier's max_price bound.
+// catalog, no key): fails the model-drift workflow (every 6 hours) when a model id we ADVERTISE or FAIL OVER TO no
+// longer exists upstream, when MODEL_COST underestimates a live price
+// inside a tier's max_price bound, or when a MODEL_COST row sits more than 15%
+// above the dearest live endpoint of every servable model it owns (stale high).
 //
 // Why: the stale-id class has bitten three times - gemini-2.0-flash(-lite)
 // vanished while leading every auto band (2026-08-04, a failed round-trip per
 // routed call), ministral-3b/8b were renamed and claude-3.5-haiku left while
 // still advertised on /v1/models, and the TTS chain carried zyphra/zonos with
 // ZERO endpoints (2026-08-19, a wasted round-trip on every walk past link 3).
-// Each was found by a human reading the live catalog. This reads it daily (.github/workflows/model-drift.yml, which opens an issue).
+// Each was found by a human reading the live catalog. This reads it every 6 hours (.github/workflows/model-drift.yml, which opens an issue).
 //
 // It FAILS on network error rather than skipping: a skipped guard is the same
 // silent green that let every one of those ship.
@@ -39,6 +40,8 @@ import { TICKER_PACK_MODELS } from "../src/tools/ticker-pack-kit.js";
 import { TOKEN_BRIEF_MODELS } from "../src/tools/token-brief-kit.js";
 import { TOKEN_RISK_MODELS } from "../src/tools/token-risk-kit.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { noteOwnedPrice, staleHighRows, describeStaleHigh, STALE_HIGH_TOLERANCE } from "./lib/cost-row-drift.js";
+import { modelCostRows } from "../src/tools/llm-gateway-kit.js";
 requireUpstreamCosts("test-gateway-model-ids");
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
@@ -273,6 +276,10 @@ const admitted = models.filter((m) => {
   return !!tierFor(m.id);
 });
 const under = [];
+// Row key -> the dearest routable prices of the servable models it prices
+// (the stale-high half, graded after the loop).
+const owned = new Map();
+const rowKeyOf = (cost) => { for (const [prefix, c] of modelCostRows()) if (c === cost) return prefix; return null; };
 let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked = 0;
 {
   const queue = [...admitted];
@@ -308,6 +315,13 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
       if (!prices.length && !priorityPrices.length) continue;
       const table = costFor(m.id);
       if (!table) { under.push(brief(`${m.id} (no MODEL_COST entry)`, `${m.id} (no MODEL_COST entry; dearest routable endpoint $${Math.max(...prices.map((e) => e.p))}/$${Math.max(...prices.map((e) => e.c))})`)); continue; }
+      // What this row must cover for this model on this tier: the dearest
+      // routable endpoint, and a priority endpoint divided by the factor the
+      // priority tiers price it at.
+      noteOwnedPrice(owned, rowKeyOf(table), table, m.id, {
+        prompt: Math.max(...prices.map((e) => e.p), ...priorityPrices.map((e) => e.p / PRIORITY_PRICE_FACTOR)),
+        completion: Math.max(...prices.map((e) => e.c), ...priorityPrices.map((e) => e.c / PRIORITY_PRICE_FACTOR)),
+      });
       if (prices.length) {
         const p = Math.max(...prices.map((e) => e.p)), c = Math.max(...prices.map((e) => e.c));
         if (p > table.prompt + 1e-9 || c > table.completion + 1e-9) {
@@ -330,6 +344,18 @@ console.log(`rule 4: ${admitted.length} admitted live models, ${endpointReads} e
 ok(priorityChecked >= 3, `rule 4 checked priority endpoints on the priority tiers (${priorityChecked}; the 2026-09-18 read found openai/fast on sol, terra, astra and anthropic/fast on opus-5, google */priority on gemini-2.5-pro) - zero would mean the read is blind`);
 ok(endpointReads >= admitted.length / 2, `rule 4 read endpoint lists for most admitted models (${endpointReads} of ${admitted.length}); a headline-only run would be the old, weaker check`);
 ok(under.length === 0, `MODEL_COST never underestimates a live admitted model's dearest routable endpoint${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
+// 4b. The other direction: a row more than STALE_HIGH_TOLERANCE above the
+//     dearest routable endpoint of EVERY servable model it owns (graded per
+//     unit against the dearest of them, so a family row is judged by its
+//     dearest member). Stale high inflates metered quotes and keeps a model
+//     off a flat tier whose bound sits under the row. Key, unit and percent
+//     only: never a rate, in CI or locally.
+{
+  const high = staleHighRows(owned);
+  console.log(`rule 4b: ${owned.size} cost row(s) graded against the servable models they own`);
+  ok(owned.size > 0, "rule 4b graded at least one cost row (zero would mean the read is blind)");
+  ok(high.length === 0, `no MODEL_COST row sits more than ${Math.round(STALE_HIGH_TOLERANCE * 100)}% above the dearest live endpoint of every servable model it owns${high.length ? `:\n    ${high.map(describeStaleHigh).join("\n    ")}` : ""}`);
+}
 // 5. Expiring models: OpenRouter stamps expiration_date; anything we rank or
 //    fail over to that expires within 14 days fails now, not on the day.
 const soon = Date.now() + 14 * 86_400_000;
