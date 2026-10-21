@@ -2568,6 +2568,7 @@ jobs:
           t node scripts/test-live-quote-query-params.js
           t node scripts/test-live-price-adopt.js
           t node scripts/test-live-quote-body-redirect.js
+          t node scripts/test-probe-example.js
           t node scripts/test-proto-pollution-guard.js
           t node scripts/test-tool-judge.js
           # Free /api/route judged answers are bounded per caller (boots a free server against a stub judgment endpoint - offline)

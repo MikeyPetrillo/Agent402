@@ -24,6 +24,11 @@
 // they are cheap to constrain: a legitimate parameter or JSON field name fits a
 // tiny charset, so an allowlist bounds them structurally rather than by
 // pattern-matching what an attacker chose to write.
+//
+// The one private use of a sample is the unpaid quote probe: a seller's own
+// example request may be sent, bounded, as the probe body to that seller's own
+// route (src/probe-example.js, probeAttemptsFor). It is held only for that
+// crawl and never stored or projected; this file still projects no sample.
 const SAFE_NAME = /^[A-Za-z0-9_.\-\[\]]{1,64}$/;
 
 const LOCATIONS = ["path", "query", "header", "cookie"];

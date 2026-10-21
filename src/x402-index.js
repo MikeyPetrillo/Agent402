@@ -24,6 +24,7 @@
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
+import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -1546,7 +1547,11 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
         const allowance = repriceAllowance(origin);
         if (allowance > 0) {
           noteReprice(origin);
-          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
+          // The examples are re-read from the manifest the crawl kept (packed),
+          // into a Map local to this call: the probe body only.
+          const probeExamples = new Map();
+          try { const doc = await previousManifestDoc(fresh || existing); if (doc) normaliseManifestTools(doc, origin, { examples: probeExamples }); } catch { /* no examples */ }
+          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, probeExamples, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
           repriced = true;
         }
       }
@@ -2781,6 +2786,10 @@ export function singleResourceManifestTool(manifest, originUrl) {
 function catalogueEntryAccepts(raw, fallback) {
   if (!raw || typeof raw !== "object") return fallback;
   if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
+  // A per-entry `payment` block, the `paths` manifest's shape: its own accepts,
+  // or a `networks` list (CAIP-2) beside one asset and payTo.
+  const own = entryPaymentBlockAccepts(raw.payment);
+  if (own.length) return own;
   const network = raw.network || raw.chain;
   if (typeof network === "string" && network) {
     return [{
@@ -2795,6 +2804,56 @@ function catalogueEntryAccepts(raw, fallback) {
     }];
   }
   return fallback;
+}
+
+/** The accepts a catalogue entry's own `payment` block declares: its accepts
+ *  array, else one accept per network it names (`network`, `chain`, or a
+ *  `networks` list), each with the block's asset and, where its shape fits the
+ *  network, its payTo. Empty when the block names no chain. */
+function entryPaymentBlockAccepts(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return [];
+  if (Array.isArray(p.accepts) && p.accepts.length) return p.accepts;
+  const nets = [...new Set(
+    [p.network, p.chain, ...(Array.isArray(p.networks) ? p.networks : [])]
+      .filter((v) => typeof v === "string" && v.trim())
+      .map((v) => normalizeNetwork(v.trim())),
+  )].slice(0, 16);
+  if (!nets.length) return [];
+  const payTo = typeof p.payTo === "string" ? p.payTo.trim() : (typeof p.pay_to === "string" ? p.pay_to.trim() : "");
+  const asset = [p.asset, p.asset_address, p.assetAddress].find((v) => typeof v === "string" && v.trim()) || undefined;
+  return nets.map((network) => ({
+    scheme: typeof p.scheme === "string" && p.scheme ? p.scheme : "exact",
+    network,
+    ...(asset ? { asset } : {}),
+    ...(payToFitsNetwork(network, payTo) ? { payTo } : {}),
+    ...(p.amount != null || p.maxAmountRequired != null ? { amount: p.amount ?? p.maxAmountRequired, maxAmountRequired: p.maxAmountRequired ?? p.amount } : {}),
+    ...(p.maxTimeoutSeconds != null ? { maxTimeoutSeconds: p.maxTimeoutSeconds } : {}),
+    ...(p.extra && typeof p.extra === "object" ? { extra: p.extra } : {}),
+  }));
+}
+
+/**
+ * A top-level `paths` object read as a catalogue: path -> entry carrying
+ * `methods`, `resource` and a `payment` block. An OpenAPI document served as a
+ * manifest also has `paths`, keyed by verb; those path items (and any document
+ * that names itself `openapi`/`swagger`) are left to the OpenAPI reader, and an
+ * entry that carries none of the x402 entry fields is not read.
+ */
+const OPENAPI_PATH_ITEM_KEYS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace", "$ref", "parameters", "servers"]);
+function manifestPathsCatalogue(manifest) {
+  const p = manifest?.paths;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  if (manifest.openapi != null || manifest.swagger != null) return null;
+  const out = [];
+  for (const [path, e] of Object.entries(p).slice(0, 1000)) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    if (Object.keys(e).some((k) => OPENAPI_PATH_ITEM_KEYS.has(k.toLowerCase()))) continue;
+    const x402Entry = (e.payment && typeof e.payment === "object") || typeof e.resource === "string"
+      || Array.isArray(e.methods) || typeof e.method === "string" || Array.isArray(e.accepts) || e.price != null;
+    if (!x402Entry) continue;
+    out.push({ ...e, path: typeof e.path === "string" && e.path ? e.path : path });
+  }
+  return out.length ? out : null;
 }
 
 /** Does this address have the shape of a wallet on this network's family?
@@ -2862,8 +2921,12 @@ function manifestPaymentAccepts(manifest) {
   }];
 }
 
-export function normaliseManifestTools(manifest, originUrl) {
-  const rows = normaliseManifestToolsUnscoped(manifest, originUrl);
+export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
+  // `examples` (a Map, crawl-local) collects each entry's published example
+  // request for the unpaid quote probe and nothing else; see
+  // src/probe-example.js. The rows returned never carry it.
+  const exampleOf = examples instanceof Map ? new WeakMap() : null;
+  const rows = normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf);
   // A path seller's manifest that declares its own origin WITH the prefix
   // writes its routes relative to that origin ("/v1/reconcile" under
   // ".../functions/v1/api"); read host-absolute they fall outside the prefix
@@ -2876,7 +2939,35 @@ export function normaliseManifestTools(manifest, originUrl) {
       if (r && r[MANIFEST_HOST_RELATIVE] && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
     }
   }
+  if (exampleOf && Array.isArray(rows)) {
+    for (const r of rows) {
+      const ex = r && exampleOf.get(r);
+      if (!ex) continue;
+      const route = r[SCOPED_ROW] ? r.route : scopeRouteToSeller(originUrl, r.route);
+      if (route != null) noteProbeExample(examples, r.methodInferred ? null : r.method, route, ex);
+    }
+  }
   return scopeRowsToSeller(rows, originUrl);
+}
+
+/** The example request bodies a seller's OpenAPI publishes for its POST
+ *  operations, into the crawl-local `examples` Map, keyed by the route the
+ *  OpenAPI reader gives the operation. For the unpaid quote probe only (see
+ *  src/probe-example.js); never put on a row. */
+export function openapiProbeExamples(openapi, originUrl, examples) {
+  if (!(examples instanceof Map) || !openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return examples;
+  const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return examples;
+  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
+    if (examples.size >= MAX_PROBE_EXAMPLES) break;
+    if (!methods || typeof methods !== "object" || !Object.hasOwn(methods, "post")) continue;
+    const ex = openapiOperationExample(methods.post, openapi);
+    if (!ex) continue;
+    const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
+    const route = scopeRouteToSeller(originUrl, pathStr);
+    if (route != null) noteProbeExample(examples, "POST", route, ex);
+  }
+  return examples;
 }
 function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
   const declared = typeof manifest?.origin === "string" ? manifest.origin : "";
@@ -2886,7 +2977,7 @@ function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
     return a.host === b.host && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
   } catch { return false; }
 }
-function normaliseManifestToolsUnscoped(manifest, originUrl) {
+function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
   // Relative entries resolve against where the manifest is served: a path
@@ -2902,6 +2993,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   const catalogues = ["tools", "resources", "endpoints", "services", "resourceCatalog"]
     .map((k) => manifest[k])
     .filter((v) => Array.isArray(v) && v.length);
+  const pathsCatalogue = manifestPathsCatalogue(manifest);
+  if (pathsCatalogue) catalogues.push(pathsCatalogue);
   if (!catalogues.length) {
     const single = singleResourceManifestTool(manifest, originUrl);
     return single ? [single] : [];
@@ -2909,6 +3002,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
 
   const byKey = new Map();
   const metaByPath = new Map();
+  // Probe examples by row key, only when the caller collects them.
+  const exampleByKey = exampleOf ? new Map() : null;
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
   // A catalogue row that carries only a bare `amount` under a manifest whose
@@ -2968,6 +3063,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
         }
       }
       if (!ref) continue;
+      const example = exampleByKey && typeof raw === "object" ? manifestEntryExample(raw) : null;
       // "POST /exchange/sell-clams" — a verb glued to a path.
       const verb = /^([A-Za-z]+)\s+(\/.*)$/.exec(ref);
       if (verb && MANIFEST_HTTP_METHODS.has(verb[1].toUpperCase())) {
@@ -3017,6 +3113,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
             ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}) } : {}),
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
+        if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
       }
     }
   }
@@ -3073,6 +3170,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   for (const [k, t] of [...byKey.entries()]) {
     if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) byKey.delete(k);
   }
+  if (exampleByKey) for (const [k, t] of byKey) { const ex = exampleByKey.get(k); if (ex) exampleOf.set(t, ex); }
   return [...byKey.values()];
 }
 
@@ -4388,7 +4486,7 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
@@ -4500,7 +4598,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       bump(quoteProbeStats.attempts, k);
       if (!firstOutcome) firstOutcome = k;
     };
-    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool)) {
+    // The seller's own example request for this route, when its documents
+    // publish one: the probe body only, never stored or logged (probe-example.js).
+    // Never for a route the seller itself marks free (paid:false): a body the
+    // route accepts would run it, and only a paid route answers it with a 402.
+    const example = tool.paid === false ? null : probeExampleFor(probeExamples, "POST", tool.route);
+    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool, { example })) {
       if (pastDeadline()) break;
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
@@ -5378,7 +5481,12 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // endpoints nobody else reported or enrich ones already known. It can
     // never add a second row for an endpoint we already list — see
     // mergeManifestIntoTools for the 16 -> 30 regression that proved why.
-    tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl), tools);
+    // The seller's published example requests, for this crawl's unpaid quote
+    // probes only: a local Map, never on a row or the cache entry, dropped when
+    // this crawl returns (src/probe-example.js). Manifest first, then OpenAPI.
+    const probeExamples = new Map();
+    tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl, { examples: probeExamples }), tools);
+    if (openapi && openapi.paths) openapiProbeExamples(openapi, originUrl, probeExamples);
     tools = dropDeclaredFreeEndpoints(tools, manifest);
     tools = dropUnvouchedNonProductRoutes(tools, (bazaarToolsByOrigin.get(originUrl) || []).map((t) => t.route));
     // Which routes the seller's own documents name; the rest must prove
@@ -5387,7 +5495,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples });
 
     cache.set(originUrl, {
       // Derivation is done: the entry keeps the slim keys its readers use,
@@ -5515,7 +5623,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null });
+      // Crawl-local, as on the manifest path: the probe body only.
+      const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
