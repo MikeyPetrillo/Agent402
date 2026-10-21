@@ -19,6 +19,7 @@
     "rpc-failover.js",
     "settle-poll.js",
     "fee-bid.js",
+    "signer-reread.js",
     "README.md"
   ],
   "engines": {
