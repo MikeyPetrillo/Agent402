@@ -30,6 +30,7 @@
 //
 // Cost per run: 2 x $0.01 from the canary burner to our own payTo, plus Tempo
 // fees. The money is ours on both ends; the fees are the real spend.
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
 import { Mppx, tempo } from "mppx/client";

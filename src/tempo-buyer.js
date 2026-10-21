@@ -31,7 +31,8 @@ import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
-const trustedDispatcher = new UndiciAgent();
+import { withDistrust } from "./tls-distrust.js";
+const trustedDispatcher = new UndiciAgent({ connect: withDistrust() });
 import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
 
 

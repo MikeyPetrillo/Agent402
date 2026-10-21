@@ -15,6 +15,7 @@
 //
 //   FACILITATOR_URL=... FACILITATOR_TOKEN=... STELLAR_BURNER_SECRET=... \
 //   PAYTO=... node scripts/facilitator-mainnet-canary.js
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { Keypair } from "@stellar/stellar-sdk";
 import { createEd25519Signer, ExactStellarScheme, USDC_PUBNET_ADDRESS, getHorizonClient } from "@x402/stellar";
 

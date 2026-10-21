@@ -14,7 +14,7 @@
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
-import { RAILS, railKey, x402EvmOnly } from "./rails.js";
+import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { mppShimEnabled } from "./mpp-shim.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
@@ -73,7 +73,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
   // The chains this instance takes, from the networks enabled at boot (the
   // same filter /.well-known/x402 applies); without the list, the full table.
   const enabledSet = Array.isArray(networks) ? new Set(networks.map((n) => String(n).toLowerCase())) : null;
-  const rails = enabledSet ? RAILS.filter((r) => enabledSet.has(railKey(r))) : RAILS;
+  const rails = enabledSet ? liveRails().filter((r) => enabledSet.has(railKey(r))) : RAILS;
   const canonical = `${baseUrl}/how-to-pay`;
   const title = "How to pay for a call: x402, MPP, credits or proof-of-work";
   const description =

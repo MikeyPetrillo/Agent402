@@ -809,6 +809,7 @@ export const CAIP2_NAMES = {
   // fails if an offered rail has no entry, so a thirteenth cannot repeat it.
   "eip155:1329": "sei",
   "eip155:10": "optimism",
+  "eip155:5042": "arc",
 };
 
 /** Fold a raw CAIP-2 counter key into its friendly name.

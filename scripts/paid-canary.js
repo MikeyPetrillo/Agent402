@@ -18,6 +18,7 @@
 // Exit codes: 0 = buying works (warnings allowed) · 1 = buying broken · 2 = misconfig
 //   · 3 = underfunded (settlement proven; burner empty) · 4 = green but burner low
 //   · 5 = partial-rail (tools settled; one or more chain rail legs failed)
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt } from "../src/avm-sponsorship.js";
@@ -790,6 +791,7 @@ export const CHAIN_FUNDING = [
   { key: "avalanche", label: "Avalanche", token: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", rpcs: ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"] },
   { key: "sei", label: "Sei", token: "0xe15fc38f6d8c56af07bbcbe3baf5708a2bf42392", rpcs: ["https://evm-rpc.sei-apis.com", "https://sei-evm-rpc.publicnode.com"] },
   { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"] },
+  { key: "arc", label: "Arc", token: "0x3600000000000000000000000000000000000000", rpcs: ["https://rpc.mainnet.arc.io"] },
   { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://rpc.mainnet.chain.robinhood.com"] },
   // Tempo: the 2-hourly tempo-volume.yml buys from this burner every day, so
   // its low-water is higher than the one-buy legs use. Funded in USDC.e since
@@ -1526,6 +1528,7 @@ async function main() {
     { key: "avalanche", caip2: "eip155:43114", sym: "USDC", chainLabel: "Avalanche", tx: (h) => `https://snowtrace.io/tx/${h}` },
     { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1` },
     { key: "optimism", caip2: "eip155:10", sym: "USDC", chainLabel: "Optimism", tx: (h) => `https://optimistic.etherscan.io/tx/${h}` },
+    { key: "arc", caip2: "eip155:5042", sym: "USDC", chainLabel: "Arc", gated: true, tx: (h) => `https://explorer.arc.io/tx/${h}` },
   ]) {
     try {
       const { x402HTTPClient } = await import("@x402/core/client");
@@ -1545,6 +1548,13 @@ async function main() {
         continue;
       }
       const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network || "") === leg.caip2);
+      if (!accepts.length && leg.gated) {
+        // A gated rail (Arc: offered only while its key is set and Circle's
+        // /supported check passed) that is not in the live 402 is not an
+        // outage of a rail we sell; the leg has nothing to buy.
+        console.log(`SKIP  ${leg.key} leg: skipped: ${leg.chainLabel} not offered (${leg.caip2} is not in the live 402)`);
+        continue;
+      }
       if (!accepts.length) {
         railFail(leg.key, `${leg.caip2} NOT among the live 402 accepts — the ${leg.chainLabel} rail has DROPPED OUT of the offer (PAYMENT_NETWORKS changed, or the boot /supported guard dropped it). This is the Celo-outage shape and must never be a silent skip.`);
         continue;

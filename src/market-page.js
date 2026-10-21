@@ -13,6 +13,7 @@
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
+import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
@@ -296,6 +297,37 @@ export const CHAIN_PAGES = {
   },
 };
 
+// Chain pages for gated rails (src/gated-rails.js). Not in CHAIN_PAGES, so no
+// nav, sitemap or /<chain> route names them, until src/payments.js reports the
+// rail in the live offer; then the entry joins CHAIN_PAGES and every surface
+// that iterates it at request time (nav, sitemap, the /<chain> page) picks it
+// up. Until then /arc answers 404, the same as an unknown chain.
+export const GATED_CHAIN_PAGES = {
+  arc: {
+    chainName: "Arc",
+    // Arc's gas is paid in USDC; there is no separate native token.
+    ticker: "USDC",
+    tickerLabel: "ARC · MAINNET",
+    caip2: "eip155:5042",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.arc.io",
+    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
+    networkParam: "arc",
+    acceptNetwork: "eip155:5042",
+    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
+    // ("eip155:5042002"), so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:5042",
+    honestyNetworkPhrase: "the Arc network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
+};
+onGatedRailOffered((caip2) => {
+  for (const [key, cfg] of Object.entries(GATED_CHAIN_PAGES)) {
+    if (cfg.caip2 === caip2 && !CHAIN_PAGES[key]) CHAIN_PAGES[key] = cfg;
+  }
+});
+
 // The x402 seller leaderboard (src/leaderboard.js) reads Base USDC only. A
 // seller's payTo on another EVM chain is usually the same address, so joining
 // another chain's roster to it would show Base settlements under that chain's
@@ -425,7 +457,7 @@ export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
   return `
   <div class="mfb" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 6px;padding:12px;border:1px solid var(--hairline);background:var(--card);">
     <span class="mfb-label">Chain</span>
-    <div class="mfb-tabs" style="display:flex;flex-wrap:wrap;gap:5px;">${tabs.join("")}</div>${rowControls ? `
+    <div class="mfb-tabs">${tabs.join("")}</div>${rowControls ? `
     <span class="mfb-label" style="margin-left:6px;">Sort</span>
     <select class="mfb-sel" data-mfb-sort aria-label="Sort sellers by"><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
     <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">` : ""}

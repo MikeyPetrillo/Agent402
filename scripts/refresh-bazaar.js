@@ -18,8 +18,9 @@
 //   3) Pay once to make the harvester re-observe metadata
 //
 // Missing mode steps:
-//   1) Fetch /api/pricing (our catalog) and the full Bazaar resource set
-//   2) Diff: catalog ∖ Bazaar = routes that have never been observed
+//   1) Fetch /api/pricing (our catalog) and the full Bazaar resource set, read
+//      in full passes until two agree (a third on disagreement)
+//   2) Diff: catalog ∖ Bazaar = routes absent from every pass
 //   3) Pull examples from /openapi.json (full coverage, unlike /api/find)
 //   4) Pay each from cheapest first, bounded by MAX_SPEND_USD
 //   5) Re-verify the missing count
@@ -69,7 +70,7 @@ const heartbeatHeaders = () => {
 };
 import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { chainOf, routeSellsOn } from "./listing-coverage.js";
+import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -136,30 +137,33 @@ const MISSING_CHAIN = (() => {
 // single pass runs long enough to time out. Default = one batch (everything).
 const BATCH_COUNT = Math.max(1, parseInt(process.env.BATCH_COUNT || "1", 10) || 1);
 const BATCH_INDEX = Math.min(BATCH_COUNT - 1, Math.max(0, parseInt(process.env.BATCH_INDEX || "0", 10) || 0));
-const BAZAAR_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
-const PAGE_SIZE = 1000;
+const BAZAAR_URL = BAZAAR_REGISTRY_URL;
 const HOST = new URL(TARGET).host;
 
 function priceToUsd(s) {
   return Number(String(s || "").replace(/[^\d.]/g, "")) || 0;
 }
 
-async function pageBazaar(filter) {
-  const matches = [];
-  let offset = 0;
-  let total = 0;
-  while (true) {
-    const r = await fetch(`${BAZAAR_URL}?limit=${PAGE_SIZE}&offset=${offset}`);
-    if (!r.ok) throw new Error(`Bazaar HTTP ${r.status}`);
-    const j = await r.json();
-    total = j.pagination?.total || 0;
-    const items = j.items || [];
-    if (!items.length) break;
-    for (const it of items) if (filter(it)) matches.push(it);
-    offset += items.length;
-    if (offset >= total) break;
-  }
-  return { matches, total };
+const pathOf = (it) => {
+  try { return new URL(it.resource).pathname; } catch { return null; }
+};
+
+// Our rows from the feed. The feed indexes with a lag and a single walk can
+// come back partially populated, so it is read in full passes until two agree
+// (walkAgreed); a row seen in ANY pass counts as listed, so a route is treated
+// as missing only when every pass lacks it.
+async function readOurRows() {
+  const feed = await walkAgreed(BAZAAR_URL, {
+    isOurs: (it) => (it.resource || "").includes(HOST),
+    keyOf: pathOf,
+    log: (m) => console.log(m),
+  });
+  const counts = feed.passes.map((p) => `${p.total} rows / ${p.keys.size} ours`).join(", ");
+  console.log(
+    `Bazaar read in ${feed.passes.length} passes (${counts})` +
+      (feed.agreed ? "; the last two agree." : "; passes disagree, so only routes absent from every pass count as missing.")
+  );
+  return feed;
 }
 
 async function loadStaleRoutes() {
@@ -175,20 +179,23 @@ async function loadStaleRoutes() {
     const r = await fetch(`${TARGET}/api/pricing`);
     if (r.ok) for (const e of ((await r.json()).endpoints || [])) if (e?.path) expected.set(e.path, e.name || EXPECT_NAME);
   } catch { /* fall back to the constant below */ }
-  const { matches, total } = await pageBazaar((it) => {
-    const r = it.resource || "";
-    if (!r.includes(HOST)) return false;
-    let want = EXPECT_NAME;
-    try { want = expected.get(new URL(r).pathname) ?? EXPECT_NAME; } catch { /* keep the fallback */ }
-    return it.serviceName !== want;
-  });
-  console.log(`Scanned ${total} Bazaar resources; ${matches.length} stale on ${HOST}.`);
-  // Normalise to { slug, route, serviceName }
-  return matches.map((it) => {
-    const u = new URL(it.resource);
-    const slug = u.pathname.replace(/^\/api\//, "");
-    return { slug, path: u.pathname, serviceName: it.serviceName || "(null)" };
-  });
+  const feed = await readOurRows();
+  const wantFor = (path) => expected.get(path) ?? EXPECT_NAME;
+  // A path seen with the expected name in any pass is not stale: only a drift
+  // every pass agrees on is paid for.
+  const current = new Set();
+  for (const it of feed.items) {
+    const p = pathOf(it);
+    if (p && it.serviceName === wantFor(p)) current.add(p);
+  }
+  const stale = new Map();
+  for (const it of feed.items) {
+    const p = pathOf(it);
+    if (!p || current.has(p) || stale.has(p)) continue;
+    stale.set(p, { slug: p.replace(/^\/api\//, ""), path: p, serviceName: it.serviceName || "(null)" });
+  }
+  console.log(`Scanned ${feed.total} Bazaar resources; ${stale.size} stale on ${HOST}.`);
+  return [...stale.values()];
 }
 
 async function loadExample(slug) {
@@ -232,30 +239,30 @@ async function loadCatalog() {
   }));
 }
 
-// Paths with a Bazaar row; under --chain, paths with a row whose accepts carry
-// that chain (a row minted before the chain was offered does not count).
-async function loadRegisteredPaths() {
+// Paths with a Bazaar row in any pass of the feed read; under --chain, paths
+// with a row whose accepts carry that chain (a row minted before the chain was
+// offered does not count).
+export function registeredPaths(items, chain = MISSING_CHAIN) {
   const reg = new Set();
-  const { matches } = await pageBazaar((it) => (it.resource || "").includes(HOST));
-  for (const it of matches) {
-    if (MISSING_CHAIN && !(it.accepts || []).some((a) => a && a.network === MISSING_CHAIN.caip2)) continue;
-    try { reg.add(new URL(it.resource).pathname); } catch {}
+  for (const it of items || []) {
+    if (chain && !(it.accepts || []).some((a) => a && a.network === chain.caip2)) continue;
+    const p = pathOf(it);
+    if (p) reg.add(p);
   }
   return reg;
 }
 
-// path -> ms since CDP last observed a settlement for it. A path absent here is
-// not listed at all, which is always worth a settlement.
-async function loadFreshness() {
+// path -> ms since CDP last observed a settlement for it, the freshest reading
+// across passes. A path absent here is not listed at all, which is always worth
+// a settlement.
+export function freshnessOf(items, now = Date.now()) {
   const fresh = new Map();
-  const { matches } = await pageBazaar((it) => (it.resource || "").includes(HOST));
-  for (const it of matches) {
-    const at = it.quality?.lastCalledAt;
-    if (!at) continue;
-    const t = Date.parse(at);
-    if (Number.isFinite(t)) {
-      try { fresh.set(new URL(it.resource).pathname, Date.now() - t); } catch {}
-    }
+  for (const it of items || []) {
+    const t = Date.parse(it.quality?.lastCalledAt || "");
+    const p = pathOf(it);
+    if (!p || !Number.isFinite(t)) continue;
+    const age = now - t;
+    if (!fresh.has(p) || age < fresh.get(p)) fresh.set(p, age);
   }
   return fresh;
 }
@@ -287,13 +294,15 @@ async function loadOpenapiExamples() {
   return out;
 }
 
-async function runMissingMode({ sweep = false } = {}) {
-  const [catalog, registered, examples, freshness] = await Promise.all([
+export async function runMissingMode({ sweep = false } = {}) {
+  const needFeed = !sweep || STALE_DAYS > 0;
+  const [catalog, feed, examples] = await Promise.all([
     loadCatalog(),
-    sweep ? Promise.resolve(new Set()) : loadRegisteredPaths(),
+    needFeed ? readOurRows() : Promise.resolve(null),
     loadOpenapiExamples(),
-    STALE_DAYS > 0 ? loadFreshness() : Promise.resolve(new Map()),
   ]);
+  const registered = sweep ? new Set() : registeredPaths(feed.items);
+  const freshness = STALE_DAYS > 0 ? freshnessOf(feed.items) : new Map();
   // A path we have never listed has no freshness reading, and that is exactly
   // the case that needs a settlement - so an unknown path is treated as stale,
   // never as fresh. Same rule as the rest of this repo: a missing measurement
@@ -414,7 +423,7 @@ async function runMissingMode({ sweep = false } = {}) {
   // Bazaar harvester is not instant. Give it ~60s then re-verify.
   console.log("Waiting 60s for the Bazaar harvester to catch up …");
   await new Promise((r) => setTimeout(r, 60000));
-  const afterReg = await loadRegisteredPaths();
+  const afterReg = registeredPaths((await readOurRows()).items);
   const stillMissing = catalog.filter((t) => t.onChain && !afterReg.has(t.path));
   console.log(`After: ${afterReg.size} registered, ${stillMissing.length} still missing (harvester may continue to catch up).`);
   if (stillMissing.length === 0) return 0;

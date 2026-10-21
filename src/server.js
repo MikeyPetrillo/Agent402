@@ -1,4 +1,5 @@
 import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
@@ -6,6 +7,15 @@ import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tool
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
+import { onGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
+import { GATED_RAILS, railKey } from "./rails.js";
+// The networks a PUBLIC surface names: the configured ones, minus any gated
+// rail (Arc) that is not in the live offer. Operator views read the full
+// configured list (enabledNetworks) so a dropped rail stays visible there.
+const GATED_NETWORK_NAMES = new Map(GATED_RAILS.map((r) => [railKey(r), r.caip2]));
+function publicNetworks() {
+  return enabledNetworks(NETWORK).filter((n) => !GATED_NETWORK_NAMES.has(n) || gatedRailOffered(GATED_NETWORK_NAMES.get(n)));
+}
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -14,8 +24,9 @@ import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import dns from "node:dns";
 import { createGzip } from "node:zlib";
 import { setGlobalDispatcher, Agent as UndiciAgent } from "undici";
+import { withDistrust } from "./tls-distrust.js";
 dns.setDefaultResultOrder("ipv4first");
-setGlobalDispatcher(new UndiciAgent({ connect: { family: 4 } }));
+setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // The event loop is watched for the life of the process (started in
 // boot-profile.js, the first import, because ES imports hoist and a monitor
 // started here cannot see the boot it is meant to measure). A CONNECT timeout
@@ -367,7 +378,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -3376,6 +3387,10 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // Arc settlements Circle left pending (src/circle-pending.js): off / ok /
+    // near_capacity / full / unresolved. One word; the heartbeat pages on
+    // unresolved and full.
+    circlePending: { status: await circlePendingStatus() },
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
@@ -3505,7 +3520,7 @@ app.get("/what-is-x402", (_req, res) => htmlCache(res, 300, 900).send(whatIsX402
 })));
 app.get("/what-is-mpp", (_req, res) => htmlCache(res, 300, 900).send(whatIsMppPage(BASE_URL, CATALOG)));
 // The buyer path per rail (x402, MPP, credits, proof-of-work); prices from the live catalog.
-app.get("/how-to-pay", (_req, res) => htmlCache(res, 300, 900).send(howToPayPage(BASE_URL, CATALOG, { networks: enabledNetworks(NETWORK) })));
+app.get("/how-to-pay", (_req, res) => htmlCache(res, 300, 900).send(howToPayPage(BASE_URL, CATALOG, { networks: publicNetworks() })));
 // The speech tools; prices and the served routes from the live catalog.
 app.get("/speech", (_req, res) => htmlCache(res, 300, 900).send(speechPage(BASE_URL, CATALOG)));
 // The category page: Agentic Finance - the moniker the whole surface
@@ -5264,7 +5279,7 @@ app.post("/__operator/stall-profile", async (req, res) => {
 app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
   getCatalog: () => CATALOG,
   baseUrl: BASE_URL,
-  getNetworks: () => enabledNetworks(NETWORK).map((n) => PAY_NETWORKS[n]).filter(Boolean),
+  getNetworks: () => publicNetworks().map((n) => PAY_NETWORKS[n]).filter(Boolean),
   // Execute pays outside steps on Base through route-execute-pro, so a row is
   // executable only when the router's Base verdict for it is eligible now.
   remoteExecutable: (t) => {
@@ -5607,6 +5622,28 @@ app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req,
   }
   res.set("Cache-Control", "no-store").json({ ...sellerFundingStatus(), cleared: store.list(), note: 'GET ?wallet=0x... for one wallet; POST {"action":"clear"|"restore","wallet":"0x...","note":"..."} to change it; POST {"action":"disable"|"enable","note":"..."} turns the whole reader off or on' });
 });
+// Arc pending settlements (src/circle-pending.js): the shared book's word and
+// its unresolved entries, and the operator action that settles one by hand
+// after checking Circle and the chain. Token-authed; every action is logged
+// with its note.
+app.get("/__operator/circle-pending.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = circlePendingBookForOperator();
+  if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
+  try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
+  catch { return res.status(503).json({ error: "the pending book could not be read" }); }
+});
+app.post("/__operator/circle-pending", express.json(), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = circlePendingBookForOperator();
+  if (!book) return res.status(409).json({ error: "Arc is not configured on this server" });
+  const { action, key, outcome, note } = req.body || {};
+  if (action !== "resolve") return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","outcome":"refunded"|"not_charged"|"retry","note":"what was checked"}' });
+  try {
+    const r = await book.resolve(key, { outcome, note });
+    return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json(r);
+  } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
+});
 app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};
@@ -5864,8 +5901,10 @@ app.get("/docs/:slug", (req, res) => {
 // so this seller is the one selected. Per-resource terms still live in each
 // 402 + the x402 Bazaar; this is the index that ties them together. Built once:
 // it depends only on boot-time constants (catalog, prices, networks, wallet).
-const MANIFEST = serviceManifest({
-  baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+// Rebuilt once more when a gated rail (src/gated-rails.js) joins the live
+// offer, so its chain is named only after the boot offer kept it.
+const buildManifest = () => serviceManifest({
+  baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
   wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
   payToByNetwork: Object.fromEntries([
     ["evm", WALLET_ADDRESS], ["solana", (process.env.SOLANA_WALLET_ADDRESS || "").trim()],
@@ -5874,6 +5913,8 @@ const MANIFEST = serviceManifest({
   toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
   powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
 });
+let MANIFEST = buildManifest();
+onGatedRailOffered(() => { MANIFEST = buildManifest(); });
 // Shared helper: builds a small 24h performance signal from the analytics
 // table (cache hit rate, error rate, p50/p95 latency, dashboard URL). Used by
 // /api/stats and /.well-known/x402 so a discovery agent fetching either one
@@ -6009,7 +6050,7 @@ app.get("/acp/feed", (_req, res) =>
 );
 app.get("/acp/manifest", (_req, res) =>
   res.set("Cache-Control", "public, max-age=3600").json(acpManifest({
-    baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+    baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
     wallet: WALLET_ADDRESS, toolCount: Object.keys(CATALOG).length, powDifficulty: POW_DIFFICULTY,
   }))
 );
@@ -6574,6 +6615,8 @@ function getIndexSnapshot() {
 // the strip is memoized on their identity (the leaderboard getter returns a
 // fresh wrapper per call; its `leaderboard` array is the shared object).
 let navChainsMemo = { snapshot: null, board: null, value: null };
+// A gated rail joining the live offer adds a chain page: rebuild the strip.
+onGatedRailOffered(() => { navChainsMemo = { snapshot: null, board: null, value: null }; });
 setNavIndexProvider(() => {
   const snapshot = getIndexSnapshot();
   const board = getLeaderboardSnapshot();
@@ -6935,7 +6978,7 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
 // /robinhood replaces the old dedicated robinhood-page.js landing (folded
 // its unique chain-parameter and tollbooth-config copy into this chain's
 // sellParagraphHtml in market-page.js) — same URL, now the shared template.
-const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", robinhood: "Robinhood Chain" };
+const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", arc: "Arc", robinhood: "Robinhood Chain" };
 // Per-chain wallet source: EVM rails (including Robinhood, chain 4663) all
 // settle to the same WALLET_ADDRESS; Solana has its own env.
 const chainWallet = (chainKey) => (chainKey === "solana" ? (process.env.SOLANA_WALLET_ADDRESS || "").trim() : WALLET_ADDRESS);
@@ -6987,7 +7030,10 @@ const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
 const CHAIN_SELLER_VIEW_STALE_MS = 60_000;
 const chainSellerViewsInFlight = createInFlightGauge({ staleMs: CHAIN_SELLER_VIEW_STALE_MS });
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
-  app.get(`/${chainKey}`, async (req, res) => {
+  app.get(`/${chainKey}`, async (req, res, next) => {
+    // A gated rail's page (Arc) exists only while the rail is in the live
+    // offer (src/gated-rails.js); before that it is an unknown path.
+    if (!CHAIN_PAGES[chainKey]) return next();
     try {
       const all = req.query.all === "1";
       // THE CACHE IS CHECKED FIRST (2026-10-01). A distributed burst of plain
@@ -7020,7 +7066,7 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
 app.get("/api/market/:chain/panel", async (req, res) => {
   try {
     const chainKey = String(req.params.chain || "");
-    if (!SNAPSHOT_RAIL_LABEL[chainKey]) return res.status(404).json({ error: "unknown chain" });
+    if (!SNAPSHOT_RAIL_LABEL[chainKey] || !CHAIN_PAGES[chainKey]) return res.status(404).json({ error: "unknown chain" });
     const snapshot = getIndexSnapshot();
     const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, req.query.seller);
     const activity = scanWallet ? await getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : null;
@@ -7067,7 +7113,7 @@ function ourToolsAsIndexRows() {
     // the external row by scripts/test-projection-parity.js.
     price: t.price ?? null,
     payable: "x402",   // every tool in our own catalog is priced and payable
-    networks: enabledNetworks(NETWORK),
+    networks: publicNetworks(),
   }));
 }
 app.get("/marketplace/tools", (req, res) => {
@@ -8351,7 +8397,7 @@ app.get("/api/stats", (_req, res) => {
   base.settledOnChain = settledOnChainCount();
   // Every chain this instance takes and the MPP methods its 402 offers, not
   // only the primary network (the same sources /api/pricing and the manifest read).
-  base.payment = { ...base.payment, networks: enabledNetworks(NETWORK), mpp: mppMethodsSummary() };
+  base.payment = { ...base.payment, networks: publicNetworks(), mpp: mppMethodsSummary() };
   res.json(base);
 });
 
@@ -8565,7 +8611,7 @@ app.get("/api/pricing", (_req, res) => {
         .map((t) => ({ ...t, note: V1_TIER_NOTES[t.path] || undefined })),
       docs: `${BASE_URL}/tools/category/llm`,
     },
-    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
+    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks() },
     altPayment: {
       protocol: "proof-of-work",
       summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead - no money, no AI tokens, no model involved.",

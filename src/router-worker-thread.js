@@ -12,6 +12,7 @@
 // turns the crawler off and points every file-backed store at a scratch
 // directory, and the replica flag makes the two reads that would consult
 // this thread's own (empty) state read the shipped values instead.
+import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { parentPort } from "node:worker_threads";
 
 const xi = await import("./x402-index.js");

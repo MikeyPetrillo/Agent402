@@ -18,6 +18,9 @@ export const EVM_RPCS = {
   // rpc.robinhoodchain.com answers an EMPTY body; the host the rest of the repo
   // and Robinhood's own docs use is this one (probe: chainId 0x1237).
   "eip155:4663": "https://rpc.mainnet.chain.robinhood.com",
+  // Arc mainnet public RPC (probe 2026-10-20: chainId 0x13b2, USDC at
+  // 0x3600...0000 answers decimals() 6). Refund proof and settle chain proof.
+  "eip155:5042": "https://rpc.mainnet.arc.io",
 };
 
 /** The RPC URL for an EVM network (CAIP-2), or null. */

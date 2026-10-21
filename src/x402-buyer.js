@@ -10,6 +10,7 @@
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
+import { withDistrust } from "./tls-distrust.js";
 
 // What a seller sees in their logs when our router buys from them. Points at
 // the same page as the crawler's string: one place that says who we are.
@@ -760,7 +761,7 @@ export function neverLeftUs(err) {
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
 // A fresh plain connection for a trusted URL (no address guard).
-const trustedDispatcher = () => new UndiciAgent();
+const trustedDispatcher = () => new UndiciAgent({ connect: withDistrust() });
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, trusted = false, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);

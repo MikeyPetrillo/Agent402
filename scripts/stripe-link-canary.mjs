@@ -6,6 +6,7 @@
 //   /api/revenue/mpp byNetwork.stripe advanced by one.
 // Every request carries X-Heartbeat-Token so the ledger files the buy as internal.
 // Needs LINK_ACCESS_TOKEN / LINK_REFRESH_TOKEN (Actions secrets), STRIPE_PROFILE_ID, POW_SECRET.
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 

@@ -507,7 +507,6 @@ a { color: inherit; }
 }
 
 /* --- home hero (settled-calls proof, spec strip, staggered load) --- */
-@keyframes ml-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes ml-rise { to { opacity: 1; transform: none; } }
 /* Starts at 1% rather than 0: a fully transparent element is not a paint, so the
    largest-paint measure would wait on the animation (and on a busy main thread). */
@@ -518,7 +517,7 @@ a { color: inherit; }
 .ml-stagger > *:nth-child(4) { animation-delay: .26s; }
 .ml-stagger > *:nth-child(5) { animation-delay: .34s; }
 .ml-stagger > *:nth-child(6) { animation-delay: .42s; }
-.ml-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: ml-ring 2s infinite; flex: none; }
+.ml-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
 .ml-cta { transition: transform .12s ease; }
 .ml-cta:hover { transform: translateY(-2px); }
 .ml-spec-cell:last-child { border-right: none; margin-right: 0; }
@@ -547,7 +546,6 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 :root[data-theme="dark"] .hm-aura.is-on { opacity: .42; }
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
-  .ml-dot { animation: none; }
   .ml-nav-link, .ml-cta, .mlr-row, .ml-chip, .ml-faq-mark { transition: none !important; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
@@ -585,7 +583,11 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
 /* A phone shows the chain tabs as one strip that scrolls sideways, not a wrapped block ending on one stray tab. */
-@media (max-width:600px){.mfb-tabs{flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;}}
+/* Wider screens: the tabs are inline atoms in a balanced text block, so any
+   chain count wraps into even rows (never a last row of one tab). */
+.mfb-tabs{display:block;text-wrap:balance;flex:1 1 auto;min-width:0;line-height:2.15;}
+.mfb-tabs .mfb-tab{display:inline-block;margin:0 5px 5px 0;line-height:1.4;}
+@media (max-width:600px){.mfb-tabs{display:flex;flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;gap:5px;}.mfb-tabs .mfb-tab{margin:0;}}
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
@@ -710,13 +712,13 @@ function chainRows() {
     const data = navDataProvider && navDataProvider();
     if (data && Array.isArray(data.chains) && data.chains.length) {
       // Scale rule: EVERY live rail gets a row while the rail count stays
-      // human-sized (≤12 - twelve live rails, see #469); only past that does
+      // human-sized (16; twelve live rails plus room, see #469); only past that does
       // the list truncate to the top 12 with the "all sellers" row carrying
       // the rest. The previous >9 → slice(0,7) rule silently dropped Stellar,
       // Algorand, and Robinhood from the dropdown AND the mobile menu the
       // moment rail #10 shipped - the exact failure its own comment said it
       // was preventing. A ceiling must sit ABOVE the roster it protects.
-      const chains = data.chains.length > 12 ? data.chains.slice(0, 12) : data.chains;
+      const chains = data.chains.length > 16 ? data.chains.slice(0, 16) : data.chains;
       return { chains, live: true };
     }
   } catch { /* provider threw - fall back to the static list below */ }

@@ -10,6 +10,7 @@
 // their pure deps), never payments/db/operator, so those modules never even load
 // here. A boot guard also fails LOUD if a payment/DB/operator secret is present
 // in this process's env — the worker must be secretless by construction.
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import express from "express";
 import { timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";

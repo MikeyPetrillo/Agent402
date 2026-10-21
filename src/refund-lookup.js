@@ -22,7 +22,7 @@ import { refundByEvidence } from "./refund-ledger.js";
 const CAIP_TO_CHAIN = {
   "eip155:8453": "base", "eip155:137": "polygon", "eip155:42161": "arbitrum", "eip155:10": "optimism",
   "eip155:43114": "avalanche", "eip155:42220": "celo", "eip155:143": "monad", "eip155:1329": "sei",
-  "eip155:4663": "robinhood", "eip155:4217": "tempo",
+  "eip155:4663": "robinhood", "eip155:4217": "tempo", "eip155:5042": "arc",
 };
 const EXPLORER = {
   base: (h) => `https://basescan.org/tx/${h}`,
@@ -33,6 +33,7 @@ const EXPLORER = {
   celo: (h) => `https://celoscan.io/tx/${h}`,
   monad: (h) => `https://monadscan.com/tx/${h}`,
   sei: (h) => `https://seiscan.io/tx/${h}`,
+  arc: (h) => `https://explorer.arc.io/tx/${h}`,
   robinhood: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
   tempo: (h) => `https://explore.tempo.xyz/tx/${h}`,
   solana: (h) => `https://solscan.io/tx/${h}`,

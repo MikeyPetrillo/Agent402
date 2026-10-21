@@ -114,6 +114,18 @@ const FORBIDDEN = [
     exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
   },
   {
+    // A rail count typed into a SERVED page ("Twelve chains.", "plus eleven
+    // more rails", "all twelve chains", "12 chains in total"). Served copy
+    // derives the count from the live offer (src/rails.js
+    // resolveRailCountTokens), so a gated rail joining it moves the figure;
+    // a typed word stays wrong the moment it does. Comments are not copy.
+    re: /\b(?:eleven|twelve|thirteen|fourteen|fifteen|1[0-9]) (?:x402 )?(?:chains|rails|networks)\b(?! (?:of|from)\b)|\ball (?:eleven|twelve|thirteen|fourteen|1[0-9]) (?:chains|rails)\b|\b1[0-9] chains in total\b|\bplus (?:eleven|twelve|thirteen|1[0-9]) more (?:rails|chains)\b/i,
+    why: "a served page types a rail count; write {{railCount}} / {{railsMore}} and resolve it with resolveRailCountTokens so it follows the live offer",
+    only: /^src\//,
+    skipComments: true,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
     // The static-surface count is "500+ tools" (CLAUDE.md). Package
     // descriptions carried a hand-typed lower floor ("400+ pay-per-call
     // tools") beside it, which reads as a second, contradicting count.
@@ -291,10 +303,13 @@ function sweep(entries) {
   for (const [rel, text] of entries) {
     if (text == null) continue;
     const lines = text.split("\n");
-    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false } of FORBIDDEN) {
+    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false, only = null, skipComments = false } of FORBIDDEN) {
       if (exempt?.has(rel)) continue;
+      if (only && !only.test(rel)) continue;
       for (let i = 0; i < lines.length; i++) {
-        const sentence = `${lines[i]} ${lines[i + 1] || ""}`;
+        const isComment = (l) => skipComments && /^\s*(?:\/\/|\*|\/\*)/.test(l || "");
+        if (isComment(lines[i])) continue;
+        const sentence = `${lines[i]} ${isComment(lines[i + 1]) ? "" : lines[i + 1] || ""}`;
         const m = sentence.match(re);
         if (!m) continue;
         if (requires && !requires.test(sentence)) continue;      // a different subject entirely
@@ -328,9 +343,12 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Text-to-video over x402 - one clip. The call returns when ready; a failed or timed-out generation is never charged."],
                        ["<control>", "Why pay here (a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, or a report by card)"],
                        ["<control>", "<h3>Is this Solana token safe to touch</h3>"],
-                       ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."]]);
-const CONTROL_EXPECTED = 18;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 15 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+                       ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."],
+                       ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
+                       ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
+                       ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
+const CONTROL_EXPECTED = 20;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 17 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);

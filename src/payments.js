@@ -36,6 +36,12 @@ import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onc
 import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
+import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
+import { markGatedRailOffered } from "./gated-rails.js";
+import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
+import { shared } from "./shared-limits.js";
+import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
+import { hasLastingEffect } from "./hangup-forgiveness.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -82,6 +88,13 @@ const EVM_NETWORKS = {
   // OPT-IN only: it settles nothing unless `robinhood` is listed in
   // PAYMENT_NETWORKS, so the working USDC path is untouched by default.
   robinhood: "eip155:4663",
+  // Arc (Circle's EVM L1, chain 5042). Native USDC at 0x3600...0000 with the
+  // "USDC" v2 domain (verified on chain 2026-10-20), priced through
+  // TIER1_USDC. Settled by Circle's facilitator only (src/circle-facilitator.js),
+  // so it is offered only while CIRCLE_FACILITATOR_API_KEY is set and Circle's
+  // /supported lists exact on eip155:5042. With the key set it joins any
+  // multi-chain PAYMENT_NETWORKS list (see enabledNetworks).
+  arc: "eip155:5042",
 };
 const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
@@ -203,6 +216,10 @@ const TIER1_USDC = {
   "eip155:43114": { asset: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", decimals: 6, name: "USD Coin", version: "2" }, // Avalanche C-Chain, native Circle
   "eip155:1329": { asset: "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", decimals: 6, name: "USDC", version: "2" }, // Sei, native Circle (NOT Noble's 0x3894…)
   "eip155:10": { asset: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6, name: "USD Coin", version: "2" }, // Optimism, native Circle (verified 2026-07-28)
+  // Arc: @x402/evm's registry carries the same row; pinned here so a registry
+  // change can never move the asset or domain the Circle preflight checks.
+  // (Same values as ARC_USDC in src/circle-facilitator.js; scripts/test-arc-rail.js pins both.)
+  "eip155:5042": { asset: "0x3600000000000000000000000000000000000000", decimals: 6, name: "USDC", version: "2" }, // Arc, native USDC (verified 2026-10-20)
 };
 function makeTier1UsdcScheme(caip2) {
   const cfg = TIER1_USDC[caip2];
@@ -270,6 +287,25 @@ function makeCeloUsdcScheme() {
  *  default is the single primary network (current behavior, zero change). The
  *  primary `network` is always included and listed first (it carries the Bazaar
  *  resource + is what the facilitator must support). */
+let warnedArcWithoutKey = false;
+// The Arc pending book (src/circle-pending.js), built only when Circle's
+// client is; null otherwise. Read by /api/gateway-status as one word.
+let circlePendingBook = null;
+/** "off" without an Arc client, else ok / near_capacity / full / unresolved,
+ *  read from the shared store (every replica answers the same word). The
+ *  read is cached for a few seconds so a burst of status reads is one read. */
+let pendingWordCache = { at: 0, word: null };
+export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } = {}) {
+  if (!circlePendingBook) return "off";
+  if (pendingWordCache.word && now - pendingWordCache.at < ttlMs) return pendingWordCache.word;
+  try {
+    const word = await circlePendingBook.alarmStatus();
+    pendingWordCache = { at: now, word };
+    return word;
+  } catch { return "unknown"; }
+}
+/** The pending book, for the operator route; null without an Arc client. */
+export function circlePendingBookForOperator() { return circlePendingBook; }
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -281,6 +317,19 @@ export function enabledNetworks(network) {
     throw new Error(`Unsupported primary network "${network}". Known: ${Object.keys(NETWORKS).join(", ")}`);
   }
   const names = [network, ...requested.filter((n) => n !== network)];
+  // Arc's switch is the Circle key: set, it joins a multi-chain list without a
+  // PAYMENT_NETWORKS edit; unset, Arc is not even configured (an explicit `arc`
+  // entry is ignored), so /api/rails and the rail self-heal never count a rail
+  // nobody can settle. A single-network server stays single-network.
+  if (circleKeyConfigured()) {
+    if (names.length > 1 && !names.includes("arc")) names.push("arc");
+  } else if (names.includes("arc")) {
+    if (!warnedArcWithoutKey) {
+      warnedArcWithoutKey = true;
+      console.warn("WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - Arc is not configured (other chains unaffected).");
+    }
+    for (let i = names.length - 1; i >= 0; i--) if (names[i] === "arc") names.splice(i, 1);
+  }
   const seen = new Set();
   const out = [];
   for (const n of names) {
@@ -694,6 +743,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
     labelFacilitatorErrors(label, client);
+    // Arc is Circle's alone. @x402 routes a network to the FIRST client whose
+    // /supported lists it, and CDP/PayAI are registered before Circle, so a
+    // general facilitator that starts listing Arc would take its payments past
+    // the Circle client's preflight. Every other client's answer has the Arc
+    // networks removed, so only the Circle client can verify or settle Arc.
+    if (!(client instanceof CircleFacilitatorClient)) withoutArcKinds(client);
     facilitatorClients.push(memoizeGetSupported(client));
     facilitatorLabels.push(label);
     facilitatorRegistry.push({ label, client: facilitatorClients[facilitatorClients.length - 1] });
@@ -872,6 +927,64 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       createAuthHeaders: async () => ({ verify: celoAuthHeaders, settle: celoAuthHeaders, supported: celoAuthHeaders }),
     }));
     console.log(`Celo: settling USDC (${CELO_USDC.asset}) via facilitator ${CELO_FACILITATOR_URL}`);
+  }
+  // Arc (chain 5042 / USDC) settles through Circle's facilitator only. The
+  // client is Arc-only by construction (its getSupported returns just the Arc
+  // exact kind, so it cannot win Base or Polygon, which Circle also lists),
+  // reduces every upstream error to a status and a reason code, and is never
+  // registered with the facilitator diagnostics (it exposes no `url`). Same
+  // drop-don't-break safety as Celo: no key, no Arc. And Arc FAILS CLOSED on
+  // its own probe below: unlike the other rails it is never offered on the
+  // all-probes-failed fail-open path, or when the boot probe is skipped.
+  let circleClient = null;
+  if (evmCaip2.includes(ARC_CAIP2)) {
+    // A settlement Circle leaves pending past the client's window is booked
+    // by paymentId and resolved by a leased reconcile pass (src/circle-pending.js).
+    const book = async () => {
+      if (circlePendingBook) return circlePendingBook;
+      const { createCirclePendingBook } = await import("./circle-pending.js");
+      const { saleByTxFresh } = await import("./sales-ledger.js");
+      const { txServedElsewhere } = await import("./settlement-claims.js");
+      // Served after all: a sale recorded for the tx, or a request holding its
+      // settlement claim. Checking also takes the claim, so nothing can serve
+      // that tx after it is booked owed.
+      circlePendingBook = createCirclePendingBook({
+        wasServed: async ({ tx, network, paymentId }) =>
+          !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `circle-pending:${paymentId}`)),
+      });
+      return circlePendingBook;
+    };
+    const bookPending = async (entry) => (await book()).book(entry);
+    circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
+    if (circleClient && process.env.X402_SYNC_ON_START !== "false") {
+      const { leased } = await import("./state-db.js");
+      const { RECONCILE_LEASE_MS } = await import("./circle-pending.js");
+      const client = circleClient;
+      void book();
+      const tick = leased("circle-pending-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
+        const b = await book();
+        await b.ready;
+        // The shared store, not this process's memory: another replica may
+        // hold every entry.
+        await b.refresh();
+        if (!b.list().length) return null;
+        const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
+        if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
+        return r;
+      });
+      const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
+      if (typeof t.unref === "function") t.unref();
+    }
+    if (!circleClient) {
+      console.warn(
+        "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
+          "dropping Arc from the offered networks (other chains unaffected)."
+      );
+      evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
+    } else {
+      addFacilitator(CIRCLE_LABEL, circleClient);
+      console.log(`Arc: settling USDC (${ARC_USDC.asset}) via Circle's facilitator`);
+    }
   }
   // Solvador — settle-FALLBACK for existing rails, deliberately NOT in
   // facilitatorClients as a general client: it advertises Base (which must
@@ -1143,6 +1256,41 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       avmCaip2 = dropUnadvertised(avmCaip2);
     }
   }
+  // Arc fails CLOSED, on Circle's own answer. The guard above fails open when
+  // every probe fails, and is skipped outright offline or with its escape
+  // hatch; Arc is not offered on either path. It stays only when Circle's
+  // /supported (memoized, so this is the guard's own read when it ran) lists
+  // exact on eip155:5042 for Arc USDC. A malformed or failing /supported, a
+  // timeout, or an answer without that kind drops Arc and nothing else.
+  let arcDeliberatelyAbsent = false;
+  if (circleClient) {
+    let arcListed = false;
+    let why = "boot probe skipped (X402_SYNC_ON_START=false)";
+    if (syncOnStart) {
+      try {
+        const s = await Promise.race([
+          circleClient.getSupported(),
+          new Promise((_, reject) => {
+            const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { reason: "timeout" })), 8000);
+            if (typeof t.unref === "function") t.unref();
+          }),
+        ]);
+        arcListed = (s?.kinds || []).some((k) => k?.scheme === "exact" && k?.network === ARC_CAIP2);
+        // Circle answered, and does not settle Arc for us: a rail this server
+        // never offered is not an outage. One it offered on an earlier boot
+        // and now cannot is (src/gated-rails.js history).
+        if (!arcListed && !(await gatedRailWasOffered(ARC_CAIP2))) arcDeliberatelyAbsent = true;
+        why = arcListed ? "" : "Circle's /supported does not list exact on eip155:5042";
+      } catch (e) {
+        // Only our own reason code is printed (src/circle-facilitator.js).
+        why = `Circle's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
+      }
+    }
+    if (!arcListed && evmCaip2.includes(ARC_CAIP2)) {
+      console.warn(`WARNING: dropping ${ARC_CAIP2} (Arc) from the offered networks - ${why}. Other chains are unaffected.`);
+      evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
+    }
+  }
   // Which networks may offer `upto`. Two gates, both required:
   //   1. Operator opt-in — X402_UPTO_NETWORKS (CSV of CAIP-2 ids, or "all").
   //      Unset means the scheme is never registered and every 402 is
@@ -1264,8 +1412,29 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // scheme registrations live here, and only for networks that survived it.
   if (stellarEnabled) for (const caip2 of stellarCaip2) server = server.register(caip2, new ExactStellarScheme());
   if (algorandEnabled) for (const caip2 of avmCaip2) server = server.register(caip2, new ExactAvmScheme());
-  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient,
-    solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : null);
+  // Arc names no settle fallback: Circle is the one facilitator that settles
+  // it, so a re-settle elsewhere could only fail, and an Arc payload is never
+  // sent to a facilitator that does not own the chain.
+  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
+    [ARC_CAIP2]: [],
+    ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
+  });
+  // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
+  // effect is not keyed on the payer. An identity-bound route (memory, attest,
+  // feedback, my-usage, receipts) keys the caller on authorization.from; for a
+  // contract wallet that is the CONTRACT's address, and who may sign for it is
+  // whatever its isValidSignature says at the moment of the check (it can
+  // accept any signer, or change owners), so it is not the single-key
+  // attribution an EOA gives. Those routes refuse a contract-wallet signature
+  // before verification (no RPC call, nothing charged); so does any request
+  // this hook cannot place on a known non-identity route.
+  if (circleClient && evmCaip2.includes(ARC_CAIP2) && arcContractWalletsEnabled()) {
+    const contractOkRoutes = new Set(Object.entries(catalog || {})
+      .filter(([route, item]) => contractWalletEligible(route, item) && isComputePayablePath(route.split(" ")[1]))
+      .map(([route]) => route));
+    registerArcContractWalletRouteGate(server, contractOkRoutes);
+    console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} pure-CPU routes (no model, paid upstream, spend-first, lasting effect or identity binding)`);
+  }
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -1285,8 +1454,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const offeredCaip2 = new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
   const offeredNames = networks.filter((n) => offeredCaip2.has(NETWORKS[n]));
   // Observe the outcome for railStatus(); does not affect it.
-  railsConfigured = [...networks];
+  // A gated rail its facilitator does not list, and this server never
+  // offered, is not configured-but-dropped: it is absent on purpose.
+  railsConfigured = networks.filter((n) => !(arcDeliberatelyAbsent && NETWORKS[n] === ARC_CAIP2));
   railsOffered = [...offeredNames];
+  // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
+  // chain page, nav, live revenue read) only now, from the FINAL offer.
+  if (offeredCaip2.has(ARC_CAIP2)) { markGatedRailOffered(ARC_CAIP2); void recordGatedRailOffered(ARC_CAIP2); }
   console.log(
     `Accepting USDC on: ${offeredNames.join(", ")} (${[...offeredCaip2].join(", ")})` +
       (robinhoodEnabled ? " - note: robinhood settles USDG, not USDC" : "")
@@ -1562,6 +1736,78 @@ export function blockedPayerFromPayload(paymentPayload) {
   return null;
 }
 
+/** Refuse an Arc contract-wallet signature on any route not in `okRoutes`
+ *  ("METHOD /path" keys). Before verification, so no RPC call is made and the
+ *  buyer gets a 402 that names the reason. */
+export const ARC_CONTRACT_WALLET_ROUTE_REASON = "contract_wallet_not_accepted_on_this_route";
+export const ARC_CONTRACT_WALLET_RATE_REASON = "contract_signature_rate_limited";
+
+/**
+ * May a contract wallet pay this catalog route? Only where a payment that
+ * fails at settlement costs us nothing beyond CPU: not identity-bound (the
+ * caller is keyed on `from`), not a route that spends one of our wallets or
+ * runs long composite work before settlement (spendsBeforeSettlement), not one
+ * whose effect outlives the answer (hasLastingEffect: memory writes, attest,
+ * feedback, the router tiers, seller-payability, flights), and not the /v1
+ * model gateway or a metered (quoted) route. A wallet whose isValidSignature
+ * passes in simulation can still fail on chain, and a fresh counterfactual
+ * address per payment dodges per-payer breakers, so only work we can lose
+ * for free is offered to it.
+ */
+export function contractWalletEligible(route, item) {
+  if (!item || typeof route !== "string") return false;
+  const path = route.split(" ")[1] || "";
+  if (item.identityBound || isIdentityBoundRoute(item)) return false;
+  if (spendsBeforeSettlement(item) || item.longRunning || isLongRunningSlug(item.slug)) return false;
+  if (hasLastingEffect(item.slug)) return false;
+  if (path.startsWith("/v1/") || path === "/v1") return false;
+  if (typeof item.quote === "function" || typeof item.tierQuote === "function" || item.metered) return false;
+  if (item.modelBacked) return false;
+  return true;
+}
+
+/** Bounds on contract-signature verification, so junk payloads cannot amplify
+ *  into RPC load: per client IP and per claimed payer per minute (shared
+ *  across replicas when the shared store is on), refused fail-closed when the
+ *  store cannot count. */
+export const CONTRACT_VERIFY_PER_IP_PER_MIN = () => Math.max(1, Number(process.env.ARC_CONTRACT_VERIFY_PER_IP_PER_MIN) || 20);
+export const CONTRACT_VERIFY_PER_PAYER_PER_MIN = () => Math.max(1, Number(process.env.ARC_CONTRACT_VERIFY_PER_PAYER_PER_MIN) || 10);
+async function contractVerifyAllowed(req, payer, { now = Date.now(), counter = shared } = {}) {
+  const minute = Math.floor(now / 60_000);
+  const ip = String(req?.ip || req?.socket?.remoteAddress || "unknown").slice(0, 64);
+  try {
+    const a = await counter.counterAdd("arc-cw-ip", `${ip}:${minute}`, 1, 120_000, { now });
+    const b = await counter.counterAdd("arc-cw-payer", `${String(payer || "").toLowerCase()}:${minute}`, 1, 120_000, { now });
+    if (!a?.ok || !b?.ok) return false;
+    return a.value <= CONTRACT_VERIFY_PER_IP_PER_MIN() && b.value <= CONTRACT_VERIFY_PER_PAYER_PER_MIN();
+  } catch { return false; }
+}
+
+export function registerArcContractWalletRouteGate(server, okRoutes, { counter = shared, now = () => Date.now() } = {}) {
+  server.onBeforeVerify(async (ctx) => {
+    if (ctx?.requirements?.network !== ARC_CAIP2) return undefined;
+    if (!(await isContractWalletPayment(ctx?.paymentPayload))) return undefined;
+    const req = ctx?.transportContext?.request?.adapter?.req;
+    const key = req ? `${String(req.method || "").toUpperCase()} ${req.path || ""}` : "";
+    if (!okRoutes.has(key)) {
+      return {
+        abort: true,
+        reason: ARC_CONTRACT_WALLET_ROUTE_REASON,
+        message: "This route takes an EOA signature only (it keys the caller on the paying address, spends before settlement, or has a lasting effect); a contract-wallet payment is not accepted here. Nothing was charged.",
+      };
+    }
+    if (!(await contractVerifyAllowed(req, ctx?.paymentPayload?.payload?.authorization?.from, { now: now(), counter }))) {
+      return {
+        abort: true,
+        reason: ARC_CONTRACT_WALLET_RATE_REASON,
+        message: "Too many contract-wallet signature checks from this client or for this wallet in the last minute. Nothing was charged; retry shortly or pay from an EOA.",
+      };
+    }
+    return undefined;
+  });
+  return server;
+}
+
 export function registerWalletBlocklistPayerEnrichment(server) {
   server.onAfterVerify((ctx) => {
     const payer = ctx?.result?.payer;
@@ -1745,6 +1991,11 @@ let railsOffered = [];
 // avoiding is spending money we cannot bill for.
 let _computePayablePaths = null;
 export function setComputePayablePaths(paths) { _computePayablePaths = paths instanceof Set ? paths : new Set(paths || []); }
+/** A pure-CPU route (PoW-eligible: no egress, key, model or paid upstream,
+ *  proven by test-free-tier-egress). False when the set was never published. */
+export function isComputePayablePath(path) {
+  return !!_computePayablePaths && _computePayablePaths.has(String(path || ""));
+}
 function isFreeToServe(resource) {
   if (!_computePayablePaths || !_computePayablePaths.size) return false;
   try { return _computePayablePaths.has(new URL(String(resource)).pathname); } catch { return false; }

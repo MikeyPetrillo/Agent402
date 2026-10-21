@@ -18,7 +18,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
-import { RAILS, railKey } from "./rails.js";
+import { RAILS, railKey, liveRails } from "./rails.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -75,7 +75,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
   // The chains this instance takes, from the networks it enabled at boot (not
   // the full rail table): a self-host on one chain names one chain.
   const enabled = new Set((networks || []).map((n) => String(n).toLowerCase()));
-  const rails = RAILS.filter((r) => enabled.has(railKey(r)));
+  const rails = liveRails().filter((r) => enabled.has(railKey(r)));
   const usdcRails = rails.filter((r) => r.asset === "USDC").map((r) => r.name);
   const otherRails = rails.filter((r) => r.asset !== "USDC");
   const railsNote = `x402 settlements use ${[usdcRails.length ? `USDC on ${usdcRails.join(", ")}` : "", ...otherRails.map((o) => `${o.asset}${o.asset === "USDG" ? " (Global Dollar)" : ""} on ${o.name}`)].filter(Boolean).join("; plus ")}.${rails.some((r) => r.chainId) ? " Gas is sponsored by the facilitator on EVM chains - callers need only the stablecoin." : ""}`;

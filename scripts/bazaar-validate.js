@@ -24,6 +24,7 @@
 // probe/heartbeat leg), never against a CI localhost boot. Method comes from
 // the catalog (/api/pricing): the first manual probe POSTed a GET route and
 // read a 405 as "not x402" - the exact mistake this script exists to not make.
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const VALIDATE_URL = process.env.BAZAAR_VALIDATE_URL || "https://api.cdp.coinbase.com/platform/v2/x402/validate";
 const CONCURRENCY = Math.max(1, Number(process.env.BAZAAR_VALIDATE_CONCURRENCY) || (process.argv.includes("--all") ? 1 : 3));

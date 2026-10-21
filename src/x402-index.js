@@ -1867,6 +1867,7 @@ const TESTNET_CAIP2 = new Set([
   "eip155:11142220", // celo sepolia
   "eip155:43113", // avalanche fuji
   "eip155:1328", // sei testnet (atlantic-2)
+  "eip155:5042002", // arc testnet
 ]);
 export function itemHasMainnetAccept(item) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];

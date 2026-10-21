@@ -311,7 +311,7 @@ ${WHY_SECTION_CSS}
 
       <div class="hm-obsidian receipt" style="overflow:hidden;padding-bottom:22px;">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);">
-          <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);display:inline-flex;align-items:center;gap:8px;min-width:0;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;flex:none;"></span><span class="hm-live-h" style="white-space:nowrap;">live · every x402 and MPP payment<span class="hm-live-tail"> we see on chain</span></span></span>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);display:inline-flex;align-items:center;gap:8px;min-width:0;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;flex:none;"></span><span class="hm-live-h" style="white-space:nowrap;">live · every x402 and MPP payment<span class="hm-live-tail"> we see on chain</span></span></span>
           <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full screen ↗</a>
         </div>
         ${liveEmbed

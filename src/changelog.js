@@ -14,6 +14,7 @@ const ENTRIES = [
       "New pages: /how-to-pay walks the buyer path on every payment rail, and /speech covers the speech tools, with routes, prices and examples read from the catalog.",
       "On the MCP connector, audio from a paid call comes back as an audio block, with dub's translation kept.",
       "agent402-mcp 0.13.14 requires MCP SDK 1.32.1; the server runs follow-redirects 1.16.1 and hono 4.13.13.",
+      "Outbound TLS from the server, the render worker, the Stellar facilitator and the canaries refuses a certificate chain through any of eight intermediate CAs whose keys are reported recoverable, keyed on each key's SubjectPublicKeyInfo hash. agent402-client 0.8.14 and agent402-mcp 0.13.15 apply the same refusal to their own requests on a dedicated dispatcher.",
     ],
   },
   {

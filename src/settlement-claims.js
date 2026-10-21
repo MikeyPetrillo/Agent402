@@ -194,10 +194,31 @@ export function registerSettlementClaimRelease(server) {
   server.onSettleFailure(async (ctx) => {
     try {
       const s = settleClaimStateOf(reqOf(ctx));
-      if (s?.nonceKey) await releaseSettlementKey(s.nonceKey, s.id);
+      if (!s?.nonceKey) return;
+      // A settlement the facilitator reports as still PENDING is not a failure
+      // that frees the authorization: it may still land. The claim is kept
+      // (for as long as a settled one), so the same signed payment cannot be
+      // resent and served while its first settlement is unresolved; the
+      // pending book (src/circle-pending.js) settles what is owed.
+      if (isPendingSettlement(ctx)) { await extendSettlementKey(s.nonceKey, s.id); return; }
+      await releaseSettlementKey(s.nonceKey, s.id);
     } catch { /* never touch a payment */ }
   });
   return server;
+}
+
+/** The settle failed only in the sense that its outcome is not known yet. */
+export const SETTLEMENT_PENDING = "settlement_pending";
+export function isPendingSettlement(ctx) {
+  const reasons = [ctx?.error?.errorReason, ctx?.result?.errorReason, ctx?.error?.reason];
+  return reasons.some((r) => r === SETTLEMENT_PENDING);
+}
+
+/** Is a settlement tx already claimed by a request that served it? Claims the
+ *  tx for `holder` when nobody holds it, so nothing can serve it afterwards. */
+export async function txServedElsewhere(network, tx, holder) {
+  const r = await claimSettlementKey(txClaimKey(network, tx), holder);
+  return !r.claimed;
 }
 
 /** Test-only. */

@@ -7,6 +7,7 @@ import { marketSellers, marketSellersAll, marketPage, marketPanelHtml, CHAIN_PAG
 import { sitemapPages, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";
 import { readFileSync } from "node:fs";
+import { RAILS, railKey } from "../src/rails.js";
 import { fileURLToPath } from "node:url";
 
 const filterBarScript = readFileSync(fileURLToPath(new URL("../assets/js/market-filter-bar.js", import.meta.url)), "utf8");
@@ -37,8 +38,8 @@ const NEW_CHAINS = [
   { key: "robinhood", network: "eip155:4663", offNetwork: "eip155:99999", asset: "USDG", explorer: "robinhoodchain.blockscout.com", wallet: "0x4444444444444444444444444444444444444444" },
 ];
 
-// 1. All 12 chain pages exist in CHAIN_PAGES.
-ok(Object.keys(CHAIN_PAGES).length === 12, `CHAIN_PAGES has 12 entries (got ${Object.keys(CHAIN_PAGES).length})`);
+// 1. Every rail has a chain page in CHAIN_PAGES.
+ok(Object.keys(CHAIN_PAGES).length === RAILS.length && RAILS.every((r) => CHAIN_PAGES[railKey(r)]), `CHAIN_PAGES has one entry per rail (got ${Object.keys(CHAIN_PAGES).length} of ${RAILS.length})`);
 for (const c of NEW_CHAINS) ok(!!CHAIN_PAGES[c.key], `CHAIN_PAGES has a "${c.key}" entry`);
 
 for (const c of NEW_CHAINS) {
@@ -648,6 +649,18 @@ for (const c of NEW_CHAINS) {
   // The economy strip says what it counts.
   const econ = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, economySnap: { totals: { last7d: { settlements: 5, volumeUsd: 10, payers: 2, merchants: 1 }, last30d: { settlements: 9 } } } });
   ok(/All gasless USDC transfers on Base/.test(econ) && /not x402 volume/.test(econ), "economy strip: labelled as all EIP-3009 transfers, not x402 volume");
+}
+
+// Chain tabs wrap into balanced rows for ANY chain count (a gated rail joining
+// the offer makes 14 tabs, which as plain flex items left one alone on the last
+// row at 1440, measured by test-wrap-quality). The tabs are inline atoms in a
+// text-wrap:balance block above the phone breakpoint; no inline flex overrides it.
+{
+  const bar = marketFilterBar("base", "https://agent402.tools");
+  ok(/<div class="mfb-tabs">/.test(bar) && !/class="mfb-tabs" style=/.test(bar), "chain tabs carry no inline flex layout");
+  const chrome = readFileSync(new URL("../src/ledger-chrome.js", import.meta.url), "utf8");
+  ok(/\.mfb-tabs\{display:block;text-wrap:balance;/.test(chrome) && /\.mfb-tabs \.mfb-tab\{display:inline-block;/.test(chrome),
+    "chain tabs are balanced inline atoms, so no chain count leaves a lone last tab");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

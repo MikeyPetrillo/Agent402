@@ -214,5 +214,25 @@ if (!process.env.REDIS_URL) {
   }
 }
 
+// The memory backend is bounded: a fresh key per request (a new payer or IP
+// while Redis is away) cannot grow a process's memory without limit. Expired
+// keys go first, then the oldest; a live, recently used key survives.
+{
+  const m = createMemoryLimits({ keyCap: 100 });
+  const t0 = 1_000_000;
+  for (let i = 0; i < 5000; i++) await m.counterAdd("c", `fresh-${i}`, 1, 60_000, { now: t0 + i });
+  ok(m._sizes().counters <= 100, `counters stay under the key cap with 5000 fresh keys (${m._sizes().counters})`);
+  const latest = await m.counterGet("c", "fresh-4999", { now: t0 + 5000 });
+  ok(latest.value === 1, "the most recent key is kept");
+  const e = createMemoryLimits({ keyCap: 100 });
+  for (let i = 0; i < 60; i++) await e.counterAdd("c", `short-${i}`, 1, 10, { now: t0 });
+  for (let i = 0; i < 50; i++) await e.counterAdd("c", `live-${i}`, 1, 60_000, { now: t0 + 100 });
+  ok((await e.counterGet("c", "live-0", { now: t0 + 200 })).value === 1, "an expired key is swept before a live one is evicted");
+  for (let i = 0; i < 3000; i++) await m.flagSet("f", `flag-${i}`, t0 + 60_000, { now: t0 });
+  ok(m._sizes().flags <= 100, `flags stay under the cap (${m._sizes().flags})`);
+  for (let i = 0; i < 3000; i++) await m.windowAdd("w", `win-${i}`, { windowMs: 60_000, member: "x", now: t0 + i });
+  ok(m._sizes().windows <= 100, `windows stay under the cap (${m._sizes().windows})`);
+}
+
 console.log(`\ntest-shared-limits: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -368,7 +368,7 @@ for (const [name, over, detail] of failCases) {
   // times), the record, a confirmed alarm reading, and every other alarm
   // closing an open issue (a comment and a PATCH each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
@@ -574,6 +574,14 @@ for (const [name, over, detail] of failCases) {
     for (const w of ["retrying", "unknown", "something-new"]) assert.equal(judge(withGateway({ tweetQueue: { status: w } }))[TQ], "quiet", w);
     assert.equal(judge(HEALTHY)[TQ], "quiet", "a gateway without the field (an older build) changes nothing");
   });
+  const CP = "Arc pending settlements need attention";
+  await acheck("each Arc pending-book word maps to page, clear or quiet; the body echoes only known words", async () => {
+    for (const w of ["unresolved", "full"]) assert.equal(judge(withGateway({ circlePending: { status: w } }))[CP], "bad", w);
+    for (const w of ["ok", "off"]) assert.equal(judge(withGateway({ circlePending: { status: w } }))[CP], "good", w);
+    for (const w of ["near_capacity", "unknown", "something-new"]) assert.equal(judge(withGateway({ circlePending: { status: w } }))[CP], "quiet", w);
+    const a = ALARMS.find((x) => x.title === CP);
+    assert.doesNotMatch(a.body({ gateway: { circlePending: { status: "<script>" } } }), /<script/i);
+  });
   await acheck("an in-doubt tweet post confirmed by a second read opens the issue", async () => {
     mkGh();
     const bad = withGateway({ tweetQueue: { status: "in_doubt" } });
@@ -602,7 +610,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);

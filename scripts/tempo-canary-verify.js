@@ -16,6 +16,7 @@
 // Marked synthetic via the same X-Heartbeat-Token mechanism paid-canary.js
 // uses (HMAC(POW_SECRET, UTC minute)), so this doesn't pollute the sales
 // ledger / PostHog settlement stream as fake external demand.
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
 import { Mppx, tempo } from "mppx/client";

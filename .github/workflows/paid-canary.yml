@@ -47,6 +47,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       skip: ${{ steps.fresh.outputs.skip }}
+      celo_stale: ${{ steps.fresh.outputs.celo_stale }}
     steps:
       - name: Has a canary already proven buying today?
         id: fresh
@@ -98,7 +99,14 @@ jobs:
           # that recorded a FAILED purchase is not proof that buying works, and
           # suppressing the next attempt on the strength of it would turn the
           # three-attempt design into one attempt to fail per day.
-          if [ "$STATE" = "operational" ] && [ "$AGE" -lt 64800000 ]; then
+          # A rail this run measures that is not operational (Celo is bought
+          # only on the 13:17 run, so a skipped 13:17 run lets it go stale)
+          # means the run is not redundant: buy.
+          STALE_RAILS=$(printf '%s' "$SNAP" | jq -r '[.railComponents[]? | select(.current.state != "operational") | .key] | join(",")' 2>/dev/null || echo none)
+          if [ -n "$STALE_RAILS" ] && [ "$STALE_RAILS" != "none" ]; then
+            echo "rails not operational: $STALE_RAILS - this attempt will buy"
+            case ",$STALE_RAILS," in *,rail_celo,*) echo "celo_stale=true" >> "$GITHUB_OUTPUT" ;; esac
+          elif [ "$STATE" = "operational" ] && [ "$AGE" -lt 64800000 ]; then
             echo "a real purchase settled within 18h - skipping this redundant attempt (not a failure)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -168,9 +176,10 @@ jobs:
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
           UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
-          # Celo legs draw prepaid facilitator credits: the 13:17 run and hand
-          # dispatches buy on Celo, the other scheduled runs skip it.
-          CANARY_CELO: ${{ github.event_name != 'schedule' || github.event.schedule == '17 13 * * *' }}
+          # Celo legs draw prepaid facilitator credits: the 13:17 run, hand
+          # dispatches and any run whose gate found Celo stale buy on Celo;
+          # the other scheduled runs skip it.
+          CANARY_CELO: ${{ github.event_name != 'schedule' || github.event.schedule == '17 13 * * *' || needs.gate.outputs.celo_stale == 'true' }}
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."

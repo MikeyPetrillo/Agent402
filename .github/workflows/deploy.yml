@@ -1812,6 +1812,8 @@ jobs:
           t node scripts/test-revenue-cold.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
+          # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
+          t node scripts/test-arc-rail.js
           # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
           t node scripts/test-render-bytebudget.js
           # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
@@ -1917,6 +1919,8 @@ jobs:
           # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
           t node scripts/test-resale-copy.js
           t node scripts/test-mcp-dockerfiles.js
+          # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
+          t node scripts/test-tls-distrust.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js
@@ -3001,6 +3005,8 @@ jobs:
           t node scripts/test-refund-monitor.js
           # Bazaar register verdict (harvester lag is not a failure; a failed or unpaid route is — offline)
           t node scripts/test-bazaar-verdict.js
+          # Bazaar feed read (two full passes must agree, a third on disagreement; only routes absent from every pass are bought; short pages never end a walk, offline)
+          t node scripts/test-bazaar-twopass.js
           # External-buy spend cap (reserve before send; release only on a conclusive on-chain miss — offline)
           t node scripts/test-spend-budget.js
           # Third-party catalog (disclaimers present, seller strings inert, links nofollowed — offline)
@@ -3912,6 +3918,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Native MPP on /mcp (stock MCP SDK client + mppx McpClient pays a wallet-only tool via the real gates; stub facilitator; -32042 wire; RFC 9457 problem on tamper - offline)
           t node scripts/test-mcp-mpp.js
+          # A binary tool answer through a real MCP tools/call on both result paths (direct handler and the paid loopback via the real translateMppResponse): audio is an audio block with X-Dub-Translation kept, an image stays an image block (stock SDK client, injected loopback fetch - offline)
+          t node scripts/test-mcp-binary-e2e.js
           # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
           t node scripts/test-hangup-settlement.js
           # Per-phase timing of paid calls: verify, handler and settle measured against injected stub delays, filed under the right rail (x402 vs mpp-evm), a hang-up marked gone, summary operator-only (boots a paid server against stub facilitator and market-data stubs - offline)
