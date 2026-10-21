@@ -207,10 +207,24 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       ttlMs: TTL_MS,
       pollIntervalMs: POLL_MS,
       slug: String(slug || ""),
+      // Progress (src/job-progress.js): queued until the paid handler starts.
+      phase: "queued",
       owner: bootId,
       pid: process.pid,
     };
   };
+
+  /** Merge a progress patch into a WORKING record in memory; false when the
+   *  record is terminal (a terminal record never changes again). */
+  function applyProgress(rec, patch = {}) {
+    if (!rec || rec.status !== "working") return false;
+    if (patch.phase === "running" && rec.phase !== "running") { rec.phase = "running"; rec.startedAtMs = now(); }
+    if (typeof patch.stage === "string" && patch.stage) rec.stage = patch.stage.slice(0, 60);
+    if (Number.isInteger(patch.total) && patch.total > 0 && Number.isInteger(patch.done)) { rec.done = patch.done; rec.total = patch.total; }
+    if (Number.isFinite(patch.progress)) rec.progress = Math.max(0, Math.min(1, patch.progress));
+    if (typeof patch.statusMessage === "string" && patch.statusMessage) rec.statusMessage = patch.statusMessage.slice(0, 500);
+    return true;
+  }
 
   /**
    * Apply a terminal transition to a record in memory. Returns
@@ -221,6 +235,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
    */
   function transition(rec, { status, result, error, statusMessage }) {
     rec.status = status;
+    rec.endedAtMs = now();
     if (statusMessage) rec.statusMessage = String(statusMessage).slice(0, 500);
     else delete rec.statusMessage;
     if (status === "completed") {
@@ -366,6 +381,14 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     const complete = (id, result, opts = {}) => settle(id, { status: "completed", result, ...opts });
     const fail = (id, error, statusMessage) => settle(id, { status: "failed", error, statusMessage });
 
+    /** Progress on a working record (stage, steps, fraction); false when it
+     *  is unknown or already terminal. Advisory: never a state transition. */
+    function update(id, patch) {
+      const rec = read(id);
+      if (!applyProgress(rec, patch)) return false;
+      return write(rec);
+    }
+
     /** tasks/cancel. Cooperative and eventually consistent (spec): we stop
      *  waiting on the live run, which closes its loopback request. A paid
      *  request whose connection closes before the first response byte is not
@@ -395,7 +418,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     sweep();
 
     return {
-      create, get, complete, fail, cancel, settle, sweep,
+      create, get, complete, fail, cancel, settle, sweep, update,
       activeCount, atCapacity, isRunning: (id) => runs.has(id),
       backend: "file", ready: () => Promise.resolve(), close: () => {},
       bootId, TTL_MS, POLL_MS, RUN_TIMEOUT_MS, MAX_ACTIVE, MAX_RESULT_BYTES, dir: root,
@@ -595,6 +618,16 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     const complete = (id, result, opts = {}) => settle(id, { status: "completed", result, ...opts });
     const fail = (id, error, statusMessage) => settle(id, { status: "failed", error, statusMessage });
 
+    /** Progress on a working row. The write is conditional on a non-terminal
+     *  row (putRow), so a late progress write never reopens a closed job. */
+    async function update(id, patch) {
+      await ready;
+      let rec;
+      try { rec = await rowOf(String(id || "")); } catch { return false; }
+      if (!applyProgress(rec, patch)) return false;
+      try { return await putRow(stamp(rec)); } catch { return false; }
+    }
+
     async function cancel(id) {
       await ready;
       let rec;
@@ -618,7 +651,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     }
 
     return {
-      create, get, complete, fail, cancel, settle, sweep,
+      create, get, complete, fail, cancel, settle, sweep, update,
       activeCount, atCapacity, isRunning: (id) => runs.has(id),
       backend: "pg", collection, ready: () => ready, close, _renewLease: renewLease,
       bootId, TTL_MS, POLL_MS, RUN_TIMEOUT_MS, MAX_ACTIVE, MAX_RESULT_BYTES, dir: root,

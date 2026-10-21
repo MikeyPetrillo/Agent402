@@ -469,6 +469,27 @@ for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }
   ok(editInputFromMultipart({ headers: { "content-type": "application/json" }, body: {} }) === null, "a JSON request is not read as multipart");
 }
 
+// ---- video job progress (src/job-progress.js) and the poll schedule ----
+{
+  const { videosPollWaitMs } = await import("../src/tools/llm-images-fast-kit.js");
+  installVideoFetch();
+  const patches = [];
+  const req = { headers: {} };
+  Object.defineProperty(req, "__a402JobProgress", { value: (p) => patches.push(p), enumerable: false });
+  await bySlug("v1-videos").handler({ prompt: "a boat for stages" }, req);
+  const seq = patches.map((p) => p.stage).filter((st, i, a) => st !== a[i - 1]);
+  ok(JSON.stringify(seq) === JSON.stringify(["submitted", "generating", "downloading", "encoding"]), `video reports its stages to the job in order (${seq.join(" > ")})`);
+  installVideoFetch();
+  await bySlug("v1-videos").handler({ prompt: "a boat outside a job" }, { headers: {} });
+  ok(true, "outside a job the stage reports are no-ops");
+  const fixed = process.env.VIDEOS_POLL_MS;
+  ok(videosPollWaitMs(0) === videosPollWaitMs(60_000) && videosPollWaitMs(0) < 2000, "VIDEOS_POLL_MS set keeps one fixed poll interval");
+  delete process.env.VIDEOS_POLL_MS;
+  ok(videosPollWaitMs(0) === 5000 && videosPollWaitMs(19_999) === 5000, "the first 20 s poll every 5 s (the clip is not due yet)");
+  ok(videosPollWaitMs(20_000) === 2000 && videosPollWaitMs(150_000) === 2000, "after 20 s the poll is every 2 s");
+  process.env.VIDEOS_POLL_MS = fixed;
+}
+
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

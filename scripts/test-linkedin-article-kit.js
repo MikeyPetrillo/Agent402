@@ -95,6 +95,20 @@ const deps = (over = {}) => ({
   e = null; try { await h({ topic: "t" }, { headers: {} }, thin); } catch (x) { e = x; }
   ok(e && e.statusCode === 502, "thin research (< 3 sources) is refused, not charged");
 }
+// ---- job progress and the images generated at once -------------------------------
+{
+  const h = makeLinkedInHandler("linkedin-article");
+  const patches = [];
+  const req = { headers: {} };
+  Object.defineProperty(req, "__a402JobProgress", { value: (p) => patches.push(p), enumerable: false });
+  let live = 0, peak = 0;
+  const slowImage = async () => { live++; peak = Math.max(peak, live); await new Promise((r) => setTimeout(r, 150)); live--; return { data: [{ b64_json: srcJpeg.toString("base64") }] }; };
+  const out = await h({ topic: "Why AI agents will pay for APIs with stablecoins" }, req, deps({ generateImage: slowImage }));
+  ok(peak === 2 && out.images.length === 2 && out.images[0].slot === "cover" && out.images[1].slot === "inline", `the two images generate at once and keep the briefs' order (peak ${peak})`);
+  const stages = patches.map((p) => `${p.stage}:${p.done}/${p.total}`);
+  ok(JSON.stringify(stages) === JSON.stringify(["researching:0/3", "writing article:1/3", "generating images:2/3"]), `the run reports its steps to the job (${stages.join(", ")})`);
+  ok(patches.every((p) => p.progress === p.done / p.total), "each step carries its fraction done");
+}
 // ---- registration ---------------------------------------------------------------
 {
   ok(EXPENSIVE_COMPOSITE_SLUGS.has("linkedin-article"), "the slug is composite-guarded (and therefore long-running: EVM exact only)");

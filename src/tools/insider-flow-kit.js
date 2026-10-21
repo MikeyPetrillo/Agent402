@@ -13,6 +13,7 @@
 // `probeInsiderFilings()` is exported for the monitor scheduler: the cheap
 // daily probe (one EDGAR full-text query, no XML fetch) whose fingerprint is
 // the set of Form 4 accession numbers - a new one = paid re-run + email.
+import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
@@ -163,6 +164,9 @@ const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, ""))
 function makeInsiderHandlerInner(tierSlug) {
   const t = INSIDER_TIERS[tierSlug];
   return async (input, req) => {
+    // Job progress (src/job-progress.js): a no-op outside an async job or task.
+    const steps = stepProgress(2, req);
+    steps.next("reading insider filings");
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"ticker": "AAPL"}');
     const ticker = typeof input.ticker === "string" ? input.ticker.trim().toUpperCase() : "";
     const cikIn = input.cik != null ? String(input.cik).trim() : "";
@@ -255,6 +259,7 @@ Write a well-structured report of up to ${t.words} words with these sections whe
 NOTE: a gap in this material is never a finding about the company or an insider - if a filing was not fetched or a table is empty, say the material does not cover it.`;
 
     let spent = 0;
+    steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);

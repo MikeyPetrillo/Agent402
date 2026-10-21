@@ -10,6 +10,7 @@
 // code, settlement-safe (any upstream failure throws >=400 so the buyer is not
 // charged), cost read for the internal accumulator and never returned,
 // WALLET_ONLY, not cached. Gated on OPENROUTER_API_KEY (503 without it).
+import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
@@ -296,6 +297,9 @@ async function pullFilingExcerpts(filings, { bridge = null, maxChars = 6_000, ma
 function makeDossierHandlerInner(tierSlug) {
   const t = DOSSIER_TIERS[tierSlug];
   return async (input, req) => {
+    // Job progress (src/job-progress.js): a no-op outside an async job or task.
+    const steps = stepProgress(3, req);
+    steps.next("reading SEC filings and market data");
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"ticker": "AAPL"}');
     const ticker = String(input.ticker ?? "").trim().toUpperCase();
     if (!ticker) throw bad('"ticker" (US stock ticker, e.g. "AAPL") is required');
@@ -357,6 +361,7 @@ function makeDossierHandlerInner(tierSlug) {
       max_tokens: 1400,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
     });
+    steps.next("searching the web");
     const webResults = await Promise.all(queries.map((q) => chat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(
       (d) => ({ q, answer: textOf(d), sources: webSourcesFrom(d), cost: costOf(d) }),
       () => null,
@@ -427,6 +432,7 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
 === WEB RESEARCH ===\n${webBlock}
 === WEB SOURCES (numbered, with snippet content) ===\n${webSourceLines}`;
 
+    steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);

@@ -26,6 +26,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
+import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -66,6 +67,12 @@ const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
 const HAS_CREDITS = /^a402_[A-Za-z0-9_-]{32,64}$/.test(CREDITS_KEY);
+// Slow paid routes (async.recommended on their /api/pricing row) are sent with
+// Prefer: respond-async and collected from their job link (./async-job.js).
+// AGENT402_ASYNC=off waits on the connection instead; =always uses a job on
+// every route that runs as one. AGENT402_ASYNC_TIMEOUT_MS bounds the wait.
+const ASYNC_MODE = (() => { const v = String(process.env.AGENT402_ASYNC || "auto").trim().toLowerCase(); return v === "off" || v === "false" ? false : v === "always" || v === "true" ? true : "auto"; })();
+const ASYNC_TIMEOUT_MS = Number(process.env.AGENT402_ASYNC_TIMEOUT_MS) > 0 ? Number(process.env.AGENT402_ASYNC_TIMEOUT_MS) : DEFAULT_ASYNC_TIMEOUT_MS;
 // Version comes from package.json, the serverInfo self-report drifted from
 // the published version once (0.11.5 vs 0.12.1) because this was a hardcoded
 // string bumped by hand. Reading the manifest makes drift impossible.
@@ -139,6 +146,7 @@ async function loadCatalog() {
       description: e.description,
       category: e.category,
       computePayable: !!e.computePayable,
+      async: e.async && typeof e.async === "object" ? e.async : null,
       inputSchema,
     });
   }
@@ -299,9 +307,31 @@ function failureText(status, text) {
   return JSON.stringify({ ...rest, status, paymentOptions: Array.isArray(accepts) ? accepts.length : 0, note: "The full offer is in the PAYMENT-REQUIRED header of this 402." });
 }
 
-async function callEndpoint(tool, args = {}) {
+/** A job's progress as MCP notifications/progress, when the caller asked for
+ *  progress (a progressToken on the tools/call). Progress only ever rises. */
+function progressNotifier(req, extra) {
+  const token = req?.params?._meta?.progressToken;
+  if (token === undefined || token === null || typeof extra?.sendNotification !== "function") return null;
+  let last = -1;
+  return (doc) => {
+    const pct = Number.isFinite(doc?.progress) ? Math.round(doc.progress * 100) : 0;
+    // MCP requires progress to increase with each notification.
+    if (pct <= last) return;
+    const value = pct;
+    last = value;
+    const eta = Number.isFinite(doc?.etaSeconds) ? `, about ${doc.etaSeconds} s left` : "";
+    const message = `${jobState(doc) || "running"}${doc?.stage ? `: ${doc.stage}` : ""}${doc?.steps ? ` (${doc.steps.done} of ${doc.steps.total} steps)` : ""}${doc?.progressEstimated ? " (estimated)" : ""}${eta}`;
+    extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: value, total: 100, message } }).catch(() => {});
+  };
+}
+
+async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   const url = new URL(`${BASE}${tool.path}`);
   const init = { method: tool.method, headers: { Accept: "application/json" } };
+  // A slow route runs as a job (./async-job.js): the paid call asks for one,
+  // and the job link is polled (free) until the answer is ready.
+  const asyncHeaders = shouldRequestAsync(tool.async, ASYNC_MODE) ? { Prefer: "respond-async" } : {};
+  const collect = (r) => awaitJob(r, { baseUrl: BASE, fetchImpl: ownFetch, timeoutMs: ASYNC_TIMEOUT_MS, onProgress, slug: tool.slug });
   if (tool.method === "GET") {
     for (const [k, v] of Object.entries(args)) {
       if (v === undefined || v === null) continue;
@@ -325,7 +355,8 @@ async function callEndpoint(tool, args = {}) {
     if (spentUsd + price > BUDGET) {
       return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request).` }], isError: true };
     }
-    res = await ownFetch(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${CREDITS_KEY}` } });
+    try { res = await collect(await ownFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders, Authorization: `Bearer ${CREDITS_KEY}` } })); }
+    catch (e) { if (e instanceof AsyncJobPendingError) { spentUsd += price; return pendingJobResult(tool, e); } throw e; }
     if (res.ok) spentUsd += price;
     if (res.status === 402) {
       let body = {}; try { body = await res.clone().json(); } catch { /* plain */ }
@@ -350,7 +381,12 @@ async function callEndpoint(tool, args = {}) {
       };
     }
     const payFetch = await getPayFetch();
-    res = await payFetch(url, init);
+    try { res = await collect(await payFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders } })); }
+    catch (e) {
+      // Still running past the wait: it may yet settle, so it counts as spent.
+      if (e instanceof AsyncJobPendingError) { spentUsd += price; return pendingJobResult(tool, e); }
+      throw e;
+    }
     // Count spend when the server confirms settlement (payment receipt header),
     // falling back to any 2xx, conservative in the buyer's favor.
     if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += price;
@@ -382,7 +418,23 @@ async function callEndpoint(tool, args = {}) {
   let parsed;
   try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
   const structured = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : { result: parsed };
+  // A binary answer collected from a job arrives as { contentType, encoding: "base64", data }.
+  if (structured.encoding === "base64" && typeof structured.data === "string" && /^image\//.test(String(structured.contentType || ""))) {
+    return {
+      content: [{ type: "image", data: structured.data, mimeType: String(structured.contentType) }],
+      structuredContent: { slug: tool.slug, result: { contentType: structured.contentType, encoding: "base64", note: "Binary payload is in the image content block" } },
+    };
+  }
   return { content: [{ type: "text", text }], structuredContent: structured };
+}
+
+/** The tool result for a job still running when the wait ended. */
+function pendingJobResult(tool, e) {
+  return {
+    content: [{ type: "text", text: `${tool.slug}: ${e.message}. The call was paid for as a job; payment settles only if the answer is delivered. Poll the job link (free, no payment) for the answer.` }],
+    structuredContent: { slug: tool.slug, pending: true, jobUrl: e.jobUrl || null, job: e.job || null },
+    isError: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +595,7 @@ async function ensureCatalog() {
     log(`Could not load the catalog from ${BASE}: ${err.message}: next read in ${CATALOG_RETRY_MS / 1000}s`);
   }
 }
-const withCatalog = (handler) => async (req) => { await ensureCatalog(); return handler(req); };
+const withCatalog = (handler) => async (req, extra) => { await ensureCatalog(); return handler(req, extra); };
 
 server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
   const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -674,7 +726,7 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
   return { tools };
 }));
 
-server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req) => {
+server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
   const overBound = toolInputBoundRefusal(rawName, args);
@@ -907,7 +959,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req) => {
       if (!tool) return { content: [{ type: "text", text: `External routing (${slug}) is not in the catalog from ${BASE} yet. It may be rolling out; retry shortly.` }], isError: true };
       // Body matches the route-execute input schema; include:"external" is what
       // pays an OUTSIDE seller (vs this host's catalog). Paid via callEndpoint.
-      return await callEndpoint(tool, { task, include: "external", maxUsd, ...(args.params && typeof args.params === "object" ? { params: args.params } : {}) });
+      return await callEndpoint(tool, { task, include: "external", maxUsd, ...(args.params && typeof args.params === "object" ? { params: args.params } : {}) }, { onProgress: progressNotifier(req, extra) });
     }
     // Curated tools are exposed verb_noun for tools/list consistency, but the
     // real slug is kebab, accept exposed name, plain snake, or raw slug.
@@ -920,7 +972,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req) => {
     if (!tool) {
       return { content: [{ type: "text", text: `Unknown tool slug "${wanted}". Use catalog.search to find the right slug.` }], isError: true };
     }
-    const out = await callEndpoint(tool, name === "catalog.call" ? (args.params ?? {}) : args);
+    const out = await callEndpoint(tool, name === "catalog.call" ? (args.params ?? {}) : args, { onProgress: progressNotifier(req, extra) });
     // call_tool: wrap structuredContent in {slug, result} to match META_OUTPUT_SCHEMAS["catalog.call"]
     // while keeping content text as the native tool JSON.
     if (name === "catalog.call" && !out.isError && out.structuredContent) {

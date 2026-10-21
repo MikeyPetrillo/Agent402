@@ -14,6 +14,7 @@ import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, RERANK_MODEL, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { extractArticle } from "./extract.js";
+import { stepProgress } from "../job-progress.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
 // Per-buyer OpenRouter `user` id, so one abusive buyer can't get our whole
@@ -66,7 +67,11 @@ const MAX_QUERY_CHARS = 2000;
 // input stays ~1.5k tokens per source, which fits every tier's cap.
 const BODY_CHARS = 6_000;
 const BODY_TIMEOUT_MS = 15_000;
-const BODY_CONCURRENCY = 3;
+// Every tier's bodies are read at once (at most 10, each a plain guarded fetch
+// to a different site; HTML parsing stays bounded by the parse pool), so the
+// step takes one page's time instead of one per round of three: up to 60 s
+// fell to 15 s on research-max.
+const BODY_CONCURRENCY = 10;
 async function readBodies(sources, n, fetchBody = extractArticle) {
   const targets = sources.slice(0, n);
   let i = 0;
@@ -165,6 +170,9 @@ function makeResearchHandlerInner(tierSlug) {
     const user = safeUser(req);
 
     let spent = 0;
+    // Job progress (src/job-progress.js): five steps; a no-op outside a job.
+    const steps = stepProgress(5, req);
+    steps.next("planning");
 
     // 1) PLAN — decompose into sub-questions (bounded to the tier's subQ).
     const planPrompt = `${t.planFrame || "You are a research planner."} Break this question into ${t.subQ} focused, non-overlapping web-search sub-questions that together fully answer it. Return ONLY a JSON object: {"sub_questions": ["…"], "outline": ["section titles for the final report"]}.\n\nQuestion: ${query}${focus.length ? `\nEmphasize: ${focus.join(", ")}` : ""}${recency !== "any" ? `\nPrefer sources from the last ${recency}.` : ""}`;
@@ -202,6 +210,7 @@ function makeResearchHandlerInner(tierSlug) {
     // 2) GROUNDED SEARCH — one Exa-grounded call per sub-question (concurrent,
     // capped at the tier's `searches`). A failed leg drops to null, not fatal.
     const toRun = subQuestions.slice(0, t.searches);
+    steps.next("searching");
     const searchBody = (q) => ({
       model: M.ground,
       reasoning: { effort: "low" },
@@ -231,6 +240,7 @@ function makeResearchHandlerInner(tierSlug) {
     let sources = [...byUrl.values()];
 
     // 3) RERANK the pooled sources against the ORIGINAL question, keep top-K.
+    steps.next("ranking sources");
     if (sources.length > 3) {
       try {
         const docs = sources.map((s) => `${s.title}\n${s.snippet}`.slice(0, 1500));
@@ -243,7 +253,9 @@ function makeResearchHandlerInner(tierSlug) {
     sources = sources.slice(0, t.topK).map((s, i) => ({ n: i + 1, ...s }));
     // 3b) PAGE BODIES for the top-ranked sources (the rest stay excerpts, and
     // are LABELLED as such so "the source is silent" is never said of a snippet).
+    steps.next("reading pages");
     await readBodies(sources, t.bodies || 0, deps.fetchBody);
+    steps.next("writing report");
 
     // 4) SYNTHESIZE — cited long-form report. Downgrade to the cheaper model if
     // we've already spent past the tier's upstream cap (circuit breaker; the

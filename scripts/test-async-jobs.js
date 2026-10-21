@@ -11,7 +11,12 @@
 //     exactly as before (no job);
 //   - a forged loopback marker is stripped and served synchronously;
 //   - the per-client cap refuses a fifth concurrent job before anything runs;
-//   - job links are bearer ids: unknown or malformed ids are 404.
+//   - job links are bearer ids: unknown or malformed ids are 404;
+//   - the slow route's 402 recommends async (X-Async-Recommended, an `async`
+//     block in the JSON body, never in the PAYMENT-REQUIRED header) and its
+//     /api/pricing row says so;
+//   - a job reports queued, then running with a stage, an estimated progress
+//     and an ETA, with Retry-After on every state that is not final.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -53,7 +58,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
-const up = { calls: 0, delayMs: 1500, failNext: false };
+const up = { calls: 0, delayMs: 2500, failNext: false };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 upstream = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -114,6 +119,18 @@ try {
   const req402 = JSON.parse(Buffer.from(r0.headers.get("payment-required"), "base64").toString("utf8"));
   accepted = (req402.accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
   ok(!!accepted, "the route offers exact on Base");
+  const adv = r0.headers.get("x-async-recommended") || "";
+  ok(/^respond-async; expected-seconds=\d+; max-seconds=\d+$/.test(adv), `the slow route's 402 recommends async in X-Async-Recommended (got "${adv}")`);
+  const b0 = await r0.json();
+  ok(b0.async?.recommended === true && b0.async?.prefer === "respond-async" && b0.async?.maxSeconds > 0 && Array.isArray(b0.accepts), "the 402 JSON body carries the async block beside the mirrored offer");
+  ok(!("async" in req402), "the PAYMENT-REQUIRED header carries no async block (its size is unchanged)");
+  const pricing = await (await fetch(`${B}/api/pricing`)).json();
+  const row = pricing.endpoints.find((e) => e.slug === "image-gen-premium");
+  ok(row?.async?.recommended === true && row.async.expectedSeconds > 0 && row.async.maxSeconds >= row.async.expectedSeconds, `the /api/pricing row says the route is slow (${JSON.stringify(row?.async && { e: row.async.expectedSeconds, m: row.async.maxSeconds })})`);
+  const uuidRow = pricing.endpoints.find((e) => e.slug === "uuid");
+  ok(uuidRow && !("async" in uuidRow), "a fast route's pricing row has no async block");
+  const r0b = await post({ "x-forwarded-for": "10.9.0.1" }, "/api/uuid", "{}");
+  ok(!r0b.headers.get("x-async-recommended"), "a fast route's answer carries no X-Async-Recommended");
 
   // 1. Paid + async: 202 now, settle only when the result is ready.
   const s0 = fac.settle;
@@ -121,19 +138,46 @@ try {
   const r1 = await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.2", "payment-signature": credential(wallet(1)) });
   const j1 = await r1.json();
   ok(r1.status === 202 && Date.now() - t0 < up.delayMs && /^[0-9a-f]{48}$/.test(j1.jobId || ""), `a paid call answers 202 with a job id before the run finishes (${r1.status} in ${Date.now() - t0} ms)`);
-  ok(r1.headers.get("location") === `/api/jobs/${j1.jobId}` && r1.headers.get("preference-applied") === "respond-async" && j1.status === "working", "the 202 carries Location, Preference-Applied and status working");
+  ok(r1.headers.get("location") === `/api/jobs/${j1.jobId}` && r1.headers.get("preference-applied") === "respond-async" && j1.status === "working" && ["queued", "running"].includes(j1.state), `the 202 carries Location, Preference-Applied, status working (as before) and state queued (got ${j1.status}/${j1.state})`);
+  ok(Number(r1.headers.get("retry-after")) >= 1 && j1.pollIntervalSeconds >= 1, "the 202 carries Retry-After");
   ok(fac.settle === s0, `nothing has settled when the 202 is answered (settles ${fac.settle - s0})`);
-  const done1 = await waitFor(async () => ["completed", "failed"].includes((await job(j1.statusUrl)).status));
-  const g1 = await job(j1.statusUrl);
-  ok(done1 && g1.status === "completed" && g1.result?.httpStatus === 200 && g1.result?.body, `the job completes with the route's 200 answer (status ${g1.status})`);
+  // While the handler runs: running, a stage, an estimated progress, an ETA, Retry-After.
+  let live = null, liveRetry = null;
+  await waitFor(async () => { const g = await fetch(`${B}${j1.statusUrl}`); const d = await g.json(); if (d.state === "running") { live = d; liveRetry = g.headers.get("retry-after"); return true; } return d.state === "succeeded" || d.state === "failed"; });
+  ok(live && live.status === "working" && live.stage && typeof live.progress === "number" && live.progress >= 0 && live.progress < 1 && live.progressEstimated === true, `a running job reports a stage and an estimated progress (${JSON.stringify(live && { stage: live.stage, progress: live.progress, est: live.progressEstimated })})`);
+  ok(live && Number.isInteger(live.etaSeconds) && live.expectedSeconds > 0 && live.maxSeconds >= live.expectedSeconds, `a running job reports etaSeconds and the route's expected and max seconds (eta ${live?.etaSeconds})`);
+  ok(Number(liveRetry) >= 1 && Number(liveRetry) <= 5, `a running job's GET sets Retry-After (got ${liveRetry})`);
+  ok(fac.settle === s0, "nothing settles while the job is running");
+  const done1 = await waitFor(async () => ["succeeded", "failed"].includes((await job(j1.statusUrl)).state));
+  const g1r = await fetch(`${B}${j1.statusUrl}`);
+  const g1 = await g1r.json();
+  ok(done1 && g1.state === "succeeded" && g1.status === "completed" && g1.result?.httpStatus === 200 && g1.result?.body && g1.progress === 1, `the job succeeds with the route's 200 answer (state ${g1.state}, status ${g1.status})`);
+  ok(!g1r.headers.get("retry-after") && !("pollIntervalSeconds" in g1), "a final job sets no Retry-After");
   ok(fac.settle === s0 + 1, `exactly one settlement, after the result was ready (settles ${fac.settle - s0})`);
   ok(!!g1.result?.headers?.["payment-response"], "the settle receipt is kept with the result");
   ok(!("owner" in g1) && !("pid" in g1), "the job document exposes no owner or process id");
 
+  // 1b. A poller written before the progress fields (waits for status
+  // "completed" or "failed", reads only status/result) still finishes.
+  {
+    const s1b = fac.settle;
+    const jo = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.12", "payment-signature": credential(wallet(12)) })).json();
+    let last = null;
+    const t0b = Date.now();
+    while (Date.now() - t0b < 20_000) {
+      last = await job(jo.statusUrl);
+      if (last.status === "completed" || last.status === "failed") break;
+      if (last.status !== "working") break; // the old vocabulary must hold while running
+      await sleep(200);
+    }
+    ok(last?.status === "completed" && last.result?.httpStatus === 200 && last.result?.body, `an old-style poller waiting for status "completed" finishes with the answer (last status ${last?.status})`);
+    ok(fac.settle === s1b + 1, "and the job settled exactly once");
+  }
+
   // 2. Upstream failure: the job fails and nothing settles.
   const s2 = fac.settle; up.failNext = true;
   const j2 = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.3", "payment-signature": credential(wallet(2)) })).json();
-  await waitFor(async () => ["completed", "failed"].includes((await job(j2.statusUrl)).status));
+  await waitFor(async () => ["succeeded", "failed"].includes((await job(j2.statusUrl)).state));
   const g2 = await job(j2.statusUrl);
   ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /nothing was charged/.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
   ok(fac.settle === s2, `a failed run settles nothing (settles ${fac.settle - s2})`);
@@ -141,7 +185,7 @@ try {
   // 3. Refused payment: the job carries the 402, nothing settles.
   const s3 = fac.settle, calls3 = up.calls;
   const j3 = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.4", "payment-signature": credential(BAD_PAYER) })).json();
-  await waitFor(async () => ["completed", "failed"].includes((await job(j3.statusUrl)).status));
+  await waitFor(async () => ["succeeded", "failed"].includes((await job(j3.statusUrl)).state));
   const g3 = await job(j3.statusUrl);
   ok(g3.status === "failed" && g3.error?.httpStatus === 402 && /payment was not accepted/i.test(g3.message || ""), `a refused payment ends the job failed with the 402 (error HTTP ${g3.error?.httpStatus})`);
   ok(fac.settle === s3 && up.calls === calls3, "a refused payment settles nothing and never reaches the upstream");

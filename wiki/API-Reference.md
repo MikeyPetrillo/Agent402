@@ -230,7 +230,7 @@ A copy of a keyed call sent while the first is still running (a client that time
 
 ## Async jobs (slow routes)
 
-Reports, video, the premium image and `/api/decide/execute` can take one to four minutes; each one's description says how long. Send the **paid** call with `Prefer: respond-async` and it answers `202` at once with a job link instead of holding the connection:
+Reports, video, the premium image and `/api/decide/execute` can take one to four minutes. Each slow route says so in machine-readable form: an `async` block on its `/api/pricing` row and its `/openapi.json` operation (`x-agent402-async`) with `expectedSeconds` (the typical measured run) and `maxSeconds` (the run budget), a "slow" marker on its `/llms.txt` line, and on its `402` an `X-Async-Recommended: respond-async; expected-seconds=…; max-seconds=…` header plus the same `async` block in the JSON body (the `PAYMENT-REQUIRED` header is unchanged). Send the **paid** call with `Prefer: respond-async` and it answers `202` at once with a job link instead of holding the connection. The route-execute tiers, `seller-payability` and the fast and pro image tiers accept the header too, without being advertised as slow:
 
 ```bash
 curl -X POST https://agent402.tools/v1/research \
@@ -238,10 +238,13 @@ curl -X POST https://agent402.tools/v1/research \
   -H 'Prefer: respond-async' \
   -H 'PAYMENT-SIGNATURE: <your payment>' \
   -d '{"query":"x402 adoption"}'
-# 202 {"jobId":"…","status":"working","statusUrl":"/api/jobs/…","pollIntervalSeconds":5}
+# 202 {"jobId":"…","status":"working","state":"queued","stage":"queued","statusUrl":"/api/jobs/…","pollIntervalSeconds":5}
 
-curl https://agent402.tools/api/jobs/<jobId>   # free; poll until completed or failed
+curl https://agent402.tools/api/jobs/<jobId>   # free; poll until status is completed or failed, waiting Retry-After seconds
+# {"status":"working","state":"running","stage":"searching","steps":{"done":1,"total":5},"progress":0.2,"progressEstimated":false,"etaSeconds":64,…}
 ```
+
+`status` keeps its original values (`working`, then `completed` or `failed`), so an existing poller is unchanged. The lifecycle is in `state`: `queued` until the paid handler starts (the payment has been verified), `running` while it works, then `succeeded` or `failed`. While it runs it reports a `stage` (video: `submitted`, `generating`, `downloading`, `encoding`; reports: their named steps with `steps.done` of `steps.total`), a `progress` from 0 to 1 and an `etaSeconds`. A route that does not report its own steps shows elapsed time against its typical run, marked `progressEstimated: true`. Every state that is not final sets `Retry-After`; wait that long between polls. agent402-client and agent402-mcp do all of this on their own for the slow routes.
 
 The call runs on the server with your payment and **settles only when the answer is ready**: a failed run is not charged on x402, and a refused payment ends the job with its `402`. A completed job carries the route's answer in `result.body` and its payment receipt in `result.headers`. The link is the job's only key and expires after one hour; a client may run four jobs at once. Without the header, or without a payment, the route behaves exactly as before.
 

@@ -38,6 +38,7 @@
 // buyer is not charged), thin-evidence refusal BEFORE any expensive spend,
 // upstream cost read internally and never returned, WALLET_ONLY,
 // composite-guarded, not cached. 503 without OPENROUTER_API_KEY.
+import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock } from "../report-synthesis.js";
@@ -576,6 +577,10 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
     const focus = Array.isArray(input.focus) ? input.focus.filter((x) => typeof x === "string").slice(0, 8) : [];
     const insiderDays = clampInt(input.days, t.insiderDays, 7, 365);
     const user = safeUser(req);
+    // Job progress (src/job-progress.js): the nested dossier and insider runs
+    // report nothing of their own. A no-op outside an async job or task.
+    const steps = stepProgress(4, req);
+    steps.next("resolving the company");
 
     // 1) RESOLVE. An unknown ticker is a 4xx with zero spend.
     const resolved = await d.resolveCompany({ ticker });
@@ -586,6 +591,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
     // 2) CHEAP PROBES FIRST (EDGAR only, no LLM, no upstream spend). These are
     //    the evidence gate: the expensive parts do not run unless at least two
     //    of the three legs have something to report.
+    steps.next("probing SEC filings");
     const [filingsP, insiderP, holdersP, g13P] = await Promise.all([
       settle(() => d.probeCompanyFilings({ cik, limit: t.filingsShown }), PROBE_TIMEOUT_MS, "EDGAR filings probe"),
       settle(() => d.probeInsiderFilings({ ticker, days: insiderDays, limit: 40 }), PROBE_TIMEOUT_MS, "Form 4 probe"),
@@ -613,6 +619,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
     // 3) THE EXPENSIVE PARTS, in parallel. Each is settled: a failed part is
     //    NAMED as failed in the report and its numbers are left null, never 0.
     let partSpend = 0;
+    steps.next("running the dossier and insider reports");
     const [dossierR, insiderR] = await Promise.all([
       // `accountAs` makes each part fold its upstream spend into THIS run instead
       // of booking a separate sale: one $15 purchase must produce one usage row,
@@ -764,6 +771,7 @@ ${factLines.join("\n")}`;
     let execSummary = "";
     let nextSteps = "";
     const overBudget = (d.now() - started) > RUN_DEADLINE_MS - SYNTH_TIMEOUT_MS;
+    steps.next("writing the pack summary");
     const packSynth = overBudget
       ? { ok: false, error: `skipped: the pack was already ${Math.round((d.now() - started) / 1000)}s in and the payment window bounds the run` }
       : await settle(() => d.synthesize({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), SYNTH_TIMEOUT_MS + 5_000, "pack synthesis");

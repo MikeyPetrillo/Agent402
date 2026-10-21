@@ -18,6 +18,7 @@
 // solidity-scan as a local ruleset. Nothing is bought per call except the
 // synthesis. Settlement-safe (throws >=400 on total failure), WALLET_ONLY, not
 // cached. Synthesis gated on OPENROUTER_API_KEY.
+import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding } from "../report-grounding.js";
@@ -189,6 +190,9 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
     const chain = String(input.chain ?? "base").trim().toLowerCase();
     if (!CHAINS.has(chain)) throw bad(`"chain" must be one of: ${CHAINS_PROSE}`);
     const user = safeUser(req);
+    // Job progress (src/job-progress.js): a no-op outside an async job or task.
+    const steps = stepProgress(t.web ? 3 : 2, req);
+    steps.next("reading on-chain data");
 
     // 1) ON-CHAIN PROBES (parallel, each non-fatal).
     const [srcR, gpR, dexR, abiR] = await Promise.all([
@@ -248,6 +252,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
       } else scanErr = "verified source text was not extractable from the verification record";
     }
     if (t.web) {
+      steps.next("searching the web");
       const q = `${gp.tokenName || address} ${gp.tokenSymbol || ""} token ${chain} scam OR rug OR honeypot OR audit reputation`.trim();
       const wr = await ask({ model: GROUND, reasoning: { effort: "low" }, messages: [{ role: "user", content: `Search the web for the reputation of this crypto token and answer with SPECIFIC facts and citations - any scam/rug/honeypot reports, audits, or notable coverage. If you find nothing credible, say so. Token: ${q}` }], max_tokens: 600, plugins: [{ id: "web", engine: "exa", max_results: 5 }] }, SEARCH_TIMEOUT_MS, user).catch(() => null);
       if (wr) { web = { answer: textOf(wr), sources: (wr?.choices?.[0]?.message?.annotations || []).map((a) => a?.url_citation || a).filter((c) => c?.url).map((c) => ({ title: String(c.title || c.url).slice(0, 160), url: String(c.url) })) }; spent += costOf(wr); }
@@ -308,6 +313,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
 === SOURCE VERIFICATION ===\n${verifyBlock}
 === HOLDER CONCENTRATION ===\n${holderBlock}${t.scan ? `\n=== STATIC SCAN ===\n${scanBlock}` : ""}${t.web && webBlock ? `\n=== WEB REPUTATION ===\n${webBlock}` : ""}`;
 
+    steps.next("writing report");
     const sd = await ask({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
     spent += costOf(sd);
     const prose = textOf(sd);
