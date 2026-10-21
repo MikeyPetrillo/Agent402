@@ -1886,6 +1886,8 @@ jobs:
           t node scripts/test-worker-isolation.js
           # Render-worker wake retries (connection refused / edge 502 while the worker starts are retried in the deadline; a worker answer is final - offline)
           t node scripts/test-worker-wake-retry.js
+          # Published examples that a tool fetches name a page that exists (no path on a reserved example host - offline)
+          t node scripts/test-example-urls-fetchable.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
 

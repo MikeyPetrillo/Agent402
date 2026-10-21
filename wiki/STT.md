@@ -38,7 +38,7 @@ mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepte
 
 ```json
 // Request
-{ "url": "https://example.com/audio.mp3", "language": "en" }
+{ "url": "https://agent402.tools/fixtures/sample-audio.wav", "language": "en" }
 
 // Response
 { "model": "gpt-transcribe", "provider": "openai",

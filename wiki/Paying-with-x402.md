@@ -43,7 +43,7 @@ const payFetch = wrapFetchWithPayment(fetch, client);
 const res = await payFetch("https://agent402.tools/api/extract", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ url: "https://example.com/article" }),
+  body: JSON.stringify({ url: "https://agent402.tools/guides/x402-in-5-minutes" }),
 });
 console.log(await res.json());
 ```
