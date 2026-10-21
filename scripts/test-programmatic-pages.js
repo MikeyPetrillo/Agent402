@@ -336,7 +336,8 @@ const pages = {
 // a seeded manager).
 {
   const { INSIDER_TIERS } = await import("../src/tools/insider-flow-kit.js");
-  const txt = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  // The text a reader sees: tags stripped, the entities esc() writes decoded.
+  const txt = (h) => h.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
   ok(txt(pages.hubInsider).includes(`reads the newest ${INSIDER_TIERS["insider-report"].maxFilings} Form 4 filings in your window`), "insider hub: buy copy names the report's filing cap");
   ok(/two most recent 13F filings/.test(txt(pages.hubFund)) && !/resolve too/.test(txt(pages.hubFund)), "fund hub: buy copy says it compares two 13Fs, and promises no off-list manager pages");
   ok(/reads the company's filings and cites every claim/.test(txt(pages.hubDossier)) && !/in your window/.test(txt(pages.hubDossier)), "dossier hub: buy copy has no window");

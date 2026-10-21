@@ -108,7 +108,7 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   // Every refusal reason the router emits is listed (an eligible verdict is not).
   const NOT_REFUSALS = new Set(["eligible", "local_catalog", "settlement_checked_at_pay_time"]);
   for (const code of Object.keys(DISPATCH_REASONS).filter((c) => !NOT_REFUSALS.has(c))) {
-    ok(sec.includes(`>${code}<`) && sec.includes(DISPATCH_REASONS[code].slice(0, 40).replace(/"/g, "&quot;")), `${code}: named with the router's own reason text`);
+    ok(sec.includes(`>${code}<`) && sec.includes(DISPATCH_REASONS[code].slice(0, 40).replace(/"/g, "&quot;").replace(/'/g, "&#39;")), `${code}: named with the router's own reason text`);
   }
   // The floor's figures are server config (SOR_MIN_SETTLED_TX / SOR_MIN_DISTINCT_PAYERS):
   // no bare number outside a price, a code name or an HTTP status may appear.

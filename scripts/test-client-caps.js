@@ -41,13 +41,28 @@ const mkClient = (opts) => {
 // 3. 402-inspection: catalog advertises $0.01 but the 402 quotes 1000 USDC → refused.
 {
   const a = mkClient({ maxPerCallUsd: 0.05 });
-  a.f = async () => ({ status: 402, json: async () => ({ accepts: [{ maxAmountRequired: "1000000000", asset: "USDC", extra: { decimals: 6 } }] }) });
+  // A real accept: Base USDC from the known-asset table, so the cap prices it.
+  a.f = async () => ({ status: 402, json: async () => ({ accepts: [{ network: "eip155:8453", maxAmountRequired: "1000000000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", extra: { decimals: 6 } }] }) });
   a.payFetch = async () => ({ ok: true, json: async () => ({}) }); // must NOT be reached
   let err = null;
   try { await a.call("t", {}, { cache: false }); } catch (e) { err = e; }
   ok(err?.name === "SpendingLimitError", `a 402 quoting $1000 is refused despite a $0.01 catalog price (got ${err?.name})`);
   ok(err?.priceUsd >= 1000, `the cap saw the real 402 amount, not the advertised price (priceUsd=${err?.priceUsd})`);
   ok(a.spendingSummary().dailyUsd === 0, "nothing was signed for the refused hostile call");
+}
+
+// 3b. An accept naming an asset outside the known-asset table has no price: it
+//     is refused, never priced from the seller's own decimals.
+{
+  const a = mkClient({ maxPerCallUsd: 0.05 });
+  a.f = async () => ({ status: 402, json: async () => ({ accepts: [{ maxAmountRequired: "1000", asset: "USDC", extra: { decimals: 6 } }] }) });
+  let reached = false;
+  a.payFetch = async () => { reached = true; return { ok: true, json: async () => ({}) }; };
+  let err = null;
+  try { await a.call("t", {}, { cache: false }); } catch (e) { err = e; }
+  ok(err?.name === "SpendingLimitError" && err?.limit === "knownAsset", `an unknown asset is refused (got ${err?.name}/${err?.limit})`);
+  ok(err?.priceUsd == null, `an unknown asset carries no price (priceUsd=${err?.priceUsd})`);
+  ok(!reached && a.spendingSummary().dailyUsd === 0, "nothing was signed for the unknown-asset call");
 }
 
 // 4. Fail-open: a non-402 preflight (e.g. FREE_MODE) falls back to the advertised

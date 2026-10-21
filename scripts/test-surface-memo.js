@@ -56,7 +56,15 @@ try {
   const m1 = await (await fetch(`${base}/marketplace`)).text(), m2 = await (await fetch(`${base}/marketplace`)).text();
   ok(m1.length > 1000 && m1 === m2, "the rendered marketplace is served from the memo inside the window");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/if \(!req\.query\.seller\) \{\s*const html = await memoSurfaceAsync\(`market:\$\{chainKey\}:\$\{all\}`, 60_000, \(\) => buildChainPage\(chainKey, null, all\)\)/.test(src), "a ?seller= chain view is rendered per request, never keyed into the memo (only the plain chain page is memoized)");
+  // The plain chain page is one memoized build (seller null). A ?seller= view
+  // resolves the seller against the index first: an unlisted or local value is
+  // the plain page from its memo; a listed seller's view is memoized in the
+  // bounded per-seller memo, keyed by the resolved host, never the raw query.
+  ok(/const plainPage = async \(\) => \{\s*const html = await memoSurfaceAsync\(`market:\$\{chainKey\}:\$\{all\}`, 60_000, \(\) => buildChainPage\(chainKey, null, all\)\)/.test(src)
+    && /if \(!req\.query\.seller\) return plainPage\(\);/.test(src), "the plain chain page is served from the page memo");
+  ok(/resolveMarketSeller\(chainKey, getIndexSnapshot\(\), req\.query\.seller\)[\s\S]{0,80}if \(!selectedSeller \|\| selectedSeller\.local \|\| !selectedSeller\.host\) return plainPage\(\);/.test(src), "a ?seller= value naming no listed seller is the plain page, never a build");
+  ok(/const host = selectedSeller\.host;\s*const html = await chainSellerViewMemo\.get\(`\$\{chainKey\}:\$\{all\}:\$\{host\}`/.test(src) && !/chainSellerViewMemo\.get\([^)]*req\.query/.test(src), "a listed seller's view is keyed by its resolved host, never the raw query");
+  ok(/const chainSellerViewMemo = createBoundedMemo\(\{\s*max:[^\n]+\n[\s\S]{0,200}maxBytes:/.test(src), "the per-seller memo is bounded by entries and bytes");
   const memoFn = src.slice(src.indexOf("function memoSurface("), src.indexOf("function dropSurface("));
   ok(/if \(hit\) \{[\s\S]*setImmediate\([\s\S]*return hit\.value;/.test(memoFn), "an expired surface serves its last value and rebuilds after the response (no request waits on a rebuild)");
   ok(/surfaceMemo\.get\(key\) === hit/.test(memoFn) && /hit\.rebuilding = false/.test(memoFn), "one rebuild at a time, and a rebuild never overwrites a dropped or newer entry");
