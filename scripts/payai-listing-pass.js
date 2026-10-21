@@ -97,6 +97,11 @@ export function quoteOf(pr, caip2) {
   return { atomic, usd: Number(atomic) / 10 ** decimals };
 }
 
+/** A published example whose `file` part is a "multipart" placeholder. */
+export const isMultipartExample = (ex) => typeof ex?.file === "string" && /multipart/i.test(ex.file);
+/** JSON bodies are strings; a FormData body lets fetch set its own boundary. */
+const jsonHeader = (body) => (typeof body === "string" ? { "Content-Type": "application/json" } : {});
+
 /**
  * Read each quoted route's price from its own 402: the published example is
  * sent unpaid, and the amount named on this chain's exact accept is the
@@ -106,11 +111,11 @@ export async function quoteRoutes(routes, { caip2, requestFor, fetchImpl = fetch
   const out = new Map();
   for (const r of routes) {
     if (!r.quoted) continue;
-    const { url, body } = requestFor(r);
+    const { url, body } = await requestFor(r);
     try {
       const res = await fetchImpl(url, {
         method: r.method,
-        headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: { Accept: "application/json", ...jsonHeader(body) },
         body,
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -263,9 +268,27 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   log(renderTable(before));
   const spec = await (await fetch(`${target}/openapi.json`, { signal: AbortSignal.timeout(60_000) })).json();
   const examples = examplesFromOpenapi(spec);
-  const urlFor = (r) => {
+  // A route on the OpenAI transcription wire takes a multipart `file` part;
+  // its published example marks that part with a "multipart" string, so the
+  // pass uploads the server's own speech fixture there (as catalog-buy does).
+  let fixture = null;
+  const fixtureBytes = async () => {
+    if (!fixture) {
+      const res = await fetch(`${target}/fixtures/sample-speech.wav`, { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) throw new Error(`speech fixture HTTP ${res.status}`);
+      fixture = new Uint8Array(await res.arrayBuffer());
+    }
+    return fixture;
+  };
+  const urlFor = async (r) => {
     const ex = examples.get(routeKeyOf(r)) || {};
     if (r.method === "GET") return { url: `${target}${r.path}${Object.keys(ex).length ? "?" + new URLSearchParams(ex).toString() : ""}`, body: undefined };
+    if (isMultipartExample(ex)) {
+      const form = new FormData();
+      form.append("file", new Blob([await fixtureBytes()], { type: "audio/wav" }), "sample-speech.wav");
+      for (const [k, v] of Object.entries(ex)) if (k !== "file" && v != null && typeof v !== "object") form.append(k, String(v));
+      return { url: `${target}${r.path}`, body: form };
+    }
     return { url: `${target}${r.path}`, body: JSON.stringify(ex) };
   };
   // Quoted routes are priced by their own 402 before anything is selected.
@@ -291,8 +314,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   {
     const probe = plan.selected[0];
     // The example body goes along: a quoted route prices its 402 from it.
-    const { url, body } = urlFor(probe);
-    const read = async (headers) => { const r = await fetch(url, { method: probe.method, headers: { Accept: "application/json", ...headers, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body, signal: AbortSignal.timeout(30_000) }); await r.text().catch(() => ""); return { status: r.status, pr: decode(r.headers.get("payment-required") || "") }; };
+    const { url, body } = await urlFor(probe);
+    const read = async (headers) => { const r = await fetch(url, { method: probe.method, headers: { Accept: "application/json", ...headers, ...jsonHeader(body) }, body, signal: AbortSignal.timeout(30_000) }); await r.text().catch(() => ""); return { status: r.status, pr: decode(r.headers.get("payment-required") || "") }; };
     const control = await read({});
     const tagged = await read(tagHeaders);
     if (control.status !== 402 || tagged.status !== 402) { console.error(`payai-listing-pass: preflight expected two 402s on ${probe.path}, got ${control.status} and ${tagged.status}`); return 2; }
@@ -315,14 +338,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let settled = 0, failed = 0, spent = 0;
   for (let i = 0; i < plan.selected.length; i++) {
     const r = plan.selected[i];
-    const { url, body } = urlFor(r);
+    const { url, body } = await urlFor(r);
     ceiling = { caip2: chain.caip2, atomic: r.quotedAtomic != null ? r.quotedAtomic : BigInt(Math.round(opts.maxPriceUsd * 1e6)) };
     const rec = { slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, status: null, tx: null, charged: false, error: null };
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const res = await payFetch(url, {
           method: r.method,
-          headers: { Accept: "application/json", ...tagHeaders, ...hb, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+          headers: { Accept: "application/json", ...tagHeaders, ...hb, ...jsonHeader(body) },
           body,
           signal: AbortSignal.timeout(180_000),
         });
