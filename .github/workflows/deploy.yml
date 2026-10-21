@@ -1578,6 +1578,8 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # Through the CDN proxy: a paid call to a route that outlasts its wait runs as a job (a 202-following SDK) or is refused before any gate; LLM and image waits end inside the bound; 402s and paid answers are never cacheable (paid-mode boot vs stub facilitator and upstream - offline)
+          t node scripts/test-cdn-sync-window.js
           # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
           t node scripts/test-async-jobs-body-loss.js
           # Slow routes advertise their duration and async advice; job progress (queued/running/stage/ETA), sinks keyed in-process only, throttled writes, terminal records never updated (offline)
@@ -4562,6 +4564,8 @@ jobs:
           t node scripts/test-report-probes.js
           # Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) — boots a server, offline
           t node scripts/test-checkout-limiter.js
+          # Client address behind the CDN proxy: CF-Connecting-IP only from a CDN peer and only when valid, IPv4 and IPv6, a forged header never mints a limiter bucket (boots a server, offline)
+          t node scripts/test-cdn-client-ip.js
           # A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
           t node scripts/test-payment-reject.js
           # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
