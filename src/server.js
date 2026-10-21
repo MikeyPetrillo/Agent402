@@ -391,7 +391,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -6082,9 +6082,27 @@ const buildManifest = () => serviceManifest({
     ["evm", WALLET_ADDRESS], ["solana", (process.env.SOLANA_WALLET_ADDRESS || "").trim()],
     ["stellar", (process.env.STELLAR_WALLET_ADDRESS || "").trim()], ["algorand", (process.env.ALGORAND_WALLET_ADDRESS || "").trim()],
   ].filter(([, v]) => v)),
+  payToByRoute: payToByRouteNow(),
   toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
   powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
 });
+// The routes whose 402 names a payee other than the rail's receiving wallet,
+// keyed by absolute resource URL then CAIP-2 network. Derived from the same
+// payToForRoute the 402 builder calls, over the rails the paywall offers, so
+// a buyer that checks a 402's payTo against the manifest finds it here.
+// Empty before the paywall is built and in FREE_MODE (no route answers 402).
+function payToByRouteNow() {
+  const rails = paymentRailsLive();
+  if (!rails) return null;
+  const out = {};
+  for (const [key, item] of Object.entries(CATALOG)) {
+    const over = payToOverridesForItem(item, rails);
+    if (!Object.keys(over).length) continue;
+    const url = `${BASE_URL}${key.split(" ")[1] || key}`;
+    out[url] = { ...(out[url] || {}), ...over };
+  }
+  return out;
+}
 let MANIFEST = buildManifest();
 onGatedRailOffered(() => { MANIFEST = buildManifest(); });
 // Shared helper: builds a small 24h performance signal from the analytics
@@ -9297,6 +9315,9 @@ if (FREE_MODE) {
       )
     ),
   });
+  // The paywall's rails are known now: republish the manifest so its
+  // payToByRoute names every payee the 402s name.
+  MANIFEST = buildManifest();
   // x402 payer screen (src/x402-payer-screen.js): called as the x402
   // middleware's `next`, so it runs after verification and before every paid
   // handler; a refusal is a 403 and cancels settlement. The list is shared

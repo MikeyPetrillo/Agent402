@@ -444,19 +444,60 @@ export function priceWithPremium(price, network, premiums = NETWORK_PREMIUMS) {
   return "$" + (micro / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-export function acceptsForItem(item, rails) {
-  const { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet } = rails;
+/**
+ * The payTo a route's accept names on one network: the ONE place the payee is
+ * decided, read by the 402 builder (acceptsForItem) and by the discovery
+ * surfaces that publish it (the service manifest's payToByRoute), so the two
+ * cannot disagree. `rails` carries the receiving wallets (walletAddress for
+ * every EVM chain, solanaWallet, stellarWallet, algorandWallet) and, for
+ * tests, upstreamBuyerAddress / avmUpstreamBuyerAddress overrides of the env.
+ *
+ * The router tiers settle their Base leg to the Base spending wallet and
+ * their Algorand leg to the AVM spending wallet (see SELF_FUNDING_SLUGS and
+ * AVM_SELF_FUNDING_SLUGS above); with those addresses unset every route
+ * settles to the receiving wallet of its rail.
+ */
+export function payToForRoute(slug, caip2, rails = {}) {
+  const net = String(caip2 || "");
   const burner = rails.upstreamBuyerAddress ?? UPSTREAM_BUYER_ADDRESS;
   const avmBuyer = rails.avmUpstreamBuyerAddress ?? AVM_UPSTREAM_BUYER_ADDRESS;
-  const payToFor = (caip2) =>
-    burner && caip2 === "eip155:8453" && SELF_FUNDING_SLUGS.has(item.slug) ? burner : walletAddress;
+  if (net.startsWith("eip155:")) {
+    return burner && net === "eip155:8453" && SELF_FUNDING_SLUGS.has(slug) ? burner : rails.walletAddress;
+  }
+  if (net.startsWith("solana:")) return rails.solanaWallet;
+  if (net.startsWith("stellar:")) return rails.stellarWallet;
   // Chain-matched self-funding for Algorand (2026-07-29, same rule as Base):
   // an Algorand buyer's route-execute payment funds the AVM spending wallet
   // that buys from Algorand sellers to resell. ROUTER TIERS ONLY: a tool
   // whose upstream spend is pinned to Base must not route its Algorand
   // revenue to the AVM wallet, which would fund the wrong wallet.
-  const avmPayToFor = () =>
-    avmBuyer && AVM_SELF_FUNDING_SLUGS.has(item.slug) ? avmBuyer : algorandWallet;
+  if (net.startsWith("algorand:")) return avmBuyer && AVM_SELF_FUNDING_SLUGS.has(slug) ? avmBuyer : rails.algorandWallet;
+  return rails.walletAddress;
+}
+
+/**
+ * The networks on which a route's 402 names a payee other than its rail's
+ * receiving wallet, as { caip2: address }; empty for every route when the
+ * spending-wallet addresses are unset. Read off the route's own accepts, so a
+ * network the route does not offer is never listed.
+ */
+export function payToOverridesForItem(item, rails) {
+  const out = {};
+  for (const a of acceptsForItem(item, rails)) {
+    const fallback = payToForRoute("", a.network, rails);
+    if (a.payTo && a.payTo !== fallback && !out[a.network]) out[a.network] = a.payTo;
+  }
+  return out;
+}
+
+// The rails the paywall builds its accepts from, set by buildPaymentMiddleware
+// (null before it runs and in FREE_MODE, where no route answers 402).
+let liveRails = null;
+export function paymentRailsLive() { return liveRails ? liveRails() : null; }
+
+export function acceptsForItem(item, rails) {
+  const { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, solanaWallet, stellarWallet, algorandWallet } = rails;
+  const payToFor = (caip2) => payToForRoute(item.slug, caip2, rails);
   // A tool with a `quote` (the metered gateway tier) is priced PER REQUEST:
   // @x402/core resolves a `price` function against the request context on
   // every call, including the paid retry, so the amount a buyer authorized is
@@ -529,14 +570,14 @@ export function acceptsForItem(item, rails) {
   return [
     ...evm,
     ...upto,
-    ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: solanaWallet, price: priceOf(caip2), network: caip2 })) : []),
-    ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: stellarWallet, price: priceOf(caip2), network: caip2 })) : []),
+    ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
+    ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     // The Algorand accepts carry the x402 Global Challenge tag (Algorand
     // Foundation's entry marker, per their 2026-07-21 checklist): GoPlausible's
     // Bazaar + leaderboard attribute challenge entries by `extra.tag`, and the
     // challenge-filtered views hide untagged merchants entirely. Scheme-level
     // fields (decimals/feePayer) are merged in by the facilitator downstream.
-    ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: avmPayToFor(), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
+    ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
   ];
 }
 
@@ -1531,8 +1572,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     if (clean.length <= 32) return clean;
     return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
   };
-  const acceptsFor = (item) =>
-    acceptsForItem(item, { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2 });
+  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2 });
+  const acceptsFor = (item) => acceptsForItem(item, railsNow());
+  // Read at call time, like acceptsFor: a rail dropped or joined after boot
+  // is reflected in what discovery publishes as well as in the 402.
+  liveRails = railsNow;
 
   // The payment-required header is one base64-encoded JSON blob carrying
   // description + discovery extensions.  Skill packs and tools with rich

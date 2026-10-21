@@ -4638,6 +4638,8 @@ jobs:
           t node scripts/test-paid-settle-breaker.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
+          # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)
+          t node scripts/test-payto-by-route.js
           # Every skill pack's Algorand accept matches the requirement the paid request rebuilds; a refusal for the buyer's balance is insufficient-funds to the buyer and funding (not a rail failure) to the sweep (offline, stub facilitator kinds)
           t node scripts/test-skill-pack-avm-match.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
