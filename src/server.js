@@ -41,7 +41,7 @@ import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldes
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
-import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
+import { posthogProxyPathAllowed, posthogProxyTypeAllowed, noteRefusedPosthogPath } from "./posthog-proxy.js";
 import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
 import express from "express";
 import compression from "compression";
@@ -2841,7 +2841,10 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
   if (phProxyLimiter.check(ip).limited) return res.status(429).end();
   // Only the paths the analytics library uses (src/posthog-proxy.js), checked
   // before any upstream call.
-  if (!posthogProxyPathAllowed(req.params[0] || "")) return res.status(404).end();
+  if (!posthogProxyPathAllowed(req.params[0] || "")) {
+    noteRefusedPosthogPath(req.params[0] || "", req.headers["sec-fetch-site"]);
+    return res.status(404).end();
+  }
   if (phInFlight.live() >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
   const releaseRelay = phInFlight.enter();
   try {
