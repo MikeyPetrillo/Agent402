@@ -7704,7 +7704,7 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
 // Short chain names buyers may pass to ?network= — resolved to CAIP-2.
 const ROUTE_NETWORKS = {
   base: "eip155:8453", polygon: "eip155:137", arbitrum: "eip155:42161",
-  robinhood: "eip155:4663", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  robinhood: "eip155:4663", arc: "eip155:5042", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
 };
 
 // The decorated remote pool per entry and the per-tool statics (lowercased

@@ -325,7 +325,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer });
-withNetworkPreference(client, ["robinhood"]);   // or ["base","solana"], or ["eip155:4663"]
+withNetworkPreference(client, ["robinhood"]);   // or ["base","solana"], or ["eip155:4663"], or ["eip155:5042"] for Arc
 const payFetch = wrapFetchWithPayment(fetch, client);
 ```
 

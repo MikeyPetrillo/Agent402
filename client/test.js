@@ -24,6 +24,7 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
 // Robinhood Chain) on any duck-typed x402 client - no @x402 dependency here.
 {
   ok(NETWORK_CAIP2.robinhood === "eip155:4663", "NETWORK_CAIP2 knows robinhood -> eip155:4663");
+  ok(NETWORK_CAIP2.arc === "eip155:5042", "NETWORK_CAIP2 knows arc -> eip155:5042");
   const accepts = [{ network: "eip155:8453", a: "base" }, { network: "eip155:4663", a: "usdg" }];
   const seen = [];
   const fake = { createPaymentPayload: (pr) => { seen.push(pr.accepts.map((x) => x.a)); return "ok"; } };

@@ -796,6 +796,7 @@ export const NETWORK_CAIP2 = {
   arbitrum: "eip155:42161",
   "base-sepolia": "eip155:84532",
   robinhood: "eip155:4663",
+  arc: "eip155:5042",
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
 };

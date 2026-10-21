@@ -106,6 +106,12 @@ const EVM_NETWORKS = {
     rpcs: [...alchemy("celo-mainnet"), "https://forno.celo.org"],
     spanBlocks: 21600, // ~6h at 1s blocks
   },
+  arc: {
+    usdc: "0x3600000000000000000000000000000000000000",
+    rpcs: [...alchemy("arc-mainnet"), "https://rpc.mainnet.arc.io"],
+    spanBlocks: 43000, // ~6h at 0.5s blocks
+    chunkBlocks: 4900, // the public RPC refuses 10,000-block getLogs ranges
+  },
   // Robinhood Chain settles USDG (Global Dollar), not USDC — same 6 decimals,
   // same ERC-20 Transfer scan, so the field keeps the `usdc` name (it is
   // "the stablecoin contract to scan"); `token` fixes the log labels.

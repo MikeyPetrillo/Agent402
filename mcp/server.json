@@ -27,7 +27,7 @@
       "environmentVariables": [
         {
           "name": "AGENT_KEY",
-          "description": "Hex private key of an EVM wallet funded with USDC on any EVM rail the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism) or USDG on Robinhood Chain; use SOLANA_AGENT_KEY for Solana. Stellar and Algorand are not signed by this package. Unset = proof-of-work mode (free pure-CPU tools).",
+          "description": "Hex private key of an EVM wallet funded with USDC on any EVM rail the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc) or USDG on Robinhood Chain; use SOLANA_AGENT_KEY for Solana. Stellar and Algorand are not signed by this package. Unset = proof-of-work mode (free pure-CPU tools).",
           "isRequired": false,
           "isSecret": true
         },
