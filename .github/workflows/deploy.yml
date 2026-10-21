@@ -2391,6 +2391,20 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
+      # scripts/test-facilitator-access-policy.js boots facilitator/index.js,
+      # which needs the facilitator's own dependencies (its own lockfile); under
+      # CI that suite fails rather than skips without them. Same secretless env
+      # as the install above.
+      - name: Install facilitator dependencies (secretless)
+        working-directory: facilitator
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: npm ci --ignore-scripts
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,

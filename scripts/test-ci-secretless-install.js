@@ -25,7 +25,7 @@ for (const l of lines) {
   if (cur) cur.lines.push(l);
 }
 
-const INSTALLS = [/^- name: Install dependencies \(secretless\)$/, /^- name: Adapter tests\b/];
+const INSTALLS = [/^- name: Install dependencies \(secretless\)$/, /^- name: Adapter tests\b/, /^- name: Install facilitator dependencies \(secretless\)$/];
 let checkedSteps = 0, adapterSteps = 0;
 for (const job of jobs) {
   // Job-level env: the block right under "    env:".

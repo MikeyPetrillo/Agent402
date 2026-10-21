@@ -45,13 +45,27 @@ ok(/openFacilitatorRefusal\(\{[\s\S]*?allowOpen: process\.env\.FACILITATOR_ALLOW
     ok(r.status === 1 && /Refusing to start/.test(r.stderr) && !/FACILITATOR_STELLAR_SECRET (is|must|does)/.test(r.stderr), `index.js exits 1 with the refusal, before the signer loads (status ${r.status})`);
     const optIn = spawnSync(process.execPath, ["index.js"], { cwd: fdir, env: { ...env, FACILITATOR_ALLOW_OPEN: "1" }, encoding: "utf8", timeout: 30_000 });
     ok(!/Refusing to start/.test(optIn.stderr), "control: FACILITATOR_ALLOW_OPEN=1 gets past the refusal (it then stops on the missing secret)");
+  } else if (process.env.CI) {
+    // Under CI a missing dependency is a failure, never a skip: the lane that
+    // runs this suite installs facilitator/ (deploy.yml, test-unit-b2).
+    ok(false, "facilitator/node_modules is installed for the entry-point boot check (CI)");
   } else {
-    console.log("skip - facilitator/node_modules not installed; the entry-point boot check runs where it is");
+    console.log("skip - facilitator/node_modules not installed; the entry-point boot check runs where it is (and fails under CI)");
   }
 }
 ok(JSON.parse(read("facilitator/package.json")).files.includes("access-policy.js"), "access-policy.js is in the package files list");
 ok(/COPY [^\n]*facilitator\/access-policy\.js/.test(read("Dockerfile.facilitator")), "access-policy.js is copied into the image");
 ok(/FACILITATOR_ALLOW_OPEN/.test(read("facilitator/README.md")), "README documents FACILITATOR_ALLOW_OPEN");
+// The CI lane that runs this suite installs the facilitator's own lockfile
+// first, so the boot check above runs there instead of skipping.
+{
+  const wf = read(".github/workflows/deploy.yml");
+  const job = wf.slice(wf.indexOf("\n  test-unit-b2:\n"), wf.indexOf("\n  test-unit-b4:\n"));
+  const install = job.indexOf("- name: Install facilitator dependencies (secretless)");
+  const runs = job.indexOf("t node scripts/test-facilitator-access-policy.js");
+  ok(job.length > 0 && install > 0 && runs > install, "test-unit-b2 installs facilitator dependencies before it runs this suite");
+  ok(/- name: Install facilitator dependencies \(secretless\)[\s\S]{0,800}?working-directory: facilitator[\s\S]{0,200}?run: npm ci --ignore-scripts/.test(job), "...from facilitator/'s own lockfile, with install scripts off");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
