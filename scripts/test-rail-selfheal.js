@@ -119,5 +119,41 @@ ok(/cannot resolve the Railway service to restart/.test(healer),
     "the issue text says plainly that revenue continues on the other rails");
 }
 
+// --- Arc: only a recovery the boot check would accept restarts production ----
+//
+// The healer restarts when a degraded rail's facilitator "answers again". For
+// Arc that has to mean what the boot check means (Circle's /supported lists
+// exact on eip155:5042 for Arc USDC, read through the same parser), or a
+// Circle answer the boot check rejects would restart production every run into
+// the same drop. And Arc counts as configured only with its key.
+{
+  const { railRecovered } = await import("./lib/rail-recovered.js");
+  ok(/railRecovered\(r\.network, s\)/.test(healer), "the healer decides recovery through railRecovered (the shared parser)");
+  const arcListed = { ok: true, status: 200, body: { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:5042", asset: "0x3600000000000000000000000000000000000000", extra: { name: "USDC", version: "2" } }] } };
+  ok(railRecovered("arc", arcListed) === true, "Circle listing Arc exact normally is a recovery");
+  ok(railRecovered("arc", { ok: true, status: 200, body: { kinds: [{ scheme: "exact", network: "eip155:8453" }] } }) === false,
+    "Circle answering without Arc is NOT a recovery (the boot check would drop Arc again)");
+  ok(railRecovered("arc", { ok: true, status: 200, body: { kinds: "garbage" } }) === false, "a malformed Circle answer is not a recovery");
+  ok(railRecovered("arc", { ok: true, status: 200, body: { kinds: [{ scheme: "exact" }] } }) === false, "a kind without a network is not a recovery");
+  ok(railRecovered("arc", { ok: true, status: 200, body: { kinds: [{ scheme: "exact", network: "eip155:5042", asset: "0x0000000000000000000000000000000000000001" }] } }) === false,
+    "Arc listed on another asset is not a recovery");
+  ok(railRecovered("arc", { ok: false, status: 500, body: null }) === false, "a failing Circle is not a recovery");
+  ok(railRecovered("arc", null) === false, "a probe that timed out (no answer) is not a recovery");
+  ok(railRecovered("celo", { ok: true, status: 200, body: { kinds: [] } }) === true, "other rails keep the old rule (any kinds array)");
+
+  // Configured only with the key: without it /api/rails never lists Arc, so it
+  // can never read as degraded and the healer has nothing to restart for.
+  const saved = { k: process.env.CIRCLE_FACILITATOR_API_KEY, n: process.env.PAYMENT_NETWORKS };
+  const { enabledNetworks } = await import("../src/payments.js");
+  delete process.env.CIRCLE_FACILITATOR_API_KEY;
+  process.env.PAYMENT_NETWORKS = "base,polygon,arc";
+  ok(!enabledNetworks("base").includes("arc"), "without the key an explicit `arc` entry is not configured");
+  process.env.CIRCLE_FACILITATOR_API_KEY = "LIVE_API_KEY:selfheal-test-placeholder";
+  process.env.PAYMENT_NETWORKS = "base,polygon";
+  ok(enabledNetworks("base").includes("arc"), "with the key Arc is configured on a multi-chain server");
+  if (saved.k === undefined) delete process.env.CIRCLE_FACILITATOR_API_KEY; else process.env.CIRCLE_FACILITATOR_API_KEY = saved.k;
+  if (saved.n === undefined) delete process.env.PAYMENT_NETWORKS; else process.env.PAYMENT_NETWORKS = saved.n;
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

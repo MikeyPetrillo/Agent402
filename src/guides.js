@@ -13,16 +13,11 @@ marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.p
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
-import { RAILS, RAILS_OR, RAILS_AMP } from "./rails.js";
+import { RAILS_OR, RAILS_AMP, resolveRailCountTokens } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
-import { countWord } from "./chain-logos.js";
-// Rail counts in guide prose come from RAILS, never typed.
-const RAILS_N = countWord(RAILS.length);
-const RAILS_N_CAP = RAILS_N.charAt(0).toUpperCase() + RAILS_N.slice(1);
-const RAILS_MORE = countWord(RAILS.length - 1);
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -43,7 +38,7 @@ function resolveGuideTokens(text, catalog) {
     if (!d) throw new Error(`guide token names "${slug}", which is not in the catalog`);
     return d;
   };
-  return String(text)
+  return resolveRailCountTokens(String(text))
     .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
     .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
     .replace(/\{\{routerTiers\}\}/g, () => {
@@ -830,13 +825,13 @@ work today.
   },
   {
     slug: "why-twelve-chains",
-    title: `Why Agent402 settles on ${RAILS_N} chains instead of just Base`,
+    title: "Why Agent402 settles on {{railCount}} chains instead of just Base",
     description:
-      "Base is where x402 volume actually is today. Agent402 also settles on Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar, Algorand, and Robinhood Chain (USDG) anyway - here's the actual reason, chain by chain.",
+      "Base is where x402 volume actually is today. Agent402 also settles on {{usdcRailsButBase}}, and Robinhood Chain (USDG) anyway - here's the actual reason, chain by chain.",
     md: `
 Most x402 volume, ours included, settles on Base. That's not a secret and
 this guide isn't going to pretend otherwise. So the honest question is: why
-run ${RAILS_MORE} more rails if that's where the traffic already is?
+run {{railsMore}} more rails if that's where the traffic already is?
 
 ## The reason isn't "more chains, more revenue"
 
@@ -844,7 +839,7 @@ It's optionality. An agent doesn't get to choose what chain its wallet
 already holds USDC on - it was funded once, for some other reason, on
 whatever chain that happened to be. A seller who only accepts Base is
 invisible to every agent funded anywhere else, no matter how good the tool
-is. ${RAILS_N_CAP} chains means ${RAILS_N} populations of already-funded buyers who never
+is. {{RailCount}} chains means {{railCount}} populations of already-funded buyers who never
 have to bridge, swap, or wait for a transfer just to pay for one API call.
 
 ## What's actually live, and who settles it
@@ -863,8 +858,7 @@ exists:
 - **Optimism** - USDC; its settlement carries a fee, so its quote carries a
   small network premium, shown in the \`402\`. What you're quoted is what
   actually clears.
-- **Arc** - USDC, through the facilitator that settles that network; Arc pays
-  its own gas in USDC, and the facilitator covers it, so a buyer needs only USDC.
+{{gatedRailBullets}}
 - **Stellar** - USDC via our own self-hosted Soroban facilitator (open source,
   in this repository); settlement here is confirmed against the chain itself,
   not just trusted from the facilitator's word, because Stellar's ~5-second
@@ -882,7 +876,7 @@ proof-of-work tier, are unaffected.
 
 The settlement rule is the same everywhere: a call that answers an error
 status, or whose payment does not match the offer, is not settled, on any of
-the ${RAILS_N} chains. Chain choice changes *where* the USDC moves, not the rule
+the {{railCount}} chains. Chain choice changes *where* the USDC moves, not the rule
 that decides *whether* it moves.
 
 ## The Smart Order Router uses this directly
@@ -890,7 +884,7 @@ that decides *whether* it moves.
 When [the router](/guides/smart-order-router) buys from an external seller
 to resell the result to you, it settles on the SAME chain you paid it on - an Algorand
 payment funds an Algorand purchase, a Base payment funds a Base purchase.
-${RAILS_N_CAP} chains isn't just about who can pay us; it's what lets the router keep
+{{RailCount}} chains isn't just about who can pay us; it's what lets the router keep
 your money on the chain you already trusted it on, instead of quietly
 routing everything through one chain regardless of what you sent.
 `,
@@ -903,7 +897,7 @@ routing everything through one chain regardless of what you sent.
       "Already holding a Coinbase Agentic Wallet, the Agentic Wallet MCP tools, Stripe's purl, or a CDP-managed wallet in code? Every Agent402 endpoint is a plain x402 resource on Base, so those pay it unchanged - here are the exact commands, the spend caps to set, and the two extensions we honor (payment-identifier, bazaar).",
     md: `
 Agent402 is indexed on the Coinbase x402 Bazaar and every paid endpoint is a
-plain x402 v2 resource settling USDC on Base (plus ${RAILS_MORE} more rails). So the
+plain x402 v2 resource settling USDC on Base (plus {{railsMore}} more rails). So the
 buyer tooling Coinbase and Stripe ship for x402 pays it with no Agent402-specific
 setup. This guide is the command sheet. Nothing here needs an API key from us:
 the payment is the identity.
@@ -1799,8 +1793,8 @@ export function guidesIndex(baseUrl) {
 
   const items = GUIDES.map(
     (g) => `<a href="/guides/${esc(g.slug)}" class="gi-card">
-        <h2>${esc(g.title)}</h2>
-        <p>${esc(g.description)}</p>
+        <h2>${esc(resolveRailCountTokens(g.title))}</h2>
+        <p>${esc(resolveRailCountTokens(g.description))}</p>
       </a>`
   ).join("\n      ");
 
@@ -1824,7 +1818,7 @@ ${ledgerFooterCompact()}`;
 export function guidePage(baseUrl, slug, catalog = null) {
   const found = GUIDES.find((x) => x.slug === slug);
   if (!found) return null;
-  const g = { ...found, md: resolveGuideTokens(found.md, catalog), description: resolveGuideTokens(found.description, catalog) };
+  const g = { ...found, title: resolveRailCountTokens(found.title), md: resolveGuideTokens(found.md, catalog), description: resolveGuideTokens(found.description, catalog) };
 
   const title = fitTitle([`${g.title} - Agent402`, g.seoTitle ? `${g.seoTitle} - Agent402` : "", g.seoTitle || g.title]);
   const canonical = `${baseUrl}/guides/${g.slug}`;
@@ -1856,7 +1850,7 @@ ${ledgerFooterCompact()}`;
 }
 
 export const guideSlugs = () => GUIDES.map((g) => g.slug);
-export const guideTitles = () => Object.fromEntries(GUIDES.map((g) => [g.slug, g.title]));
+export const guideTitles = () => Object.fromEntries(GUIDES.map((g) => [g.slug, resolveRailCountTokens(g.title)]));
 
 // The packages a reader of this guide will install next, each linking to its
 // /integrations page (map derived in integration-pages.js).

@@ -37,13 +37,17 @@ const RAILS = ["base", "solana", "polygon", "arbitrum", "monad", "celo", "avalan
   }
 }
 
-// ---- 3. far-future ceiling: >12 chains truncates to 12, never below the roster ----
+// ---- 3. far-future ceiling: >16 chains truncates to 16, never below the roster (12 rails + a gated one fit) ----
 {
-  const many = [...RAILS, "chain13", "chain14"].map((label) => ({ label, href: `/${label}`, sellers: 1, healthy: true }));
+  const many = [...RAILS, ...Array.from({ length: 8 }, (_, i) => `chain${13 + i}`)].map((label) => ({ label, href: `/${label}`, sellers: 1, healthy: true }));
   setNavIndexProvider(() => ({ chains: many }));
   const html = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
   const shown = many.filter((c) => html.includes(`href="/${c.label}"`)).length;
-  ok(shown === 12, `14 chains truncate to exactly 12 (got ${shown})`);
+  ok(shown === 16, `20 chains truncate to exactly 16 (got ${shown})`);
+  const thirteen = many.slice(0, 13);
+  setNavIndexProvider(() => ({ chains: thirteen }));
+  const html13 = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
+  ok(thirteen.every((c) => html13.includes(`href="/${c.label}"`)), "13 chains (12 rails plus a gated rail in the live offer) are all shown");
 }
 
 setNavIndexProvider(null);

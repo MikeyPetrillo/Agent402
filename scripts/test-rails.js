@@ -13,7 +13,7 @@
 //
 //   node scripts/test-rails.js                       # offline only
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-rails.js
-import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, railKey } from "../src/rails.js";
+import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, railKey, GATED_RAILS, liveRails } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
 import { railsCoveredByLiveView } from "../src/revenue-live.js";
 
@@ -27,8 +27,20 @@ const ok = (cond, msg) => {
 const TESTNETS = new Set(["base-sepolia", "solana-devnet"]);
 const settleable = Object.entries(NETWORKS).filter(([name]) => !TESTNETS.has(name));
 const railCaip2 = new Set(RAILS.map((r) => r.caip2));
+// A gated rail (GATED_RAILS, src/gated-rails.js) is settleable but kept out of
+// RAILS on purpose: static copy never names it, and runtime surfaces name it
+// only while it is in the live offer (liveRails()).
+const gatedCaip2 = new Set(GATED_RAILS.map((r) => r.caip2));
 for (const [name, caip2] of settleable) {
-  ok(railCaip2.has(caip2), `payments.js network "${name}" (${caip2}) has a RAILS entry — copy layer knows about it`);
+  ok(railCaip2.has(caip2) || gatedCaip2.has(caip2), `payments.js network "${name}" (${caip2}) has a RAILS or GATED_RAILS entry - copy layer knows about it`);
+}
+for (const r of GATED_RAILS) ok(!railCaip2.has(r.caip2), `gated rail ${r.name} is not in RAILS, so no static copy names it`);
+{
+  const { markGatedRailOffered, __resetGatedRailsForTests } = await import("../src/gated-rails.js");
+  ok(liveRails().length === RAILS.length, "liveRails() is RAILS while no gated rail is offered");
+  markGatedRailOffered(GATED_RAILS[0].caip2);
+  ok(liveRails().some((r) => r.caip2 === GATED_RAILS[0].caip2), `liveRails() names ${GATED_RAILS[0].name} once it is in the live offer`);
+  __resetGatedRailsForTests();
 }
 const paymentsCaip2 = new Set(Object.values(NETWORKS));
 for (const r of RAILS) {

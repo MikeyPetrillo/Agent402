@@ -11,6 +11,8 @@
 // the data. Keep prose-heavy narrative (guides/blog bodies) as prose — this
 // module owns the *claims*, not the storytelling.
 
+import { gatedRailOffered } from "./gated-rails.js";
+
 export const RAILS = [
   { name: "Base", asset: "USDC", caip2: "eip155:8453", chainId: 8453, primary: true },
   { name: "Solana", asset: "USDC", caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" },
@@ -21,11 +23,52 @@ export const RAILS = [
   { name: "Avalanche", asset: "USDC", caip2: "eip155:43114", chainId: 43114 },
   { name: "Sei", asset: "USDC", caip2: "eip155:1329", chainId: 1329 },
   { name: "Optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
-  { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
   { name: "Stellar", asset: "USDC", caip2: "stellar:pubnet" },
   { name: "Algorand", asset: "USDC", caip2: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" },
   { name: "Robinhood Chain", asset: "USDG", caip2: "eip155:4663", chainId: 4663 },
 ];
+
+// Gated rails (src/gated-rails.js): settleable by src/payments.js but kept out
+// of RAILS, so no static copy names them. A runtime surface lists one only
+// while it is in the live offer, through liveRails().
+export const GATED_RAILS = [
+  { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
+];
+
+/** RAILS plus every gated rail that is in the live offer right now. */
+export function liveRails() {
+  const extra = GATED_RAILS.filter((r) => gatedRailOffered(r.caip2));
+  return extra.length ? [...RAILS, ...extra] : RAILS;
+}
+
+const COUNT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+/** A small count in words ("thirteen"), digits past twenty. */
+export const countWord = (n) => COUNT_WORDS[n] || String(n);
+/** The live rail count for request-time copy: { n, word, Word, more, moreWord }
+ *  ("twelve" chains, "eleven" more), counted from liveRails() at the call. */
+export function liveRailCount() {
+  const n = liveRails().length;
+  const word = countWord(n);
+  return { n, word, Word: word.charAt(0).toUpperCase() + word.slice(1), more: n - 1, moreWord: countWord(n - 1) };
+}
+/** Replace the rail tokens in served copy, from the live offer at the call:
+ *  {{railCount}} ("twelve"), {{RailCount}} ("Twelve"), {{railsMore}}
+ *  ("eleven"), {{railsMoreThan3}} ("9"), {{usdcRailsAnd}} ("Base, Solana, ...
+ *  and Algorand"), {{usdcRailsButBase}} ("Solana, Polygon, ..., Algorand") and
+ *  {{gatedRailBullets}} (one markdown bullet per gated rail in the offer). */
+export function resolveRailCountTokens(text) {
+  const c = liveRailCount();
+  const usdc = liveRails().filter((r) => r.asset === "USDC").map((r) => r.name);
+  const gated = liveRails().filter((r) => GATED_RAILS.includes(r));
+  return String(text)
+    .replace(/\{\{railCount\}\}/g, c.word)
+    .replace(/\{\{RailCount\}\}/g, c.Word)
+    .replace(/\{\{railsMore\}\}/g, c.moreWord)
+    .replace(/\{\{railsMoreThan3\}\}/g, String(c.n - 3))
+    .replace(/\{\{usdcRailsAnd\}\}/g, usdc.length > 1 ? `${usdc.slice(0, -1).join(", ")} and ${usdc.at(-1)}` : usdc.join(""))
+    .replace(/\{\{usdcRailsButBase\}\}/g, usdc.filter((n) => n !== "Base").join(", "))
+    .replace(/\{\{gatedRailBullets\}\}\n?/g, gated.map((r) => `- **${r.name}** - ${r.asset}, through the facilitator that settles that network.\n`).join(""));
+}
 
 const usdc = RAILS.filter((r) => r.asset === "USDC").map((r) => r.name);
 const others = RAILS.filter((r) => r.asset !== "USDC");
@@ -44,7 +87,7 @@ export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
  *  the "primary chain first" phrasing used in buyer-facing prose. */
 export const RAILS_PAREN = `USDC on ${usdc[0]} (or ${usdc.slice(1).join(", ")}${othersDash})`;
 
-/** "USDC on Base + N more chains, or USDG on Robinhood Chain" - tight UI copy (derives live from RAILS). */
+/** "USDC on Base + 10 more chains, or USDG on Robinhood Chain" — tight UI copy (derives live from RAILS). */
 export const RAILS_SHORT = `USDC on ${usdc[0]} + ${usdc.length - 1} more chains${others.length ? `, or ${others.map((o) => `${o.asset} on ${o.name}`).join(" / ")}` : ""}`;
 
 /** Chain names for the /.well-known/x402 manifest's ecosystem.chains. */

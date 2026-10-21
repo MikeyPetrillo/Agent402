@@ -91,7 +91,39 @@ function projectBytes(prodHeader, localHeader) {
       return localSchema !== undefined ? { ...rest, outputSchema: localSchema } : rest;
     });
   }
-  return Buffer.from(JSON.stringify(merged), "utf8").toString("base64").length;
+  return Buffer.from(JSON.stringify(withTreeRails(merged)), "utf8").toString("base64").length;
+}
+// Rails this tree offers that production may not yet (Arc rides on Circle's
+// key and joins every 402 once it is set). Each is projected into prod's
+// challenge as one more exact accept cloned from prod's Base accept, so the
+// ceiling is judged on the challenge a buyer will get once this tree is live,
+// not on the one production serves today.
+const TREE_EXTRA_RAILS = [
+  { network: "eip155:5042", asset: "0x3600000000000000000000000000000000000000", extra: { name: "USDC", version: "2" } },
+];
+function withTreeRails(env) {
+  if (!env || !Array.isArray(env.accepts)) return env;
+  const evm = env.accepts.find((a) => a?.scheme === "exact" && a?.network === "eip155:8453");
+  if (!evm) return env;
+  const { outputSchema: _drop, ...base } = evm;
+  const add = TREE_EXTRA_RAILS.filter((r) => !env.accepts.some((a) => a?.network === r.network))
+    .map((r) => ({ ...base, network: r.network, asset: r.asset, extra: { ...(base.extra || {}), ...r.extra } }));
+  return add.length ? { ...env, accepts: [...env.accepts, ...add] } : env;
+}
+/** prod's own challenge with this tree's extra rails added (no local boot). */
+function projectRailsOnly(prodHeader) {
+  try {
+    const env = JSON.parse(Buffer.from(prodHeader, "base64").toString("utf8"));
+    return Buffer.from(JSON.stringify(withTreeRails(env)), "utf8").toString("base64").length;
+  } catch { return null; }
+}
+// Control: the projection must actually add the rail (a no-op projection
+// would pass every run while judging the old, smaller challenge).
+{
+  const sample = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
+  const grown = projectRailsOnly(sample);
+  if (!(grown > sample.length + 200)) { console.log(`FAIL - control: the projection adds this tree's extra rails to a prod challenge (${sample.length} -> ${grown})`); process.exit(1); }
+  console.log(`ok - control: the projection adds this tree's extra rails to a prod challenge (+${grown - sample.length} bytes for ${TREE_EXTRA_RAILS.length} rail)`);
 }
 // A buyer's retry carries roughly the challenge plus its own signature and
 // authorization (~700 bytes measured), so budget below the common 8 KB limit.
@@ -215,6 +247,12 @@ async function worker() {
         const lh = lr.status === 402 ? (lr.headers.get("payment-required") || "") : "";
         if (lh) { projected = projectBytes(h, lh); if (projected != null) projectedTotalLocal = projectTotal(res, lr, projected); }
       } catch { /* a route this tree does not serve (retired) keeps the measured figure */ }
+    }
+    // Without the local boot, the projection is prod's own challenge plus this
+    // tree's extra rails, and the total grows by the same bytes.
+    if (projected == null) {
+      const railsOnly = projectRailsOnly(h);
+      if (railsOnly != null && railsOnly !== h.length) { projected = railsOnly; projectedTotalLocal = total + (railsOnly - h.length); }
     }
     // The total is projected the same way: prod's other headers stay, the
     // challenge is this tree's.

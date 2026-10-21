@@ -24,34 +24,31 @@
 //      drops Arc from the offer at boot (src/payments.js).
 //   4. A local preflight on verify and settle: the requirement must be Arc
 //      exact USDC, the signed authorization must pay that payTo exactly that
-//      amount inside its validity window, and an EOA-shaped signature must
-//      recover to the payer under Arc's own EIP-712 domain. A payment signed
-//      for another chain or another token is refused here, before Circle sees
-//      it. Contract-wallet signatures (ERC-1271) are left to Circle, which
-//      checks them on chain.
+//      amount inside its validity window, and the signature (any ECDSA form)
+//      must verify for the payer under Arc's own EIP-712 domain. A payment
+//      signed for another chain or another token, or a signature this server
+//      cannot verify itself (contract wallets), is refused before Circle sees it.
 //   5. `settlement_pending` (the outcome was unresolved inside Circle's wait
-//      window) is reconciled by polling /status for a bounded time, so a
-//      payment that lands a moment later is reported as the settlement it is.
+//      window) is reconciled by polling /status for a bounded time; one still
+//      pending after that is booked by paymentId (src/circle-pending.js) and a
+//      reconcile pass resolves it from Circle's final status later.
 //
 // The base URL is a constant. Nothing in a request can change the host, and
 // the API key is read from the environment by the caller and held only in
 // this instance's closure.
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { SettleError, VerifyError } from "@x402/core/types";
-import { recoverTypedDataAddress } from "viem";
+import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
+import {
+  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
+  CircleResponseError, safeReason, arcKindsFromSupported,
+} from "./circle-supported.js";
 
-export const ARC_CAIP2 = "eip155:5042";
-export const ARC_CHAIN_ID = 5042;
-/** Arc native USDC, verified on chain 2026-10-20: decimals() 6,
- *  DOMAIN_SEPARATOR() rebuilds from ("USDC", "2", 5042, asset). */
-export const ARC_USDC = Object.freeze({
-  asset: "0x3600000000000000000000000000000000000000",
-  decimals: 6,
-  name: "USDC",
-  version: "2",
-});
-export const CIRCLE_FACILITATOR_BASE = "https://api.circle.com/v1/facilitator/x402";
-export const CIRCLE_LABEL = "Circle (Arc)";
+export {
+  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
+  safeReason, arcKindsFromSupported,
+};
+export { isArcNetwork, stripArcFromSupported, withoutArcKinds } from "./circle-supported.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const SUPPORTED_TIMEOUT_MS = 10_000;
@@ -63,16 +60,8 @@ const PENDING_BUDGET_MS = 20_000;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const REASON = /^[a-z0-9_]{1,64}$/;
 const UINT = /^[0-9]{1,78}$/;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
-
-/** A reason code we are willing to repeat: lower snake case, bounded. Anything
- *  else (prose, markup, an echoed header) becomes a fixed placeholder. */
-export function safeReason(value, fallback = "circle_unrecognized_reason") {
-  const s = typeof value === "string" ? value.trim() : "";
-  return REASON.test(s) ? s : fallback;
-}
 
 /** The first machine reason in a Circle ErrorResponse ({code, message, errors:[{reason}]}),
  *  or a status-derived code. The message field is never read. */
@@ -80,15 +69,6 @@ function reasonFromErrorBody(data, status) {
   const first = data && typeof data === "object" && Array.isArray(data.errors) ? data.errors[0] : null;
   const r = first && typeof first === "object" ? first.reason : null;
   return safeReason(r, `circle_http_${Number(status) || 0}`);
-}
-
-class CircleResponseError extends Error {
-  constructor(op, status, reason) {
-    super(`Circle facilitator ${op} failed (${Number(status) || 0}): ${reason}`);
-    this.name = "CircleResponseError";
-    this.status = Number(status) || 0;
-    this.reason = reason;
-  }
 }
 
 /** Read a response body as JSON under a byte cap. Throws CircleResponseError
@@ -134,37 +114,6 @@ async function readJsonCapped(res, op) {
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 const lc = (s) => String(s || "").toLowerCase();
 
-/** Reduce Circle's /supported to the one kind we route here: Arc `exact` on the
- *  Arc USDC asset. Malformed input throws (the boot guard then drops Arc). */
-export function arcKindsFromSupported(data) {
-  if (!isObj(data) || !Array.isArray(data.kinds) || data.kinds.length > 500) {
-    throw new CircleResponseError("supported", 200, "invalid_supported_shape");
-  }
-  const kinds = [];
-  for (const k of data.kinds) {
-    if (!isObj(k) || typeof k.scheme !== "string" || typeof k.network !== "string") {
-      throw new CircleResponseError("supported", 200, "invalid_supported_kind");
-    }
-    if (k.scheme !== "exact" || k.network !== ARC_CAIP2) continue;
-    if (k.x402Version !== undefined && k.x402Version !== 2) continue;
-    // A listed asset must be the Arc USDC we price in; a kind for any other
-    // token on Arc is not one we can settle.
-    if (k.asset !== undefined && lc(k.asset) !== lc(ARC_USDC.asset)) continue;
-    const extra = isObj(k.extra) ? k.extra : {};
-    if (extra.name !== undefined && extra.name !== ARC_USDC.name) continue;
-    if (extra.version !== undefined && extra.version !== ARC_USDC.version) continue;
-    kinds.push({ x402Version: 2, scheme: "exact", network: ARC_CAIP2, extra: { name: ARC_USDC.name, version: ARC_USDC.version } });
-    break;
-  }
-  const extensions = Array.isArray(data.extensions)
-    ? data.extensions.filter((e) => typeof e === "string" && REASON.test(e.replace(/-/g, "_")) && e.length <= 64)
-    : [];
-  const signers = {};
-  const arcSigners = isObj(data.signers) ? data.signers[ARC_CAIP2] : null;
-  if (Array.isArray(arcSigners)) signers[ARC_CAIP2] = arcSigners.filter((a) => typeof a === "string" && ADDR.test(a)).slice(0, 32);
-  return { kinds, extensions, signers };
-}
-
 /** The EIP-3009 typed data a buyer signs for an Arc USDC exact payment. */
 function arcTypedData(auth) {
   return {
@@ -208,17 +157,20 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
   if (BigInt(auth.value) !== BigInt(requirements.amount)) return refuse("invalid_exact_evm_payload_authorization_value_mismatch", payer);
   if (BigInt(auth.validAfter) > BigInt(nowSec)) return refuse("invalid_exact_evm_payload_authorization_valid_after", payer);
   if (BigInt(auth.validBefore) <= BigInt(nowSec + 6)) return refuse("invalid_exact_evm_payload_authorization_valid_before", payer);
-  // EOA-shaped signature (65 bytes, v 27 or 28, the only EOA form Circle
-  // accepts): it must recover to the payer under ARC's domain. A signature
-  // made for Base (or any other chainId or token) recovers to someone else.
-  if (sig.length === 132) {
-    const v = parseInt(sig.slice(130), 16);
-    if (v === 27 || v === 28) {
-      let signer = null;
-      try { signer = await recoverTypedDataAddress({ ...arcTypedData(auth), signature: sig }); } catch { signer = null; }
-      if (!signer || lc(signer) !== lc(auth.from)) return refuse("invalid_exact_evm_payload_signature", payer);
-    }
-  }
+  // Every signature is checked here, under ARC's own domain, in whatever form
+  // it comes (65-byte with v 27/28 or 0/1, or 64-byte EIP-2098 compact). One
+  // made for Base, for another chainId or for another token recovers to
+  // someone else and is refused. A form that cannot be verified locally (a
+  // contract wallet's ERC-1271 or ERC-6492 signature) is refused too: nothing
+  // reaches Circle that this server has not verified itself.
+  let valid = false;
+  try {
+    // viem verifies 65-byte signatures (v 27/28 or 0/1); a 64-byte EIP-2098
+    // compact one is expanded to that form first.
+    const full = sig.length === 130 ? serializeSignature(compactSignatureToSignature(parseCompactSignature(sig))) : sig;
+    valid = await verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: full });
+  } catch { valid = false; }
+  if (!valid) return refuse("invalid_exact_evm_payload_signature", payer);
   return null;
 }
 
@@ -232,7 +184,7 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
  * non-JSON error body. This client's errors are already reduced.
  */
 export class CircleFacilitatorClient extends HTTPFacilitatorClient {
-  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS } = {}) {
+  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null } = {}) {
     super({ url: "http://127.0.0.1:0" });
     // The stock constructor sets `url`; remove it (see the class comment).
     delete this.url;
@@ -245,6 +197,23 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     this._now = now || (() => Date.now());
     this._pendingBudgetMs = pendingBudgetMs;
     this._pendingPollMs = pendingPollMs;
+    // Called with { paymentId, payer, network, amount, resource } for a
+    // settlement still pending after the reconcile window (src/circle-pending.js).
+    this._onPending = typeof onPending === "function" ? onPending : null;
+  }
+
+  /** Circle's final word on one payment: { status, transaction } with status
+   *  "pending" | "completed" | "failed", or null when it cannot be read. */
+  async paymentStatus(paymentId) {
+    if (typeof paymentId !== "string" || !UUID.test(paymentId)) return null;
+    let r;
+    try { r = await this._request("status", `/status/${paymentId}`, { timeoutMs: VERIFY_TIMEOUT_MS }); } catch { return null; }
+    if (!r.ok || r.parseError || !isObj(r.data)) return null;
+    const { status, transaction, network } = r.data;
+    if (network !== undefined && network !== ARC_CAIP2) return null;
+    if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction } : null;
+    if (status === "failed" || status === "pending") return { status, transaction: null };
+    return null;
   }
 
   toJSON() { return { facilitator: CIRCLE_LABEL }; }
@@ -331,6 +300,14 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
       if (typeof paymentId === "string" && UUID.test(paymentId)) {
         const resolved = await this._awaitPending(paymentId, payer);
         if (resolved) return resolved;
+        // Still unresolved: the buyer is refused now, and the payment is booked
+        // by paymentId so a later pass turns a late completion into an owed
+        // refund instead of a silent charge.
+        if (this._onPending) {
+          try {
+            await this._onPending({ paymentId, payer, network, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
+          } catch { /* booking never breaks the settle path */ }
+        }
       }
       console.warn("[circle] Arc settlement still pending after the reconcile window; not reported as settled");
     }
@@ -343,26 +320,18 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const deadline = this._now() + this._pendingBudgetMs;
     while (this._now() < deadline) {
       await new Promise((r) => setTimeout(r, this._pendingPollMs));
-      let r;
-      try {
-        r = await this._request("status", `/status/${paymentId}`, { timeoutMs: VERIFY_TIMEOUT_MS });
-      } catch {
-        continue;
-      }
-      if (!r.ok || r.parseError || !isObj(r.data)) continue;
-      const { status, transaction, network } = r.data;
-      if (network !== undefined && network !== ARC_CAIP2) return { success: false, errorReason: "invalid_settle_response", transaction: "", network: ARC_CAIP2, payer };
-      if (status === "completed" && TX.test(String(transaction || ""))) return { success: true, transaction, network: ARC_CAIP2, payer };
-      if (status === "failed") return { success: false, errorReason: "settlement_failed", transaction: "", network: ARC_CAIP2, payer };
+      const s = await this.paymentStatus(paymentId);
+      if (s?.status === "completed") return { success: true, transaction: s.transaction, network: ARC_CAIP2, payer };
+      if (s?.status === "failed") return { success: false, errorReason: "settlement_failed", transaction: "", network: ARC_CAIP2, payer };
     }
     return null;
   }
 }
 
 /** The Arc client when a key is configured, else null. */
-export function circleClientFromEnv(env = process.env) {
+export function circleClientFromEnv(env = process.env, opts = {}) {
   const key = String(env.CIRCLE_FACILITATOR_API_KEY || "").trim();
-  return key ? new CircleFacilitatorClient({ apiKey: key }) : null;
+  return key ? new CircleFacilitatorClient({ apiKey: key, ...opts }) : null;
 }
 
 /** True when the Arc rail's switch (the Circle key) is set. Never returns the key. */

@@ -18,6 +18,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { powCostPhrase } from "./pow.js";
+import { resolveRailCountTokens } from "./rails.js";
 
 // [id, kicker, headline, bodyHtml (trusted, authored here), notesText, opts]
 // notesText is the presenter's talk track - shown only with the N key / print.
@@ -87,7 +88,7 @@ export const SLIDES = [
 <tr><th>The price rides in</th><td><code>PAYMENT-REQUIRED</code> header</td><td><code>WWW-Authenticate: Payment</code> (the web's normal login mechanism)</td></tr>
 <tr><th>The payment rides in</th><td><code>PAYMENT-SIGNATURE</code> header</td><td><code>Authorization: Payment</code> header</td></tr>
 <tr><th>The receipt</th><td><code>PAYMENT-RESPONSE</code></td><td>signed <code>Payment-Receipt</code></td></tr>
-<tr><th>Settles</th><td>USDC via a facilitator (Base, Solana, Polygon and 9 more)</td><td>the same way on Base/Celo, or natively on Tempo</td></tr>
+<tr><th>Settles</th><td>USDC via a facilitator (Base, Solana, Polygon and {{railsMoreThan3}} more)</td><td>the same way on Base/Celo, or natively on Tempo</td></tr>
 </tbody></table></div>
 <p>Agent402 answers <strong>both</strong> on the same 402 at the same price. The buyer's software picks the dialect; the seller does not have to choose.</p>`,
     notes: "If the audience is non-technical, the one line to keep is: 'two dialects of the same idea, and we speak both.' If they are technical: MPP reuses the web's standard auth headers, which is why it is on a standards track; x402 has the larger installed base today. Neither requires the other.",
@@ -96,7 +97,7 @@ export const SLIDES = [
     id: "money", kicker: "06 / the money",
     headline: "Dollars on a public ledger, and receipts anyone can check.",
     body: `<p><strong>Stablecoins</strong> are dollars that live on a public ledger: USDC is designed to hold one dollar. Payments here are USDC (or USDG on Robinhood Chain), so nobody prices anything in a volatile token.</p>
-<p><strong>Twelve chains.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists every rail with its own amount, the list price on most and a little more on a rail whose settlement carries a fee. On the EVM chains the buyer pays no network fee at all.</p>
+<p><strong>{{RailCount}} chains.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists every rail with its own amount, the list price on most and a little more on a rail whose settlement carries a fee. On the EVM chains the buyer pays no network fee at all.</p>
 <p><strong>Every payment is a public record.</strong> That is what makes this an economy rather than a wire: sellers can be ranked by settlements the chain actually shows, revenue can be published with proof, and a router can try sellers with proven settlement before anyone untested.</p>
 <p class="s101-links"><a href="/revenue">Live transactions with every figure linked to its receipt &rarr;</a></p>`,
     notes: "Anticipate 'is this crypto speculation?' - no: dollar stablecoins only, and no native token is required from the buyer on the EVM chains. The public-ledger point is the strategic one: it enables trust without accounts. Show /revenue if you have time; every number links to chain proof.",
@@ -198,7 +199,7 @@ export function x402101Page(baseUrl) {
   <div class="s101-in">
     <div class="s101-kicker">${esc(s.kicker)}</div>
     ${i === 0 ? `<h1 class="s101-h">${s.headline}</h1>` : `<h2 class="s101-h">${s.headline}</h2>`}
-    ${s.body}
+    ${resolveRailCountTokens(s.body)}
     <aside class="s101-notes"><span>Speaker notes</span>${esc(s.notes)}</aside>
   </div>
 </section>`).join("");

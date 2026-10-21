@@ -10,6 +10,7 @@
 // the protocols' own homes.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { resolveRailCountTokens } from "./rails.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 
@@ -55,7 +56,7 @@ export const GLOSSARY = [
     def: "The agent's own key pair holding stablecoins. In agentic finance the payment IS the identity: there is no account to create, and the payer address on a settled payment is what a seller keys memory, usage history and quotas to. Keys never leave the client - the wallet signs an authorization and the facilitator broadcasts it.",
     see: [["/agentic-finance#faq", "do agents need crypto?"]] },
   { id: "rails", name: "Rails (stablecoin rails)", alt: ["payment rails", "chains"],
-    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar and Algorand, USDG on Robinhood Chain, and USDC.e and PathUSD natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
+    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on {{usdcRailsAnd}}, USDG on Robinhood Chain, and USDC.e and PathUSD natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
     see: [["/revenue", "transactions by rail"], ["/pricing", "pricing"]] },
   { id: "dual-stack", name: "Dual-stack (x402 + MPP)", alt: ["dual-stack seller"],
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
@@ -109,7 +110,7 @@ export function glossaryPage(baseUrl) {
       // The category term is defined on its own page; the glossary entry is
       // an alias to that @id so the two never diverge in the graph.
       "@id": t.id === "agentic-finance" ? `${baseUrl}/agentic-finance#term` : `${canonical}#${t.id}`,
-      name: t.name, ...(t.alt?.length ? { alternateName: t.alt } : {}), description: t.def,
+      name: t.name, ...(t.alt?.length ? { alternateName: t.alt } : {}), description: resolveRailCountTokens(t.def),
       url: `${canonical}#${t.id}`, inDefinedTermSet: { "@id": `${canonical}#set` },
     })),
   };
@@ -132,7 +133,7 @@ export function glossaryPage(baseUrl) {
     const see = seeList.length ? `<div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${esc(label)}&nbsp;→</a>`).join("")}</div>` : "";
     return `<article id="${esc(t.id)}" class="gl-term gl-row" style="display:grid;grid-template-columns:300px 1fr;gap:28px;padding:26px 24px;border-bottom:1px solid var(--hairline);">
       <div><h2 style="font-weight:700;font-size:var(--fs-xl);line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
-      <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>
+      <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(resolveRailCountTokens(t.def))}</p>${see}</div>
     </article>`;
   }).join("");
 

@@ -583,7 +583,11 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
    made the active tab a white blob with invisible text). */
 .mfb-tab.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent);}
 /* A phone shows the chain tabs as one strip that scrolls sideways, not a wrapped block ending on one stray tab. */
-@media (max-width:600px){.mfb-tabs{flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;}}
+/* Wider screens: the tabs are inline atoms in a balanced text block, so any
+   chain count wraps into even rows (never a last row of one tab). */
+.mfb-tabs{display:block;text-wrap:balance;flex:1 1 auto;min-width:0;line-height:2.15;}
+.mfb-tabs .mfb-tab{display:inline-block;margin:0 5px 5px 0;line-height:1.4;}
+@media (max-width:600px){.mfb-tabs{display:flex;flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;gap:5px;}.mfb-tabs .mfb-tab{margin:0;}}
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
@@ -661,9 +665,9 @@ const NAV_ZONES = [
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown
 // and footer still get real, crawlable links, just without seller counts.
-// Every rail has a live market page (/base, /solana, /polygon, /arbitrum, /monad,
-// /celo, /avalanche, /sei, /optimism, /arc, /stellar, /algorand, /robinhood) - this
-// fallback must list every one, not just the two that got dedicated routes first.
+// All 12 rails have a live market page (/base, /solana, /polygon, /arbitrum, /monad,
+// /celo, /avalanche, /sei, /optimism, /stellar, /algorand, /robinhood) - this fallback
+// must list every one, not just the two that got dedicated routes first.
 const STATIC_CHAINS = [
   { label: "base", href: "/base" },
   { label: "solana", href: "/solana" },
@@ -674,7 +678,6 @@ const STATIC_CHAINS = [
   { label: "avalanche", href: "/avalanche" },
   { label: "sei", href: "/sei" },
   { label: "optimism", href: "/optimism" },
-  { label: "arc", href: "/arc" },
   { label: "stellar", href: "/stellar" },
   { label: "algorand", href: "/algorand" },
   { label: "robinhood", href: "/robinhood" },
@@ -709,13 +712,13 @@ function chainRows() {
     const data = navDataProvider && navDataProvider();
     if (data && Array.isArray(data.chains) && data.chains.length) {
       // Scale rule: EVERY live rail gets a row while the rail count stays
-      // human-sized (≤12 - twelve live rails, see #469); only past that does
+      // human-sized (16; twelve live rails plus room, see #469); only past that does
       // the list truncate to the top 12 with the "all sellers" row carrying
       // the rest. The previous >9 → slice(0,7) rule silently dropped Stellar,
       // Algorand, and Robinhood from the dropdown AND the mobile menu the
       // moment rail #10 shipped - the exact failure its own comment said it
       // was preventing. A ceiling must sit ABOVE the roster it protects.
-      const chains = data.chains.length > 12 ? data.chains.slice(0, 12) : data.chains;
+      const chains = data.chains.length > 16 ? data.chains.slice(0, 16) : data.chains;
       return { chains, live: true };
     }
   } catch { /* provider threw - fall back to the static list below */ }

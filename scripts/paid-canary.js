@@ -1527,7 +1527,7 @@ async function main() {
     { key: "avalanche", caip2: "eip155:43114", sym: "USDC", chainLabel: "Avalanche", tx: (h) => `https://snowtrace.io/tx/${h}` },
     { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1` },
     { key: "optimism", caip2: "eip155:10", sym: "USDC", chainLabel: "Optimism", tx: (h) => `https://optimistic.etherscan.io/tx/${h}` },
-    { key: "arc", caip2: "eip155:5042", sym: "USDC", chainLabel: "Arc", tx: (h) => `https://explorer.arc.io/tx/${h}` },
+    { key: "arc", caip2: "eip155:5042", sym: "USDC", chainLabel: "Arc", gated: true, tx: (h) => `https://explorer.arc.io/tx/${h}` },
   ]) {
     try {
       const { x402HTTPClient } = await import("@x402/core/client");
@@ -1547,6 +1547,13 @@ async function main() {
         continue;
       }
       const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network || "") === leg.caip2);
+      if (!accepts.length && leg.gated) {
+        // A gated rail (Arc: offered only while its key is set and Circle's
+        // /supported check passed) that is not in the live 402 is not an
+        // outage of a rail we sell; the leg has nothing to buy.
+        console.log(`SKIP  ${leg.key} leg: skipped: ${leg.chainLabel} not offered (${leg.caip2} is not in the live 402)`);
+        continue;
+      }
       if (!accepts.length) {
         railFail(leg.key, `${leg.caip2} NOT among the live 402 accepts — the ${leg.chainLabel} rail has DROPPED OUT of the offer (PAYMENT_NETWORKS changed, or the boot /supported guard dropped it). This is the Celo-outage shape and must never be a silent skip.`);
         continue;

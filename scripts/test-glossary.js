@@ -13,6 +13,7 @@
 // emitted raw into structured data. None of those break a render, so a
 // render smoke never sees them.
 import { GLOSSARY, glossaryPage } from "../src/glossary.js";
+import { resolveRailCountTokens } from "../src/rails.js";
 import { agenticFinancePage } from "../src/agentic-finance.js";
 import { whatIsX402Page } from "../src/what-is-x402.js";
 import { whatIsMppPage } from "../src/what-is-mpp.js";
@@ -66,7 +67,7 @@ const terms = sets.length ? sets[0].hasDefinedTerm || [] : [];
 ok(terms.length === GLOSSARY.length, `DefinedTermSet carries one DefinedTerm per rendered term (${terms.length}/${GLOSSARY.length})`);
 ok(terms.every((d) => d["@type"] === "DefinedTerm" && d.name && d.description && d.url && d.inDefinedTermSet?.["@id"] === `${BASE}/glossary#set`), "every DefinedTerm has name/description/url and points back at the set");
 const byId = Object.fromEntries(GLOSSARY.map((t) => [t.id, t]));
-ok(terms.every((d) => { const id = d.url.split("#")[1]; return byId[id] && byId[id].def === d.description && byId[id].name === d.name; }), "JSON-LD descriptions are byte-identical to the rendered definitions");
+ok(terms.every((d) => { const id = d.url.split("#")[1]; return byId[id] && resolveRailCountTokens(byId[id].def) === d.description && byId[id].name === d.name; }), "JSON-LD descriptions are byte-identical to the rendered definitions");
 const aifiTerm = terms.find((d) => d.url.endsWith("#agentic-finance"));
 ok(aifiTerm && aifiTerm["@id"] === `${BASE}/agentic-finance#term`, "the Agentic Finance entry aliases the category page's DefinedTerm @id (one node in the graph, not two)");
 ok(findType(blocks, "BreadcrumbList").length === 1, "breadcrumb present");
