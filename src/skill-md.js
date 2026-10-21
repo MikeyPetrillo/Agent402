@@ -200,9 +200,11 @@ header instead of a payment.
 3. **Call:** resend with payment (your client does this) and the same JSON body.
 4. **Retry safely:** send an \`Idempotency-Key\` header; a retry of an
    already-served paid call replays the result instead of charging again.
-5. **Slow routes:** reports and media take minutes. Send the paid call with
-   \`Prefer: respond-async\` to get \`202\` and a job link, then collect the
-   answer from \`GET /api/jobs/{id}\` (free); payment settles only on the answer.
+5. **Slow routes:** reports and media take minutes; their 402 carries
+   \`X-Async-Recommended\` and their /api/pricing row an \`async\` block. Send the
+   paid call with \`Prefer: respond-async\` to get \`202\` and a job link, then poll
+   \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) for its status, stage,
+   progress and ETA until it succeeds; payment settles only on the answer.
 
 ### Request Templates
 

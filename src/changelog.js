@@ -2,6 +2,17 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-21",
+    title: "Slow routes say so, and jobs show their progress",
+    items: [
+      "Each slow route (reports, video, the premium image) states its typical and maximum run time on its /api/pricing row and /openapi.json operation, marks its /llms.txt line, and its 402 carries X-Async-Recommended with the same advice in the JSON body. The route-execute tiers, seller-payability and the fast and pro image tiers accept Prefer: respond-async too.",
+      "GET /api/jobs/{id} now reports status queued, running, succeeded or failed, with a stage (video: submitted, generating, downloading; reports: their named steps), progress from 0 to 1, an ETA and Retry-After on every state that is not final. A route that does not report its own steps shows elapsed time against its typical run, marked as an estimate. Payment still settles only on the delivered answer.",
+      "On the MCP connector, every slow paid route runs as an MCP task for a client that declares the tasks extension, and tasks/get carries the same progress.",
+      "Faster runs: a domain audit probes in one round instead of three, research reads its source pages at once, the LinkedIn article generates its images together, and video checks for its finished clip every 2 seconds once it is due.",
+      "agent402-client 0.8.16 and agent402-mcp 0.13.17 send slow calls as jobs and collect them on their own, honoring Retry-After, with progress callbacks and MCP progress notifications.",
+    ],
+  },
+  {
     date: "2026-10-20",
     title: "Dub, loop gate, email guard, page change and MCP package check",
     items: [
