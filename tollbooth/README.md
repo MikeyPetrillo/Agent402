@@ -271,8 +271,14 @@ settle-after-handler discipline as the x402 rail - then replays the response
 with a `Payment-Receipt` header and `X-Tollbooth-Paid: mpp-tempo`. A refused
 credential gets a 402 with fresh challenges and an RFC 9457 `problem` in the
 body. Challenges are HMAC-bound to your `TOLLBOOTH_SECRET`; each credential is
-single-use (share a `replayStore` across workers). No new dependency: the
-relay is spoken to over plain `fetch`.
+single-use through the same `replayStore` that records proof-of-work solves
+(keys prefixed `tempo:`). **Without a `replayStore` that record is per
+process**: behind a load balancer, under `cluster`, or across instances, one
+Tempo credential is accepted once per process until its challenge expires, and
+the gate logs a warning at startup. Pass `sqliteReplayStore(db)` or
+`redisReplayStore(client)` (or `TOLLBOOTH_REPLAY_SQLITE` for the CLI) in any
+deploy with more than one process. No new dependency: the relay is spoken to
+over plain `fetch`.
 
 **Chain-truth confirm (0.9.2):** a relay can report settlement failure for a
 payment that actually landed - measured live: a buyer whose packed signature
@@ -318,7 +324,7 @@ live incident transaction in the tests).
 | `resourceBaseUrl` | `""` | Absolute base used for the `resource` field / PoW binding |
 | `observe` | `false` | Observe-only: classify and count, but never 402. For pre-launch traffic measurement. |
 | `statsSink` | in-memory | Durable stats backend. Built-ins: `memorySink`, `kvStatsSink(kv)`, `httpStatsSink(url)`. |
-| `replayStore` | **this process's memory** | Shared single-use record for solved proof-of-work tokens. Required for multi-worker / multi-instance / serverless. Built-ins: `sqliteReplayStore(db)`, `redisReplayStore(client)`. See below. |
+| `replayStore` | **this process's memory** | Shared single-use record for solved proof-of-work tokens and Tempo credentials. Required for multi-worker / multi-instance / serverless. Built-ins: `sqliteReplayStore(db)`, `redisReplayStore(client)`. See below. |
 
 ### Environment variables
 

@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { createPow } from "./pow.js";
+import { CLIENT_TRUST_HEADERS, HOP_BY_HOP_HEADERS } from "./strip-headers.js";
 import { makeBotMatcher, AI_BOTS } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, isMppCredential, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
@@ -94,14 +95,9 @@ export function x402VerifierFromExpress(paymentMiddleware, { timeoutMs } = {}) {
   });
 }
 // Headers a client must never be able to forge through the proxy: the gate's own
-// trust signals and forwarding/hop-by-hop headers.
-const STRIP_INBOUND = new Set([
-  "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-  "te", "trailer", "transfer-encoding", "upgrade", "content-length",
-  "x-tollbooth-paid", "x-tollbooth-error", "x-pow-error", "x-forwarded-host", "forwarded",
-  // client-IP / scheme trust headers an upstream might honour (spoofable by the bot)
-  "x-real-ip", "cf-connecting-ip", "true-client-ip", "x-client-ip", "fastly-client-ip", "x-forwarded-proto", "x-forwarded-port", "via",
-]);
+// trust signals and forwarding/hop-by-hop headers (strip-headers.js, shared with
+// the edge Worker).
+const STRIP_INBOUND = new Set([...HOP_BY_HOP_HEADERS, ...CLIENT_TRUST_HEADERS]);
 
 /**
  * Create the tollbooth Express middleware.
@@ -231,6 +227,9 @@ export function createTollbooth(config = {}) {
     console.warn("[agent402-tollbooth] Tempo enabled with a per-process random secret - set TOLLBOOTH_SECRET (or mppSecret) for multi-worker deploys.");
   }
   const tempoRelayClient = tempoCfg ? tempoRelay(tempoCfg) : null;
+  if (tempoCfg && !(replayStore && typeof replayStore.claim === "function")) {
+    console.warn("[agent402-tollbooth] WARNING: Tempo rail enabled with NO shared replayStore - each Tempo credential is single-use PER PROCESS only. With more than one process or instance, one credential is accepted once per process until its challenge expires. Pass replayStore (sqliteReplayStore / redisReplayStore, or TOLLBOOTH_REPLAY_SQLITE for the CLI) for any multi-process deploy.");
+  }
   // Single-use record for tempo credentials (challenge id), sharing the
   // operator's replayStore when given (same atomic `claim` contract as PoW).
   const tempoSeen = new Map(); // id -> expiresAt (in-process fallback)
@@ -887,7 +886,7 @@ async function startCli() {
   if (upstream) {
     app.use(createProxy(upstream));
   } else {
-    app.use((_req, res) => res.json({ ok: true, note: "Bare tollbooth gate (no TOLLBOOTH_UPSTREAM set). Clients that reach here paid or solved a proof-of-work." }));
+    app.use((_req, res) => res.json({ ok: true, note: "Bare tollbooth gate (no TOLLBOOTH_UPSTREAM set). This answer means the request passed the gate (free, paid or solved); it is not a verifier response." }));
   }
   const server = app.listen(port, () => {
     const paidLabel = x402mw ? `x402 + MPP (${process.env.TOLLBOOTH_ASSET || "USDC"}, settling via ${process.env.TOLLBOOTH_CDP_API_KEY_ID && process.env.TOLLBOOTH_CDP_API_KEY_SECRET ? "Coinbase CDP" : process.env.TOLLBOOTH_FACILITATOR_URL})` : (process.env.TOLLBOOTH_PAYTO ? `x402 quote only (${process.env.TOLLBOOTH_ASSET || "USDC"}, NOT settling - set TOLLBOOTH_FACILITATOR_URL)` : "");
