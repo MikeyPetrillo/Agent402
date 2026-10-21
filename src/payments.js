@@ -1419,7 +1419,6 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
   });
-  registerWalletBlocklistHook(server);
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
   // feedback, my-usage, receipts) keys the caller on authorization.from; for a
@@ -1436,6 +1435,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     registerArcContractWalletRouteGate(server, contractOkRoutes);
     console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} pure-CPU routes (no model, paid upstream, spend-first, lasting effect or identity binding)`);
   }
+  registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
   // One authorization, one answer (src/settlement-claims.js). The claim runs

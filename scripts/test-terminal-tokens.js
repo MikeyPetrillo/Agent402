@@ -219,7 +219,7 @@ const js = readFileSync(new URL("../assets/js/market-terminal.js", import.meta.u
 ok(!/innerHTML/.test(js), "the behaviour script never assigns innerHTML");
 ok(!/\bfetch\s*\(/.test(js), "the behaviour script makes no network request - it only re-orders rows the server sent");
 ok(/VIRTUALIZE_OVER/.test(js), "windowing is thresholded rather than always-on");
-ok(/prefers-reduced-motion/.test(TERMINAL_CSS), "the ticker stops under prefers-reduced-motion");
+ok(!/t-ticker-rail\{[^}]*animation/.test(TERMINAL_CSS) && !/@keyframes t-scroll/.test(TERMINAL_CSS), "the ticker is a static row: no scroll animation to stop");
 
 console.log(`\n${fail === 0 ? "OK" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

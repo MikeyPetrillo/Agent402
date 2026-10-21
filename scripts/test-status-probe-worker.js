@@ -580,7 +580,7 @@ for (const [name, over, detail] of failCases) {
     for (const w of ["ok", "off"]) assert.equal(judge(withGateway({ circlePending: { status: w } }))[CP], "good", w);
     for (const w of ["near_capacity", "unknown", "something-new"]) assert.equal(judge(withGateway({ circlePending: { status: w } }))[CP], "quiet", w);
     const a = ALARMS.find((x) => x.title === CP);
-    assert.doesNotMatch(a.body({ gateway: { circlePending: { status: "<script>" } } }), /<script>/);
+    assert.doesNotMatch(a.body({ gateway: { circlePending: { status: "<script>" } } }), /<script/i);
   });
   await acheck("an in-doubt tweet post confirmed by a second read opens the issue", async () => {
     mkGh();
