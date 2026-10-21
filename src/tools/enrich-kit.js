@@ -586,7 +586,9 @@ export const ENRICH_TOOLS = [
       if (!GH_REPO_RE.test(repo) || repo.length > 128 || repo === "." || repo.includes("..")) throw bad(`"repo" must be a GitHub repository name (letters, digits, . _ -; no ".." segments)`);
       const base = `https://api.github.com/repos/${owner}/${repo}`;
       const { status, data } = await getJson(base, "GitHub", ghHeaders());
-      if (status === 404 || !data || typeof data !== "object") {
+      // A private repository a configured token can read answers exactly like
+      // one that does not exist: nothing about it leaves through this tool.
+      if (status === 404 || !data || typeof data !== "object" || data.private === true) {
         throw bad(`Repository ${owner}/${repo} not found (or private)`, 404);
       }
       // Language byte mix — best-effort second call; the core record stands alone.

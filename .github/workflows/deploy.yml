@@ -2453,6 +2453,7 @@ jobs:
           # Settlement-aware idempotency (FR4-01 — a non-200/unsettled response is NOT cached; @x402/express settles AFTER the handler)
           t node scripts/test-idempotency-settlement.js
           t node scripts/test-idempotency-inflight.js
+          t node scripts/test-idempotency-pow-binding.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
           # MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
@@ -2998,6 +2999,7 @@ jobs:
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
           t node scripts/test-ssrf-literal-ip.js
+          t node scripts/test-dns-name-filter.js
           t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
@@ -4442,6 +4444,9 @@ jobs:
       - name: Browser pool tools (page-speed fixture + html-frames sandbox)
         run: node scripts/test-page-speed-frames.js
 
+      - name: Browser contexts block service workers and WebSockets (real Chromium)
+        run: node scripts/test-render-isolation.js
+
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
 
@@ -4921,6 +4926,7 @@ jobs:
           # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
           t node scripts/test-verify-failed-payer-key.js
           t node scripts/test-svm-payer.js
+          t node scripts/test-non-evm-payer.js
           # Event-loop lag monitor measures a real block and stays cheap enough to leave on (offline)
           t node scripts/test-loop-lag.js
           # Tempo MPP settlement (native tempo/charge via Tempo's relay — challenge wiring + settlement-ordering proof — offline)

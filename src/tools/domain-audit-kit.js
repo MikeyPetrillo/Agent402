@@ -19,6 +19,7 @@ import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { NETWORK_TOOLS } from "./network-kit.js";
 import { NETWORK_TOOLS2 } from "./network-kit2.js";
 import { promises as dnsPromises } from "node:dns";
+import { assertQueryableName } from "./dns-name-filter.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -100,6 +101,7 @@ export function normDomain(input) {
   if (!d) throw bad('"domain" is required, e.g. "example.com"');
   d = d.replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "").replace(/:\d+$/, "").replace(/^www\./i, "").toLowerCase();
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d) || d.length > 253) throw bad(`"${d}" is not a valid domain name`);
+  assertQueryableName(d);
   return d;
 }
 
@@ -176,6 +178,7 @@ export function dnsHostFor(nameservers) {
   };
 }
 export async function probeDnsPosture(domain) {
+  assertQueryableName(domain);
   // The NS lookup runs beside the other lookups: none of them reads it.
   const [nsR, caaR, sts, rpt, bimi, sec] = await Promise.all([
     (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })(),

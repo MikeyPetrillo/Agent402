@@ -14,6 +14,7 @@
 import { promises as dnsPromises } from "node:dns";
 import { isIP } from "node:net";
 import { assertPublicUrl, ssrfDispatcher, safeFetch } from "./fetch-guard.js";
+import { assertQueryableName } from "./dns-name-filter.js";
 
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
@@ -442,6 +443,7 @@ async function asnInfoHandler(body) {
   if (!ip) {
     const host = pickHost(body, ["host", "hostname", "domain", "url", "email"]);
     if (host) {
+      assertQueryableName(host);
       try { ip = (await dnsPromises.lookup(host, { family: 4 })).address; }
       catch { throw bad(`Could not resolve "${host}" to an IPv4 address`, 422); }
     }
