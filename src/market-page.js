@@ -229,7 +229,7 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settledBy: "an x402 facilitator",
     explorerUrl: "optimistic.etherscan.io",
-    explorerWalletUrl: (wallet) => `https://optimistic.etherscan.io/address/${wallet}`,
+    explorerWalletUrl: (wallet) => `https://optimistic.etherscan.io/address/${wallet}#tokentxns`,
     networkParam: "optimism",
     acceptNetwork: "eip155:10",
     // OP mainnet CAIP-2 is "eip155:10"; OP Sepolia is a different chain id
@@ -248,7 +248,7 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settledBy: "an x402 facilitator",
     explorerUrl: "explorer.arc.io",
-    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
+    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}?tab=token_transfers`,
     networkParam: "arc",
     acceptNetwork: "eip155:5042",
     // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
@@ -303,7 +303,7 @@ export const CHAIN_PAGES = {
     asset: "USDG",
     settledBy: "an x402 facilitator",
     explorerUrl: "robinhoodchain.blockscout.com",
-    explorerWalletUrl: (wallet) => `https://robinhoodchain.blockscout.com/address/${wallet}`,
+    explorerWalletUrl: (wallet) => `https://robinhoodchain.blockscout.com/address/${wallet}?tab=token_transfers`,
     networkParam: "robinhood",
     acceptNetwork: "eip155:4663",
     // Robinhood Chain mainnet CAIP-2 is "eip155:4663" - an Arbitrum Orbit
