@@ -197,6 +197,9 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(String(spender?.environment || "") === "spending", "that job carries the spending environment");
   const run = (spender?.steps || []).map((st) => String(st.run || "")).join("\n");
   ok(/scripts\/payai-listing-pass\.js --live --include-upstream --max-price "\$MAX_PRICE_USD" --max-spend "\$MAX_SPEND_USD"/.test(run), "it runs the pass live, vendor-calling routes included, under both ceilings");
+  ok("only" in inputs && String(inputs.only?.default ?? "") === "" && inputs.only?.required !== true, "its dispatch takes an optional only list, empty by default (unchanged behavior)");
+  const onlyEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {})).ONLY;
+  ok(/inputs\.only/.test(String(onlyEnv || "")) && !/\$\{\{\s*inputs\.only/.test(run) && /\$\{ONLY:\+--only "\$ONLY"\}/.test(run), "the only list reaches the pass through the step environment as --only, never interpolated into the script");
   ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run) && /add-mask::\$POW_SECRET/.test(run), "all three secrets are masked in its log");
   const stepEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {}));
   ok(!spender?.env?.SOLANA_BURNER_KEY && !spender?.env?.AGENT402_OPERATOR_TOKEN && !spender?.env?.POW_SECRET, "no secret sits at job scope, where the dependency install could read it");

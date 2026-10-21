@@ -16,12 +16,24 @@
 // preference is not honored (wrong token, or a build without the gate) and
 // nothing is spent.
 //
+// A route quoted per request (`quoted: true` in /api/pricing: its price is
+// computed from the input) has no list price to trust. Before selection the
+// pass sends that route's published example unpaid and reads the amount the
+// 402 names on this chain's exact accept: the amount the buyer would sign.
+// That amount is the route's price for --max-price, --max-spend, the
+// cheapest-first order and the spend total. A route whose example does not
+// answer 402 (or names no accept on this chain) is skipped with the reason.
+// Every buy carries a client policy that refuses any accept above the amount
+// the pass priced it at (the 402 quote, or the cap for a list-priced route),
+// so nothing is signed above what was selected.
+//
 // DEFAULT IS A DRY RUN. `--live` sends real money.
 //
 //   node scripts/payai-listing-pass.js                       # measure, select, price
 //   node scripts/payai-listing-pass.js --live                # buy the selection
 //   node scripts/payai-listing-pass.js --live --max-price 0.60
 //   node scripts/payai-listing-pass.js --live --only hash,page-speed
+//   node scripts/payai-listing-pass.js --include-upstream --only dub   # quote one route
 //   node scripts/payai-listing-pass.js --live --limit 5 --out /tmp/pass.json
 //   node scripts/payai-listing-pass.js --live --include-upstream --max-spend 2
 //
@@ -30,8 +42,7 @@
 // cheapest first and the routes past the ceiling are skipped with
 // "past --max-spend"; no ceiling unless set), --only slug,slug, --limit N,
 // --pause-ms (default 1500 between buys), --out FILE (route/status/tx/charged
-// records as JSON), --include-quoted (a quoted route's 402 prices the request
-// itself; skipped by default), --include-upstream (a route that serves through
+// records as JSON), --include-upstream (a route that serves through
 // a vendor call: the list price lands in our own treasury, the vendor call is
 // the real cost, so skipped by default), --settle-wait-ms (before the closing
 // re-measure, default 60000), --chain (default solana).
@@ -43,7 +54,8 @@
 //
 // Scheduled: .github/workflows/payai-listing.yml runs this live every
 // Wednesday 03:53 UTC (and on dispatch) with --include-upstream, --max-price
-// 0.25 and --max-spend 2, in the spending environment, and keeps one issue
+// 0.25 and --max-spend 2 (plus --only from its `only` dispatch input, when
+// given), in the spending environment, and keeps one issue
 // ("PayAI listing pass FAILED") open while a run fails.
 //
 // Exit: 0 nothing missing, nothing selected, or every selected buy settled
@@ -58,23 +70,87 @@ import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, chainOf }
 export const SETTLE_VIA = "payai";
 export const DEFAULT_MAX_PRICE_USD = 0.25;
 
+export const routeKeyOf = (r) => `${r.method} ${r.path}`;
+
+/**
+ * Pure: the routes a pass would consider before pricing: missing on the
+ * chain, named by --only (when given), and not a vendor-calling route unless
+ * included. These are the quoted routes worth an unpaid 402 read.
+ */
+export function candidatesOf(coverage, { chain = "solana", only = null, includeUpstream = false } = {}) {
+  const onlySet = only ? new Set([...only].map((s) => String(s).trim()).filter(Boolean)) : null;
+  return missingIn(coverage, "payai", chain).filter((r) => (!onlySet || onlySet.has(r.slug)) && (r.computePayable || includeUpstream));
+}
+
+/**
+ * Pure: the amount a decoded 402 envelope asks on one chain's exact accept,
+ * as { atomic (BigInt), usd }, or null when it names no such accept or an
+ * unreadable amount. USDC carries 6 decimals unless the accept says otherwise.
+ */
+export function quoteOf(pr, caip2) {
+  const a = (pr?.accepts || []).find((x) => x?.network === caip2 && x?.scheme === "exact");
+  const raw = a?.amount ?? a?.maxAmountRequired;
+  if (raw == null || !/^\d+$/.test(String(raw))) return null;
+  const decimals = Number.isInteger(a?.extra?.decimals) ? a.extra.decimals : 6;
+  const atomic = BigInt(String(raw));
+  if (atomic <= 0n) return null;
+  return { atomic, usd: Number(atomic) / 10 ** decimals };
+}
+
+/**
+ * Read each quoted route's price from its own 402: the published example is
+ * sent unpaid, and the amount named on this chain's exact accept is the
+ * price. Returns Map(routeKey -> { atomic, usd } | { why }). Nothing is paid.
+ */
+export async function quoteRoutes(routes, { caip2, requestFor, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+  const out = new Map();
+  for (const r of routes) {
+    if (!r.quoted) continue;
+    const { url, body } = requestFor(r);
+    try {
+      const res = await fetchImpl(url, {
+        method: r.method,
+        headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      await res.text().catch(() => "");
+      if (res.status !== 402) { out.set(routeKeyOf(r), { why: `example did not quote: HTTP ${res.status}, not 402` }); continue; }
+      let pr = null;
+      try { pr = JSON.parse(Buffer.from(res.headers.get("payment-required") || "", "base64").toString("utf8")); } catch { pr = null; }
+      out.set(routeKeyOf(r), quoteOf(pr, caip2) || { why: "example did not quote: the 402 names no readable exact accept on this chain" });
+    } catch (e) {
+      out.set(routeKeyOf(r), { why: `example did not quote: ${String(e?.message || e).slice(0, 120)}` });
+    }
+  }
+  return out;
+}
+
 /**
  * Pure: the routes to buy, cheapest first. A route is selected when it sells
- * on the chain, the PayAI registry lacks it there, its price is within the
- * cap, and (unless included) it is not quoted per request. `limit` cuts the
- * cheapest-first order by count, `maxSpendUsd` by summed list price.
+ * on the chain, the PayAI registry lacks it there, and its price is within
+ * the cap. A quoted route is priced by its 402 quote (`quotes`, from
+ * quoteRoutes) and skipped with the reason when it has none. `limit` cuts
+ * the cheapest-first order by count, `maxSpendUsd` by summed price.
  */
-export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, maxSpendUsd = Infinity, only = null, limit = Infinity, includeQuoted = false, includeUpstream = false } = {}) {
+export function selectPass(coverage, { chain = "solana", maxPriceUsd = DEFAULT_MAX_PRICE_USD, maxSpendUsd = Infinity, only = null, limit = Infinity, includeUpstream = false, quotes = null } = {}) {
   const onlySet = only ? new Set([...only].map((s) => String(s).trim()).filter(Boolean)) : null;
   const missing = missingIn(coverage, "payai", chain);
   const skipped = [];
   const selected = [];
-  for (const r of missing) {
-    if (onlySet && !onlySet.has(r.slug)) continue;
-    if (r.quoted && !includeQuoted) { skipped.push({ ...r, why: "quoted per request" }); continue; }
+  for (const listed of missing) {
+    if (onlySet && !onlySet.has(listed.slug)) continue;
+    let r = listed;
     // The list price only moves between our own wallets; a route that calls
     // a vendor while it serves is real spend, so it is bought only on request.
     if (!r.computePayable && !includeUpstream) { skipped.push({ ...r, why: "serves through an upstream vendor call (pass --include-upstream)" }); continue; }
+    if (r.quoted) {
+      const q = quotes?.get(routeKeyOf(r));
+      if (!q) { skipped.push({ ...r, why: "quoted per request, no 402 quote read" }); continue; }
+      if (q.why) { skipped.push({ ...r, why: q.why }); continue; }
+      r = { ...r, listPriceUsd: r.priceUsd, priceUsd: q.usd, quotedAtomic: q.atomic };
+      if (r.priceUsd > maxPriceUsd) { skipped.push({ ...r, why: `the 402 quotes $${r.priceUsd}, above the $${maxPriceUsd} cap` }); continue; }
+    }
     if (!(r.priceUsd > 0)) { skipped.push({ ...r, why: "no fixed price" }); continue; }
     if (r.priceUsd > maxPriceUsd) { skipped.push({ ...r, why: `above the $${maxPriceUsd} cap` }); continue; }
     selected.push(r);
@@ -131,7 +207,6 @@ export function parseArgs(argv) {
     limit: limit != null && limit !== true ? Number(limit) : Infinity,
     pauseMs: Math.max(0, Number(flag(argv, "--pause-ms", 1500)) || 0),
     out: typeof flag(argv, "--out") === "string" ? flag(argv, "--out") : null,
-    includeQuoted: argv.includes("--include-quoted"),
     settleWaitMs: Math.max(0, Number(flag(argv, "--settle-wait-ms", 60_000)) || 0),
     chain: String(flag(argv, "--chain", "solana")),
   };
@@ -145,7 +220,22 @@ function heartbeatHeader(secret) {
   return { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32) };
 }
 
-async function buildSvmPayFetch(rawKey) {
+/**
+ * Pure: an x402Client policy that keeps only accepts on the ceiling's chain
+ * whose amount is at or under the ceiling. An empty result makes the client
+ * refuse before anything is signed.
+ */
+export function ceilingPolicy(getCeiling) {
+  return (_version, reqs) => {
+    const c = getCeiling();
+    return (reqs || []).filter((r) => {
+      const raw = r?.amount ?? r?.maxAmountRequired;
+      return r?.network === c.caip2 && raw != null && /^\d+$/.test(String(raw)) && BigInt(String(raw)) <= c.atomic;
+    });
+  };
+}
+
+async function buildSvmPayFetch(rawKey, getCeiling) {
   const [{ x402Client }, { wrapFetchWithPayment }, kit, { registerExactSvmScheme }] = await Promise.all([
     import("@x402/core/client"), import("@x402/fetch"), import("@solana/kit"), import("@x402/svm/exact/client"),
   ]);
@@ -153,6 +243,7 @@ async function buildSvmPayFetch(rawKey) {
   const signer = await kit.createKeyPairSignerFromBytes(bytes);
   const client = disableVendorSpendControls(new x402Client());
   registerExactSvmScheme(client, { signer });
+  client.registerPolicy(ceilingPolicy(getCeiling));
   return { payFetch: wrapFetchWithPayment(fetch, client), address: signer.address };
 }
 
@@ -170,11 +261,23 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const before = await measureCoverage({ target, origin: env.LISTING_ORIGIN, chains: ["base", chain.name], bazaarUrl: env.BAZAAR_REGISTRY_URL || undefined, payaiUrl: env.PAYAI_REGISTRY_URL || undefined, log });
   log("");
   log(renderTable(before));
-  const plan = selectPass(before, opts);
+  const spec = await (await fetch(`${target}/openapi.json`, { signal: AbortSignal.timeout(60_000) })).json();
+  const examples = examplesFromOpenapi(spec);
+  const urlFor = (r) => {
+    const ex = examples.get(routeKeyOf(r)) || {};
+    if (r.method === "GET") return { url: `${target}${r.path}${Object.keys(ex).length ? "?" + new URLSearchParams(ex).toString() : ""}`, body: undefined };
+    return { url: `${target}${r.path}`, body: JSON.stringify(ex) };
+  };
+  // Quoted routes are priced by their own 402 before anything is selected.
+  const toQuote = candidatesOf(before, { ...opts, chain: chain.name }).filter((r) => r.quoted);
+  const quotes = await quoteRoutes(toQuote, { caip2: chain.caip2, requestFor: urlFor });
+  if (toQuote.length) log(`\nquoted ${toQuote.length} route(s) from their 402 on ${chain.name}`);
+  const plan = selectPass(before, { ...opts, chain: chain.name, quotes });
+  const quoteNote = (r) => (r.quotedAtomic != null ? `  402 quote (${r.quotedAtomic} atomic; list $${Number(r.listPriceUsd || 0).toFixed(3)})` : "");
   log(`\npayai / ${chain.name}: ${plan.missing} missing · ${plan.selected.length} selected · ${plan.skipped.length} skipped`);
-  for (const r of plan.selected) log(`  BUY   ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}`);
+  for (const r of plan.selected) log(`  BUY   ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}${quoteNote(r)}`);
   for (const r of plan.skipped) log(`  SKIP  ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  ${r.why}`);
-  log(`\nestimated spend from the price list: $${plan.estimateUsd.toFixed(3)} over ${plan.selected.length} buys`);
+  log(`\nestimated spend (list prices, 402 quotes for quoted routes): $${plan.estimateUsd.toFixed(3)} over ${plan.selected.length} buys`);
   if (!plan.missing) { log(`nothing missing: every route sold on ${chain.name} has a PayAI row`); return 0; }
   if (!plan.selected.length) { log(`nothing to buy: ${plan.missing} missing, every one skipped (see SKIP above)`); return 0; }
   if (!opts.live) { log("DRY RUN. Re-run with --live to buy."); return 0; }
@@ -185,17 +288,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const decode = (h) => { try { return JSON.parse(Buffer.from(h, "base64").toString("utf8")); } catch { return null; } };
 
   // Preflight: the preference has to be honored before anything is spent.
-  const spec = await (await fetch(`${target}/openapi.json`, { signal: AbortSignal.timeout(60_000) })).json();
-  const examples = examplesFromOpenapi(spec);
-  const urlFor = (r) => {
-    const ex = examples.get(`${r.method} ${r.path}`) || {};
-    if (r.method === "GET") return { url: `${target}${r.path}${Object.keys(ex).length ? "?" + new URLSearchParams(ex).toString() : ""}`, body: undefined };
-    return { url: `${target}${r.path}`, body: JSON.stringify(ex) };
-  };
   {
     const probe = plan.selected[0];
-    const { url } = urlFor(probe);
-    const read = async (headers) => { const r = await fetch(url, { method: probe.method, headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(30_000) }); return { status: r.status, pr: decode(r.headers.get("payment-required") || "") }; };
+    // The example body goes along: a quoted route prices its 402 from it.
+    const { url, body } = urlFor(probe);
+    const read = async (headers) => { const r = await fetch(url, { method: probe.method, headers: { Accept: "application/json", ...headers, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body, signal: AbortSignal.timeout(30_000) }); await r.text().catch(() => ""); return { status: r.status, pr: decode(r.headers.get("payment-required") || "") }; };
     const control = await read({});
     const tagged = await read(tagHeaders);
     if (control.status !== 402 || tagged.status !== 402) { console.error(`payai-listing-pass: preflight expected two 402s on ${probe.path}, got ${control.status} and ${tagged.status}`); return 2; }
@@ -207,7 +304,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     log(`preflight: tagged 402 names feePayer ${v.taggedFeePayer} (control ${v.controlFeePayer}); preference honored`);
   }
 
-  const { payFetch, address } = await buildSvmPayFetch(rawKey);
+  // The most one buy may sign: the 402 quote for a quoted route, the cap for
+  // a list-priced one. The client refuses any accept above it.
+  let ceiling = { caip2: chain.caip2, atomic: 0n };
+  const { payFetch, address } = await buildSvmPayFetch(rawKey, () => ceiling);
   log(`paying via ${chain.name} from ${address}`);
   const hb = heartbeatHeader(String(env.POW_SECRET || "").trim());
   if (!hb["X-Heartbeat-Token"]) log("note: POW_SECRET unset, these buys read as outside demand in the ledger");
@@ -216,7 +316,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   for (let i = 0; i < plan.selected.length; i++) {
     const r = plan.selected[i];
     const { url, body } = urlFor(r);
-    const rec = { slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, status: null, tx: null, charged: false, error: null };
+    ceiling = { caip2: chain.caip2, atomic: r.quotedAtomic != null ? r.quotedAtomic : BigInt(Math.round(opts.maxPriceUsd * 1e6)) };
+    const rec = { slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, status: null, tx: null, charged: false, error: null };
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const res = await payFetch(url, {
@@ -246,7 +347,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     records.push(rec);
     if (i < plan.selected.length - 1 && opts.pauseMs) await sleep(opts.pauseMs);
   }
-  log(`\n${settled} settled, ${failed} failed, $${spent.toFixed(3)} charged at list price`);
+  log(`\n${settled} settled, ${failed} failed, $${spent.toFixed(3)} charged (list prices, 402 quotes for quoted routes)`);
   if (opts.out) { writeFileSync(opts.out, JSON.stringify({ target, chain: chain.name, measuredAt: new Date().toISOString(), records }, null, 2)); log(`records: ${opts.out}`); }
 
   if (opts.settleWaitMs) { log(`\nwaiting ${Math.round(opts.settleWaitMs / 1000)} s before re-measuring`); await sleep(opts.settleWaitMs); }
