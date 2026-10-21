@@ -3133,6 +3133,8 @@ jobs:
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
           t node scripts/test-workflow-runner-pins.js
+          # Workflow trust gates (workflow_run jobs need a push run of this repo; PyPI build has no id-token; wish text fenced)
+          t node scripts/test-workflow-trust-gates.js
           # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
           t node scripts/test-gateway-meter.js
           t node scripts/test-metered-quote-binding.js
