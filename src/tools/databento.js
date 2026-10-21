@@ -199,12 +199,31 @@ async function get(path, params) {
  *  timer while there is demand, and a request serves the last confirmed value
  *  with its age (availableEndInfo). A request reads it inline only when there
  *  is no value yet or the last one is older than DATABENTO_RANGE_MAX_AGE_MS
- *  (the warmer was idle). Concurrent reads share one upstream call. */
+ *  (the warmer was idle). Concurrent reads share one upstream call.
+ *
+ *  LAST GOOD RANGE. A refresh that times out or errors does not fail the call
+ *  while the last confirmed end is younger than DATABENTO_RANGE_STALE_MAX_MS
+ *  (default 24 h): the call is answered on that end, with its real
+ *  confirmation time (checkedAt, ageMs) and stale: true. This is the safe
+ *  direction by construction: the end only ever bounds a read from above
+ *  (quoteWindow, stock-history's span), the end of a dataset only moves
+ *  forward, and every answer's asOf is the last bar's own day, so an older
+ *  end can make an answer omit the newest session but never claim a session
+ *  the dataset does not hold. Past the hard limit, or with no confirmed end
+ *  at all, the call fails as before. Between RANGE_REFRESH_MS and the max
+ *  age, a request with no warmer running starts one background refresh
+ *  (shared with any concurrent read, at most one attempt per
+ *  DATABENTO_RANGE_RETRY_MS) and answers on the value it has. */
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 export const RANGE_REFRESH_MS = envMs("DATABENTO_RANGE_REFRESH_MS", 15 * 60_000);
 const rangeMaxAgeMs = () => envMs("DATABENTO_RANGE_MAX_AGE_MS", 60 * 60_000);
+const rangeStaleMaxMs = () => envMs("DATABENTO_RANGE_STALE_MAX_MS", 24 * 3600_000);
+const rangeRetryMs = () => envMs("DATABENTO_RANGE_RETRY_MS", 30_000);
 let rangeState = { end: null, at: 0, dataset: null };
 let rangeInflight = null;
+let rangeRefreshAttemptAt = 0;
+let staleWarnAt = 0;
+const rangeStats = { staleServed: 0, refreshFailures: 0, backgroundRefreshes: 0 };
 // Every read here is the daily-bar schema, and its end trails the dataset's
 // own end whenever another schema (instrument definitions, statistics) runs
 // ahead of the last settled session, as over a weekend: bounding a read by the
@@ -255,17 +274,40 @@ async function adoptSharedRange(maxAgeMs) {
 }
 /** `demand: false` (the self-check) reads the range without counting as a
  *  buyer's demand, so it never keeps the warmer awake. */
+const cachedRange = (extra) => ({ end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: Date.now() - rangeState.at, cached: true, ...extra });
+/** Background refresh off the request path: never awaited, never throws. */
+function refreshRangeInBackground() {
+  if (rangeInflight || Date.now() - rangeRefreshAttemptAt < rangeRetryMs()) return;
+  rangeRefreshAttemptAt = Date.now();
+  rangeStats.backgroundRefreshes++;
+  readRange().catch(() => { rangeStats.refreshFailures++; });
+}
 export async function availableEndInfo({ demand = true } = {}) {
   if (demand) lastDemandAt = Date.now();
-  let age = Date.now() - rangeState.at;
-  if (rangeState.end && age < rangeMaxAgeMs()) return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
-  // Stale here: another replica's warmer may have confirmed it since.
-  if (await adoptSharedRange(rangeMaxAgeMs())) {
-    age = Date.now() - rangeState.at;
-    return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
+  const age = Date.now() - rangeState.at;
+  if (rangeState.end && age < rangeMaxAgeMs()) {
+    // The warmer, when running, refreshes on its own timer.
+    if (age >= RANGE_REFRESH_MS && !warm.started) refreshRangeInBackground();
+    return cachedRange();
   }
-  const end = await readRange();
-  return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
+  // Stale here: another replica's warmer may have confirmed it since.
+  if (await adoptSharedRange(rangeMaxAgeMs())) return cachedRange();
+  try {
+    const end = await readRange();
+    return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
+  } catch (e) {
+    rangeRefreshAttemptAt = Date.now();
+    rangeStats.refreshFailures++;
+    // The last good end, ours or another replica's, inside the hard limit.
+    await adoptSharedRange(rangeStaleMaxMs());
+    if (!rangeState.end || !(Date.now() - rangeState.at < rangeStaleMaxMs())) throw e;
+    rangeStats.staleServed++;
+    if (Date.now() - staleWarnAt > 60_000) {
+      staleWarnAt = Date.now();
+      console.warn(`[databento] range refresh failed (${e?.statusCode || "error"}); answering on the last confirmed end (${Math.round((Date.now() - rangeState.at) / 60_000)} min old)`);
+    }
+    return cachedRange({ stale: true });
+  }
 }
 export async function availableEnd(opts) { return (await availableEndInfo(opts)).end; }
 
@@ -623,6 +665,7 @@ export function quoteWarmerStatus() {
     running: warm.started,
     lastTickAt: warm.lastTickAt ? new Date(warm.lastTickAt).toISOString() : null,
     range: rangeState.end ? { end: rangeState.end, dataset: rangeState.dataset, ageSec: Math.round((Date.now() - rangeState.at) / 1000) } : null,
+    rangeFallback: { ...rangeStats },
     background: { day, calls: warm.day === day ? warm.calls : 0, dailyMax: backgroundDailyMax(), ceilingHit: warm.ceilingHitDay === day },
     trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched, adoptedFromShared: warm.adopted, leaseSkips: warm.leaseSkips,
     shared: sharedCacheCounts(),
@@ -632,10 +675,13 @@ export function quoteWarmerStatus() {
   };
 }
 
+/** Test hook: move the last confirmed range's confirmation time back by `ms`. */
+export function __ageRange(ms) { rangeState = { ...rangeState, at: rangeState.at - ms }; }
 /** Test hook: forget every piece of warm state. */
 export function __resetDatabentoState() {
   stopQuoteWarmer();
   rangeState = { end: null, at: 0, dataset: null }; rangeInflight = null; hostCheckedAt = 0;
+  rangeRefreshAttemptAt = 0; staleWarnAt = 0; for (const k of Object.keys(rangeStats)) rangeStats[k] = 0;
   barsCache.clear(); barsInflight.clear(); popularity.clear(); lastDemandAt = 0;
   quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
   Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, adopted: 0, leaseSkips: 0, primed: false });
