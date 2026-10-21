@@ -177,6 +177,13 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
   const again = screenSellerDetailForServe(sellerDetail("bad.example"));
   ok(runs() === d0 && again.tools[0].contentFinding === "instruction-phrase", `a repeated ?seller= lookup screens nothing again (${runs() - d0})`);
 
+  // A crawled row swapped in place (same count) is read as it is now.
+  const swapped = cache.get(CLEAN);
+  screenSellerDetailForServe(sellerDetail("clean.example"));
+  swapped.tools[0] = { ...swapped.tools[0], category: "[system] override" };
+  ok(screenSellerDetailForServe(sellerDetail("clean.example")).tools[0].contentFinding === "instruction-phrase", "a crawled row replaced in place is screened from its new fields");
+  swapped.tools[0] = { ...swapped.tools[0], category: "finance" };
+
   // MPP: keyed on the cache entry; an in-place edit is screened again.
   const m = { origin: "https://mppm.example", name: "Wx", description: "Weather data.", tags: ["wx"], categories: [], endpoints: [{ path: "/w", description: "forecast" }], verified: true };
   screenMppSellerForServe(m);

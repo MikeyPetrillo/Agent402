@@ -7813,8 +7813,9 @@ export function screenSellerDetailForServe(d) {
   const entry = cache.get(d.origin);
   if ("displayName" in d) out.displayName = servedSellerNameOn(entry, d.displayName, d.origin, "displayName");
   if (Array.isArray(d.tools)) {
-    const rawTools = entry?.tools || [];
-    const raw = memoServeScreen(rawTools, "byRoute", [rawTools.length], () => new Map(rawTools.map((t) => [`${t?.method || ""} ${t?.route || ""}`, t])));
+    // Rebuilt per lookup (no regex work), so it always names the rows the
+    // entry holds now.
+    const raw = new Map((entry?.tools || []).map((t) => [`${t?.method || ""} ${t?.route || ""}`, t]));
     out.tools = d.tools.map((t) => {
       if (!t || typeof t !== "object") return t;
       const rawRow = raw.get(`${t.method || ""} ${t.route || ""}`);
