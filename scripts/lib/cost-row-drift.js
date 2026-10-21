@@ -12,8 +12,9 @@
 // it sits above every model it prices, never because one cheap member is far
 // under it. A row that owns no servable model is not graded.
 //
-// Output is the row's key, the unit, the direction and a whole percent only,
-// never a rate: the workflow log and its issue are public.
+// Output is the row's key, the unit and the direction only: no rate and no
+// percent, because a percent beside a public list price gives the row away
+// and the workflow log and its issue are public.
 
 /** Default tolerance: a row more than 15% above its dearest owned endpoint. */
 export const STALE_HIGH_TOLERANCE = 0.15;
@@ -46,8 +47,7 @@ export function staleHighRows(owned, { tolerance = STALE_HIGH_TOLERANCE } = {}) 
   return out.sort((a, b) => a.key.localeCompare(b.key) || a.unit.localeCompare(b.unit));
 }
 
-/** One public line per finding: key, unit, direction and percent, no rate. */
+/** One public line per finding: key, unit and direction, no rate or percent. */
 export function describeStaleHigh(f) {
-  const how = f.pct === null ? "above a zero live price" : `${f.pct}% above`;
-  return `${f.key} ${f.unit}: stale high, ${how} the dearest live endpoint of every servable model it owns (${f.models} model(s))`;
+  return `${f.key} ${f.unit}: stale high, above the dearest live endpoint of every servable model it owns (${f.models} model(s))`;
 }

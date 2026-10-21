@@ -74,7 +74,7 @@ const redact = (text) => {
   ok(staleHighRows(fam2).length === 2, "the same family row with only its cheap member servable is stale high on both units");
   // The public line: key, unit, direction, percent; nothing the redactor must touch.
   const line = describeStaleHigh(high[0]);
-  ok(/^fake\/vendorb-model-2\.5 prompt: stale high, 100% above /.test(line), `the line names key, unit, direction and percent (${line})`);
+  ok(/^fake\/vendorb-model-2\.5 prompt: stale high, above /.test(line) && !/%|\d+\s*percent/.test(line), `the line names key, unit and direction, never a percent (${line})`);
   const out = redact(`    ${line}\n`);
   ok(out.trim() === line, `the stale-high line passes the redactor unchanged (${out.trim()})`);
   ok(!/\$|\b0\.\d|\d+e-\d/.test(line), "the stale-high line carries no rate");
