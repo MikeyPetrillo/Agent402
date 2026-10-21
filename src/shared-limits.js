@@ -85,11 +85,28 @@ function parseEntries(flat) {
 const summarize = (entries) => ({ count: entries.length, sum: entries.reduce((s, e) => s + e.weight, 0) });
 
 // ---- the memory backend -------------------------------------------------------
+/** Keys each in-memory map may hold. Past it, expired keys are swept and then
+ *  the oldest are evicted, so a fresh key per request (a new payer, a new IP)
+ *  cannot grow a process's memory without bound while Redis is away. */
+export const MEMORY_KEY_CAP = 50_000;
 /** The same interface from process memory. Every call resolves ok: true. */
-export function createMemoryLimits() {
+export function createMemoryLimits({ keyCap = MEMORY_KEY_CAP } = {}) {
   const windows = new Map();  // key -> [{ score, weight, member }]
   const flags = new Map();    // key -> until (ms)
   const counters = new Map(); // key -> { value, exp }
+  const windowSpan = new Map(); // key -> the window (ms) it was last written with
+  const bound = (map, expired) => {
+    if (map.size <= keyCap) return;
+    for (const [k, v] of map) if (expired(k, v)) { map.delete(k); if (map === windows) windowSpan.delete(k); }
+    // Down to 90% of the cap, so the sweep runs once per tenth of the cap
+    // of new keys, not on every add.
+    while (map.size > Math.floor(keyCap * 0.9)) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+      if (map === windows) windowSpan.delete(oldest);
+    }
+  };
   const prune = (key, cutoff) => {
     const list = (windows.get(key) || []).filter((e) => e.score > cutoff);
     if (list.length) windows.set(key, list); else windows.delete(key);
@@ -107,7 +124,10 @@ export function createMemoryLimits() {
       const list = prune(k, now - windowMs).filter((e) => e.member !== String(member));
       list.push({ score, weight: Math.trunc(Number(weight) || 0), member: String(member) });
       list.sort((a, b) => a.score - b.score);
+      windows.delete(k); // re-insert: Map order is the eviction order
       windows.set(k, list);
+      windowSpan.set(k, windowMs);
+      bound(windows, (key, l) => !l.length || l[l.length - 1].score <= now - (windowSpan.get(key) || windowMs));
       return { ok: true, ...readOne(k, windowMs, now) };
     },
     async windowRead(name, key, { windowMs, now = Date.now() }) {
@@ -125,7 +145,9 @@ export function createMemoryLimits() {
     async windowClear(name, key) { windows.delete(keyOf(name, key)); return { ok: true }; },
     async flagSet(name, key, untilMs, { now = Date.now() } = {}) {
       const k = keyOf(name, key);
-      if (Number(untilMs) > now) flags.set(k, Number(untilMs)); else flags.delete(k);
+      flags.delete(k);
+      if (Number(untilMs) > now) flags.set(k, Number(untilMs));
+      bound(flags, (_, until) => until <= now);
       return { ok: true };
     },
     async flagGet(name, key, { now = Date.now() } = {}) {
@@ -139,7 +161,9 @@ export function createMemoryLimits() {
       let c = counters.get(k);
       if (!c || c.exp <= now) c = { value: 0, exp: now + Math.max(1, Number(ttlMs) || 1) };
       c.value += Math.trunc(Number(delta) || 0);
+      counters.delete(k);
       counters.set(k, c);
+      bound(counters, (_, v) => v.exp <= now);
       return { ok: true, value: c.value };
     },
     async counterGet(name, key, { now = Date.now() } = {}) {
@@ -149,7 +173,9 @@ export function createMemoryLimits() {
     },
     async counterClear(name, key) { counters.delete(keyOf(name, key)); return { ok: true }; },
     /** Test seam. */
-    _clear() { windows.clear(); flags.clear(); counters.clear(); },
+    _clear() { windows.clear(); flags.clear(); counters.clear(); windowSpan.clear(); },
+    /** Test seam: key counts per map. */
+    _sizes() { return { windows: windows.size, flags: flags.size, counters: counters.size }; },
   };
 }
 

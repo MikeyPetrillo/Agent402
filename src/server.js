@@ -378,7 +378,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -3390,7 +3390,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // Arc settlements Circle left pending (src/circle-pending.js): off / ok /
     // near_capacity / full / unresolved. One word; the heartbeat pages on
     // unresolved and full.
-    circlePending: { status: circlePendingStatus() },
+    circlePending: { status: await circlePendingStatus() },
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
@@ -5621,6 +5621,28 @@ app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req,
     return res.set("Cache-Control", "no-store").json({ ...sellerFundingStatus({ wallet }), entry: store.list().find((x) => x.wallet === wallet) || null, creditedTo, notCounted, notCountedNote: "per origin, the figures at this wallet that would have been credited had the self-funded payments counted (gross: they include the payers' own money); what was netted is evidence.selfFunded*" });
   }
   res.set("Cache-Control", "no-store").json({ ...sellerFundingStatus(), cleared: store.list(), note: 'GET ?wallet=0x... for one wallet; POST {"action":"clear"|"restore","wallet":"0x...","note":"..."} to change it; POST {"action":"disable"|"enable","note":"..."} turns the whole reader off or on' });
+});
+// Arc pending settlements (src/circle-pending.js): the shared book's word and
+// its unresolved entries, and the operator action that settles one by hand
+// after checking Circle and the chain. Token-authed; every action is logged
+// with its note.
+app.get("/__operator/circle-pending.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = circlePendingBookForOperator();
+  if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
+  try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
+  catch { return res.status(503).json({ error: "the pending book could not be read" }); }
+});
+app.post("/__operator/circle-pending", express.json(), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = circlePendingBookForOperator();
+  if (!book) return res.status(409).json({ error: "Arc is not configured on this server" });
+  const { action, key, outcome, note } = req.body || {};
+  if (action !== "resolve") return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","outcome":"refunded"|"not_charged"|"retry","note":"what was checked"}' });
+  try {
+    const r = await book.resolve(key, { outcome, note });
+    return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json(r);
+  } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
 });
 app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });

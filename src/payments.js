@@ -39,6 +39,9 @@ import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
 import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
+import { shared } from "./shared-limits.js";
+import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
+import { hasLastingEffect } from "./hangup-forgiveness.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -288,10 +291,21 @@ let warnedArcWithoutKey = false;
 // The Arc pending book (src/circle-pending.js), built only when Circle's
 // client is; null otherwise. Read by /api/gateway-status as one word.
 let circlePendingBook = null;
-/** "off" without an Arc client, else ok / near_capacity / full / unresolved. */
-export function circlePendingStatus() {
-  try { return circlePendingBook ? circlePendingBook.alarmStatus() : "off"; } catch { return "unknown"; }
+/** "off" without an Arc client, else ok / near_capacity / full / unresolved,
+ *  read from the shared store (every replica answers the same word). The
+ *  read is cached for a few seconds so a burst of status reads is one read. */
+let pendingWordCache = { at: 0, word: null };
+export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } = {}) {
+  if (!circlePendingBook) return "off";
+  if (pendingWordCache.word && now - pendingWordCache.at < ttlMs) return pendingWordCache.word;
+  try {
+    const word = await circlePendingBook.alarmStatus();
+    pendingWordCache = { at: now, word };
+    return word;
+  } catch { return "unknown"; }
 }
+/** The pending book, for the operator route; null without an Arc client. */
+export function circlePendingBookForOperator() { return circlePendingBook; }
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -950,9 +964,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       const tick = leased("circle-pending-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
         const b = await book();
         await b.ready;
+        // The shared store, not this process's memory: another replica may
+        // hold every entry.
+        await b.refresh();
         if (!b.list().length) return null;
         const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
-        if (r.owed || r.failed || r.served || r.unresolved) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.pending + r.unreadable} still pending`);
+        if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
         return r;
       });
       const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
@@ -1414,10 +1431,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // this hook cannot place on a known non-identity route.
   if (circleClient && evmCaip2.includes(ARC_CAIP2) && arcContractWalletsEnabled()) {
     const contractOkRoutes = new Set(Object.entries(catalog || {})
-      .filter(([, item]) => item && !item.identityBound && !isIdentityBoundRoute(item))
+      .filter(([route, item]) => contractWalletEligible(route, item) && isComputePayablePath(route.split(" ")[1]))
       .map(([route]) => route));
     registerArcContractWalletRouteGate(server, contractOkRoutes);
-    console.log("Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on), except on identity-bound routes");
+    console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} pure-CPU routes (no model, paid upstream, spend-first, lasting effect or identity binding)`);
   }
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -1723,18 +1740,70 @@ export function blockedPayerFromPayload(paymentPayload) {
  *  ("METHOD /path" keys). Before verification, so no RPC call is made and the
  *  buyer gets a 402 that names the reason. */
 export const ARC_CONTRACT_WALLET_ROUTE_REASON = "contract_wallet_not_accepted_on_this_route";
-export function registerArcContractWalletRouteGate(server, okRoutes) {
+export const ARC_CONTRACT_WALLET_RATE_REASON = "contract_signature_rate_limited";
+
+/**
+ * May a contract wallet pay this catalog route? Only where a payment that
+ * fails at settlement costs us nothing beyond CPU: not identity-bound (the
+ * caller is keyed on `from`), not a route that spends one of our wallets or
+ * runs long composite work before settlement (spendsBeforeSettlement), not one
+ * whose effect outlives the answer (hasLastingEffect: memory writes, attest,
+ * feedback, the router tiers, seller-payability, flights), and not the /v1
+ * model gateway or a metered (quoted) route. A wallet whose isValidSignature
+ * passes in simulation can still fail on chain, and a fresh counterfactual
+ * address per payment dodges per-payer breakers, so only work we can lose
+ * for free is offered to it.
+ */
+export function contractWalletEligible(route, item) {
+  if (!item || typeof route !== "string") return false;
+  const path = route.split(" ")[1] || "";
+  if (item.identityBound || isIdentityBoundRoute(item)) return false;
+  if (spendsBeforeSettlement(item) || item.longRunning || isLongRunningSlug(item.slug)) return false;
+  if (hasLastingEffect(item.slug)) return false;
+  if (path.startsWith("/v1/") || path === "/v1") return false;
+  if (typeof item.quote === "function" || typeof item.tierQuote === "function" || item.metered) return false;
+  if (item.modelBacked) return false;
+  return true;
+}
+
+/** Bounds on contract-signature verification, so junk payloads cannot amplify
+ *  into RPC load: per client IP and per claimed payer per minute (shared
+ *  across replicas when the shared store is on), refused fail-closed when the
+ *  store cannot count. */
+export const CONTRACT_VERIFY_PER_IP_PER_MIN = () => Math.max(1, Number(process.env.ARC_CONTRACT_VERIFY_PER_IP_PER_MIN) || 20);
+export const CONTRACT_VERIFY_PER_PAYER_PER_MIN = () => Math.max(1, Number(process.env.ARC_CONTRACT_VERIFY_PER_PAYER_PER_MIN) || 10);
+async function contractVerifyAllowed(req, payer, { now = Date.now(), counter = shared } = {}) {
+  const minute = Math.floor(now / 60_000);
+  const ip = String(req?.ip || req?.socket?.remoteAddress || "unknown").slice(0, 64);
+  try {
+    const a = await counter.counterAdd("arc-cw-ip", `${ip}:${minute}`, 1, 120_000, { now });
+    const b = await counter.counterAdd("arc-cw-payer", `${String(payer || "").toLowerCase()}:${minute}`, 1, 120_000, { now });
+    if (!a?.ok || !b?.ok) return false;
+    return a.value <= CONTRACT_VERIFY_PER_IP_PER_MIN() && b.value <= CONTRACT_VERIFY_PER_PAYER_PER_MIN();
+  } catch { return false; }
+}
+
+export function registerArcContractWalletRouteGate(server, okRoutes, { counter = shared, now = () => Date.now() } = {}) {
   server.onBeforeVerify(async (ctx) => {
     if (ctx?.requirements?.network !== ARC_CAIP2) return undefined;
     if (!(await isContractWalletPayment(ctx?.paymentPayload))) return undefined;
     const req = ctx?.transportContext?.request?.adapter?.req;
     const key = req ? `${String(req.method || "").toUpperCase()} ${req.path || ""}` : "";
-    if (okRoutes.has(key)) return undefined;
-    return {
-      abort: true,
-      reason: ARC_CONTRACT_WALLET_ROUTE_REASON,
-      message: "This route keys the caller on the paying address and takes an EOA signature only; a contract-wallet payment is not accepted here. Nothing was charged.",
-    };
+    if (!okRoutes.has(key)) {
+      return {
+        abort: true,
+        reason: ARC_CONTRACT_WALLET_ROUTE_REASON,
+        message: "This route takes an EOA signature only (it keys the caller on the paying address, spends before settlement, or has a lasting effect); a contract-wallet payment is not accepted here. Nothing was charged.",
+      };
+    }
+    if (!(await contractVerifyAllowed(req, ctx?.paymentPayload?.payload?.authorization?.from, { now: now(), counter }))) {
+      return {
+        abort: true,
+        reason: ARC_CONTRACT_WALLET_RATE_REASON,
+        message: "Too many contract-wallet signature checks from this client or for this wallet in the last minute. Nothing was charged; retry shortly or pay from an EOA.",
+      };
+    }
+    return undefined;
   });
   return server;
 }
@@ -1922,6 +1991,11 @@ let railsOffered = [];
 // avoiding is spending money we cannot bill for.
 let _computePayablePaths = null;
 export function setComputePayablePaths(paths) { _computePayablePaths = paths instanceof Set ? paths : new Set(paths || []); }
+/** A pure-CPU route (PoW-eligible: no egress, key, model or paid upstream,
+ *  proven by test-free-tier-egress). False when the set was never published. */
+export function isComputePayablePath(path) {
+  return !!_computePayablePaths && _computePayablePaths.has(String(path || ""));
+}
 function isFreeToServe(resource) {
   if (!_computePayablePaths || !_computePayablePaths.size) return false;
   try { return _computePayablePaths.has(new URL(String(resource)).pathname); } catch { return false; }

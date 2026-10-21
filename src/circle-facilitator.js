@@ -39,7 +39,11 @@
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { EVM_RPCS } from "./evm-rpcs.js";
 import { SettleError, VerifyError } from "@x402/core/types";
-import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
+import {
+  verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature,
+  encodeDeployData, hashTypedData, erc6492SignatureValidatorAbi, erc6492SignatureValidatorByteCode,
+  ExecutionRevertedError, RawContractError,
+} from "viem";
 import {
   ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
   CircleResponseError, safeReason, arcKindsFromSupported,
@@ -204,18 +208,35 @@ export function arcContractWalletsEnabled(env = process.env) {
 
 export const CONTRACT_VERIFY_TIMEOUT_MS = 4_000;
 
+export const CONTRACT_VERIFY_MAX_INFLIGHT = 8;
+
+/** Was this call error the contract REVERTING (a verdict: the signature is
+ *  not valid), as opposed to the RPC failing (no verdict at all)? */
+function isRevert(err) {
+  const hit = (x) => x instanceof ExecutionRevertedError || x instanceof RawContractError;
+  try {
+    if (typeof err?.walk === "function") return !!err.walk(hit);
+  } catch { /* fall through */ }
+  return hit(err);
+}
+
 /**
- * An on-chain verifier for contract-wallet signatures on Arc: viem's public
- * client verifyTypedData, which checks ERC-1271 on a deployed wallet and an
- * ERC-6492 wrapped signature for an undeployed one through the universal
- * validator (one eth_call). The RPC is the Arc constant (src/evm-rpcs.js);
- * nothing in a request names it. Each verdict is cached by (from, nonce,
- * signature) for a few minutes, so a settle after its verify costs no second
- * call. Returns true, false (the wallet says no), or "unverifiable" (RPC error
- * or timeout); only true passes.
+ * An on-chain verifier for contract-wallet signatures on Arc: one eth_call of
+ * the ERC-6492 universal signature validator (deployless), which checks
+ * ERC-1271 on a deployed wallet and an ERC-6492 wrapped signature for an
+ * undeployed one. It is called directly, not through viem's verifyTypedData,
+ * because that turns ANY call failure (an RPC error included) into `false`:
+ * here a revert is a verdict (false, cached) and anything else (an RPC error,
+ * a timeout, an unreadable answer) is "unverifiable" (refused, never cached).
+ * The RPC is the Arc constant (src/evm-rpcs.js); nothing in a request names
+ * it. At most CONTRACT_VERIFY_MAX_INFLIGHT checks run at once in a process
+ * ("busy" past that: refused). Each definite verdict is cached by (from,
+ * nonce, signature) for a few minutes, so a settle after its verify costs no
+ * second call. Only true passes.
  */
-export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs = CONTRACT_VERIFY_TIMEOUT_MS, ttlMs = 5 * 60_000, now = () => Date.now() } = {}) {
+export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs = CONTRACT_VERIFY_TIMEOUT_MS, ttlMs = 5 * 60_000, now = () => Date.now(), maxInflight = CONTRACT_VERIFY_MAX_INFLIGHT } = {}) {
   let client = publicClient;
+  let inflight = 0;
   const cache = new Map();
   const getClient = async () => {
     if (client) return client;
@@ -227,20 +248,29 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
     const key = `${lc(auth.from)}|${lc(auth.nonce)}|${lc(sig)}`;
     const hit = cache.get(key);
     if (hit && now() - hit.at < ttlMs) return hit.verdict;
+    if (inflight >= maxInflight) return "unverifiable";
+    inflight++;
     let verdict;
     let timer = null;
     try {
       const c = await getClient();
-      const ok = await Promise.race([
-        c.verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: sig }),
+      const data = encodeDeployData({
+        abi: erc6492SignatureValidatorAbi,
+        bytecode: erc6492SignatureValidatorByteCode,
+        args: [auth.from, hashTypedData(arcTypedData(auth)), sig],
+      });
+      const res = await Promise.race([
+        c.call({ data }),
         // Not unref'd: a request is waiting on this answer. Cleared below.
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("timeout"), { name: "TimeoutError" })), timeoutMs); }),
       ]);
-      verdict = ok === true;
-    } catch {
-      verdict = "unverifiable";
+      const out = typeof res?.data === "string" ? res.data : "0x";
+      verdict = /^0x0*1$/.test(out) ? true : /^0x0*$/.test(out) ? false : "unverifiable";
+    } catch (e) {
+      verdict = isRevert(e) ? false : "unverifiable";
     } finally {
       if (timer) clearTimeout(timer);
+      inflight--;
     }
     // Only a definite answer is cached; an RPC failure is tried afresh.
     if (verdict !== "unverifiable") {
