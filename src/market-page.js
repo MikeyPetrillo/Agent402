@@ -1313,6 +1313,13 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // per-chain stats would mean every /{chain} page computing all 12 chains'
   // numbers on every load just to render its own tab strip - real added
   // cost for a value only this page needs.
+  // A chain count that leaves one card alone on the grid's last row at some
+  // column count (2 to 8 columns across the breakpoints) gets one more card,
+  // the page that lists every rail, so no row ends on a single card.
+  const chainGridFiller = (n) => ([2, 3, 4, 5, 6, 7, 8].some((k) => n % k === 1) ? `<a href="/how-to-pay" title="How to pay on every rail" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
+      <span style="display:block;margin-bottom:12px;font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);">Every rail</span>
+      <span style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">how to pay on each chain &rarr;</span>
+    </a>` : "");
   const chainGridHtml = CHAIN_ORDER.map(([slug, name]) => {
     const chainSellers = marketSellers(slug, { sellers });
     const sellerCount = marketOperatorCount(slug, { sellers }, leaderboardSnap);
@@ -1322,7 +1329,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
       <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:var(--fs-sm);flex-wrap:wrap;"><span style="color:var(--ok);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">tool${toolCount === 1 ? "" : "s"}</span></span>
     </a>`;
-  }).join("");
+  }).join("") + chainGridFiller(CHAIN_ORDER.length);
 
   const chainGridSection = `
   <h2 style="font-size:var(--fs-xl);font-weight:700;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>

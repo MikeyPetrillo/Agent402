@@ -116,7 +116,7 @@ const KNOWN_NON_CATALOG = new Set([
   "/v1/judge", "/v1/decisions", "/v1/judge/vision", "/v1/judge/locate", "/v1/judge/long",
   "/api/pricing", "/api/find", "/api/index", "/api/route", "/api/stats", "/api/wishes",
   "/api/sales", "/api/revenue", "/api/revenue/daily", "/api/revenue/mpp", "/api/calls/daily",
-  "/api/reliability", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
+  "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",
   "/api/index/register", "/api/x402-economy", "/api/gateway-status", "/api/selfcheck",
   "/api/wish", "/api/route/execute", "/api/skill-packs",
