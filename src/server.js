@@ -510,6 +510,7 @@ import { DUB_TOOLS } from "./tools/dub-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { solanaIntelToolsEnabled, rugcheckEnabled } from "./tools/solana-intel-kit.js";
+import { rugcheckPauseMiddleware, RUGCHECK_SLUGS } from "./rugcheck-pause.js";
 // Env-gated on RUGCHECK_TOOLS=on for the three RugCheck-backed tools.
 const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 // The token brief's safety and holder facts are RugCheck reads, so it is
@@ -3138,6 +3139,13 @@ app.use((req, res, next) => {
   res.set("Cache-Control", "no-store").set("Retry-After", "60");
   return res.status(503).json({ error: "This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry." });
 });
+
+// RugCheck-backed tools pause themselves while RugCheck is not answering
+// (src/rugcheck-pause.js): ahead of every payment gate, so the paused answer
+// is a free 503 with Retry-After, never a 402 for a call that can only fail.
+app.use(rugcheckPauseMiddleware(
+  Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
+));
 
 app.use(securityHeaders());
 

@@ -1888,6 +1888,8 @@ jobs:
           t node scripts/test-worker-wake-retry.js
           # Published examples that a tool fetches name a page that exists (no path on a reserved example host - offline)
           t node scripts/test-example-urls-fetchable.js
+          # RugCheck-backed tools pause on consecutive RugCheck outages: free 503 + Retry-After before any gate, fail open after the cool-down (offline)
+          t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
 

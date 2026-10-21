@@ -59,7 +59,7 @@ try {
   ok(safety.ms >= D.RUGCHECK_SUMMARY_MS - 100 && safety.ms < D.RUGCHECK_SUMMARY_MS + SLACK_MS, `it answers at the summary cap (${safety.ms} ms against ${D.RUGCHECK_SUMMARY_MS})`);
 
   ok(holders.status === 503, `a stalled RugCheck report answers 503, not 504 (got ${holders.status} in ${holders.ms} ms)`);
-  ok(/^RugCheck did not answer the report read within 12 s \(upstream deadline\)/.test(holders.body?.error || ""), `the body names the report step (got: ${holders.body?.error})`);
+  ok(/^RugCheck did not answer the report read within 15 s \(upstream deadline\); nothing was charged - retry shortly/.test(holders.body?.error || ""), `the body names the report step (got: ${holders.body?.error})`);
   ok(holders.ms >= D.RUGCHECK_REPORT_MS - 100 && holders.ms < D.RUGCHECK_REPORT_MS + SLACK_MS && holders.ms < D.HANDLER_BUDGET_MS, `it answers at the report cap and inside the handler budget (${holders.ms} ms against ${D.RUGCHECK_REPORT_MS} and ${D.HANDLER_BUDGET_MS})`);
 
   ok(control.status === 200 && control.body?.holders?.length === 10 && control.body?.returned === 10 && control.body?.matched === 20 && control.body?.complete === false && control.body?.maxHolders === 20,
