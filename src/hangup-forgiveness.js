@@ -16,6 +16,17 @@
 //     count, so a burst of concurrent hang-ups cannot all be granted. A route
 //     whose effect outlives the answer (a memory write, an attestation, a
 //     stored verdict, a purchase from an outside seller) never gets one.
+//   - A payer's FIRST hang-up in the window is forgiven whatever it costs (a
+//     video or a report priced above the per-key budget included): when every
+//     key the request carries (its verified payer AND its IP) holds nothing,
+//     neither in flight nor abandoned, the per-key budget does not apply to
+//     that ticket. The service-wide budget still does, and so does the
+//     lasting-effect rule. A request with no verified payer (IP only) gets no
+//     such exemption. Once that ticket is in flight or abandoned, every later
+//     ticket under the same payer or IP meets the ordinary per-key budget, so
+//     the bound per key per window is max(per-key budget, one call's price);
+//     farming a second free call needs a fresh wallet AND a fresh IP, and all
+//     of them together stop at the service-wide budget.
 //   - A run whose buyer left before the first byte is recorded as ABANDONED
 //     under every key it carried and globally. Nothing clears that record
 //     except time: a paid success does not, because a success is exactly what
@@ -85,10 +96,10 @@ const FILE_VERSION = 1;
 // catalog calls cost a fraction of a cent, so a quarter per key still covers
 // dozens of abandoned runs from an honest short-timeout client, and the
 // service-wide figure bounds what everyone together can walk away from. A
-// single call priced above the per-key budget (a report, a card charge, the
-// dearer router tiers) is never forgiven: its hang-up is settled and booked as
-// owed, like any run past the budget. HANGUP_FORGIVE_KEY_USD and
-// HANGUP_FORGIVE_GLOBAL_USD override them.
+// single call priced above the per-key budget is forgiven only as the payer's
+// first hang-up of the window (above); one priced above the service-wide
+// budget is never forgiven: its hang-up is settled and booked as owed.
+// HANGUP_FORGIVE_KEY_USD and HANGUP_FORGIVE_GLOBAL_USD override them.
 export const DEFAULT_KEY_BUDGET_USD = 0.25;
 export const DEFAULT_GLOBAL_BUDGET_USD = 2;
 
@@ -199,7 +210,8 @@ async function readSharedBudget(keys, now, windowMs) {
 // (`<micro>|<member>`), so its reads and removals see the same rows.
 // KEYS: per window i (0 = service): hf-in, hf-ab.
 // ARGV: inCutoff, abCutoff, inWindowMs, encodedMember, score, micro, then per
-// window i: cap, floorIn, floorAb.
+// window i: cap, floorIn, floorAb, first (1 when an empty window admits the
+// ticket whatever its price: the payer's first hang-up, key windows only).
 const TICKET_RESERVE = `
 local function wsum(key, cutoff)
   redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
@@ -213,9 +225,10 @@ local micro = tonumber(ARGV[6])
 for i = 1, n do
   local inSum = wsum(KEYS[2 * i - 1], ARGV[1])
   local abSum = wsum(KEYS[2 * i], ARGV[2])
-  local base = 6 + (i - 1) * 3
+  local base = 6 + (i - 1) * 4
   local used = math.max(inSum, tonumber(ARGV[base + 2])) + math.max(abSum, tonumber(ARGV[base + 3]))
-  if used + micro > tonumber(ARGV[base + 1]) then return { 0, i } end
+  local first = tonumber(ARGV[base + 4]) == 1 and used == 0
+  if used + micro > tonumber(ARGV[base + 1]) and not first then return { 0, i } end
 end
 for i = 1, n do
   redis.call('ZADD', KEYS[2 * i - 1], ARGV[5], ARGV[4])
@@ -234,8 +247,8 @@ async function reserveSharedTicket(ticket, cfg, now) {
   const keys = [], perWindow = [];
   for (const k of windows) {
     keys.push(sharedKeyOf("hf-in", k), sharedKeyOf("hf-ab", k));
-    if (k === GLOBAL_KEY) perWindow.push(cfg.globalMicro, globalInflight, sumOf(globalAbandoned));
-    else perWindow.push(cfg.keyMicro, inflightByKey.get(k) || 0, abandonedMicro(k, now, cfg.windowMs));
+    if (k === GLOBAL_KEY) perWindow.push(cfg.globalMicro, globalInflight, sumOf(globalAbandoned), 0);
+    else perWindow.push(cfg.keyMicro, inflightByKey.get(k) || 0, abandonedMicro(k, now, cfg.windowMs), firstEligible(ticket) ? 1 : 0);
   }
   const inMs = INFLIGHT_WINDOW_MS();
   let timer = null;
@@ -341,10 +354,14 @@ export function reserveHangupForgiveness(req, { keys = [], priceUsd = 0, slug = 
   // Every request carries at least the IP key; one that carries none is not
   // bounded per key, so it is never forgiven.
   if (!uniq.length) { ticket.reason = "no key"; return store(ticket); }
-  // A single call priced above the per-key budget could never be forgiven,
-  // whatever else is spent: say so, and keep it from reading as (and warning
-  // about) a spent service-wide budget.
-  if (micro > cfg.keyMicro) { ticket.reason = "over per-key budget"; return store(ticket); }
+  // A single call priced above the service-wide budget could never be
+  // forgiven, whatever else is spent: say so, and keep it from reading as (and
+  // warning about) a spent service-wide budget. One priced above the per-key
+  // budget goes on: it is forgiven only as the payer's first hang-up.
+  if (micro > cfg.globalMicro) { ticket.reason = "over service budget"; return store(ticket); }
+  // Without a verified payer there is no first-hang-up exemption, so a call
+  // priced above the per-key budget could never be forgiven either.
+  if (micro > cfg.keyMicro && !firstEligible(ticket)) { ticket.reason = "over per-key budget"; return store(ticket); }
   if (!SHARED) return store(decideTicket(ticket, cfg, now, null));
   return reserveSharedTicket(ticket, cfg, now).then((r) => {
     // The store did not answer: the read-then-grant path on what it can read.
@@ -363,6 +380,13 @@ function noteGlobalExhausted(now) {
     lastExhaustedLog = now;
     console.warn("[hangup] forgiveness budget for the whole service is spent for this window: a buyer who leaves before the answer is charged and the charge booked as owed until it clears");
   }
+}
+/** True when this ticket may be the payer's first hang-up of the window: it
+ *  carries a verified payer key (tempo, credits or an EIP-3009 payer), not
+ *  only an IP. Whether it IS the first is read per key at the decision: a key
+ *  with nothing in flight and nothing abandoned. */
+function firstEligible(ticket) {
+  return ticket.keys.some((k) => !k.startsWith("ip:"));
 }
 /** Book a granted ticket in this process (and on the shared store unless the
  *  reservation script already did). */
@@ -390,7 +414,9 @@ function decideTicket(ticket, cfg, now, view) {
   for (const k of ticket.keys) {
     const kIn = Math.max(inflightByKey.get(k) || 0, view?.inflight.get(k) || 0);
     const kAb = Math.max(abandonedMicro(k, now, cfg.windowMs), view?.abandoned.get(k) || 0);
-    if (kIn + kAb + micro > cfg.keyMicro) {
+    // The payer's first hang-up of the window: an empty key admits the ticket
+    // whatever its price (the bound is in the header comment).
+    if (kIn + kAb + micro > cfg.keyMicro && !(firstEligible(ticket) && kIn + kAb === 0)) {
       ticket.reason = k.startsWith("ip:") ? "ip budget" : "payer budget";
       return ticket;
     }

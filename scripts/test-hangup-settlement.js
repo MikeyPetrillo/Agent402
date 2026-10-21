@@ -162,10 +162,43 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   const dflt = hangupForgivenessConfig();
   ok(dflt.enabled && dflt.keyMicro === 250_000 && dflt.globalMicro === 2_000_000 && dflt.windowMs === 86_400_000, `defaults: $0.25 per key and $2.00 service-wide per 24 h (${JSON.stringify(dflt)})`);
   _resetHangupForgiveness();
-  // A single call priced above the per-key default is never forgiven, even
-  // with nothing spent: $0.26 on a fresh wallet and IP.
+  // A payer's FIRST hang-up of the window is forgiven whatever it costs
+  // (under the service-wide budget): $0.26 on a fresh wallet and IP is granted.
   const pricey = {}; reserveHangupForgiveness(pricey, { keys: ["0xdefault", "ip:10.10.0.1"], priceUsd: 0.26 });
-  ok(!hangupForgiven(pricey) && pricey.__a402HangupTicket.reason === "over per-key budget", `defaults: a $0.26 call is over the per-key budget on its own (${pricey.__a402HangupTicket.reason})`);
+  ok(hangupForgiven(pricey), `defaults: a payer's first hang-up is forgiven above the per-key budget ($0.26: ${pricey.__a402HangupTicket.reason || "granted"})`);
+  settleHangupTicket(pricey, { abandoned: true });
+  // The second in the window meets the per-key budget again, under the payer
+  // key (new IP) and under the IP key (new wallet), at any price.
+  const again = {}; reserveHangupForgiveness(again, { keys: ["0xdefault", "ip:10.10.0.2"], priceUsd: 0.26 });
+  ok(!hangupForgiven(again) && again.__a402HangupTicket.reason === "payer budget", `defaults: the same wallet's second hang-up is charged (${again.__a402HangupTicket.reason})`);
+  const cheapAgain = {}; reserveHangupForgiveness(cheapAgain, { keys: ["0xdefault", "ip:10.10.0.3"], priceUsd: 0.001 });
+  ok(!hangupForgiven(cheapAgain) && cheapAgain.__a402HangupTicket.reason === "payer budget", `defaults: after a $0.26 first hang-up even a $0.001 one from that wallet is charged (${cheapAgain.__a402HangupTicket.reason})`);
+  const sameIp = {}; reserveHangupForgiveness(sameIp, { keys: ["0xother", "ip:10.10.0.1"], priceUsd: 0.26 });
+  ok(!hangupForgiven(sameIp) && sameIp.__a402HangupTicket.reason === "ip budget", `defaults: a fresh wallet on the same IP is charged (${sameIp.__a402HangupTicket.reason})`);
+  // Concurrent first hang-ups from one fresh wallet: in-flight counts, so one ticket.
+  const conc = Array.from({ length: 5 }, (_, i) => { const req = {}; reserveHangupForgiveness(req, { keys: ["0xconc", `ip:10.10.2.${i}`], priceUsd: 0.2 }); return req; });
+  ok(conc.filter(hangupForgiven).length === 1, `defaults: five concurrent $0.20 runs from one fresh wallet hold one first-hang-up ticket (${conc.filter(hangupForgiven).length})`);
+  for (const req of conc) settleHangupTicket(req, { abandoned: false });
+  // A cheap ticket already in flight means the expensive one is not a first.
+  const cheapFirst = {}; reserveHangupForgiveness(cheapFirst, { keys: ["0xbusy", "ip:10.10.3.1"], priceUsd: 0.001 });
+  const priceyBusy = {}; reserveHangupForgiveness(priceyBusy, { keys: ["0xbusy", "ip:10.10.3.2"], priceUsd: 0.3 });
+  ok(hangupForgiven(cheapFirst) && !hangupForgiven(priceyBusy), "defaults: with the wallet's cheap run in flight, its $0.30 run is not a first hang-up");
+  settleHangupTicket(cheapFirst, { abandoned: false });
+  // No verified payer (IP only): no exemption.
+  const ipOnly = {}; reserveHangupForgiveness(ipOnly, { keys: ["ip:10.10.4.1"], priceUsd: 0.26 });
+  ok(!hangupForgiven(ipOnly) && ipOnly.__a402HangupTicket.reason === "over per-key budget", `defaults: an IP-only request above the per-key budget is charged (${ipOnly.__a402HangupTicket.reason})`);
+  // Above the service-wide budget: never forgiven, even as a first.
+  const huge = {}; reserveHangupForgiveness(huge, { keys: ["0xhuge", "ip:10.10.5.1"], priceUsd: 2.5 });
+  ok(!hangupForgiven(huge) && huge.__a402HangupTicket.reason === "over service budget", `defaults: a $2.50 first hang-up is over the service budget (${huge.__a402HangupTicket.reason})`);
+  // A lasting-effect route is never forgiven, first or not.
+  const lasting = {}; reserveHangupForgiveness(lasting, { keys: ["0xlast", "ip:10.10.6.1"], priceUsd: 0.2, slug: "route-execute" });
+  ok(!hangupForgiven(lasting) && lasting.__a402HangupTicket.reason === "lasting effect", `defaults: a lasting-effect first hang-up is charged (${lasting.__a402HangupTicket.reason})`);
+  // Farming with a fresh wallet AND IP each time stops at the service budget:
+  // $2.00 / $0.40 = five firsts, the sixth is charged.
+  _resetHangupForgiveness();
+  const farm = Array.from({ length: 6 }, (_, i) => { const req = {}; const t = reserveHangupForgiveness(req, { keys: [`0xfarm${i}`, `ip:10.10.7.${i}`], priceUsd: 0.4 }); settleHangupTicket(req, { abandoned: true }); return t.granted; });
+  ok(farm.slice(0, 5).every(Boolean) && farm[5] === false, `defaults: fresh wallet+IP firsts at $0.40 stop at the $2.00 service budget (${JSON.stringify(farm)})`);
+  _resetHangupForgiveness();
   // The service-wide default binds after $2.00 of abandoned runs across
   // rotating wallets and IPs: eight $0.25 runs fit, the ninth does not.
   const rotDefault = Array.from({ length: 9 }, (_, i) => { const req = {}; const t = reserveHangupForgiveness(req, { keys: [`0xdg${i}`, `ip:10.10.1.${i}`], priceUsd: 0.25 }); settleHangupTicket(req, { abandoned: true }); return t.granted; });
@@ -208,7 +241,8 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // settleHangupTicket is idempotent, and a denied ticket holds nothing.
   const once = {}; reserveHangupForgiveness(once, { keys: ["0xonce", "ip:10.6.0.1"], priceUsd: 0.003, now: T0 });
   ok(settleHangupTicket(once, { abandoned: true, now: T0 }) === true && settleHangupTicket(once, { abandoned: true, now: T0 }) === false && hangupForgivenessStatus(T0).abandonedInWindow === 1, "a ticket is settled at most once");
-  ok(!run(["0xbig", "ip:10.7.0.1"], { price: 0.01 }), "a single run pricier than the per-key budget is never forgiven");
+  ok(run(["0xbig", "ip:10.7.0.1"], { price: 0.01 }) && !run(["0xbig", "ip:10.7.0.2"], { price: 0.01 }), "a run pricier than the per-key budget is forgiven as the wallet's first hang-up only");
+  ok(!run(["0xbig2", "ip:10.7.0.3"], { price: 0.06 }), "a run pricier than the service-wide budget is never forgiven");
   const noKey = {}; reserveHangupForgiveness(noKey, { keys: [null, ""], priceUsd: 0.001 });
   ok(!hangupForgiven(noKey) && noKey.__a402HangupTicket.reason === "no key", "a run with no key at all is never forgiven");
   process.env.HANGUP_FORGIVE_KEY_USD = "not-a-number";
