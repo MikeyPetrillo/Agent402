@@ -6355,6 +6355,13 @@ function isOwnWallet(payer) {
 // Also true for the status Worker's paid-call, which carries no heartbeat token
 // (it does not hold POW_SECRET): the PoW gate sets statusProbePow only after
 // verifying a status-probe challenge, whose mark is inside the signature.
+// A free proof-of-work or trial call skips x402 verification, so a payment
+// header riding on it is unverified: dropped, as the MPP and credits gates do,
+// or payerFromRequest() would read its authorization.from as the payer (our
+// own wallets' traffic is counted apart from outside traffic).
+function dropUnverifiedPaymentHeaders(req) {
+  for (const h of ["payment-signature", "x-payment", "payment-identifier"]) delete req.headers[h];
+}
 function isSyntheticRequest(req) {
   try { return !!(req && (ownTrue(req, "statusProbePow") || verifyHeartbeatToken(req.header("x-heartbeat-token")))); }
   catch { return false; }
@@ -9411,6 +9418,7 @@ if (FREE_MODE) {
           // Set here and only here, from a solution whose probe mark was
           // verified inside the signature (src/pow.js).
           if (result.probe === true) req.statusProbePow = true;
+          dropUnverifiedPaymentHeaders(req);
           return next(); // work accepted — skip the USDC paywall
         }
         res.setHeader("X-Pow-Error", result.reason);
@@ -9470,6 +9478,7 @@ if (FREE_MODE) {
             } else {
               res.setHeader("X-Trial-Accepted", "true");
               res.setHeader("X-Trial-Limits", slug === OX_TRIAL_SLUG ? OX_TRIAL_LIMITS_LABEL : TRIAL_LIMITS_LABEL);
+              dropUnverifiedPaymentHeaders(req);
               res.on("finish", () => {
                 if (res.statusCode >= 400) {
                   sharedRefund("trial-tool", perTool, 3600).catch(() => {});
@@ -9490,6 +9499,7 @@ if (FREE_MODE) {
           trialIpLimiter.check(tip);
           res.setHeader("X-Trial-Accepted", "true");
           res.setHeader("X-Trial-Limits", slug === OX_TRIAL_SLUG ? OX_TRIAL_LIMITS_LABEL : TRIAL_LIMITS_LABEL);
+          dropUnverifiedPaymentHeaders(req);
           // REFUND on failure. The trial is charged at GRANT time, so without
           // this a malformed first probe returned a self-explaining 400 AND
           // burned the caller's one free call — their first CORRECT call then
