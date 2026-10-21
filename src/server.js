@@ -39,7 +39,7 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
-import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
+import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
@@ -5328,7 +5328,10 @@ app.get("/__operator/traffic.json", (req, res) => {
 });
 // Serving health for the heartbeat: one verdict plus the counts behind it,
 // counts only. "degraded" when the event loop is lagging or stalling, paid
-// calls or the whole server are answering 5xx, or free traffic is being shed.
+// calls or the whole server are answering 5xx, or the shared load-shed gate
+// is refusing traffic (lag or in-flight). `reasons` holds only words that
+// degrade; `info` holds words that do not, such as free-shedding (discovery
+// or seller-view requests refused by their own bounds while serving is fine).
 const SERVING = {
   loopP99Ms: Number(process.env.ALERT_LOOP_P99_MS) || 250,
   stalls1h: Number(process.env.ALERT_STALLS_PER_HOUR) || 6,
@@ -5348,10 +5351,11 @@ function servingHealth() {
   if (stalls.count > SERVING.stalls1h) reasons.push("stalls");
   if (counts.paid >= SERVING.paidMin && counts.paid5xx / counts.paid > SERVING.paidErrorRate) reasons.push("paid-errors");
   if (counts.total >= SERVING.totalMin && counts.s5xx / counts.total > SERVING.s5xxRate) reasons.push("5xx");
-  if (shed.shed > SERVING.shed1h && Date.now() - shed.since < 3600_000) reasons.push("shedding");
+  const shedWords = shedVerdict(shed, SERVING.shed1h);
+  reasons.push(...shedWords.reasons);
   const paidRoutes = routeTimings({ top: 200, minSamples: 5 }).filter((r) => Object.prototype.hasOwnProperty.call(CATALOG, r.route)).sort((a, b) => b.count - a.count).slice(0, 10)
     .map((r) => ({ route: r.route, count: r.count, p95Ms: r.totalMs.p95, computeP95Ms: r.computeMs.p95 }));
-  return { status: reasons.length ? "degraded" : "ok", reasons, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes };
+  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes };
 }
 // The shed counter is cumulative since boot; reset hourly so "shed in the last
 // hour" means that.
