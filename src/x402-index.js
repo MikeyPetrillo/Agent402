@@ -192,7 +192,7 @@ import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
 import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
-import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars } from "./price-usd.js";
+import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
@@ -2665,6 +2665,14 @@ function dollarLabelOf(obj) {
   return null;
 }
 
+/** A row whose only figure is an `amount` with no payment context of its own
+ *  and no dollar field beside it. */
+function bareAmountEntry(raw) {
+  return !!raw && typeof raw === "object" && raw.amount != null
+    && raw.price_usd == null && raw.priceUsd == null && raw.price == null
+    && !acceptShaped(raw) && !atomicContext(raw) && dollarLabelOf(raw) == null;
+}
+
 function parseManifestPrice(raw) {
   let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
@@ -2891,6 +2899,12 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   const metaByPath = new Map();
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
+  // A catalogue row that carries only a bare `amount` under a manifest whose
+  // own accepts name an asset by identifier is quoting that accept's base
+  // units, as the x402 field means; read alone it is a dollar figure a million
+  // times too large.
+  const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
+    .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
   const notePathMeta = (path, { name, description, price, slug, pay }) => {
     if (!path) return;
     const cur = metaByPath.get(path) || {};
@@ -2926,6 +2940,10 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
         name = String(raw.name || raw.title || raw.operationId || "").trim();
         description = String(raw.summary || raw.description || "").trim();
         price = parseManifestPrice(raw);
+        if (manifestAtomic && bareAmountEntry(raw)) {
+          const usd = atomicAmountToDollars(manifestAtomic, raw.amount);
+          price = usd == null ? null : `$${usd}`;
+        }
         // The input schema a seller declares beside the route (issue #1503).
         inputSchema = raw.input_schema && typeof raw.input_schema === "object" ? raw.input_schema
           : (raw.inputSchema && typeof raw.inputSchema === "object" ? raw.inputSchema : null);
