@@ -1295,6 +1295,8 @@ jobs:
           t node scripts/test-x402-manifest.js
           # MPP subscription rail-canary gate (canary product is never advertised and is mintable only for a heartbeat-token caller; boots a real server, spends nothing)
           t node scripts/test-mpp-subscription-canary-gate.js
+          # MPP monitor manage routes take the token from X-Manage-Token, a JSON body or ?token=, and answer no-store with no referrer (boots a real server, spends nothing)
+          t node scripts/test-mpp-manage-token.js
           # /api/leaderboard envelope (spec, defaults, per-row shape — MCP top_x402_sellers piggybacks on this)
           t node scripts/test-leaderboard-envelope.js
           # Payer concentration on leaderboard rows (no payer address leaks; both axes trip the flag)

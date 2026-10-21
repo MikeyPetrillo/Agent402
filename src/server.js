@@ -42,6 +42,7 @@ import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
+import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -4413,14 +4414,19 @@ if (_mppSubs) {
   // Self-serve status + cancel. The manage token minted at activation is the
   // bearer: the subscription id alone is deliberately NOT enough, the same rule
   // the Stripe portal link follows (subscribers are told to share report links).
-  app.get("/api/mpp/monitors/:subId", async (req, res) => {
+  // The token is read from an X-Manage-Token header, a JSON body {token} (a
+  // POST to the same path), or ?token= (the form already in emailed links);
+  // every answer is no-store with no referrer (src/manage-token.js).
+  const mppManageTokenOf = manageTokenFrom;
+  const mppManageHeaders = (res) => res.set(MANAGE_RESPONSE_HEADERS);
+  const mppMonitorStatus = async (req, res) => {
+    mppManageHeaders(res);
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    res.set("Cache-Control", "no-store");
     const subId = String(req.params.subId || "");
     // Read fresh: the subscription may have been activated or cancelled on
     // the other container moments ago.
     const rec = _mppSubs.isMine(subId) ? await _mppSubs.getFresh(subId) : null;
-    if (!rec || !_mppSubs.manageTokenOk(subId, req.query.token)) return res.status(404).json({ error: "Unknown subscription" });
+    if (!rec || !_mppSubs.manageTokenOk(subId, mppManageTokenOf(req))) return res.status(404).json({ error: "Unknown subscription" });
     // ?refresh=1 drives refreshStatus - which is also where a due period is
     // PULLED - and is therefore restricted to the rail canary's own
     // subscriptions, read from the stored record. It is the only way to prove
@@ -4433,11 +4439,13 @@ if (_mppSubs) {
     }
     const reports = _monitors ? (_monitors.status().subs.find((r) => r.subId === subId) || null) : null;
     res.json({ ..._mppSubs.publicView(_mppSubs.get(subId) || rec), lastReportId: reports?.lastReportId || null, reportUrl: reports?.lastReportId ? `${BASE_URL}/m/${reports.lastReportId}` : null });
-  });
+  };
+  app.get("/api/mpp/monitors/:subId", mppMonitorStatus);
+  app.post("/api/mpp/monitors/:subId", mppMonitorStatus);
   app.post("/api/mpp/monitors/:subId/cancel", async (req, res) => {
+    mppManageHeaders(res);
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    res.set("Cache-Control", "no-store");
-    try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), req.body?.token || req.query.token)); }
+    try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), mppManageTokenOf(req))); }
     catch (e) {
       if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
       console.warn("[mpp-subs] cancel failed:", String(e?.message || e).slice(0, 200));
