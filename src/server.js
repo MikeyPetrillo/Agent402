@@ -4906,7 +4906,7 @@ function readCookie(req, name) {
 // /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
 // holding a master key to use exactly one door.
 //
-// STATUS_PROBE_TOKEN is read only here, through statusProbeAuthed(), which two
+// STATUS_PROBE_TOKEN is read only here, through the statusProbeAuthed check, which two
 // routes call: POST /api/status/probe (writes the probe record) and GET
 // /api/selfcheck (may ask for a fresh run, still rate-bounded). It reaches no
 // operator surface. Unset, behaviour is byte-identical to before (the
