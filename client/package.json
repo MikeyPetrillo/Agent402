@@ -10,6 +10,7 @@
   "files": [
     "index.js",
     "async-job.js",
+    "known-assets.js",
     "tls-distrust.js",
     "README.md"
   ],
