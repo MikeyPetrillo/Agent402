@@ -25,6 +25,7 @@ import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
 
@@ -369,7 +370,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // end in a second seller paid for a payment that cannot settle.
           const defaultDeadlineMs = Math.max(30_000, Number(process.env.SOR_EXTERNAL_DEADLINE_MS) || 240_000);
           const credentialMs = windowBudgetMs == null ? evmCredentialBudgetMs(req) : null;
-          const externalDeadlineMs = windowBudgetMs ?? (credentialMs != null && credentialMs < defaultDeadlineMs ? Math.max(0, credentialMs) : defaultDeadlineMs);
+          const ownDeadlineMs = windowBudgetMs ?? (credentialMs != null && credentialMs < defaultDeadlineMs ? Math.max(0, credentialMs) : defaultDeadlineMs);
+          // Through the CDN proxy the answer must also start inside the
+          // proxy's wait (src/cdn-sync-window.js); a shorter wait keeps the
+          // hold, as above, so the nearer bound is money-safe.
+          const cdnLeftMs = cdnSyncLeftMs(req);
+          const externalDeadlineMs = cdnLeftMs != null ? Math.max(0, Math.min(ownDeadlineMs, cdnLeftMs - 5_000)) : ownDeadlineMs;
           const refusalBudgetMs = () => Math.max(0, externalDeadlineMs - (Date.now() - startedAt));
           // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
           // sellers (ranked, settled-desc) for the first chain that has any, so

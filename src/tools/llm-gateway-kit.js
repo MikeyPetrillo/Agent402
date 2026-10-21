@@ -54,6 +54,7 @@ import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
 
@@ -870,15 +871,22 @@ export const PAYMENT_WINDOW_TAIL_MS = 5_000;
  *  when too little is left to start another attempt. */
 const windowAttempted = new WeakSet();
 export function paymentWindowTimeoutMs(req, defaultMs) {
-  const left = evmCredentialSettleableMs(req);
-  if (left == null) return defaultMs;
+  // Through the CDN proxy the answer must also start inside the proxy's wait
+  // (src/cdn-sync-window.js); the nearer of the two bounds applies.
+  const evmLeft = evmCredentialSettleableMs(req);
+  const cdnLeft = cdnSyncLeftMs(req);
+  if (evmLeft == null && cdnLeft == null) return defaultMs;
+  const cdnBinds = cdnLeft != null && (evmLeft == null || cdnLeft <= evmLeft);
+  const left = cdnBinds ? cdnLeft : evmLeft;
   // The first attempt of a request always starts while any window is left (a
   // fast call settles inside a short one); a further attempt needs enough
   // window left to be worth starting.
   const first = req && typeof req === "object" && !windowAttempted.has(req);
   if (first) windowAttempted.add(req);
   if (left <= PAYMENT_WINDOW_TAIL_MS || (!first && left < PAYMENT_WINDOW_MIN_START_MS)) {
-    throw bad("The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
+    throw bad(cdnBinds
+      ? "The call did not finish within the time this connection waits for an answer - not charged; retry, or ask for a streamed answer where the route offers one"
+      : "The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
   }
   return Math.min(defaultMs, left - PAYMENT_WINDOW_TAIL_MS);
 }

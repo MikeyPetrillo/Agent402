@@ -52,6 +52,7 @@ import { createHash } from "node:crypto";
 import { shared } from "../shared-limits.js";
 import { payerFromRequest } from "../payer.js";
 import { reportProgress } from "../job-progress.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -177,6 +178,19 @@ const VIDEOS_MAX_WAIT_MS = () => Math.max(1_000, parseInt(process.env.VIDEOS_MAX
 // chain sum can exceed the tier price. 45 s sits past every measured generation
 // (klein 2 s, flux.2-pro 9 s, qwen 66 s is the exception and is the LAST link).
 const IMAGE_LINK_TIMEOUT_MS = Math.max(5_000, parseInt(process.env.IMAGE_LINK_TIMEOUT_MS || "45000", 10) || 45_000);
+// A link starts only with this much of the CDN wait left, and ends this long
+// before it, so settlement and the write fit.
+const CDN_LINK_MIN_START_MS = 15_000;
+const CDN_LINK_TAIL_MS = 5_000;
+/** The per-link timeout under the CDN wait; `defaultMs` off the CDN; null
+ *  when a further link could not finish in time. The first link always starts. */
+export function cdnLinkTimeoutMs(req, defaultMs, startedLinks, now = Date.now()) {
+  const left = cdnSyncLeftMs(req, now);
+  if (left == null) return defaultMs;
+  const usable = left - CDN_LINK_TAIL_MS;
+  if (startedLinks > 0 && usable < CDN_LINK_MIN_START_MS) return null;
+  return Math.max(1_000, Math.min(defaultMs, usable));
+}
 
 /** Margin table for the pricing-margin CI test: every link's bound against
  *  its tier price, plus the video tier. Integer micro-dollars, so an exact
@@ -332,7 +346,13 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
   const tier = IMAGE_TIERS[tierSlug];
   const { prompt, refs } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
+  let started = 0;
   for (const link of tier.chain) {
+    // Through the CDN proxy the answer must start inside the proxy's wait
+    // (src/cdn-sync-window.js): a fallback link that cannot finish in what is
+    // left is not started, and the call ends with a 504 (not charged).
+    const linkTimeoutMs = cdnLinkTimeoutMs(req, IMAGE_LINK_TIMEOUT_MS, started);
+    if (linkTimeoutMs == null) throw bad("The image did not finish within the time this connection waits for an answer - not charged; retry, or send Prefer: respond-async for a job link", 504);
     if (!linkBounds(link)) {
       lastErr = bad("Image tier temporarily unavailable", 503);
       continue;
@@ -345,7 +365,8 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
     const body = { model: link.model, prompt, n: 1, ...link.params,
       ...(refs ? { input_references: refs.map((url) => ({ type: "image_url", image_url: { url } })) } : {}), provider: { only: [link.provider], ...(zdr ? { zdr: true } : {}) }, ...(user ? { user } : {}) };
     try {
-      const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: IMAGE_LINK_TIMEOUT_MS });
+      started++;
+      const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: linkTimeoutMs });
       if (!res.ok) await throwUpstreamError(res);
       const text = await res.text();
       let parsed;
