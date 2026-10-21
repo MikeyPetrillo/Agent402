@@ -123,12 +123,32 @@ const sleep = (ms, signal) => new Promise((resolve) => {
   signal?.addEventListener?.("abort", done, { once: true });
 });
 
+// One observer hears the FINAL outcome of each worker call, once: "ok",
+// "s5xx" or "throttled" by the status the call ended on, "timeout", "aborted"
+// (the caller left), or "network" (unreachable after the wake retries, or the
+// connection lost). The refusals a wake retries through are not outcomes, so
+// a cold start that ends in an answer reads as one success.
+let outcomeObserver = null;
+export function setWorkerOutcomeObserver(fn) { outcomeObserver = typeof fn === "function" ? fn : null; }
+
+const kindOfStatus = (s) => (s === 429 ? "throttled" : s >= 500 ? "s5xx" : "ok");
+
 // Dispatch one browser/media job to the worker. Returns the tool's JSON result,
 // or `{ __binary: Buffer, contentType }` for a binary result (screenshot PNG).
 // `timeoutMs` is the whole call's deadline, wake retries included.
-export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIMEOUT_MS, minAttemptMs = WORKER_MIN_ATTEMPT_MS } = {}) {
+export async function runOnWorker(slug, input, opts = {}) {
+  if (!workerUrl()) throw Object.assign(new Error("render worker not configured"), { statusCode: 503 });
+  const outcome = { kind: null, status: null };
+  try {
+    return await dispatch(slug, input, opts, outcome);
+  } finally {
+    const kind = outcome.status != null ? kindOfStatus(outcome.status) : outcome.kind || "network";
+    try { outcomeObserver?.(kind, outcome.status); } catch { /* the observer never fails the call */ }
+  }
+}
+
+async function dispatch(slug, input, { signal, timeoutMs = WORKER_TIMEOUT_MS, minAttemptMs = WORKER_MIN_ATTEMPT_MS } = {}, outcome) {
   const base = workerUrl();
-  if (!base) throw Object.assign(new Error("render worker not configured"), { statusCode: 503 });
   const started = Date.now();
   const ac = new AbortController();
   // The timer's abort carries a TimeoutError, so the failure monitor counts
@@ -165,7 +185,7 @@ export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIME
         text = await readBounded(res, WORKER_MAX_BYTES);
         let peek = null;
         try { peek = JSON.parse(text); } catch { /* non-JSON */ }
-        if (!isEdgeUnavailable(res.status, peek)) break;
+        if (!isEdgeUnavailable(res.status, peek)) { outcome.status = res.status; break; }
         failure = `edge HTTP ${res.status}`;
       }
       const wait = wakeBackoffMs(attempt);
@@ -176,6 +196,7 @@ export async function runOnWorker(slug, input, { signal, timeoutMs = WORKER_TIME
       await sleep(wait, ac.signal);
     }
   } catch (e) {
+    outcome.kind = ac.signal.reason?.name === "TimeoutError" ? "timeout" : ac.signal.aborted ? "aborted" : "network";
     if (e?.statusCode) throw e;
     throw Object.assign(new Error(`render worker unreachable: ${e?.name === "AbortError" || e?.name === "TimeoutError" ? "timeout" : e?.message}`), { statusCode: 503 });
   } finally { clearTimeout(timer); signal?.removeEventListener?.("abort", onAbort); }

@@ -141,7 +141,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const lastToolError = new Map(); // slug -> { at, status, message, synthetic }
   const lastUpstream = new Map();  // name -> { at, kind, host, status }
   const refusals = [];          // { at, network, facilitator, reason }
-  const hosts = [];             // [matcher(host) -> bool, name]
+  const hosts = [];             // [matcher(host) -> bool, name, perFetch]
   let remote = { at: 0, snapshots: [], ok: false };
 
   const bucketOf = (t) => Math.floor(t / BUCKET_MS);
@@ -155,11 +155,14 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return null;
   }
 
-  function registerUpstreamHost(url, name) {
+  // `perFetch: false` names a host whose caller reports one final outcome per
+  // call (noteUpstream) instead of the egress meter counting every attempt:
+  // the render worker, whose wake retries are not failures of the call.
+  function registerUpstreamHost(url, name, { perFetch = true } = {}) {
     try {
       const h = new URL(String(url)).host.toLowerCase().replace(/:\d+$/, "");
       if (!h || hosts.some(([m]) => m(h))) return false;
-      hosts.push([(x) => x === h, String(name || h)]);
+      hosts.push([(x) => x === h, String(name || h), perFetch !== false]);
       return true;
     } catch { return false; }
   }
@@ -201,6 +204,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   /** Observe one outbound fetch (the egress meter's observer). */
   function observeFetch(host, promise, init, origin) {
     if (!upstreamNameOf(host)) return;
+    const h = String(host || "").toLowerCase().replace(/:\d+$/, "");
+    if (hosts.some(([m, , perFetch]) => !perFetch && m(h))) return;
     Promise.resolve(promise).then(
       (res) => { noteUpstream(host, upstreamKindOfStatus(res?.status), { origin, status: res?.status ?? null }); },
       (err) => { noteUpstream(host, upstreamKindOfError(err, init), { origin }); },

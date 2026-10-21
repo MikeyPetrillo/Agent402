@@ -227,11 +227,21 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
 });
 
 // ---- booted: the surfaces ------------------------------------------------------
+// The render worker is configured at a port nothing listens on yet, so the
+// first render call meets a cold start: refused connections, then an answer.
 const PORT = await getFreePort();
+const WORKER_PORT = await getFreePort();
+const { createServer } = await import("node:http");
+let workerCalls = 0;
+const worker = createServer((req, res) => {
+  let raw = ""; req.on("data", (c) => { raw += c; });
+  req.on("end", () => { workerCalls++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ url: "https://example.com/", title: "stub", markdown: "# stub", words: 1 })); });
+});
 const TOKEN = "tool-failure-test-operator-token-0123456789";
 const log = [];
 const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN },
+  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN,
+    RENDER_WORKER_URL: `http://127.0.0.1:${WORKER_PORT}`, RENDER_WORKER_TOKEN: "tfm-worker-token", RENDER_WORKER_TIMEOUT_MS: "9000", RENDER_WORKER_MIN_ATTEMPT_MS: "2000" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 child.stdout.on("data", (d) => log.push(...String(d).split("\n")));
@@ -260,6 +270,29 @@ try {
     assert.ok(["ok", "degraded", "failing"].includes(j.toolFailures));
     assert.ok(Array.isArray(j.tools) && Array.isArray(j.upstreams) && j.thresholds && j.issueSummary);
     assert.equal(j.scope, "instance");
+  });
+  await check("a worker cold start that ends in an answer counts as one success; a wake that fails counts once", async () => {
+    const opRead = async () => {
+      const j = await (await fetch(`${base}/__operator/tool-failures.json`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+      const row = j.upstreams.find((u) => u.upstream === "render-worker");
+      const sum = { ok: 0, network: 0, s5xx: 0, timeout: 0 };
+      if (row) for (const lane of ["outside", "background", "synthetic"]) for (const k of Object.keys(sum)) sum[k] += row.hour[lane][k];
+      return { sum, status: row?.status ?? "ok", word: j.upstreamHealth };
+    };
+    setTimeout(() => worker.listen(WORKER_PORT, "127.0.0.1"), 1800);
+    const r = await fetch(`${base}/api/render`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://example.com/" }) });
+    assert.equal(r.status, 200, `the render answered once the worker listened (${r.status})`);
+    assert.equal(workerCalls, 1, "the worker ran the job once");
+    await new Promise((res) => setTimeout(res, 100));
+    let o = await opRead();
+    assert.deepEqual(o.sum, { ok: 1, network: 0, s5xx: 0, timeout: 0 }, `the refused connects of the wake are not failures (${JSON.stringify(o.sum)})`);
+    assert.equal(o.word, "ok");
+    await new Promise((res) => { worker.closeAllConnections?.(); worker.close(res); });
+    const r2 = await fetch(`${base}/api/render`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://example.com/" }) });
+    assert.ok(r2.status >= 500, `a worker that never wakes fails the call (${r2.status})`);
+    await new Promise((res) => setTimeout(res, 100));
+    o = await opRead();
+    assert.deepEqual(o.sum, { ok: 1, network: 1, s5xx: 0, timeout: 0 }, `a wake that still fails counts once (${JSON.stringify(o.sum)})`);
   });
   await check("a bespoke route's error answer is logged as a [tool-error] line", async () => {
     const before = log.filter((l) => l.includes("[tool-error]") && l.includes("slug=pdf")).length;

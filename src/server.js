@@ -49,7 +49,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
-import { workerEnabled, runOnWorker, assertWorkerConfig } from "./worker-client.js";
+import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
@@ -2272,11 +2272,16 @@ installEgressMeter();
 // probes and canaries), or background (no request).
 {
   const monitor = toolFailureMonitor();
-  if (process.env.RENDER_WORKER_URL) monitor.registerUpstreamHost(process.env.RENDER_WORKER_URL, "render-worker");
-  setEgressOutcomeObserver((host, p, init) => {
-    const scope = currentRequestScope();
-    monitor.observeFetch(host, p, init, !scope ? "background" : scope.synthetic ? "synthetic" : "outside");
-  });
+  const originNow = () => { const scope = currentRequestScope(); return !scope ? "background" : scope.synthetic ? "synthetic" : "outside"; };
+  // The render worker reports each call's final outcome (src/worker-client.js),
+  // so the refusals a cold start retries through are not counted as failures.
+  const workerUrlAtBoot = process.env.RENDER_WORKER_URL;
+  if (workerUrlAtBoot && monitor.registerUpstreamHost(workerUrlAtBoot, "render-worker", { perFetch: false })) {
+    let workerHost = "";
+    try { workerHost = new URL(workerUrlAtBoot).host; } catch { /* registerUpstreamHost already parsed it */ }
+    setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
+  }
+  setEgressOutcomeObserver((host, p, init) => { monitor.observeFetch(host, p, init, originNow()); });
   monitor.start();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
