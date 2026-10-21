@@ -640,11 +640,12 @@ https://agent402.tools/guides/coinbase-business-get-paid-by-agents
 
 ## Split revenue on Base with 0xSplits
 
-Native `tempo.splits` only work on Tempo. On Base (and the other EVM chains
-the tollbooth settles), `payTo` is just an address, so you can point it at an
+Native `tempo.splits` only work on Tempo. On a chain where your split contract
+is deployed, `payTo` is just an address, so you can point it at an
 [0xSplits](https://splits.org) split contract instead of a wallet. The split
-contract holds the percentages. The tollbooth only quotes that address and
-settles to it. No code or config change is needed beyond the address:
+contract holds the percentages. The tollbooth quotes that address, and the
+facilitator settles the buyer's signed transfer to it. No code or config
+change is needed beyond the address:
 
 ```bash
 TOLLBOOTH_PAYTO=0xYourSplitContract \
@@ -654,18 +655,10 @@ TOLLBOOTH_UPSTREAM=http://localhost:8080 \
 npx agent402-tollbooth
 ```
 
-Checked locally against tollbooth 0.10.6 with an immutable 0xSplits PushSplit
-on Base: the 402's x402 offer (`scheme: exact`, `network: eip155:8453`, USDC
-`0x8335…2913`) and the MPP `evm` challenge (`chainId: 8453`) both name the
-split contract as `payTo` / `recipient`. A real Base settlement into that
-split was also tested: a $0.01 USDC x402 `exact` payment (EIP-3009
-`transferWithAuthorization`) landed in the split
-([payment tx](https://basescan.org/tx/0xf5e6ea9ee9a9ef697b8778a346adb7839a7e3d1987d437e82bfc6b2eab090f59)),
-then `distribute` pushed it out as fee 60% / agent 40%, fixed in the agent's
-own split - 0.006 / 0.004 USDC
-([distribute tx](https://basescan.org/tx/0xc0713e367a5411d2f3255f29b4a65393751ffe1d859d3cc20c0e942535d7d083)).
-That payment went through a Base facilitator directly, not through a
-tollbooth instance.
+`TOLLBOOTH_TEMPO_RECIPIENT` falls back to `TOLLBOOTH_PAYTO` when unset. An
+operator who also enables Tempo should set `TOLLBOOTH_TEMPO_RECIPIENT` to a
+Tempo wallet, so Tempo payments do not go to the Base split's address on
+another chain.
 
 - Use an **immutable** split if recipients must never change after launch.
 - A Push split holds the USDC it receives until someone calls `distribute` on
