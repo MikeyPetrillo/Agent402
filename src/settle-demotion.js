@@ -18,6 +18,12 @@
 // ambiguous failure (timeout, 5xx) stops at once, because that settler may
 // have broadcast.
 //
+// One settle, one call per facilitator: the wrapper notes, per payment
+// payload, which facilitators it asked and that it recorded their refusals
+// (settleAttemptOf). The settle-failure hook in src/payments.js reads that
+// note, so it neither records the same refusal a second time nor asks a
+// facilitator the wrapper already asked.
+//
 // Per process: each replica demotes on its own refusals, which a refusal
 // streak reaches on every replica within a few calls.
 import { isFacilitatorBillingRefusal } from "./payment-reject.js";
@@ -30,6 +36,17 @@ const COOLDOWN_MS = () => num(process.env.SETTLE_DEMOTE_COOLDOWN_MS, 15 * 60_000
 const SUBCENT = /subcent_quota_exceeded/i;
 
 const streaks = new Map(); // "network|label" -> { n, until, lastReason, lastAt }
+// paymentPayload -> { network, asked: Set(name) }: what one settle asked. The
+// payload is decoded per request, so the note lives exactly as long as it.
+const attempts = new WeakMap();
+
+/** What the demotion wrapper asked while settling this payload on `network`
+ *  ({ asked: Set(name) }), or null when it did not handle the settle. */
+export function settleAttemptOf(paymentPayload, network) {
+  if (!paymentPayload || typeof paymentPayload !== "object") return null;
+  const a = attempts.get(paymentPayload);
+  return a && a.network === network ? a : null;
+}
 const keyOf = (network, label) => `${network}|${label}`;
 
 /** True for the refusal class that demotes: the facilitator's own account cannot pay. */
@@ -92,9 +109,16 @@ export function withSettleDemotion(client, { network, label, alternates = () => 
   const asError = (r) => Object.assign(new Error(String(r?.errorMessage || r?.errorReason || "settle rejected")), { errorReason: r?.errorReason, errorMessage: r?.errorMessage });
   const settle = async function demotingSettle(payload, requirements, ...rest) {
     if (requirements?.network !== network) return orig.call(client, payload, requirements, ...rest);
+    let attempt = null;
+    if (payload && typeof payload === "object") {
+      attempt = attempts.get(payload);
+      if (!attempt || attempt.network !== network) { attempt = { network, asked: new Set() }; attempts.set(payload, attempt); }
+    }
     if (isDemoted(network, label)) {
       for (const alt of alternates() || []) {
         if (!alt?.client || typeof alt.client.settle !== "function") continue;
+        if (attempt?.asked.has(alt.name)) continue;
+        attempt?.asked.add(alt.name);
         try {
           const r = await alt.client.settle(payload, requirements, ...rest);
           if (r?.success === true) { record(alt.name, r, true); return r; }
@@ -108,6 +132,7 @@ export function withSettleDemotion(client, { network, label, alternates = () => 
         }
       }
     }
+    attempt?.asked.add(label);
     try {
       const r = await orig.call(client, payload, requirements, ...rest);
       record(label, r, r?.success === true);

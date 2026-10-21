@@ -42,7 +42,7 @@ import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-histor
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
-import { withSettleDemotion, isFundsRefusal, demotedList } from "./settle-demotion.js";
+import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
@@ -2227,7 +2227,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // An out-of-funds or billing refusal feeds facilitatorFunds on
     // /api/gateway-status; a network whose primary is wrapped by the settle
     // demotion has already recorded its own.
-    if (isFundsRefusal(`${ctx?.error?.errorReason || ""} ${failure}`) && !(DEMOTION_NETWORKS.has(ctx?.requirements?.network) && ctx?.error?.__a402RefusalRecorded)) {
+    // The wrapper's note (settleAttemptOf) covers a graceful {success:false}
+    // too, which @x402/core hands this hook as a new SettleError.
+    const demotionAttempt = DEMOTION_NETWORKS.has(ctx?.requirements?.network) ? settleAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network) : null;
+    if (isFundsRefusal(`${ctx?.error?.errorReason || ""} ${failure}`) && !demotionAttempt && !(DEMOTION_NETWORKS.has(ctx?.requirements?.network) && ctx?.error?.__a402RefusalRecorded)) {
       try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: ctx?.error?.__a402Facilitator || facilitatorFirstTriedByNetwork.get(ctx?.requirements?.network) || "primary", reason: failure }); } catch { /* bookkeeping only */ }
     }
     if (isBillingRefusalReceipt({ success: false, errorReason: ctx?.error?.errorReason, errorMessage: failure })) {
@@ -2263,7 +2266,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     }
     if (!fallbackEnabled) return;
     if (!isPreBroadcastSettleRejection(ctx?.error)) return;
-    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides);
+    // A facilitator the demotion wrapper already asked for this payment is
+    // not asked again.
+    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
+      .filter(({ name }) => !demotionAttempt?.asked.has(name));
     for (const { name, client } of candidates) {
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);

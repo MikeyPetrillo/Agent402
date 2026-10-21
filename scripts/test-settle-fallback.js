@@ -446,5 +446,129 @@ await (async () => {
   }
 })();
 
+// Booted, with the Celo settle demotion (src/settle-demotion.js) wrapping the
+// primary: one settle asks each facilitator at most once, a refusal is
+// recorded once (a graceful {success:false} included, which @x402/core hands
+// the failure hook as a new SettleError), and nothing is settled after an
+// ambiguous failure. SETTLE_DEMOTE_AFTER=1 demotes Celo on its first refusal.
+await (async () => {
+  const [PORT, BASE_FAC, CELO_FAC, SV_FAC] = await getFreePorts(4);
+  const B = `http://127.0.0.1:${PORT}`;
+  const CELO = "eip155:42220";
+  const OP = "settle-demotion-wiring-operator-token-0123456789";
+  const SV_TX = "0x" + "5f".repeat(32);
+  const st = { celo: 0, sv: 0, svMode: "out-of-funds", order: [] };
+  const OUT_OF_FUNDS = { success: false, errorMessage: "Out of mainnet settlement funds (this settlement costs 1 micro-USD). Top up at the dashboard.", transaction: "", network: CELO };
+  const json = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const stub = (handler) => createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* ignore */ } handler(req, res, body); });
+  });
+  const payerOf = (body) => body?.paymentPayload?.payload?.authorization?.from;
+  const baseFac = stub((req, res) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (req.url === "/rpc") return json(res, 200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+    return json(res, 404, {});
+  });
+  const celoFac = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: CELO }], extensions: [], signers: {} });
+    if (req.url === "/verify") return json(res, 200, { isValid: true, payer: payerOf(body) });
+    if (req.url === "/settle") { st.celo++; st.order.push("celo"); return json(res, 200, { ...OUT_OF_FUNDS, payer: payerOf(body) }); }
+    return json(res, 404, {});
+  });
+  const svFac = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: CELO }], extensions: [], signers: {} });
+    if (req.url === "/settle") {
+      st.sv++; st.order.push("solvador");
+      if (st.svMode === "5xx") return json(res, 500, { success: false, errorReason: "unexpected_error", errorMessage: "upstream", transaction: "", network: CELO });
+      if (st.svMode === "ok") return json(res, 200, { success: true, transaction: SV_TX, network: CELO, payer: payerOf(body) });
+      return json(res, 200, { ...OUT_OF_FUNDS, payer: payerOf(body) });
+    }
+    return json(res, 404, {});
+  });
+  await Promise.all([[baseFac, BASE_FAC], [celoFac, CELO_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  const tmp = mkdtempSync(join(tmpdir(), "a402-settle-demotion-"));
+  const env = { ...process.env };
+  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
+  const proc = spawn(process.execPath, ["src/server.js"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: {
+      ...env, PORT: String(PORT), FREE_MODE: "",
+      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
+      PAYMENT_NETWORKS: "base,celo",
+      CELO_FACILITATOR_URL: `http://127.0.0.1:${CELO_FAC}`, CELO_FACILITATOR_KEY: "celo-test-key",
+      SOLVADOR_KEY: "solvador-test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${SV_FAC}`, SOLVADOR_CELO_PRIMARY: "",
+      PAYMENT_SETTLE_FALLBACK: "true", SETTLE_DEMOTE_AFTER: "1", SETTLE_DEMOTE_COOLDOWN_MS: "600000",
+      AGENT402_OPERATOR_TOKEN: OP, SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp,
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const log = [];
+  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let nonce = 0;
+  const credential = (accepted) => Buffer.from(JSON.stringify({
+    x402Version: 2, resource: accepted.resource, accepted,
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: `0x${(0xd00 + ++nonce).toString(16).padStart(40, "0")}`, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (0x7700 + nonce).toString(16).padStart(64, "0") } },
+  })).toString("base64");
+  const PATH = "/api/demand-radar?limit=1";
+  const refusals = async () => {
+    const j = await (await fetch(`${B}/__operator/tool-failures.json`, { headers: { Authorization: `Bearer ${OP}` } })).json();
+    return (j.facilitatorRefusals || []).filter((r) => r.network === CELO);
+  };
+  const failuresBefore = failures;
+  try {
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
+    let accepted;
+    await check("demotion e2e: the paid server boots and offers Celo", async () => {
+      assert.ok(up, "server never came up");
+      const r = await fetch(`${B}${PATH}`);
+      assert.equal(r.status, 402);
+      const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf8"));
+      accepted = (req402.accepts || []).find((a) => a.network === CELO);
+      assert.ok(accepted, "a Celo accept");
+    });
+    const pay = async () => { const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } }); await r.text(); return r.status; };
+    await check("demotion e2e: Celo's graceful refusal is recorded once, then the fallback asks Solvador once", async () => {
+      st.order.length = 0;
+      assert.equal(await pay(), 402);
+      assert.deepEqual(st.order, ["celo", "solvador"], "primary, then the fallback, once each");
+      const r = await refusals();
+      assert.equal(r.length, 2, `one refusal each for Celo and Solvador (${JSON.stringify(r.map((x) => x.facilitator))})`);
+      assert.ok(log.some((l) => /\[settle-demotion\] Celo demoted on eip155:42220/.test(l)), "Celo is demoted");
+    });
+    await check("demotion e2e: while demoted, Solvador first, then Celo, each asked once; each refusal recorded once", async () => {
+      st.order.length = 0;
+      assert.equal(await pay(), 402);
+      assert.deepEqual(st.order, ["solvador", "celo"], `each facilitator asked once (${st.order.join(",")})`);
+      const r = await refusals();
+      assert.equal(r.length, 4, `two more refusals, not four (${r.length})`);
+    });
+    await check("demotion e2e: an ambiguous failure at the alternate stops the settle there", async () => {
+      st.svMode = "5xx";
+      st.order.length = 0;
+      assert.equal(await pay(), 402);
+      assert.deepEqual(st.order, ["solvador"], `nobody is asked after a 5xx that may have broadcast (${st.order.join(",")})`);
+    });
+    await check("demotion e2e control: the alternate settling while Celo is demoted answers 200", async () => {
+      st.svMode = "ok";
+      st.order.length = 0;
+      assert.equal(await pay(), 200);
+      assert.deepEqual(st.order, ["solvador"]);
+    });
+  } finally {
+    if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
+    proc.kill("SIGKILL");
+    for (const s of [baseFac, celoFac, svFac]) s.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+})();
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);
