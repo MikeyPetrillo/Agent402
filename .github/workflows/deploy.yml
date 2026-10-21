@@ -2679,6 +2679,8 @@ jobs:
           t node scripts/test-decide-reconcile.js
           # Decide instrumentation: planner version, text-free plan shape, run join, skip codes, own-traffic flag, operator stats (offline)
           t node scripts/test-decide-instrumentation.js
+          # Decide as a buyer meets it: valid 402s that name each depth's price and carry the whole example, the execute example runs as written, an unknown decisionId is a free 404, prices follow DECIDE_CONFIG alone (boots the server twice; nothing paid)
+          t node scripts/test-decide-paywall.js
           DECIDE_TEST_PG_URL=postgres://decide@127.0.0.1:5432/decide_test t node scripts/test-decide-pg.js
           t node scripts/test-image-gen-kit.js
           # Leaderboard chain config (right token on the right rail; testnets excluded — offline)

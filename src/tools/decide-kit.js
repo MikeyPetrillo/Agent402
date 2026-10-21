@@ -142,6 +142,9 @@ export function sendObservations(observations, { send = callService } = {}) {
 }
 
 export const TEMPO_DECISION_BUDGET_MS = 14_000;
+/** The refusal for a decisionId this server never answered (or has dropped):
+ *  where a real one comes from, and how to run without one. */
+export const UNKNOWN_DECISION_MESSAGE = 'Unknown decisionId: a decisionId comes from a paid POST /api/decide answer and is kept 30 days. To run without one, pass "steps" (the tool slugs of a free plan sketch from GET /api/find?q=<task>, in order) and "params" for step 1. Nothing was charged.';
 /** The planner version a free plan sketch's decision records. */
 export const SKETCH_PLANNER_VERSION = "sketch";
 
@@ -430,7 +433,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     let persistSketch = null, sketchFeedbackToken = null;
     if (decisionId) {
       d = await ledger.getDecision(decisionId);
-      if (!d) throw bad("Unknown decisionId - decisions are kept for this server's own answers only", 404);
+      if (!d) throw bad(UNKNOWN_DECISION_MESSAGE, 404);
       if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
     } else if (Array.isArray(input?.steps)) {
       // The steps of a free plan sketch become a decision of their own: kept
@@ -936,20 +939,48 @@ export function makeFeedbackHandler({ ledger, send = callService, now = () => Da
 }
 
 
-const EXAMPLE_OUT = {
-  decisionId: "dec_2b1c9e0f4a7d4c3e9b8a1f00",
-  task: "Research the latest EU AI Act obligations for general-purpose models, with citations",
-  depth: "plan",
-  plan: [{
-    step: 1, purpose: "search recent sources on the EU AI Act GPAI obligations",
-    tool: { id: "a1b2", slug: "search", name: "Web search", seller: "agent402", firstParty: true, endpoint: "https://agent402.tools/api/search", method: "GET", rail: "x402", rails: ["x402", "mpp"], networks: ["eip155:8453"], priceUsd: 0.02, executeViaAgent402Usd: 0.02, inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, exampleParams: { q: "EU AI Act general-purpose AI model obligations 2026" }, exampleParamsSource: "task" },
-    why: "fit 0.92, score 0.801", score: 0.801, fallbacks: [], dependsOn: [],
-  }],
-  estimatedCostUsd: 0.02, estimatedCostViaAgent402Usd: 0.02, estimatedLatencyMs: 1500,
-  confidence: 0.92, partial: false, gaps: [], cached: false, priceUsd: 0.02,
-  ranking: { weights: { fit: 0.45, reliability: 0.2, price: 0.15, schema: 0.1, freshness: 0.1 }, firstPartyWeight: 0 },
-  neutrality: NEUTRALITY_NOTE,
-};
+/** The decide route's description, every price read from the config. */
+export function decideDescription(cfg = decideConfig()) {
+  const usd = (d) => `$${priceForDepth(d, cfg)}`;
+  return `Describe a job and get a call-ready plan: which tools, across this catalog and outside x402 sellers with a recently verified 402, solve it end to end, in what order, with fallbacks and input params that validate against each tool's schema. Priced by depth: quick ${usd("quick")} (one best tool), plan ${usd("plan")} (the default: steps, fallbacks, params from your task, cost and latency estimates), full ${usd("full")} (the plan plus a compiled prompt). The fee comes back as a credit toward running the plan with POST /api/decide/execute. Free first: GET /api/find?q=<task> answers a multi-step task with a keyword plan sketch. The ranking formula has no first-party term; every tool carries firstParty. Uncovered needs are listed in gaps.`;
+}
+
+/** The paid decide upgrade a free plan sketch offers: priced at the depth it
+ *  describes (plan, the default), with every depth's price beside it. */
+export function decideUpgradeOffer({ next = "decide-execute", cfg = decideConfig() } = {}) {
+  const usd = (d) => `$${priceForDepth(d, cfg)}`;
+  return {
+    tool: "decide", route: "POST /api/decide", mcp: "decide.plan", depth: "plan", price: usd("plan"),
+    prices: Object.fromEntries(DEPTHS.map((d) => [d, usd(d)])),
+    note: `a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with ${next}`,
+  };
+}
+
+/** The execute route's published example: a free plan sketch, ENS name to
+ *  wallet balance, which runs as written (no decisionId is needed). */
+export const EXECUTE_EXAMPLE_INPUT = Object.freeze({ steps: ["ens-resolve", "wallet-balance"], params: { 1: { name: "vitalik.eth" } } });
+
+// The decide route's published answer, compact enough to travel whole in the
+// 402's discovery block (a larger one is replaced there by a pointer), so a
+// buyer sees what the fee buys before paying.
+export const DECIDE_EXAMPLE_TASK = "Resolve the ENS name vitalik.eth and read its wallet balance on Base";
+export function decideExampleOut(cfg = decideConfig()) {
+  const price = priceForDepth("plan", cfg);
+  const step = (n, slug, method, priceUsd, purpose, exampleParams, dependsOn) => ({
+    step: n, purpose, tool: { slug, firstParty: true, endpoint: `https://agent402.tools/api/${slug}`, method, priceUsd, exampleParams },
+    fallbacks: [], dependsOn,
+  });
+  return {
+    decisionId: "dec_…", task: DECIDE_EXAMPLE_TASK, depth: "plan",
+    plan: [
+      step(1, "ens-resolve", "GET", 0.001, "resolve the ENS name to an address", { name: "vitalik.eth" }, []),
+      step(2, "wallet-balance", "POST", 0.002, "read that address's balance on Base", { address: "{{step 1}}", network: "base" }, [1]),
+    ],
+    estimatedCostUsd: 0.003, estimatedLatencyMs: 3000, confidence: 0.9, gaps: [], priceUsd: price,
+    executionCredit: { amountUsd: Math.round(price * cfg.credit.percentOfFee / 100 * 1e6) / 1e6, token: "dc_…", redeemWith: "POST /api/decide/execute { decisionId, creditToken }" },
+    feedbackToken: "fb_…",
+  };
+}
 
 export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now = () => Date.now(), isOwnTraffic = () => false } = {}) {
   return [
@@ -962,12 +993,11 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       quote: (body) => decideQuoteUsd(body),
       // Quoted by depth: the listed price is quick's, the ceiling is full's.
       quoteMaxUsd: priceForDepth("full"),
-      description:
-        "Describe a job and get a call-ready plan: which tools, across this catalog and outside x402 sellers with a recently verified 402, solve it end to end, in what order, with fallbacks, input params that validate against each tool's schema, and cost/latency estimates. Priced by depth: quick (one best tool), plan (steps + fallbacks), full (plan + params + compiled prompt). The fee comes back as a credit toward running the plan with POST /api/decide/execute. The ranking formula has no first-party term; every tool carries firstParty. Uncovered needs are listed in gaps.",
+      description: decideDescription(),
       tags: ["agents", "routing", "planning", "discovery", "x402"],
       discovery: {
         bodyType: "json",
-        input: { task: "Research the latest EU AI Act obligations for general-purpose models, with citations", depth: "plan" },
+        input: { task: DECIDE_EXAMPLE_TASK, depth: "plan" },
         inputSchema: {
           properties: {
             task: { type: "string", description: "What the agent needs done (max 2000 chars)" },
@@ -976,7 +1006,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
           },
           required: ["task"],
         },
-        output: { example: EXAMPLE_OUT },
+        output: { example: decideExampleOut() },
       },
       handler: makeDecideHandler({ ledger, now, isOwnTraffic }),
     },
@@ -995,11 +1025,13 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
-        "Run a decision's plan through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you (you pay on Base, or by credits or card) at the seller's price plus a disclosed markup. Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
+        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you (you pay on Base, or by credits or card) at the seller's price plus a disclosed markup. Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
       tags: ["agents", "execute", "planning", "router", "x402"],
       discovery: {
         bodyType: "json",
-        input: { decisionId: "dec_2b1c9e0f4a7d4c3e9b8a1f00", creditToken: "dc_...", maxBudgetUsd: 0.05 },
+        // A body that runs as published: a free plan sketch (no decisionId,
+        // which only a paid POST /api/decide answer can supply).
+        input: EXECUTE_EXAMPLE_INPUT,
         inputSchema: {
           properties: {
             decisionId: { type: "string", description: "From POST /api/decide (or pass steps instead)" },

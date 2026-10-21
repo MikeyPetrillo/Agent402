@@ -367,7 +367,7 @@ import { mppMarketPage } from "./mpp-market-page.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
 import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, leaderboardLogCacheStatus, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
 import { decideIndexExportHandler } from "./decide/index-export.js";
-import { buildDecideTools, decideEnabled, makeFeedbackHandler } from "./tools/decide-kit.js";
+import { buildDecideTools, decideEnabled, makeFeedbackHandler, UNKNOWN_DECISION_MESSAGE, decideUpgradeOffer } from "./tools/decide-kit.js";
 import { openDecideLedger, singleWriterTopology } from "./decide/ledger.js";
 import { aggregateDecideStats, STATS_WINDOWS_DAYS as DECIDE_STATS_WINDOWS_DAYS } from "./decide/stats.js";
 let _decideLedger = null;
@@ -3069,10 +3069,18 @@ app.use(express.json({ limit: "100kb" }));
 // synchronously from the ledger's mirror when the 402 is priced. Before any
 // gate runs, both are read fresh from the database, so a plan made or a
 // credit minted on the other container moments ago is priced correctly.
-app.post("/api/decide/execute", async (req, _res, next) => {
+// A decisionId this server never answered is refused here, free, before any
+// 402: a quote for it could only buy the handler's 404. Only a definite "not
+// in the ledger" refuses; a slow or failing read leaves it to the paid path.
+app.post("/api/decide/execute", async (req, res, next) => {
   try {
     const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
     if (L?.warmForQuote && req.body && typeof req.body === "object") await L.warmForQuote(req.body.decisionId, req.body.creditToken);
+    const id = req.body && typeof req.body === "object" ? req.body.decisionId : undefined;
+    if (L && typeof id === "string" && id) {
+      const found = await Promise.race([Promise.resolve().then(() => L.getDecision(id)), new Promise((r) => setTimeout(() => r(undefined), 1500).unref?.())]);
+      if (found === null) return res.status(404).json({ error: UNKNOWN_DECISION_MESSAGE, decide: "POST /api/decide", freeSketch: "GET /api/find?q=<task>", charged: false });
+    }
   } catch { /* the mirror prices as before */ }
   next();
 });
@@ -6205,7 +6213,7 @@ const externalServes = async (q, meter = null) => {
 // the judged plan with inputs filled in stays the paid decide tool.
 const decideUpgrade = () => {
   const d = CATALOG["POST /api/decide"];
-  return d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide-execute" } : null;
+  return d ? decideUpgradeOffer() : null;
 };
 const planSketchFor = (q) => {
   try {

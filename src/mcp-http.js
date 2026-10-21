@@ -50,6 +50,7 @@ import { recordWish } from "./wish.js";
 import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
+import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -917,7 +918,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             plan = buildPlanSketch(taskStr, {
               rank: (task) => findTools(catalog, task, { k: 3, baseUrl, powSlugs: freeSlugs }),
               weakScore: FIND_WEAK_SCORE,
-              upgrade: d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide.execute" } : null,
+              upgrade: d ? decideUpgradeOffer({ next: "decide.execute" }) : null,
               executable: Boolean(catalog["POST /api/decide/execute"]),
             });
           } catch { plan = null; }
