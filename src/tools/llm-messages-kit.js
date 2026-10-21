@@ -21,9 +21,11 @@
 // on `"usage"` in data: lines, which message_delta carries at top level).
 //
 // Deliberately NOT on this wire (yet): the opt-in prompt cache (`cache:true`
-// keys on the OpenAI-shaped normalized body), default reasoning-effort
-// injection (the Anthropic wire expresses thinking as `thinking`, which the
-// buyer sets natively), and routing on the auto tier by prompt class is
+// keys on the OpenAI-shaped normalized body) and the budget tiers' default
+// reasoning-effort injection (the Anthropic wire expresses thinking as
+// `thinking`, which the buyer sets natively). The one effort the gateway adds
+// is premium's small-budget "low" (smallBudgetEffort), and only when the buyer
+// set neither effort nor thinking. Routing on the auto tier by prompt class is
 // supported (classifyPrompt reads text blocks). Buyer-settable OpenRouter
 // knobs are the same as the chat wire: zdr, cache_control (top-level, the
 // Anthropic-native per-block cache_control passes through untouched).
@@ -36,7 +38,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, smallBudgetEffort,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
@@ -401,9 +403,17 @@ export function makeMessagesHandler(routeTier) {
       // it rather than a silently ignored field (explicit-model requests were
       // validated against their own model above and never reach this branch).
       const linkProfile = body.effort !== undefined ? reasoningProfile(model) : null;
-      const effortForLink = body.effort !== undefined && (!linkProfile || !linkProfile.efforts.includes(body.effort)) ? undefined : body.effort;
+      const maxOut = Math.min(body.max_tokens, p.max_tokens);
+      // A buyer who set no depth (no effort, no thinking) on a tier that
+      // leaves the model's own default (premium) gets effort "low" when the
+      // budget is below the room the tier gives a reasoning model: thinking
+      // tokens count against max_tokens, and a small budget spent thinking at
+      // the model default comes back cut off (smallBudgetEffort).
+      const effortForLink = body.effort !== undefined
+        ? ((!linkProfile || !linkProfile.efforts.includes(body.effort)) ? undefined : body.effort)
+        : (body.thinking === undefined ? (smallBudgetEffort(model, tierSlug, maxOut) ?? undefined) : undefined);
       return {
-        ...body, model, max_tokens: Math.min(body.max_tokens, p.max_tokens), zdr: undefined, effort: effortForLink,
+        ...body, model, max_tokens: maxOut, zdr: undefined, effort: effortForLink,
         ...(provider ? { provider } : {}), ...(user ? { user, session_id: user } : {}),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
         service_tier: serviceTierFor(model, body, flex), // flex / priority / explicit default on :nitro
@@ -503,6 +513,9 @@ export function makeMessagesHandler(routeTier) {
 }
 
 const EXAMPLE_IN = { model: "anthropic/claude-sonnet-5", max_tokens: 256, messages: [{ role: "user", content: "Summarize x402 in one sentence." }] };
+// The premium example's budget: its model reasons before it speaks, and 256
+// tokens could be spent thinking before the one sentence was said.
+const EXAMPLE_MAX_TOKENS_BY_TIER = { "v1-chat-premium": 1024 };
 const EXAMPLE_OUT = { id: "msg_…", type: "message", role: "assistant", model: "anthropic/claude-sonnet-5", content: [{ type: "text", text: "x402 is an HTTP-native way for agents to pay per request with USDC." }], stop_reason: "end_turn", usage: { input_tokens: 14, output_tokens: 18 } };
 const TAGS = ["llm", "ai", "inference", "anthropic-compatible", "messages-api", "claude", "gateway"];
 const INPUT_SCHEMA = {
@@ -560,7 +573,7 @@ export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([ti
   tags: tierSlug === "v1-chat-metered" ? [...TAGS, "metered", "pay-per-token"] : TAGS,
   discovery: {
     bodyType: "json",
-    input: tierSlug === "v1-chat-auto" ? { max_tokens: 256, messages: EXAMPLE_IN.messages } : { ...EXAMPLE_IN, model: EXAMPLE_MODEL_BY_TIER[tierSlug] },
+    input: tierSlug === "v1-chat-auto" ? { max_tokens: 256, messages: EXAMPLE_IN.messages } : { ...EXAMPLE_IN, model: EXAMPLE_MODEL_BY_TIER[tierSlug], max_tokens: EXAMPLE_MAX_TOKENS_BY_TIER[tierSlug] ?? EXAMPLE_IN.max_tokens },
     inputSchema: INPUT_SCHEMA,
     output: { example: EXAMPLE_OUT },
   },

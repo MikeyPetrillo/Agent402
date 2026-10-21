@@ -484,6 +484,10 @@ export const TIERS = {
       // older model) out. With a 4k-char prompt the clamp still leaves a usable
       // output budget on either (pinned in test-llm-gateway).
       "openai/gpt-6-astra", "anthropic/claude-fable-5.1",
+      // Gemini's pro model, also on pro: the premium Gemini wire's default
+      // (llm-gemini-kit.js), served here at this tier's caps and price. The
+      // bare family id maps to the live -preview id (PREFIX_CANONICAL).
+      "google/gemini-3.1-pro",
     ],
   },
   // Auto tier - model chosen server-side (see AUTO_RANKINGS above). Listed
@@ -2023,6 +2027,10 @@ export const REASONING_MODELS = [
   { id: "google/gemini-3.5-flash-lite", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.5-flash", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.6-flash", efforts: ["minimal", "low", "medium", "high"] },
+  // Gemini 3.1 Pro: reasoning MANDATORY, default effort medium, no "minimal"
+  // (live catalog 2026-10-21). Pro injects "low"; premium leaves the model
+  // default unless the call's budget is small (smallBudgetEffort).
+  { id: "google/gemini-3.1-pro-preview", efforts: ["low", "medium", "high"] },
   { id: "anthropic/claude-sonnet-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Claude Sonnet 5.5 (pro, via the claude-sonnet prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-29); pro injects "low".
@@ -2101,13 +2109,32 @@ export function reasoningProfile(model) {
   }
   return best;
 }
+/** The effort a "model"-policy tier (premium) asks for when a call's output
+ *  budget is below the room the tier itself gives a reasoning model
+ *  (defaultMaxTokens): "low" where the model takes it, else null. Reasoning
+ *  tokens count against max_tokens, so a model left at its own default effort
+ *  (high on Claude Opus 5, medium on Gemini 3.1 Pro) can spend a small budget
+ *  thinking and come back cut off or empty. A buyer reasoning preference
+ *  always wins; the callers only ask when the buyer set none. */
+export function smallBudgetEffort(model, tierSlug, maxTokens) {
+  const tier = TIERS[tierSlug];
+  if (tier?.reasoningDefault !== "model" || !tier.defaultMaxTokens) return null;
+  const n = Number(maxTokens);
+  if (!Number.isFinite(n) || n >= tier.defaultMaxTokens) return null;
+  const prof = reasoningProfile(model);
+  return prof && prof.efforts.includes("low") ? "low" : null;
+}
 /** The reasoning object to inject for a chain link when the buyer set none:
- *  null = leave the model's default alone. */
-export function defaultReasoningFor(model, tierSlug) {
+ *  null = leave the model's default alone. `maxTokens` is the link's output
+ *  budget after the clamp (see smallBudgetEffort). */
+export function defaultReasoningFor(model, tierSlug, maxTokens) {
   const prof = reasoningProfile(model);
   if (!prof) return null;
   const policy = TIERS[tierSlug]?.reasoningDefault || "lowest";
-  if (policy === "model") return null;
+  if (policy === "model") {
+    const effort = smallBudgetEffort(model, tierSlug, maxTokens);
+    return effort ? { effort } : null;
+  }
   const nonNone = prof.efforts.filter((e) => e !== "none");
   if (policy === "low") return { effort: nonNone.includes("low") ? "low" : (nonNone[0] || null) };
   // "lowest": the cheapest effort the model supports that still reasons
@@ -3288,7 +3315,7 @@ function makeHandler(routeTier) {
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug);
+      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
       const plugins = [
         ...(TIERS[tierSlug].web ? [{ ...TIERS[tierSlug].web }] : []),
         ...(structured && body.stream !== true ? [{ id: "response-healing" }] : []),

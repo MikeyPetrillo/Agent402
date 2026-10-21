@@ -140,6 +140,33 @@ await proTool.handler({ model: "anthropic/claude-sonnet-5", max_tokens: 64, mess
   const all = frames.join("");
   ok(res.ended && /message_start/.test(all) && /message_stop/.test(all) && !/cost/.test(all), "streamed Anthropic events pass through end to end with billing scrubbed");
 }
+// ---- premium small-budget effort (2026-10-21) ----
+// The premium example's model reasons at its own default (high) before it
+// speaks, and thinking counts against max_tokens: the published example now
+// leaves 1,024 tokens, and a premium call with no depth set and a budget under
+// the tier's reasoning room asks for effort "low". A buyer's own effort or
+// thinking always wins; the pro tier is untouched.
+{
+  const prem = bySlug("v1-chat-premium-messages");
+  ok(prem.discovery.input.max_tokens === 1024 && prem.discovery.input.model === "anthropic/claude-opus-5", "the premium example leaves 1,024 tokens for a model that reasons first");
+  const sent = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); sent.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  await prem.handler(prem.discovery.input, fakeReq);
+  ok(sent[0]?.max_tokens === 1024 && sent[0]?.effort === "low", `premium example: effort ${sent[0]?.effort} at max_tokens ${sent[0]?.max_tokens}`);
+  sent.length = 0;
+  await prem.handler({ ...prem.discovery.input, effort: "high" }, fakeReq);
+  ok(sent[0]?.effort === "high", "a buyer effort is sent as given");
+  sent.length = 0;
+  await prem.handler({ ...prem.discovery.input, thinking: { type: "adaptive" } }, fakeReq);
+  ok(sent[0]?.effort === undefined && sent[0]?.thinking?.type === "adaptive", "a buyer thinking setting gets no injected effort");
+  sent.length = 0;
+  await prem.handler({ ...prem.discovery.input, max_tokens: TIERS["v1-chat-premium"].defaultMaxTokens }, fakeReq);
+  ok(sent[0]?.effort === undefined, "a budget at the tier's reasoning room keeps the model's own effort");
+  sent.length = 0;
+  await bySlug("v1-chat-pro-messages").handler({ model: "anthropic/claude-sonnet-5", max_tokens: 256, messages: msg() }, fakeReq);
+  ok(sent[0]?.effort === undefined, "the pro Messages wire injects no effort (unchanged)");
+}
+
 globalThis.fetch = realFetch;
 // ---- metered Messages route: quote from the body, belt, provider bound, meter sentinel ----
 {

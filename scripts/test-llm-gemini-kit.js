@@ -197,5 +197,59 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
   } finally { globalThis.fetch = pbmReal; delete process.env.OPENROUTER_API_KEY; }
 }
 
+// ---- the Gemini wire defaults to Gemini (2026-10-21) ------------------------
+// A Google GenAI SDK pointed here without a model was answered by the chat
+// wire's default (claude-opus-5 on premium, gpt-4o on pro). Each flat and
+// metered tier now defaults to a current Gemini model it admits itself, so the
+// call is priced and served at the route's own tier; the auto tier routes.
+{
+  const { GEMINI_DEFAULT_MODEL_BY_TIER, modelOf } = await import("../src/tools/llm-gemini-kit.js");
+  const { tierAllows, canonicalModel, reasoningProfile, smallBudgetEffort, defaultReasoningFor } = await import("../src/tools/llm-gateway-kit.js");
+  const byT = (t) => LLM_GEMINI_TOOLS.find((x) => x.slug === `${t}-gemini`);
+  const contents = [{ role: "user", parts: [{ text: "hi" }] }];
+  ok(GEMINI_DEFAULT_MODEL_BY_TIER["v1-chat-auto"] === undefined && modelOf({ contents }, "v1-chat-auto") === undefined, "the auto Gemini route keeps routing (no default model)");
+  for (const tier of Object.keys(GEMINI_PATH_BY_TIER).filter((t) => t !== "v1-chat-auto")) {
+    const m = GEMINI_DEFAULT_MODEL_BY_TIER[tier];
+    ok(typeof m === "string" && m.startsWith("google/gemini-") && canonicalModel(m) === m, `${tier}: the Gemini default is a canonical Gemini id (${m})`);
+    ok(tierAllows(tier, m), `${tier}: the tier admits its own Gemini default`);
+    ok(modelOf({ contents }, tier) === m && modelOf({ contents, model: "models/gemini-3.5-flash-lite" }, tier) === "google/gemini-3.5-flash-lite", `${tier}: no model serves the default; a named model is still served as named`);
+    const g = byT(tier);
+    if (g.tierQuote) ok(g.tierQuote(g.discovery.input) === TIERS[tier].price, `${tier}: the published example quotes the route's own price`);
+    ok(g.discovery.output.example.modelVersion === m && g.description.includes(m), `${tier}: the example answer and the description name the default`);
+  }
+  ok(GEMINI_DEFAULT_MODEL_BY_TIER["v1-chat-premium"] === "google/gemini-3.1-pro-preview", "premium serves Gemini's pro model");
+  ok(/flash|pro/.test(GEMINI_DEFAULT_MODEL_BY_TIER["v1-chat-pro"]), "pro serves a Gemini flash or pro model");
+  // The pro and premium defaults reason before they speak: their examples
+  // leave room past the old 256-token budget.
+  for (const tier of ["v1-chat-pro", "v1-chat-premium"]) {
+    const n = byT(tier).discovery.input.generationConfig.maxOutputTokens;
+    ok(reasoningProfile(GEMINI_DEFAULT_MODEL_BY_TIER[tier]) && n >= 1024 && n <= TIERS[tier].maxTokens, `${tier}: the example's budget (${n}) leaves room for a reasoning default`);
+  }
+  // Premium leaves a reasoning model at its own effort, except when the call's
+  // budget is below the room the tier gives one: then it asks for "low".
+  const P = GEMINI_DEFAULT_MODEL_BY_TIER["v1-chat-premium"];
+  ok(smallBudgetEffort(P, "v1-chat-premium", 1024) === "low" && defaultReasoningFor(P, "v1-chat-premium", 1024)?.effort === "low", "premium, small budget: effort low");
+  ok(defaultReasoningFor(P, "v1-chat-premium", TIERS["v1-chat-premium"].defaultMaxTokens) === null && defaultReasoningFor(P, "v1-chat-premium") === null, "premium at the tier default budget (or no budget known): the model's own effort");
+  ok(smallBudgetEffort(P, "v1-chat-pro", 256) === null && smallBudgetEffort("deepseek/deepseek-chat", "v1-chat-premium", 256) === null, "small-budget effort is premium-only and reasoning-models-only");
+  // Served end to end through the chat handler: the outbound call names the
+  // default and, at the example's budget, carries effort low.
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const real = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify({ id: "g", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } }), headers: { get: () => "application/json" } }; };
+  try {
+    const prem = byT("v1-chat-premium");
+    const out = await prem.handler(prem.discovery.input, { header: () => undefined, headers: {}, ip: "127.0.0.1", __meteredQuoteUsd: TIERS["v1-chat-premium"].price });
+    ok(seen[0]?.model === P && seen[0]?.max_tokens === 1024 && seen[0]?.reasoning?.effort === "low" && out.modelVersion === P && !out.agent402_tier, `premium example: served ${seen[0]?.model} at max_tokens ${seen[0]?.max_tokens}, effort ${seen[0]?.reasoning?.effort}, no cross-tier`);
+    seen.length = 0;
+    await prem.handler({ contents }, { header: () => undefined, headers: {}, ip: "127.0.0.1", __meteredQuoteUsd: TIERS["v1-chat-premium"].price });
+    ok(seen[0]?.model === P && seen[0]?.max_tokens === TIERS["v1-chat-premium"].defaultMaxTokens && seen[0]?.reasoning === undefined, "premium, no budget sent: the tier default budget and the model's own effort");
+    seen.length = 0;
+    const pro = byT("v1-chat-pro");
+    await pro.handler(pro.discovery.input, { header: () => undefined, headers: {}, ip: "127.0.0.1", __meteredQuoteUsd: TIERS["v1-chat-pro"].price });
+    ok(seen[0]?.model === GEMINI_DEFAULT_MODEL_BY_TIER["v1-chat-pro"] && seen[0]?.reasoning?.effort === "low", `pro example: served ${seen[0]?.model} with effort ${seen[0]?.reasoning?.effort}`);
+  } finally { globalThis.fetch = real; delete process.env.OPENROUTER_API_KEY; }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

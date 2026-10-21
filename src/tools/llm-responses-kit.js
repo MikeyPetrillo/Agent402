@@ -310,9 +310,10 @@ export function makeResponsesHandler(routeTier) {
     const outboundFor = (model, flex = false) => {
       const p = { ...probe, model };
       clampToMargin(p, tier, imageCount); // max_tokens in the probe IS max_output_tokens
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug);
+      const maxOut = Math.min(body.max_output_tokens, p.max_tokens);
+      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, maxOut);
       return {
-        ...body, model, max_output_tokens: Math.min(body.max_output_tokens, p.max_tokens), zdr: undefined,
+        ...body, model, max_output_tokens: maxOut, zdr: undefined,
         ...(reasoning ? { reasoning } : {}),
         ...(provider ? { provider } : {}), ...(user ? { user, session_id: user } : {}),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
