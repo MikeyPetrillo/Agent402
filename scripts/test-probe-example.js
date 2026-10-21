@@ -25,7 +25,7 @@ const { normaliseManifestTools, openapiProbeExamples, sellerDetail, persistIndex
   __setCrawlFetchForTest, __setProbeFetchForTest, __crawlSellerForTest, __resetRobotsCacheForTest, _cacheForTests,
   __probeExampleMemoStatsForTest, __testSetBazaarTools, registerOrigin, __resetForcedCrawlForTest, validatorFor, removeOrigin } = idx;
 const { probeAttemptsFor } = await import("../src/x402-live-quote.js");
-const { boundedProbeExample, manifestEntryExample, openapiOperationExample, probeExampleFor, noteProbeExample, probeExamplePath, ProbeExampleMemo, MAX_EXAMPLE_BYTES } = await import("../src/probe-example.js");
+const { boundedProbeExample, manifestEntryExample, openapiOperationExample, probeExampleFor, noteProbeExample, probeExamplePath, mergeProbeExamples, ProbeExampleMemo, MAX_EXAMPLE_BYTES, MAX_EXAMPLES } = await import("../src/probe-example.js");
 
 let pass = 0, fail = 0;
 // Straight to stdout, so an assertion made while console is captured is shown.
@@ -174,6 +174,23 @@ const pathsManifest = (origin, extra = {}) => ({
   ok(probeExampleFor(v, "POST", "/v1/y?p=b") === '{"p":"b"}' && probeExampleFor(v, "POST", "/v1/y?p=a") === '{"p":"a"}', "an exact route still wins over the shared path");
   ok(probeExampleFor(v, "POST", "/v1/y") === '{"p":"a"}', "the bare path takes the first variant's example");
 
+  // The cap counts examples (routes), not keys: each example also holds a
+  // path alias, and MAX_EXAMPLES routes all stay findable.
+  {
+    const cap = new Map();
+    for (let i = 0; i < MAX_EXAMPLES + 25; i++) noteProbeExample(cap, "POST", `/r${i}?v=1`, `{"i":${i}}`);
+    const routes = [...cap.keys()].filter((k) => !k.includes(" ~")).length;
+    ok(routes === MAX_EXAMPLES && cap.size === 2 * MAX_EXAMPLES, `the cap is ${MAX_EXAMPLES} examples, not ${MAX_EXAMPLES} keys (${routes} routes, ${cap.size} keys)`);
+    ok(probeExampleFor(cap, "POST", `/r${MAX_EXAMPLES - 1}?v=1`) === `{"i":${MAX_EXAMPLES - 1}}` && probeExampleFor(cap, "POST", `/r${MAX_EXAMPLES - 1}`) === `{"i":${MAX_EXAMPLES - 1}}`, "the last example inside the cap is found by its route and its path");
+    ok(probeExampleFor(cap, "POST", `/r${MAX_EXAMPLES}?v=1`) === null && probeExampleFor(cap, "POST", `/r${MAX_EXAMPLES}`) === null, "an example past the cap is not recorded, alias included");
+    noteProbeExample(cap, "POST", "/r0?v=1", '{"late":1}');
+    ok(probeExampleFor(cap, "POST", "/r0?v=1") === '{"i":0}', "at the cap a known route keeps its first writer");
+    const merged = mergeProbeExamples(new Map(), cap);
+    ok([...merged.keys()].filter((k) => !k.includes(" ~")).length === MAX_EXAMPLES && merged.size === cap.size, `a merge keeps ${MAX_EXAMPLES} examples with their aliases (${merged.size} keys)`);
+    const more = new Map(); for (let i = 0; i < 10; i++) noteProbeExample(more, "POST", `/extra${i}`, "{}");
+    ok(mergeProbeExamples(merged, more).size === cap.size, "a merge into a full map adds nothing past the cap");
+  }
+
   // The memo: bounded, by origin and source, with a drop hook.
   const dropped = [];
   const memo = new ProbeExampleMemo({ maxBytes: 200, maxOriginBytes: 120, onDrop: (o, p) => dropped.push(`${o} ${p}`) });
@@ -188,7 +205,7 @@ const pathsManifest = (origin, extra = {}) => ({
   ok(memo.get("o4", "openapi") === null, "a null set clears that source");
   memo.purge((o) => o === "o3");
   ok(memo.get("o3", "openapi") === null && memo.stats().origins === 0, "purge forgets an origin");
-  ok(!JSON.stringify(memo).includes("x") && Object.keys(memo).length === 0, "the memo serialises to nothing: its state is in private fields");
+  ok(!JSON.stringify(memo).includes("x") && Object.keys(memo).length === 0, "the memo serializes to nothing: its state is in private fields");
 }
 
 // ------------------------------------------------------------ 4. end to end, and private

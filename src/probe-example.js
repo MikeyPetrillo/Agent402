@@ -23,7 +23,7 @@
 //
 // Bounded: a JSON object only (never an array or a scalar), at most
 // MAX_EXAMPLE_BYTES serialized and MAX_EXAMPLE_DEPTH deep, no
-// prototype-addressing key anywhere, at most MAX_EXAMPLES per seller. Anything
+// prototype-addressing key anywhere, at most MAX_EXAMPLES routes per seller. Anything
 // outside the bounds is refused whole, never trimmed into something the seller
 // did not write.
 
@@ -121,17 +121,37 @@ export function probeExamplePath(route) {
   return p || "/";
 }
 
+// A key is "<METHOD> <route>" (one example) or "<METHOD> ~<path>" (the same
+// example's path alias). MAX_EXAMPLES bounds the examples, so each kind of key
+// is counted on its own: the cap is MAX_EXAMPLES routes, not half that.
+const isPathKey = (k) => k.charAt(k.indexOf(" ") + 1) === "~";
+function keyCounts(map) {
+  const c = { route: 0, path: 0 };
+  for (const k of map.keys()) c[isPathKey(k) ? "path" : "route"]++;
+  return c;
+}
+function addCounted(map, counts, k, v) {
+  if (map.has(k)) return;
+  const kind = isPathKey(k) ? "path" : "route";
+  if (counts[kind] >= MAX_EXAMPLES) return;
+  map.set(k, v);
+  counts[kind]++;
+}
+
 /** Record one example under its route. First writer wins, so a seller's own
  *  manifest (read first) is preferred over its OpenAPI. Keys are
  *  "<METHOD> <route>", plus "* <route>" for an entry that names no verb; each
- *  is recorded under the exact route and under its normalised path. */
+ *  is recorded under the exact route and under its normalized path. At most
+ *  MAX_EXAMPLES examples (routes) are kept. */
 export function noteProbeExample(map, method, route, text) {
-  if (!(map instanceof Map) || !text || typeof route !== "string" || !route) return;
+  if (!(map instanceof Map) || !text || typeof route !== "string" || !route || route.startsWith("~")) return;
   const m = method ? String(method).toUpperCase() : "*";
-  for (const k of new Set([`${m} ${route}`, `${m} ~${probeExamplePath(route)}`])) {
-    if (map.size >= MAX_EXAMPLES) return;
-    if (!map.has(k)) map.set(k, text);
-  }
+  const exact = `${m} ${route}`;
+  const counts = keyCounts(map);
+  // A route past the cap is not recorded at all, alias included.
+  if (!map.has(exact) && counts.route >= MAX_EXAMPLES) return;
+  addCounted(map, counts, exact, text);
+  addCounted(map, counts, `${m} ~${probeExamplePath(route)}`, text);
 }
 
 /** The example for a probe of `route` on `method`, or null: the exact route
@@ -145,12 +165,13 @@ export function probeExampleFor(map, method, route) {
 }
 
 /** Copy `from`'s entries into `into` where `into` has none (first writer
- *  wins), within MAX_EXAMPLES. Returns `into`. */
+ *  wins), within MAX_EXAMPLES routes (and as many path aliases). Returns `into`. */
 export function mergeProbeExamples(into, from) {
   if (!(into instanceof Map) || !(from instanceof Map)) return into;
+  const counts = keyCounts(into);
   for (const [k, v] of from) {
-    if (into.size >= MAX_EXAMPLES) break;
-    if (!into.has(k)) into.set(k, v);
+    if (counts.route >= MAX_EXAMPLES && counts.path >= MAX_EXAMPLES) break;
+    addCounted(into, counts, k, v);
   }
   return into;
 }
