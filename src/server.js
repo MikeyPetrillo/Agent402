@@ -369,6 +369,7 @@ import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCir
 import { decideIndexExportHandler } from "./decide/index-export.js";
 import { buildDecideTools, decideEnabled, makeFeedbackHandler } from "./tools/decide-kit.js";
 import { openDecideLedger, singleWriterTopology } from "./decide/ledger.js";
+import { aggregateDecideStats, STATS_WINDOWS_DAYS as DECIDE_STATS_WINDOWS_DAYS } from "./decide/stats.js";
 let _decideLedger = null;
 // A ledger that cannot open (bad file, unwritable path) leaves the feature
 // off rather than taking the whole app down at boot.
@@ -3889,6 +3890,24 @@ app.get("/api/calls/daily", (req, res) => {
 // wallet scan that endpoint reads never sees a Tempo transaction at all.
 // This reads src/sales-ledger.js's own recorded rows directly instead - real
 // dollars, unlike the free-tier lane, since a Tempo settlement is real money.
+// Decide funnel for the operator: decisions, payers, runs, outcomes, skip
+// codes, per plan shape and per planner version, outside buyers and our own
+// traffic apart. Aggregates only (src/decide/stats.js).
+app.get("/__operator/decide-stats.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store");
+  const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
+  if (!L || typeof L.statsRows !== "function") return res.json({ enabled: false });
+  try {
+    const now = Date.now();
+    const rows = await L.statsRows(now - Math.max(...DECIDE_STATS_WINDOWS_DAYS) * 86_400_000);
+    // A payer key is the raw wallet, or rail-prefixed (tempo:, credits:, ip:).
+    const isOurs = (r) => r.synthetic === true || isOwnWallet(String(r.payer || "").replace(/^tempo:/, ""));
+    res.json({ enabled: true, ...aggregateDecideStats(rows, { now, isOurs }) });
+  } catch (e) {
+    res.status(500).json({ error: "decide stats failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
 // Decide usage for the /revenue monitor: per slug (decide, decide-execute),
 // all-time and 30 days, settlements with ours counted separately, outside
 // dollars and distinct outside buyers. Aggregates only, never a per-call row.
