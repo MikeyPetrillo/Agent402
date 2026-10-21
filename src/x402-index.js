@@ -2839,7 +2839,9 @@ function entryPaymentBlockAccepts(p) {
  * that names itself `openapi`/`swagger`) are left to the OpenAPI reader, and an
  * entry that carries none of the x402 entry fields is not read.
  */
-const OPENAPI_PATH_ITEM_KEYS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace", "$ref", "parameters", "servers"]);
+// Verb keys and $ref mark an OpenAPI path item; `parameters` and `servers` are
+// shared with x402 entries that describe their own query, so they do not.
+const OPENAPI_PATH_ITEM_KEYS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace", "$ref"]);
 function manifestPathsCatalogue(manifest) {
   const p = manifest?.paths;
   if (!p || typeof p !== "object" || Array.isArray(p)) return null;
@@ -4599,7 +4601,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       if (!firstOutcome) firstOutcome = k;
     };
     // The seller's own example request for this route, when its documents
-    // publish one: the probe body only, never stored or logged (probe-example.js).
+    // publish one: the probe body only, never persisted, projected or logged
+    // (probe-example.js); the in-memory manifest copy is slimmed before persist.
     // Never for a route the seller itself marks free (paid:false): a body the
     // route accepts would run it, and only a paid route answers it with a 402.
     const example = tool.paid === false ? null : probeExampleFor(probeExamples, "POST", tool.route);

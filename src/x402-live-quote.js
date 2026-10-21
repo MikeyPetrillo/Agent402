@@ -310,7 +310,7 @@ export function probeBodyFor(tool) {
  * already bounded JSON text, read from the seller's own document during this
  * crawl, sent only as the body of this probe to the targets probeTargetsFor
  * yields for the seller's own route, with none of the seller's headers. It is
- * never stored, logged or projected; request-contract.js keeps its "shape, not
+ * never persisted, logged or projected; request-contract.js keeps its "shape, not
  * the sample" rule for every projection.
  */
 export function probeAttemptsFor(originUrl, tool, { example = null } = {}) {
