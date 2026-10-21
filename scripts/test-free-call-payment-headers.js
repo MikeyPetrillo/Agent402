@@ -17,7 +17,7 @@
 //     lane is observable and an own-wallet payer does move it.
 // Requires REDIS_URL (under CI a missing one fails).
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -150,8 +150,8 @@ try {
   ok(unpaid.status === 402 && !!accepted, `the paid control has a Base offer (${unpaid.status})`);
   const credential = Buffer.from(JSON.stringify({
     x402Version: 2, resource: offer.resource, accepted,
-    payload: { signature: "0x" + "11".repeat(65), authorization: { from: ours, to: accepted?.payTo, value: accepted?.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + "c1".repeat(32) } },
-  })).toString("base64");
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: ours, to: accepted?.payTo, value: accepted?.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + randomBytes(32).toString("hex") } },
+  })).toString("base64"); // a fresh nonce each run: the replay guard remembers a used one
   const paid = await fetch(`${BASE}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json", "Payment-Signature": credential }, body: JSON.stringify({ text: "hello world" }) });
   ok(paid.status === 200, `the paid control from our own wallet is served (${paid.status})`);
   const l2 = await waitLanes((l) => l.synthetic >= 1);
