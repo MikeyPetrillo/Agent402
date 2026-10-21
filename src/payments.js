@@ -36,8 +36,9 @@ import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onc
 import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
-import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds } from "./circle-facilitator.js";
+import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
+import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -284,6 +285,13 @@ function makeCeloUsdcScheme() {
  *  primary `network` is always included and listed first (it carries the Bazaar
  *  resource + is what the facilitator must support). */
 let warnedArcWithoutKey = false;
+// The Arc pending book (src/circle-pending.js), built only when Circle's
+// client is; null otherwise. Read by /api/gateway-status as one word.
+let circlePendingBook = null;
+/** "off" without an Arc client, else ok / near_capacity / full / unresolved. */
+export function circlePendingStatus() {
+  try { return circlePendingBook ? circlePendingBook.alarmStatus() : "off"; } catch { return "unknown"; }
+}
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -918,21 +926,33 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   if (evmCaip2.includes(ARC_CAIP2)) {
     // A settlement Circle leaves pending past the client's window is booked
     // by paymentId and resolved by a leased reconcile pass (src/circle-pending.js).
-    let pendingBook = null;
-    const bookPending = async (entry) => {
-      pendingBook = pendingBook || (await import("./circle-pending.js")).createCirclePendingBook();
-      return pendingBook.book(entry);
+    const book = async () => {
+      if (circlePendingBook) return circlePendingBook;
+      const { createCirclePendingBook } = await import("./circle-pending.js");
+      const { saleByTxFresh } = await import("./sales-ledger.js");
+      const { txServedElsewhere } = await import("./settlement-claims.js");
+      // Served after all: a sale recorded for the tx, or a request holding its
+      // settlement claim. Checking also takes the claim, so nothing can serve
+      // that tx after it is booked owed.
+      circlePendingBook = createCirclePendingBook({
+        wasServed: async ({ tx, network, paymentId }) =>
+          !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `circle-pending:${paymentId}`)),
+      });
+      return circlePendingBook;
     };
+    const bookPending = async (entry) => (await book()).book(entry);
     circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
     if (circleClient && process.env.X402_SYNC_ON_START !== "false") {
       const { leased } = await import("./state-db.js");
+      const { RECONCILE_LEASE_MS } = await import("./circle-pending.js");
       const client = circleClient;
-      const tick = leased("circle-pending-reconcile", { ttlMs: 10 * 60_000 }, async () => {
-        pendingBook = pendingBook || (await import("./circle-pending.js")).createCirclePendingBook();
-        await pendingBook.ready;
-        if (!pendingBook.list().length) return null;
-        const r = await pendingBook.reconcile({ status: (id) => client.paymentStatus(id) });
-        if (r.owed || r.failed) console.warn(`[circle] pending reconcile: ${r.owed} completed (booked owed), ${r.failed} failed (nothing owed), ${r.pending} still pending`);
+      void book();
+      const tick = leased("circle-pending-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
+        const b = await book();
+        await b.ready;
+        if (!b.list().length) return null;
+        const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
+        if (r.owed || r.failed || r.served || r.unresolved) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.pending + r.unreadable} still pending`);
         return r;
       });
       const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
@@ -1225,7 +1245,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // /supported (memoized, so this is the guard's own read when it ran) lists
   // exact on eip155:5042 for Arc USDC. A malformed or failing /supported, a
   // timeout, or an answer without that kind drops Arc and nothing else.
-  if (circleClient && evmCaip2.includes(ARC_CAIP2)) {
+  let arcDeliberatelyAbsent = false;
+  if (circleClient) {
     let arcListed = false;
     let why = "boot probe skipped (X402_SYNC_ON_START=false)";
     if (syncOnStart) {
@@ -1238,13 +1259,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           }),
         ]);
         arcListed = (s?.kinds || []).some((k) => k?.scheme === "exact" && k?.network === ARC_CAIP2);
+        // Circle answered, and does not settle Arc for us: a rail this server
+        // never offered is not an outage. One it offered on an earlier boot
+        // and now cannot is (src/gated-rails.js history).
+        if (!arcListed && !(await gatedRailWasOffered(ARC_CAIP2))) arcDeliberatelyAbsent = true;
         why = arcListed ? "" : "Circle's /supported does not list exact on eip155:5042";
       } catch (e) {
         // Only our own reason code is printed (src/circle-facilitator.js).
         why = `Circle's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
       }
     }
-    if (!arcListed) {
+    if (!arcListed && evmCaip2.includes(ARC_CAIP2)) {
       console.warn(`WARNING: dropping ${ARC_CAIP2} (Arc) from the offered networks - ${why}. Other chains are unaffected.`);
       evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
     }
@@ -1378,6 +1403,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
   });
   registerWalletBlocklistHook(server);
+  // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
+  // effect is not keyed on the payer. An identity-bound route (memory, attest,
+  // feedback, my-usage, receipts) keys the caller on authorization.from; for a
+  // contract wallet that is the CONTRACT's address, and who may sign for it is
+  // whatever its isValidSignature says at the moment of the check (it can
+  // accept any signer, or change owners), so it is not the single-key
+  // attribution an EOA gives. Those routes refuse a contract-wallet signature
+  // before verification (no RPC call, nothing charged); so does any request
+  // this hook cannot place on a known non-identity route.
+  if (circleClient && evmCaip2.includes(ARC_CAIP2) && arcContractWalletsEnabled()) {
+    const contractOkRoutes = new Set(Object.entries(catalog || {})
+      .filter(([, item]) => item && !item.identityBound && !isIdentityBoundRoute(item))
+      .map(([route]) => route));
+    registerArcContractWalletRouteGate(server, contractOkRoutes);
+    console.log("Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on), except on identity-bound routes");
+  }
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
   // One authorization, one answer (src/settlement-claims.js). The claim runs
@@ -1396,11 +1437,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const offeredCaip2 = new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
   const offeredNames = networks.filter((n) => offeredCaip2.has(NETWORKS[n]));
   // Observe the outcome for railStatus(); does not affect it.
-  railsConfigured = [...networks];
+  // A gated rail its facilitator does not list, and this server never
+  // offered, is not configured-but-dropped: it is absent on purpose.
+  railsConfigured = networks.filter((n) => !(arcDeliberatelyAbsent && NETWORKS[n] === ARC_CAIP2));
   railsOffered = [...offeredNames];
   // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
   // chain page, nav, live revenue read) only now, from the FINAL offer.
-  if (offeredCaip2.has(ARC_CAIP2)) markGatedRailOffered(ARC_CAIP2);
+  if (offeredCaip2.has(ARC_CAIP2)) { markGatedRailOffered(ARC_CAIP2); void recordGatedRailOffered(ARC_CAIP2); }
   console.log(
     `Accepting USDC on: ${offeredNames.join(", ")} (${[...offeredCaip2].join(", ")})` +
       (robinhoodEnabled ? " - note: robinhood settles USDG, not USDC" : "")
@@ -1674,6 +1717,26 @@ export function blockedPayerFromPayload(paymentPayload) {
     if (normalized && blocklist.has(normalized)) return normalized;
   }
   return null;
+}
+
+/** Refuse an Arc contract-wallet signature on any route not in `okRoutes`
+ *  ("METHOD /path" keys). Before verification, so no RPC call is made and the
+ *  buyer gets a 402 that names the reason. */
+export const ARC_CONTRACT_WALLET_ROUTE_REASON = "contract_wallet_not_accepted_on_this_route";
+export function registerArcContractWalletRouteGate(server, okRoutes) {
+  server.onBeforeVerify(async (ctx) => {
+    if (ctx?.requirements?.network !== ARC_CAIP2) return undefined;
+    if (!(await isContractWalletPayment(ctx?.paymentPayload))) return undefined;
+    const req = ctx?.transportContext?.request?.adapter?.req;
+    const key = req ? `${String(req.method || "").toUpperCase()} ${req.path || ""}` : "";
+    if (okRoutes.has(key)) return undefined;
+    return {
+      abort: true,
+      reason: ARC_CONTRACT_WALLET_ROUTE_REASON,
+      message: "This route keys the caller on the paying address and takes an EOA signature only; a contract-wallet payment is not accepted here. Nothing was charged.",
+    };
+  });
+  return server;
 }
 
 export function registerWalletBlocklistPayerEnrichment(server) {

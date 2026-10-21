@@ -378,7 +378,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -3387,6 +3387,10 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // Arc settlements Circle left pending (src/circle-pending.js): off / ok /
+    // near_capacity / full / unresolved. One word; the heartbeat pages on
+    // unresolved and full.
+    circlePending: { status: circlePendingStatus() },
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),

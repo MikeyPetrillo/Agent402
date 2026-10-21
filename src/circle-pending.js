@@ -1,33 +1,59 @@
-// Arc settlements Circle left unresolved, booked by paymentId until they are.
+// Arc settlements Circle left unresolved, booked until they are.
 //
 // Circle's /settle can answer `settlement_pending`: the payment is recorded on
 // its side and its outcome was not known inside the wait window. The client
 // (src/circle-facilitator.js) polls /status for a bounded time first; a payment
-// still pending after that is refused to the buyer (nothing is served), which
-// is right only if it never lands. It may land later, and then the buyer was
-// charged for nothing. So the payment is booked here, keyed by Circle's
-// paymentId, and a reconcile pass reads its final state:
+// still pending after that is refused to the buyer (nothing is served), and
+// its authorization stays claimed (src/settlement-claims.js), so the same
+// signed payment cannot be resent and served while it is unresolved. It may
+// still land, and then the buyer was charged for nothing. So it is booked
+// here, keyed by the AUTHORIZATION it carries (network, payer, nonce), with
+// Circle's paymentId to ask about it, and a reconcile pass reads its final
+// state:
 //
-//   completed -> the charge happened and nothing was served: it becomes an
-//                owed refund in the refund ledger, keyed by the settlement tx,
-//                so the refund runner repays it only after on-chain proof
-//                (src/payment-verify.js), exactly like any charged failure;
-//   failed    -> nothing was charged, nothing is owed; the entry is dropped;
-//   pending   -> kept for the next pass.
+//   completed -> unless that tx was served after all (a sale recorded for it,
+//                or another request holding its settlement claim), the charge
+//                happened and nothing was served: it becomes an owed refund
+//                keyed by the settlement tx, repaid only after on-chain proof
+//                (src/payment-verify.js). The entry is dropped only once the
+//                refund ledger holds that row.
+//   failed    -> nothing was charged, nothing is owed; dropped.
+//   pending   -> kept, next asked after a growing backoff.
+//   unreadable (Circle has no answer, or keeps answering 404) -> kept with a
+//                backoff; after UNREADABLE_LIMIT reads, or past MAX_AGE_MS, it
+//                moves to `unresolved`: never polled again and never dropped,
+//                and alarmStatus() reads "unresolved" until an operator
+//                resolves it, so it pages (/api/gateway-status circlePending).
 //
-// A retry by the buyer is a new authorization (a new paymentId), so each
-// charge is booked once and repaid at most once (the ledger dedupes by tx).
+// Each pass asks the entries whose next check is due, oldest first, at most
+// maxChecks of them and within maxPassMs, so a stuck entry can never starve a
+// newer one. The book is bounded (MAX_ENTRIES); near the bound the alarm word
+// is "near_capacity", at it "full" (a new entry is still refused rather than
+// silently replacing an old one, and the refusal is logged).
 //
 // Stored in the state database when one is configured, in the file otherwise
-// (src/json-document.js). The reconcile pass runs under a lease, so two
-// containers never resolve the same entry at once.
+// (src/json-document.js). The reconcile pass runs under a lease that covers
+// its whole time budget, so two containers never resolve one entry at once.
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
-import { recordRefundOwed } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidenceFresh } from "./refund-ledger.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
+const B32 = /^0x[0-9a-fA-F]{64}$/;
+
+export const MAX_ENTRIES = 2000;
+export const NEAR_CAPACITY = 0.8;
+export const UNREADABLE_LIMIT = 12;
+export const MAX_AGE_MS = 7 * 24 * 3600_000;
+export const FIRST_CHECK_MS = 60_000;
+export const MAX_BACKOFF_MS = 6 * 3600_000;
+/** Worst-case pass length; the reconcile lease must outlast it. */
+export const MAX_PASS_MS = 4 * 60_000;
+/** The lease: the pass budget, plus one status call that started inside it
+ *  (15 s at most), plus margin. */
+export const RECONCILE_LEASE_MS = MAX_PASS_MS + 2 * 60_000;
 
 /** The route slug a refund row names, from the resource URL the buyer paid. */
 function slugOf(resourceUrl) {
@@ -37,11 +63,19 @@ function slugOf(resourceUrl) {
   } catch { return "unknown"; }
 }
 
+/** The book's key: the authorization itself, not Circle's id for it. */
+export const pendingKey = (network, payer, nonce) => `${String(network)}|${String(payer).toLowerCase()}|${String(nonce).toLowerCase()}`;
+
+const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), MAX_BACKOFF_MS);
+
 export function createCirclePendingBook({
   file = process.env.CIRCLE_PENDING_FILE || "/data/circle-pending.json",
   recordOwed = recordRefundOwed,
+  owedRecorded = async (tx) => !!(await refundByEvidenceFresh(tx)),
+  wasServed = async () => false,
   now = () => Date.now(),
   log = console.warn,
+  maxEntries = MAX_ENTRIES,
 } = {}) {
   let state = { pending: {} };
   const absorb = (s) => { if (s && typeof s === "object" && s.pending && typeof s.pending === "object") state = { pending: { ...s.pending } }; };
@@ -49,6 +83,7 @@ export function createCirclePendingBook({
   absorb(doc.loadSync(null));
   const ready = trackStoreReady(doc.backend === "pg" ? doc.load(null).then(absorb) : Promise.resolve(), "circle-pending");
   const PG = doc.backend === "pg";
+  let refusedFull = 0;
 
   // Read-modify-write against the stored body, so two containers booking or
   // resolving at once never drop each other's entries.
@@ -62,48 +97,90 @@ export function createCirclePendingBook({
     if (r.ok) absorb(r.body);
     return !!r.ok;
   };
+  const entries = () => Object.values(state.pending);
 
   return {
     ready,
-    /** Book one unresolved settlement. Ignores anything without a valid paymentId. */
-    async book({ paymentId, payer, network, amount, resource } = {}) {
+    /** Book one unresolved settlement under its authorization. */
+    async book({ paymentId, payer, network, nonce, amount, resource } = {}) {
       if (typeof paymentId !== "string" || !UUID.test(paymentId)) return false;
+      if (!ADDR.test(String(payer || "")) || !B32.test(String(nonce || "")) || !String(network || "").startsWith("eip155:")) return false;
+      const key = pendingKey(network, payer, nonce);
+      if (state.pending[key]) return true;
+      if (entries().length >= maxEntries) {
+        refusedFull++;
+        log(`[circle] pending book is full (${maxEntries}); Arc settlement ${paymentId} NOT booked - resolve the unresolved entries`);
+        return false;
+      }
+      const t = now();
       const entry = {
-        paymentId,
-        payer: ADDR.test(String(payer || "")) ? payer : null,
-        network: String(network || ""),
+        key, paymentId, payer, network: String(network), nonce: String(nonce).toLowerCase(),
         amount: /^[0-9]{1,30}$/.test(String(amount || "")) ? String(amount) : "0",
-        slug: slugOf(resource),
-        at: now(),
+        slug: slugOf(resource), at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, state: "pending",
       };
       log(`[circle] Arc settlement ${paymentId} still pending; booked for reconcile`);
-      return change((p) => { if (!p[paymentId]) p[paymentId] = entry; });
+      return change((p) => { if (!p[key]) p[key] = entry; });
     },
-    list() { return Object.values(state.pending); },
+    list() { return entries(); },
+    /** One word for /api/gateway-status: ok / near_capacity / full / unresolved. */
+    alarmStatus() {
+      const all = entries();
+      if (all.some((e) => e.state === "unresolved")) return "unresolved";
+      if (refusedFull > 0 || all.length >= maxEntries) return "full";
+      if (all.length >= Math.ceil(maxEntries * NEAR_CAPACITY)) return "near_capacity";
+      return "ok";
+    },
     /**
      * One reconcile pass. `status(paymentId)` answers { status, transaction }
-     * or null (unreadable: try again next pass).
+     * or null (unreadable this time).
      */
-    async reconcile({ status, maxChecks = 50 } = {}) {
-      const out = { checked: 0, owed: 0, failed: 0, pending: 0 };
+    async reconcile({ status, maxChecks = 50, maxPassMs = MAX_PASS_MS } = {}) {
+      const out = { checked: 0, owed: 0, served: 0, failed: 0, pending: 0, unreadable: 0, unresolved: 0 };
       if (PG) { const r = await doc.load(null).catch(() => null); absorb(r); }
-      for (const e of this.list().slice(0, maxChecks)) {
+      const started = now();
+      const due = entries()
+        .filter((e) => e.state === "pending" && (e.nextCheckAt || 0) <= started)
+        .sort((a, b) => (a.nextCheckAt || 0) - (b.nextCheckAt || 0) || a.at - b.at)
+        .slice(0, maxChecks);
+      for (const e of due) {
+        if (now() - started >= maxPassMs) break;
         out.checked++;
         let s = null;
         try { s = await status(e.paymentId); } catch { s = null; }
         if (s?.status === "completed" && TX.test(String(s.transaction || ""))) {
+          if (await wasServed({ tx: s.transaction, network: e.network, nonce: e.nonce, paymentId: e.paymentId }).catch(() => false)) {
+            await change((p) => { delete p[e.key]; });
+            out.served++;
+            continue;
+          }
           await recordOwed({
             slug: e.slug, network: e.network, payer: e.payer, priceUsd: Number(e.amount) / 1e6,
             tx: s.transaction, httpStatus: 402, wire: "x402",
             note: "Arc settlement completed after the buyer was refused as pending",
           });
-          await change((p) => { delete p[e.paymentId]; });
-          out.owed++;
+          // Dropped only once the ledger holds the debt (a new row or one
+          // already there for this tx); a write that did not land is retried.
+          if (await owedRecorded(s.transaction).catch(() => false)) {
+            await change((p) => { delete p[e.key]; });
+            out.owed++;
+          } else {
+            await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], nextCheckAt: now() + FIRST_CHECK_MS }; });
+            out.pending++;
+          }
         } else if (s?.status === "failed") {
-          await change((p) => { delete p[e.paymentId]; });
+          await change((p) => { delete p[e.key]; });
           out.failed++;
         } else {
-          out.pending++;
+          const unreadable = s ? e.unreadable : e.unreadable + 1;
+          const checks = e.checks + 1;
+          const stale = unreadable >= UNREADABLE_LIMIT || now() - e.at >= MAX_AGE_MS;
+          await change((p) => {
+            if (!p[e.key]) return;
+            p[e.key] = { ...p[e.key], checks, unreadable, nextCheckAt: now() + backoff(checks), ...(stale ? { state: "unresolved", unresolvedAt: now() } : {}) };
+          });
+          if (stale) { out.unresolved++; log(`[circle] Arc settlement ${e.paymentId} unresolved after ${checks} checks; operator action needed`); }
+          else if (s) out.pending++;
+          else out.unreadable++;
         }
       }
       return out;

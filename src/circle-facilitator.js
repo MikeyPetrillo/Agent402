@@ -37,6 +37,7 @@
 // the API key is read from the environment by the caller and held only in
 // this instance's closure.
 import { HTTPFacilitatorClient } from "@x402/core/server";
+import { EVM_RPCS } from "./evm-rpcs.js";
 import { SettleError, VerifyError } from "@x402/core/types";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import {
@@ -62,6 +63,7 @@ const TX = /^0x[0-9a-fA-F]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UINT = /^[0-9]{1,78}$/;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
+const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
 
 /** The first machine reason in a Circle ErrorResponse ({code, message, errors:[{reason}]}),
  *  or a status-derived code. The message field is never read. */
@@ -136,7 +138,7 @@ function arcTypedData(auth) {
  * Local preflight for an Arc exact payment. Returns null when it may go to
  * Circle, or { reason, payer } when it must be refused here.
  */
-export async function preflightArcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000)) {
+export async function preflightArcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { contractVerifier = null } = {}) {
   const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "exact") return refuse("unsupported_scheme");
   if (requirements.network !== ARC_CAIP2) return refuse("invalid_network");
@@ -160,18 +162,93 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
   // Every signature is checked here, under ARC's own domain, in whatever form
   // it comes (65-byte with v 27/28 or 0/1, or 64-byte EIP-2098 compact). One
   // made for Base, for another chainId or for another token recovers to
-  // someone else and is refused. A form that cannot be verified locally (a
-  // contract wallet's ERC-1271 or ERC-6492 signature) is refused too: nothing
-  // reaches Circle that this server has not verified itself.
-  let valid = false;
+  // someone else and is refused. A signature that is not a valid ECDSA
+  // signature from `from` (a contract wallet's ERC-1271 or ERC-6492 one) is
+  // refused too, unless the contract-wallet verifier is configured
+  // (ARC_CONTRACT_WALLETS=on): then it is verified on chain against Arc, and
+  // anything but a clear yes is refused. Nothing reaches Circle unverified.
+  // Low-s rule (EIP-2): a 65-byte signature whose s is in the upper half of
+  // the curve order is the malleable twin of a valid one; refused here, the
+  // same as the token contract itself would.
+  if (sig.length === 132 && BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N) return refuse("invalid_exact_evm_payload_signature", payer);
+  if (await isLocalEoaSignature(auth, sig)) return null;
+  if (!contractVerifier) return refuse("invalid_exact_evm_payload_signature", payer);
+  const verdict = await contractVerifier(auth, sig);
+  if (verdict === true) return null;
+  return refuse(verdict === "unverifiable" ? "contract_signature_unverifiable" : "invalid_exact_evm_payload_signature", payer);
+}
+
+/** True when `sig` is a valid ECDSA signature by `auth.from` over Arc's
+ *  EIP-3009 typed data. Pure: no RPC call. */
+export async function isLocalEoaSignature(auth, sig) {
   try {
     // viem verifies 65-byte signatures (v 27/28 or 0/1); a 64-byte EIP-2098
     // compact one is expanded to that form first.
     const full = sig.length === 130 ? serializeSignature(compactSignatureToSignature(parseCompactSignature(sig))) : sig;
-    valid = await verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: full });
-  } catch { valid = false; }
-  if (!valid) return refuse("invalid_exact_evm_payload_signature", payer);
-  return null;
+    return await verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: full });
+  } catch { return false; }
+}
+
+/** The payload's signature is not a local ECDSA one (a contract-wallet form). */
+export async function isContractWalletPayment(paymentPayload) {
+  const auth = paymentPayload?.payload?.authorization;
+  const sig = paymentPayload?.payload?.signature;
+  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(String(auth.from || ""))) return false;
+  return !(await isLocalEoaSignature(auth, sig));
+}
+
+/** ARC_CONTRACT_WALLETS=on turns contract-wallet signatures on; anything else is off. */
+export function arcContractWalletsEnabled(env = process.env) {
+  return String(env.ARC_CONTRACT_WALLETS || "").trim().toLowerCase() === "on";
+}
+
+export const CONTRACT_VERIFY_TIMEOUT_MS = 4_000;
+
+/**
+ * An on-chain verifier for contract-wallet signatures on Arc: viem's public
+ * client verifyTypedData, which checks ERC-1271 on a deployed wallet and an
+ * ERC-6492 wrapped signature for an undeployed one through the universal
+ * validator (one eth_call). The RPC is the Arc constant (src/evm-rpcs.js);
+ * nothing in a request names it. Each verdict is cached by (from, nonce,
+ * signature) for a few minutes, so a settle after its verify costs no second
+ * call. Returns true, false (the wallet says no), or "unverifiable" (RPC error
+ * or timeout); only true passes.
+ */
+export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs = CONTRACT_VERIFY_TIMEOUT_MS, ttlMs = 5 * 60_000, now = () => Date.now() } = {}) {
+  let client = publicClient;
+  const cache = new Map();
+  const getClient = async () => {
+    if (client) return client;
+    const { createPublicClient, http } = await import("viem");
+    client = createPublicClient({ transport: http(rpcUrl, { timeout: timeoutMs, retryCount: 0 }) });
+    return client;
+  };
+  return async function verifyContractSignature(auth, sig) {
+    const key = `${lc(auth.from)}|${lc(auth.nonce)}|${lc(sig)}`;
+    const hit = cache.get(key);
+    if (hit && now() - hit.at < ttlMs) return hit.verdict;
+    let verdict;
+    let timer = null;
+    try {
+      const c = await getClient();
+      const ok = await Promise.race([
+        c.verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: sig }),
+        // Not unref'd: a request is waiting on this answer. Cleared below.
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); }),
+      ]);
+      verdict = ok === true;
+    } catch {
+      verdict = "unverifiable";
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    // Only a definite answer is cached; an RPC failure is tried afresh.
+    if (verdict !== "unverifiable") {
+      if (cache.size > 2000) cache.delete(cache.keys().next().value);
+      cache.set(key, { at: now(), verdict });
+    }
+    return verdict;
+  };
 }
 
 /**
@@ -184,7 +261,7 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
  * non-JSON error body. This client's errors are already reduced.
  */
 export class CircleFacilitatorClient extends HTTPFacilitatorClient {
-  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null } = {}) {
+  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null, contractVerifier = null } = {}) {
     super({ url: "http://127.0.0.1:0" });
     // The stock constructor sets `url`; remove it (see the class comment).
     delete this.url;
@@ -200,6 +277,9 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     // Called with { paymentId, payer, network, amount, resource } for a
     // settlement still pending after the reconcile window (src/circle-pending.js).
     this._onPending = typeof onPending === "function" ? onPending : null;
+    // Set only with ARC_CONTRACT_WALLETS=on (circleClientFromEnv): verifies a
+    // contract-wallet signature on chain; null refuses every one, as before.
+    this._contractVerifier = typeof contractVerifier === "function" ? contractVerifier : null;
   }
 
   /** Circle's final word on one payment: { status, transaction } with status
@@ -254,7 +334,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   }
 
   async verify(paymentPayload, paymentRequirements) {
-    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000));
+    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier: this._contractVerifier });
     if (refused) return { isValid: false, invalidReason: refused.reason, payer: refused.payer };
     const r = await this._request("verify", "/verify", {
       method: "POST", timeoutMs: VERIFY_TIMEOUT_MS,
@@ -264,7 +344,10 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
       const reason = r.parseError ? r.parseError.reason : !r.ok ? reasonFromErrorBody(r.data, r.status) : "invalid_verify_response";
       throw new VerifyError(r.ok ? 502 : r.status, { isValid: false, invalidReason: reason, invalidMessage: `Circle facilitator answered HTTP ${r.status}` });
     }
-    const payer = ADDR.test(String(r.data.payer || "")) ? r.data.payer : paymentPayload?.payload?.authorization?.from;
+    // The payer is the signer this server verified (authorization.from, bound
+    // by the local signature check or, for a contract wallet, by its on-chain
+    // check), never an address the facilitator names.
+    const payer = paymentPayload.payload.authorization.from;
     if (r.data.isValid === true) return { isValid: true, payer };
     return { isValid: false, invalidReason: safeReason(r.data.invalidReason), payer };
   }
@@ -272,7 +355,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   async settle(paymentPayload, paymentRequirements) {
     const network = ARC_CAIP2;
     const signedFrom = paymentPayload?.payload?.authorization?.from;
-    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000));
+    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier: this._contractVerifier });
     if (refused) return { success: false, errorReason: refused.reason, transaction: "", network, payer: refused.payer };
     const r = await this._request("settle", "/settle", {
       method: "POST", timeoutMs: SETTLE_TIMEOUT_MS,
@@ -286,7 +369,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     if (r.parseError) throw bad(502, r.parseError.reason);
     const d = r.data;
     if (!isObj(d) || typeof d.success !== "boolean") throw bad(502, "invalid_settle_response");
-    const payer = ADDR.test(String(d.payer || "")) ? d.payer : (ADDR.test(String(signedFrom || "")) ? signedFrom : undefined);
+    const payer = signedFrom; // verified by the preflight above, never Circle's word
     if (d.success === true) {
       // A success must name an Arc transaction; anything else is not proof.
       if (!TX.test(String(d.transaction || "")) || (d.network !== undefined && d.network !== ARC_CAIP2)) {
@@ -305,7 +388,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
         // refund instead of a silent charge.
         if (this._onPending) {
           try {
-            await this._onPending({ paymentId, payer, network, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
+            await this._onPending({ paymentId, payer, network, nonce: paymentPayload?.payload?.authorization?.nonce, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
           } catch { /* booking never breaks the settle path */ }
         }
       }
@@ -331,7 +414,11 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
 /** The Arc client when a key is configured, else null. */
 export function circleClientFromEnv(env = process.env, opts = {}) {
   const key = String(env.CIRCLE_FACILITATOR_API_KEY || "").trim();
-  return key ? new CircleFacilitatorClient({ apiKey: key, ...opts }) : null;
+  if (!key) return null;
+  const contractVerifier = arcContractWalletsEnabled(env)
+    ? (opts.contractVerifier || createContractVerifier({ rpcUrl: EVM_RPCS[ARC_CAIP2] }))
+    : null;
+  return new CircleFacilitatorClient({ apiKey: key, ...opts, contractVerifier });
 }
 
 /** True when the Arc rail's switch (the Circle key) is set. Never returns the key. */

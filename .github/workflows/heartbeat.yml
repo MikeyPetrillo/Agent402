@@ -684,6 +684,32 @@ jobs:
               ;;
           esac
 
+      # Arc settlements Circle left pending (src/circle-pending.js): one word on
+      # /api/gateway-status. unresolved / full page; ok and off close;
+      # near_capacity and unknown do neither.
+      - name: Arc pending settlements check (alarm when one needs an operator)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.circlePending.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "circle pending: $WORD"
+          TITLE="Arc pending settlements need attention"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unresolved|full)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports circlePending.status=$WORD. unresolved: an Arc settlement Circle reported as pending could not be resolved from its /status after repeated reads or within seven days; it is kept, never dropped. Look its paymentId up with Circle and on the Arc explorer, then book a refund if it settled. full: the pending book reached its bound and refused a new entry (the server log names it). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: circlePending reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
       # aging / stuck page; ok closes; unknown does neither. The status Worker
       # runs the same check every five minutes under the same title.
