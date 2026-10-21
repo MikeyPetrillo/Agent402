@@ -18,7 +18,6 @@ import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP, GATED_RAILS } from "./rails.js";
-import { gatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
 // classification rule everywhere: a transfer is external revenue only if the
@@ -1630,15 +1629,9 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     new Promise((resolve) => setTimeout(() => resolve({ rail: label, balance: null, recent: [], error: `timed out after ${Math.round(RAIL_DEADLINE_MS / 1000)} s` }), RAIL_DEADLINE_MS).unref?.()),
   ]);
   const evm = (name) => bounded(EVM[name]?.label || name, evmRail(name, walletAddress));
-  // A gated rail (src/gated-rails.js) is read, and shown, only while it is in
-  // the live offer; before that this view is the same as without it.
-  const gatedEvm = (name) => {
-    const rail = GATED_RAILS.find((r) => r.name === EVM[name]?.label);
-    return rail && gatedRailOffered(rail.caip2) ? evm(name) : Promise.resolve(null);
-  };
   const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, robinhood, solana, stellar, algorand] = await Promise.all([
     evm("base"), evm("polygon"), evm("arbitrum"), evm("monad"), evm("celo"),
-    evm("avalanche"), evm("sei"), evm("optimism"), gatedEvm("arc"), evm("robinhood"),
+    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), evm("robinhood"),
     bounded("Solana", solanaRail(solanaWallet)),
     bounded("Stellar", stellarRail(stellarWallet)),
     bounded("Algorand", algorandRail(algorandWallet)),

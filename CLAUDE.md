@@ -222,7 +222,10 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
   house style in `src/house-style.js`, samples in `src/sample-reports.js`.
 - **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
   `src/facilitator-diagnostics.js`; Stellar confirm in `src/stellar-confirm.js`; Tempo
-  chain-truth confirm in `src/tempo-confirm.js`.
+  chain-truth confirm in `src/tempo-confirm.js`. Arc (`eip155:5042`) settles through Circle's
+  facilitator only (`src/circle-facilitator.js`): `CIRCLE_FACILITATOR_API_KEY` is the switch,
+  the client is Arc-only, reduces every upstream error to a status and a reason code, and Arc
+  fails closed on Circle's own `/supported` (`scripts/test-arc-rail.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.

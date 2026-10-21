@@ -10,9 +10,12 @@ import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
 import { GATED_RAILS, railKey } from "./rails.js";
 // The networks a PUBLIC surface names: the configured ones, minus any gated
-// rail (Arc) that is not in the live offer. Operator views read the full
-// configured list (enabledNetworks) so a dropped rail stays visible there.
-const GATED_NETWORK_NAMES = new Map(GATED_RAILS.map((r) => [railKey(r), r.caip2]));
+// rail that is not in the live offer, and minus Arc unless it is: Arc is
+// configured by its key alone and offered only after its facilitator's
+// /supported check, so a key without that check never names it. Operator
+// views read the full configured list (enabledNetworks) so a dropped rail
+// stays visible there.
+const GATED_NETWORK_NAMES = new Map([...GATED_RAILS.map((r) => [railKey(r), r.caip2]), ["arc", "eip155:5042"]]);
 function publicNetworks() {
   return enabledNetworks(NETWORK).filter((n) => !GATED_NETWORK_NAMES.has(n) || gatedRailOffered(GATED_NETWORK_NAMES.get(n)));
 }

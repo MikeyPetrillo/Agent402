@@ -858,7 +858,8 @@ exists:
 - **Optimism** - USDC; its settlement carries a fee, so its quote carries a
   small network premium, shown in the \`402\`. What you're quoted is what
   actually clears.
-{{gatedRailBullets}}
+- **Arc** - USDC, through the facilitator that settles that network; Arc pays
+  its own gas in USDC, and the facilitator covers it, so a buyer needs only USDC.
 - **Stellar** - USDC via our own self-hosted Soroban facilitator (open source,
   in this repository); settlement here is confirmed against the chain itself,
   not just trusted from the facilitator's word, because Stellar's ~5-second

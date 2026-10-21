@@ -1,7 +1,8 @@
 // Rails that appear on runtime surfaces only while they are actually offered.
 //
-// A gated rail (Arc today) is known to the payment stack but is not part of
-// the static rails list (src/rails.js RAILS) that public copy is derived from.
+// A gated rail (none today; Arc was one until it settled in production) is
+// known to the payment stack but is not part of the static rails list
+// (src/rails.js RAILS) that public copy is derived from.
 // It is named on a runtime surface (the /.well-known/x402 chain list, the
 // how-to-pay page, the /<chain> page, the nav, the sitemap, the live revenue
 // read) only after src/payments.js has finished the boot offer and the rail

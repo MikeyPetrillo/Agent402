@@ -28,7 +28,7 @@ The same wallet pays for flat LLM tiers and a metered tier on four wires (OpenAI
 
 ## 04 / No wallet - Some calls need no wallet.
 
-Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced at $0.50 or more, and card checkout sells the finished reports, beside USDC or USDG on 12 chains and native MPP on Tempo. An agent with a wallet never needs an account.
+Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced at $0.50 or more, and card checkout sells the finished reports, beside USDC or USDG on 13 chains and native MPP on Tempo. An agent with a wallet never needs an account.
 
 - Ways to pay: https://agent402.tools/pricing
 - Card checkout: https://agent402.tools/reports

@@ -90,8 +90,8 @@ Pure-CPU tools are free: `agent402_call` fetches a proof-of-work challenge and
 solves it in-process (a fraction of a second of CPU), so no wallet is needed.
 Wallet-only tools (network, browser, disk, live data) settle in USDC over x402
 on whichever chain your wrapped `fetch` is funded for - Base, Solana, Polygon,
-Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar or Algorand, plus USDG
-on Robinhood Chain (12 chains in all). Prices come from the live catalog at
+Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar or Algorand, plus
+USDG on Robinhood Chain (13 chains in all). Prices come from the live catalog at
 `/api/pricing`; never hardcode one.
 
 ## License

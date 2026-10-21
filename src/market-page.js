@@ -239,6 +239,24 @@ export const CHAIN_PAGES = {
     honestyNetworkPhrase: "the Optimism network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
+  arc: {
+    chainName: "Arc",
+    // Arc's gas is paid in USDC; there is no separate native token.
+    ticker: "USDC",
+    tickerLabel: "ARC · MAINNET",
+    caip2: "eip155:5042",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.arc.io",
+    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
+    networkParam: "arc",
+    acceptNetwork: "eip155:5042",
+    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
+    // ("eip155:5042002"), so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:5042",
+    honestyNetworkPhrase: "the Arc network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
   stellar: {
     chainName: "Stellar",
     ticker: "XLM",
@@ -301,27 +319,8 @@ export const CHAIN_PAGES = {
 // nav, sitemap or /<chain> route names them, until src/payments.js reports the
 // rail in the live offer; then the entry joins CHAIN_PAGES and every surface
 // that iterates it at request time (nav, sitemap, the /<chain> page) picks it
-// up. Until then /arc answers 404, the same as an unknown chain.
-export const GATED_CHAIN_PAGES = {
-  arc: {
-    chainName: "Arc",
-    // Arc's gas is paid in USDC; there is no separate native token.
-    ticker: "USDC",
-    tickerLabel: "ARC · MAINNET",
-    caip2: "eip155:5042",
-    asset: "USDC",
-    settledBy: "an x402 facilitator",
-    explorerUrl: "explorer.arc.io",
-    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
-    networkParam: "arc",
-    acceptNetwork: "eip155:5042",
-    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
-    // ("eip155:5042002"), so an exact match can't be fooled.
-    isNetwork: (n) => n === "eip155:5042",
-    honestyNetworkPhrase: "the Arc network",
-    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
-  },
-};
+// up. Empty while no rail is gated (Arc graduated into CHAIN_PAGES).
+export const GATED_CHAIN_PAGES = {};
 onGatedRailOffered((caip2) => {
   for (const [key, cfg] of Object.entries(GATED_CHAIN_PAGES)) {
     if (cfg.caip2 === caip2 && !CHAIN_PAGES[key]) CHAIN_PAGES[key] = cfg;

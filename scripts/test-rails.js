@@ -36,11 +36,17 @@ for (const [name, caip2] of settleable) {
 }
 for (const r of GATED_RAILS) ok(!railCaip2.has(r.caip2), `gated rail ${r.name} is not in RAILS, so no static copy names it`);
 {
+  // The mechanism holds with no gated rail today: a synthetic one is added
+  // for the check and removed after.
   const { markGatedRailOffered, __resetGatedRailsForTests } = await import("../src/gated-rails.js");
+  const probe = { name: "Probe Chain", asset: "USDC", caip2: "eip155:999999001", chainId: 999999001 };
+  GATED_RAILS.push(probe);
   ok(liveRails().length === RAILS.length, "liveRails() is RAILS while no gated rail is offered");
-  markGatedRailOffered(GATED_RAILS[0].caip2);
-  ok(liveRails().some((r) => r.caip2 === GATED_RAILS[0].caip2), `liveRails() names ${GATED_RAILS[0].name} once it is in the live offer`);
+  markGatedRailOffered(probe.caip2);
+  ok(liveRails().some((r) => r.caip2 === probe.caip2), "liveRails() names a gated rail once it is in the live offer");
+  GATED_RAILS.pop();
   __resetGatedRailsForTests();
+  ok(RAILS.some((r) => r.caip2 === "eip155:5042"), "Arc is in RAILS, so static copy derives it");
 }
 const paymentsCaip2 = new Set(Object.values(NETWORKS));
 for (const r of RAILS) {
