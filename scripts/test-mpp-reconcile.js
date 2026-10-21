@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
 import {
   reconcileRecords, statusWordFor, createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc,
-  CATEGORIES, MISMATCH_CATEGORIES, dayStartMs,
+  CATEGORIES, MISMATCH_CATEGORIES, INFO_CATEGORIES, dayStartMs, EXPLAIN_NOTE_MAX,
 } from "../src/mpp-reconcile.js";
 
 let pass = 0, fail = 0;
@@ -171,6 +171,82 @@ process.env.MPP_RECONCILE = "off";
 ok(rec.start() === null, "MPP_RECONCILE=off disarms the timer");
 delete process.env.MPP_RECONCILE;
 
+// --- operator explanations: one item marked understood, never hidden -------
+{
+  ok(INFO_CATEGORIES.includes("explained") && !MISMATCH_CATEGORIES.includes("explained"), "explained is informational, never a mismatch category");
+  const pure = reconcileRecords({ start: START, end: END, ledgerRows, transfers, refunds, evmChecks, stripeChecks, currencies: [USDCE, PATHUSD], isOwnWallet: (a) => a === BURNER,
+    explained: new Map([[h(4), { note: "known", at: "2026-09-21T00:00:00.000Z" }], [h(22), { note: "not a mismatch", at: null }]]) });
+  ok(pure.info.some((m) => m.category === "explained" && m.tx === h(4) && m.explainedCategory === "amount_mismatch" && m.note === "known") && !pure.mismatches.some((m) => m.tx === h(4)), "pure: an explained amount_mismatch moves to explained with its original category and note");
+  ok(pure.mismatches.some((m) => m.category === "charged_failed" && m.tx === h(22)), "pure: a charged_failed debt is not explainable (it is not a mismatch)");
+  ok(pure.mismatchTotal === sum.mismatchTotal - 1, "pure: the mismatch total drops by exactly the explained item");
+
+  const xdir = mkdtempSync(join(tmpdir(), "mpp-rec-x-"));
+  const DEV_TX = h(3);
+  const xRows = [row(1)];
+  const xTransfers = { complete: true, source: "feed", rows: [xfer(1), xfer(3, { sender: BURNER })] };
+  const snapRows = JSON.stringify(xRows), snapXfers = JSON.stringify(xTransfers);
+  let xReads = 0;
+  const mkX = (o = {}) => createMppReconciler({
+    file: join(xdir, "state.json"), explainedFile: join(xdir, "explained.json"), log: () => {}, now: () => END + 5 * 3600e3,
+    ledgerRows: (a, b) => xRows.filter((r) => r.ts >= a && r.ts < b), refunds: () => [],
+    recipients: () => [RECIPIENT], currencies: () => [USDCE], isOwnWallet: (a) => a === BURNER,
+    fetchTransfers: async () => { xReads++; return xTransfers; }, ...o,
+  });
+  const X = mkX();
+  await X.runOnce();
+  ok((await X.status()).status === "mismatch" && (await X.status()).window7d === "mismatch", "before: the dev-test transfer holds the day and the window at mismatch");
+  const responses = [];
+  const readsBefore = xReads;
+  const e1 = await X.explain({ tx: DEV_TX.toUpperCase().replace("0X", "0x"), note: "own dev-test transfer <b>not a sale</b>" });
+  responses.push(e1);
+  ok(e1.ok && e1.matched === true && e1.changed === true && e1.tx === DEV_TX, "explain: accepted, matched the item, reference stored case-folded");
+  ok(e1.status.status === "ok" && e1.status.window7d === "ok" && e1.reran.length >= 1 && e1.reran.every((r) => r.ok) && xReads > readsBefore, "explain re-runs at once: day and window read ok");
+  const det = X.detail();
+  ok(det.day.info.some((m) => m.category === "explained" && m.tx === DEV_TX && m.explainedCategory === "paid_unrecorded" && m.note === "own dev-test transfer <b>not a sale</b>") && !det.day.mismatches.some((m) => m.tx === DEV_TX), "operator rows: the item is under explained with its original category and the note as given");
+  ok(det.window.info.some((m) => m.category === "explained" && m.tx === DEV_TX), "operator rows: the window carries it as explained too");
+  ok((await X.status({ full: true })).counts.explained.total === 1, "operator counts: explained is counted");
+  const pubX = await X.status({ full: false });
+  const pubS = JSON.stringify(pubX);
+  ok(!pubS.includes(DEV_TX.slice(2)) && !pubS.includes("dev-test") && !("explained" in pubX.categories) && !/"note"|"tx"/.test(pubS), "public status: no tx, no note, no new field");
+  ok(JSON.stringify(xRows) === snapRows && JSON.stringify(xTransfers) === snapXfers, "explaining never alters ledger rows or chain evidence");
+  const stored = JSON.parse(readFileSync(join(xdir, "explained.json"), "utf8"));
+  ok(stored.entries.length === 1 && Object.keys(stored.entries[0]).sort().join() === "at,note,tx", "explanations persist as {tx, note, at} only");
+  ok(mkX().detail().explained.some((e) => e.tx === DEV_TX), "a new process reads the explanations back");
+
+  const r1x = await X.explain({ tx: DEV_TX, action: "restore" });
+  responses.push(r1x);
+  ok(r1x.ok && r1x.changed && r1x.status.status === "mismatch" && r1x.status.window7d === "mismatch", "restore: the day and window read mismatch again");
+  ok(X.detail().day.mismatches.some((m) => m.tx === DEV_TX && m.category === "paid_unrecorded"), "restore: the item is back in its original category");
+  const r2x = await X.explain({ tx: DEV_TX, action: "restore" });
+  ok(r2x.ok && r2x.changed === false && r2x.reran.length === 0, "restoring a reference that is not explained changes nothing");
+
+  const u = await X.explain({ tx: h(0xabcdef), note: "explained ahead of time" });
+  responses.push(u);
+  ok(u.ok && u.matched === false && /no reconciliation item/.test(u.matchNote) && u.status.status === "mismatch", "an unknown but well-shaped reference is kept, reported as matching no item");
+  const pi = await X.explain({ tx: "pi_3MtwBwLkdIwHu7ix28a3tqPa", note: "stripe test" });
+  ok(pi.ok && pi.tx === "pi_3MtwBwLkdIwHu7ix28a3tqPa", "a PaymentIntent id is an accepted reference shape (kept exact)");
+
+  const refuse = async (input, code, m) => { try { await X.explain(input); ok(false, m); } catch (e) { responses.push({ error: e.message }); ok(e.statusCode === code, `${m} (${e.statusCode})`); } };
+  await refuse({ tx: PAYER, note: "x" }, 400, "a 20-byte address is refused as a reference");
+  await refuse({ tx: "0x" + "ab".repeat(31), note: "x" }, 400, "a short hash is refused");
+  await refuse({ tx: ` ${DEV_TX}`, note: "x" }, 400, "a padded reference is refused");
+  await refuse({ tx: "pi_bad", note: "x" }, 400, "a too-short PaymentIntent id is refused");
+  await refuse({ tx: 12345, note: "x" }, 400, "a non-string reference is refused");
+  await refuse({ tx: DEV_TX }, 400, "explain without a note is refused");
+  await refuse({ tx: DEV_TX, note: "   " }, 400, "a blank note is refused");
+  await refuse({ tx: DEV_TX, note: "x".repeat(EXPLAIN_NOTE_MAX + 1) }, 400, "an oversize note is refused");
+  await refuse({ tx: DEV_TX, note: "line\nbreak" }, 400, "a note with a control character is refused");
+  await refuse({ tx: DEV_TX, note: "zero\u200bwidth" }, 400, "a note with an invisible character is refused");
+  await refuse({ tx: DEV_TX, note: "x", action: "delete" }, 400, "an unknown action is refused");
+  ok((await X.explain({ tx: DEV_TX, note: "x".repeat(EXPLAIN_NOTE_MAX) })).ok, "a note at the length bound is accepted");
+
+  const C = createMppReconciler({ file: join(xdir, "cap.json"), explainedFile: join(xdir, "cap-explained.json"), maxExplained: 2, log: () => {}, now: () => END + 3600e3, refunds: () => [] });
+  await C.explain({ tx: h(501), note: "a" }); await C.explain({ tx: h(502), note: "b" });
+  await (async () => { try { await C.explain({ tx: h(503), note: "c" }); ok(false, "cap"); } catch (e) { ok(e.statusCode === 409 && /at most 2/.test(e.message), "the explained entries are capped; one past the cap is refused"); } })();
+  ok((await C.explain({ tx: h(502), note: "b2" })).ok && C.detail().explained.length === 2, "re-explaining an entry at the cap updates its note");
+  ok(!JSON.stringify(responses).toLowerCase().includes(PAYER.slice(2)) && !readFileSync(join(xdir, "explained.json"), "utf8").toLowerCase().includes(PAYER.slice(2)), "nothing payer-shaped in any explain response or the stored explanations");
+}
+
 // --- chain readers ---------------------------------------------------------
 {
   const page = (data, nextCursor = null) => ({ ok: true, status: 200, json: async () => ({ data, nextCursor }) });
@@ -218,7 +294,7 @@ delete process.env.MPP_RECONCILE;
   const PORT = await getFreePort();
   const TOKEN = "mpp-reconcile-test-operator-token-0123456789";
   const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, MPP_RECONCILE_FILE: join(dir, "server.json"), MPP_RECONCILE: "off" },
+    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, MPP_RECONCILE_FILE: join(dir, "server.json"), MPP_RECONCILE_EXPLAINED_FILE: join(dir, "server-explained.json"), MPP_RECONCILE: "off" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const base = `http://127.0.0.1:${PORT}`;
@@ -241,6 +317,27 @@ delete process.env.MPP_RECONCILE;
   const gs = await (await fetch(`${base}/api/gateway-status`)).json();
   ok(typeof gs.mppReconcile?.status === "string" && typeof gs.mppReconcile?.chargedFailedStatus === "string", "public /api/gateway-status carries mppReconcile status words");
   ok(!("counts" in gs.mppReconcile) && !("chargedFailed24h" in gs.mppReconcile), "...and no counts");
+  const X_TX = h(0x5eed);
+  const post = (body, auth = true) => fetch(`${base}/__operator/mpp-reconcile/explain`, { method: "POST", headers: { "content-type": "application/json", ...(auth ? { Authorization: `Bearer ${TOKEN}` } : {}) }, body: JSON.stringify(body) });
+  const xNo = await post({ tx: X_TX, note: "dev test" }, false);
+  ok(xNo.status === 404, "POST /__operator/mpp-reconcile/explain without the token: 404");
+  ok(!existsSync(join(dir, "server-explained.json")), "...and nothing was stored");
+  const xBad = await post({ tx: PAYER, note: "dev test" });
+  ok(xBad.status === 400, "operator explain with an address-shaped tx: 400");
+  const xBadNote = await post({ tx: X_TX, note: "y".repeat(EXPLAIN_NOTE_MAX + 1) });
+  ok(xBadNote.status === 400, "operator explain with an oversize note: 400");
+  const xOk = await post({ tx: X_TX, note: "<script>dev test</script>" });
+  const xBody = await xOk.json().catch(() => ({}));
+  ok(xOk.status === 200 && /application\/json/.test(xOk.headers.get("content-type") || "") && xBody.ok === true && xBody.tx === X_TX && xBody.matched === false && typeof xBody.status?.status === "string", "operator explain: 200 JSON with the new status words, unmatched reference reported");
+  const det2 = await (await fetch(`${base}/__operator/mpp-reconcile.json`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+  ok(det2.explained?.some((e) => e.tx === X_TX && e.note === "<script>dev test</script>"), "operator detail lists the explanation, note stored as given");
+  const gs2 = JSON.stringify((await (await fetch(`${base}/api/gateway-status`)).json()).mppReconcile);
+  ok(!gs2.includes(X_TX.slice(2)) && !gs2.includes("dev test"), "public mppReconcile carries neither the tx nor the note");
+  const xRestore = await post({ tx: X_TX, action: "restore" });
+  const rBody = await xRestore.json().catch(() => ({}));
+  ok(xRestore.status === 200 && rBody.changed === true && rBody.explainedCount === 0, "operator restore lifts the mark");
+  // The detail's day rows come from this machine's local sales ledger (other suites' fixtures), so only the explain answers and the stored explanations are checked here.
+  ok(!JSON.stringify([xBody, rBody, det2.explained]).toLowerCase().includes(PAYER.slice(2)), "no payer address in any explain response or the listed explanations");
   child.kill();
 }
 
