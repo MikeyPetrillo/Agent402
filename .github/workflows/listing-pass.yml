@@ -31,6 +31,14 @@ name: Listing pass (Bazaar and PayAI)
 # in our own treasury; the real cost is the vendor call behind a route that
 # serves through one. A week with nothing missing spends nothing.
 #
+# A registry lists a paid route on its own schedule, so a route bought this
+# week may still read as missing next week. Before the legs the job downloads
+# the pass records of the last 14 days (this workflow's listing-pass
+# artifacts, the PayAI-only pass it replaced, and the Bazaar mint;
+# scripts/listing-pass-memory.js) and each leg skips a route charged on its
+# registry and chain within 14 days ("bought <date>, awaiting registry"). The
+# records are rewritten after every attempt and kept 15 days.
+#
 # The dispatch input `legs` narrows a run to chosen legs and `only`
 # (comma-separated slugs) to chosen routes. One issue, "Listing pass FAILED",
 # stays open while a run fails and closes on the next green run.
@@ -45,11 +53,11 @@ on:
   workflow_dispatch:
     inputs:
       max_spend_usd:
-        description: "Per-leg ceiling on the summed price of the selection (cheapest first)."
+        description: "Per-leg ceiling on what may be signed (cheapest first), above 0 and at most 100."
         required: false
         default: "40"
       max_price_usd:
-        description: "Optional per-route price cap; empty means none (every paid route is in scope)."
+        description: "Optional per-route price cap above 0; empty means none (every paid route is in scope)."
         required: false
         default: ""
       legs:
@@ -64,6 +72,9 @@ on:
 permissions:
   contents: read
   issues: write
+  # Lists and downloads this repository's own listing artifacts (the
+  # purchase memory).
+  actions: read
 
 concurrency:
   group: listing-pass
@@ -85,6 +96,12 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.5.0 viem@2.52.2
+      - name: Download the purchase memory (records of the last 14 days)
+        # The workflow token reads artifacts only; no wallet secret here. A
+        # failure stops the job before the step that spends.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/listing-pass-memory.js --out bought --days 14
       - name: Buy each route a registry lacks once, per registry and chain
         # Wallet, gate and pow secrets are scoped to this step, never the
         # install above.
@@ -107,9 +124,9 @@ jobs:
           echo "::add-mask::$SOLANA_BURNER_KEY"
           echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
-          printf '%s' "$MAX_SPEND_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "::error::max_spend_usd must be a USD amount"; exit 1; }
+          printf '%s' "$MAX_SPEND_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_SPEND_USD" 'BEGIN { exit !(v > 0 && v <= 100) }' || { echo "::error::max_spend_usd must be a USD amount above 0 and at most 100"; exit 1; }
           if [ -n "$MAX_PRICE_USD" ]; then
-            printf '%s' "$MAX_PRICE_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "::error::max_price_usd must be a USD amount or empty"; exit 1; }
+            printf '%s' "$MAX_PRICE_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_PRICE_USD" 'BEGIN { exit !(v > 0) }' || { echo "::error::max_price_usd must be a USD amount above 0, or empty for no cap"; exit 1; }
           fi
           if [ -n "$ONLY" ]; then
             printf '%s' "$ONLY" | grep -Eq '^[a-z0-9][a-z0-9,-]*$' || { echo "::error::only must be comma-separated slugs"; exit 1; }
@@ -120,7 +137,7 @@ jobs:
             REGISTRY="${LEG%%-*}"
             CHAIN="${LEG#*-}"
             echo "::group::$REGISTRY / $CHAIN"
-            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
+            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
             echo "::endgroup::"
           done
           if [ -n "$FAILED" ]; then echo "::error::legs that did not complete (exit code):$FAILED"; exit 1; fi
@@ -131,7 +148,8 @@ jobs:
           name: listing-pass
           path: pass-*.json
           if-no-files-found: ignore
-          retention-days: 14
+          # Longer than the 14-day memory window that reads it back.
+          retention-days: 15
 
   report:
     needs: pass

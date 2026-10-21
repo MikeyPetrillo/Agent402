@@ -2,8 +2,12 @@
 // install step and in the adapter step (it installs framework packages from
 // the registry). An install runs dependency lifecycle scripts, so a secret
 // left in its env is readable by any postinstall a version bump brings in.
+// The spending workflows that install packages (listing-pass.yml,
+// mint-bazaar-rows.yml) keep every secret and the workflow token at step
+// scope, never on an install step or at job or workflow scope.
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
+import { load } from "js-yaml";
 
 const text = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
 const lines = text.split("\n");
@@ -49,6 +53,28 @@ for (const job of jobs) {
 }
 ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
+
+// Spending workflows: an install step runs dependency code with whatever its
+// environment holds, so no secret (nor the workflow token) may reach one.
+const SECRETISH = /secrets\.|github\.token|GITHUB_TOKEN/;
+const INSTALL_RUN = /\bnpm (ci|install|i)\b|\bnpx\b|\byarn\b|\bpnpm\b/;
+for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml"]) {
+  const wf = load(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"));
+  const leaks = (env) => Object.entries(env || {}).filter(([, v]) => SECRETISH.test(String(v))).map(([k]) => k);
+  ok(leaks(wf.env).length === 0, `${file}: no secret at workflow scope`);
+  let installs = 0;
+  for (const [name, job] of Object.entries(wf.jobs || {})) {
+    const jobLeaks = leaks(job.env);
+    const installsHere = (job.steps || []).filter((st) => INSTALL_RUN.test(String(st.run || "")));
+    if (installsHere.length) ok(jobLeaks.length === 0, `${file} ${name}: no secret at job scope, where its install would read it${jobLeaks.length ? ` (${jobLeaks.join(", ")})` : ""}`);
+    for (const st of installsHere) {
+      installs++;
+      const stepLeaks = leaks(st.env);
+      ok(stepLeaks.length === 0, `${file} ${name}: "${String(st.name || st.run).slice(0, 50)}" carries no secret${stepLeaks.length ? ` (${stepLeaks.join(", ")})` : ""}`);
+    }
+  }
+  ok(installs >= 1, `${file}: the scan found its install step (${installs})`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

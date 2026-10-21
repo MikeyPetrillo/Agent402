@@ -12,7 +12,14 @@
 //   node scripts/test-payai-listing-pass.js
 import assert from "node:assert/strict";
 import { CHAINS, coverageFor } from "./listing-coverage.js";
-import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor } from "./payai-listing-pass.js";
+import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor, boughtKeyOf, purchasesOf, loadPurchaseMemory, oneAttemptOnly, mayRetry, DEFAULT_REBUY_AFTER_DAYS } from "./payai-listing-pass.js";
+import { pickArtifacts, fetchMemory, MEMORY_ARTIFACTS } from "./listing-pass-memory.js";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -181,6 +188,8 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
   ok(await main(["--max-price", "x"], {}) === 2, "main refuses an unreadable cap");
   ok(parseArgs(["--max-spend", "2"]).maxSpendUsd === 2 && parseArgs(["--max-spend", "0"]).maxSpendUsd === 0 && d.maxSpendUsd === DEFAULT_MAX_SPEND_USD && DEFAULT_MAX_SPEND_USD === 40, "--max-spend parses, zero included; absent means the default $40 ceiling");
   ok(Number.isNaN(parseArgs(["--max-spend", "two"]).maxSpendUsd) && Number.isNaN(parseArgs(["--max-spend", "-1"]).maxSpendUsd) && Number.isNaN(parseArgs(["--max-spend"]).maxSpendUsd), "a ceiling that was given but does not read is NaN, never silently unbounded");
+  ok(Number.isNaN(parseArgs(["--limit", "abc"]).limit) && Number.isNaN(parseArgs(["--limit"]).limit) && Number.isNaN(parseArgs(["--limit", "1.5"]).limit) && parseArgs(["--limit", "0"]).limit === 0, "an unreadable --limit is NaN, never no limit");
+  ok(await main(["--limit", "abc"], {}) === 2, "main refuses an unreadable --limit (exit 2)");
   const refused = await main(["--max-spend", "two"], {});
   ok(refused === 2, `main refuses an unreadable ceiling before any read or buy (exit ${refused})`);
   ok(SETTLE_VIA === "payai", "the pass names the facilitator the server registers");
@@ -234,7 +243,12 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     return { f, reads };
   };
   const covWith = (bazaarItems = [], payaiItems = []) => coverageFor({ pricing: legPricing, bazaarItems, payaiItems, origin: T, chains: ["base", "solana"] });
-  const runLeg = async (argv, { env = {}, cov = covWith(), host = hostFetch() } = {}) => {
+  // A live leg needs the purchase memory; an empty directory unless a test
+  // names one.
+  const emptyMemory = mkdtempSync(join(tmpdir(), "listing-bought-"));
+  const NOW = Date.parse("2026-10-28T03:53:00Z");
+  const okAnswer = () => new Response("{}", { status: 200, headers: { "payment-response": enc({ success: true, transaction: "tx" }) } });
+  const runLeg = async (argv, { env = {}, cov = covWith(), host = hostFetch(), answer = null } = {}) => {
     const built = [];
     const buys = [];
     const out = [];
@@ -244,18 +258,21 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
       sleep: async () => {},
       log: (m) => out.push(m),
       error: (m) => out.push(m),
+      now: () => NOW,
       buildPayFetch: async (chainName, rawKey, getCeiling) => {
         built.push({ chainName, rawKey });
         return {
           address: "0xburner",
           payFetch: async (url, init) => {
             buys.push({ path: new URL(url).pathname, headers: init.headers, ceiling: getCeiling() });
+            if (answer) return answer(new URL(url).pathname, buys.length);
             return new Response("{}", { status: 200, headers: { "payment-response": enc({ success: true, transaction: `tx-${buys.length}` }) } });
           },
         };
       },
     };
-    const code = await main([...argv, "--settle-wait-ms", "0", "--pause-ms", "0"], { TARGET_URL: T, ...env }, deps);
+    const memoryArgs = argv.includes("--live") && !argv.includes("--bought") && !argv.includes("--no-memory-arg") ? ["--bought", emptyMemory] : [];
+    const code = await main([...argv.filter((a) => a !== "--no-memory-arg"), ...memoryArgs, "--settle-wait-ms", "0", "--pause-ms", "0"], { TARGET_URL: T, ...env }, deps);
     return { code, built, buys, out: out.join("\n"), reads: host.reads };
   };
   const ENV = { BURNER_KEY: "0xevmkey", SOLANA_BURNER_KEY: "solkey", AGENT402_OPERATOR_TOKEN: "op-token" };
@@ -310,6 +327,172 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     }
     const partial = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream"], { env: ENV, cov: covWith([], all.filter((x) => !x.resource.endsWith("/api/report"))) });
     ok(partial.code === 0 && partial.buys.map((b) => b.path).join() === "/api/report", "only the route coverage says is missing is bought");
+  }
+
+  // --- the purchase memory: a route bought in the window is never bought again
+  {
+    const noMem = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--no-memory-arg"], { env: ENV });
+    ok(noMem.code === 2 && noMem.buys.length === 0 && noMem.built.length === 0 && /--live needs --bought/.test(noMem.out), "a live leg without --bought spends nothing (exit 2)");
+    const missingDir = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", join(emptyMemory, "nope")], { env: ENV });
+    ok(missingDir.code === 2 && missingDir.buys.length === 0 && /not a directory/.test(missingDir.out), "a --bought directory that does not exist spends nothing (exit 2)");
+
+    const mem = mkdtempSync(join(tmpdir(), "listing-mem-"));
+    // Today's PayAI-only pass record, in its own schema: no registry, no
+    // boughtAt, chain on the file (payai-listing.yml's pass.json).
+    mkdirSync(join(mem, "12355170364"), { recursive: true });
+    writeFileSync(join(mem, "12355170364", "pass.json"), JSON.stringify({ target: T, chain: "base", measuredAt: "2026-10-21T14:51:44.374Z", records: [
+      { slug: "hash", method: "POST", path: "/api/hash", priceUsd: 0.001, quoted: false, status: 200, tx: "t1", charged: true, error: null },
+      { slug: "route-execute-max", method: "POST", path: "/api/execute-max", priceUsd: 3.3, quoted: false, status: 500, tx: null, charged: false, error: "HTTP 500" },
+    ] }));
+    // A four-leg record: the report bought on the Bazaar, not PayAI.
+    mkdirSync(join(mem, "2", "deeper"), { recursive: true });
+    writeFileSync(join(mem, "2", "deeper", "pass-bazaar-base.json"), JSON.stringify({ registry: "bazaar", chain: "base", startedAt: "2026-10-27T00:00:00Z", records: [
+      { registry: "bazaar", chain: "base", slug: "report", method: "POST", path: "/api/report", charged: true, boughtAt: "2026-10-27T00:00:00Z" },
+    ] }));
+    const r = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", mem], { env: ENV });
+    ok(r.code === 0 && !r.buys.some((b) => b.path === "/api/hash"), `a route the old PayAI pass charged 7 days ago is not bought again (${r.buys.map((b) => b.path).join()})`);
+    ok(/SKIP\s+POST \/api\/hash\s.*bought 2026-10-21, awaiting registry/.test(r.out), "...and is reported as bought <date>, awaiting registry");
+    ok(r.buys.some((b) => b.path === "/api/execute-max"), "a record that was not charged does not hold a route back");
+    ok(r.buys.some((b) => b.path === "/api/report"), "a purchase on another registry does not hold the route back on this one");
+    const bz = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--bought", mem], { env: { BURNER_KEY: "0xevmkey" } });
+    ok(!bz.buys.some((b) => b.path === "/api/report") && bz.buys.some((b) => b.path === "/api/hash"), "the Bazaar leg skips the report it bought and buys the route only PayAI's leg bought");
+    const old = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", mem], { env: ENV, cov: covWith() });
+    ok(old.buys.length === 3, "the same memory holds back only the one route");
+    // Older than the window: bought again.
+    const later = mkdtempSync(join(tmpdir(), "listing-mem-"));
+    writeFileSync(join(later, "pass.json"), JSON.stringify({ chain: "base", measuredAt: "2026-10-13T00:00:00Z", records: [{ slug: "hash", method: "POST", path: "/api/hash", charged: true }] }));
+    const stale = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", later], { env: ENV });
+    ok(stale.buys.some((b) => b.path === "/api/hash"), "a purchase older than 14 days no longer holds the route back");
+    const longer = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", later, "--rebuy-after-days", "30"], { env: ENV });
+    ok(!longer.buys.some((b) => b.path === "/api/hash"), "--rebuy-after-days can lengthen the window");
+    ok(Number.isNaN(parseArgs(["--rebuy-after-days", "7"]).rebuyAfterDays) && Number.isNaN(parseArgs(["--rebuy-after-days", "x"]).rebuyAfterDays) && parseArgs([]).rebuyAfterDays === DEFAULT_REBUY_AFTER_DAYS && DEFAULT_REBUY_AFTER_DAYS === 14, "the window defaults to 14 days and can never be shortened");
+    const short = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", later, "--rebuy-after-days", "7"], { env: ENV });
+    ok(short.code === 2 && short.buys.length === 0, "a shorter window is refused before anything is bought");
+    // An outcome-unknown attempt holds the route back too.
+    const unk = mkdtempSync(join(tmpdir(), "listing-mem-"));
+    writeFileSync(join(unk, "pass-payai-base.json"), JSON.stringify({ registry: "payai", chain: "base", records: [{ registry: "payai", chain: "base", method: "POST", path: "/api/hash", charged: false, chargeUnknown: true, boughtAt: "2026-10-27T10:00:00Z" }] }));
+    const u = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", unk], { env: ENV });
+    ok(!u.buys.some((b) => b.path === "/api/hash") && /bought 2026-10-27 \(outcome unknown\), awaiting registry/.test(u.out), "an attempt whose outcome is unknown holds the route back");
+    // An unreadable record file: nothing spent.
+    const bad = mkdtempSync(join(tmpdir(), "listing-mem-"));
+    writeFileSync(join(bad, "pass.json"), "{ not json");
+    const b = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--bought", bad], { env: ENV });
+    ok(b.code === 2 && b.buys.length === 0 && b.built.length === 0 && /unreadable purchase record/.test(b.out), "an unreadable record file stops the leg before anything is bought");
+    // Schema readers.
+    const mint = purchasesOf({ registry: "bazaar", chain: "base", records: [{ registry: "bazaar", chain: "base", slug: "chain-nonce", method: "GET", path: "/api/chain/nonce?address=0x1", charged: true, boughtAt: "2026-10-21T15:00:00Z" }] });
+    ok(mint.length === 1 && mint[0].key === "bazaar base GET /api/chain/nonce" && mint[0].at === Date.parse("2026-10-21T15:00:00Z"), "a mint record keys on registry, chain, method and path without the query");
+    const oldPayai = purchasesOf({ chain: "solana", measuredAt: "2026-10-21T14:51:44.374Z", records: [{ slug: "llm-premium", method: "POST", path: "/api/llm-premium", charged: true }] });
+    ok(oldPayai[0].key === boughtKeyOf({ registry: "payai", chain: "solana", method: "POST", path: "/api/llm-premium" }) && oldPayai[0].at === Date.parse("2026-10-21T14:51:44.374Z"), "an old PayAI pass record is PayAI's, on its file's chain, dated by its measuredAt");
+    let threw = false; try { purchasesOf({ nope: 1 }); } catch { threw = true; }
+    ok(threw, "a file that is not a record file throws");
+    const loaded = loadPurchaseMemory(mem, { now: NOW });
+    ok(loaded.files === 2 && loaded.bought.size === 2, `the memory reads record files recursively (${loaded.files} files, ${loaded.bought.size} routes)`);
+  }
+
+  // --- retries: only 503/504, never on a lasting-effect, report or dear route
+  {
+    ok(oneAttemptOnly({ slug: "route-execute-max", priceUsd: 0.01 }) && oneAttemptOnly({ slug: "memory-write", priceUsd: 0.002 }) && oneAttemptOnly({ slug: "research", priceUsd: 0.1 }) && oneAttemptOnly({ slug: "x", priceUsd: 0.25 }) && !oneAttemptOnly({ slug: "hash", priceUsd: 0.001 }), "lasting effects, route-execute tiers, report products and routes at $0.25 or more get one attempt");
+    ok(mayRetry({ slug: "hash", priceUsd: 0.001 }, 503) && mayRetry({ slug: "hash", priceUsd: 0.001 }, 504) && !mayRetry({ slug: "hash", priceUsd: 0.001 }, 502) && !mayRetry({ slug: "hash", priceUsd: 0.001 }, 500) && !mayRetry({ slug: "route-execute-max", priceUsd: 3.3 }, 503), "only 503 and 504 are retried");
+    const fail = (status) => () => new Response("", { status });
+    const r502 = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash"], { env: ENV, answer: fail(502) });
+    ok(r502.code === 1 && r502.buys.length === 1, `a 502 is not retried (${r502.buys.length} attempts)`);
+    const r503 = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash"], { env: ENV, answer: fail(503) });
+    ok(r503.code === 1 && r503.buys.length === 2, `a 503 on a cheap route is retried once (${r503.buys.length} attempts)`);
+    const exec = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "route-execute-max,report"], { env: ENV, answer: fail(503) });
+    ok(exec.code === 1 && exec.buys.length === 2 && exec.buys.map((x) => x.path).join() === "/api/execute-max,/api/report", `a route-execute tier and a report get one attempt each (${exec.buys.map((x) => x.path).join()})`);
+    // Every signed attempt counts against the ceiling: the retry would pass it.
+    const tight = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash", "--max-spend", "0.0015"], { env: ENV, answer: fail(504) });
+    ok(tight.buys.length === 1 && /not retried: the retry would pass --max-spend/.test(tight.out), `a retry that would pass --max-spend is not signed (${tight.buys.length} attempts)`);
+    // A retry on the first route can hold a later route back.
+    const two = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash,memory-write", "--max-spend", "0.003"], { env: ENV, answer: (p, n) => (n === 1 ? new Response("", { status: 503 }) : okAnswer()) });
+    ok(two.buys.map((x) => x.path).join() === "/api/hash,/api/hash" && /SKIP\s+POST \/api\/memory\s.*not attempted: the attempt would pass --max-spend/.test(two.out), `signed retries count toward the ceiling a later route must fit under (${two.buys.map((x) => x.path).join()})`);
+  }
+
+  // --- records are written after every attempt, so a cut-short run keeps them
+  {
+    const dir = mkdtempSync(join(tmpdir(), "listing-out-"));
+    const outFile = join(dir, "pass-payai-base.json");
+    let seenMidRun = null;
+    const r = await runLeg(["--registry", "payai", "--chain", "base", "--live", "--include-upstream", "--out", outFile], { env: ENV, answer: (p, n) => {
+      if (n === 2) {
+        seenMidRun = JSON.parse(readFileSync(outFile, "utf8"));
+        throw new Error("The operation was aborted due to timeout");
+      }
+      return okAnswer();
+    } });
+    ok(!!seenMidRun && seenMidRun.records[0].charged === true && seenMidRun.records[0].path === "/api/hash" && seenMidRun.records[1].chargeUnknown === true, "the record file already holds the first buy, and the second as outcome unknown, while the second is in flight");
+    const final = JSON.parse(readFileSync(outFile, "utf8"));
+    ok(r.code === 1 && final.registry === "payai" && final.chain === "base" && final.records.length === 4 && final.records[1].chargeUnknown === true && final.records[1].charged === false && final.records[0].boughtAt, "the final file keeps the thrown attempt as outcome unknown, with registry, chain and boughtAt");
+    ok(!existsSync(`${outFile}.tmp`), "no temp file is left behind");
+    const again = loadPurchaseMemory(dir, { now: NOW });
+    ok(again.bought.size === 4, "every attempted route of that run (charged or unknown) is in the next run's memory");
+  }
+
+  // --- the memory download: this repository's runs of the three workflows
+  {
+    const nowMs = Date.parse("2026-10-28T03:53:00Z");
+    const art = (id, name, created, run = {}) => ({ id, name, created_at: created, expired: false, workflow_run: { id: 900 + id, repository_id: 1, head_repository_id: 1, head_branch: "main", ...run } });
+    const listing = [
+      art(1, "payai-listing-pass", "2026-10-21T14:53:17Z"),
+      art(2, "listing-pass", "2026-10-27T04:00:00Z"),
+      art(3, "mint-bazaar-rows", "2026-10-22T00:00:00Z"),
+      art(4, "listing-pass", "2026-10-10T00:00:00Z"),
+      { ...art(5, "listing-pass", "2026-10-27T00:00:00Z"), expired: true },
+      art(6, "listing-pass", "2026-10-27T00:00:00Z", { head_repository_id: 2 }),
+      art(7, "other", "2026-10-27T00:00:00Z"),
+      art(8, "listing-pass", "2026-10-26T00:00:00Z", { head_branch: "claude/x" }),
+    ];
+    ok(pickArtifacts(listing, { now: nowMs }).map((a) => a.id).join() === "1,2,3,8", "only unexpired memory artifacts from this repository's runs in the last 14 days, any branch");
+    ok(MEMORY_ARTIFACTS["payai-listing-pass"] === ".github/workflows/payai-listing.yml" && MEMORY_ARTIFACTS["mint-bazaar-rows"] === ".github/workflows/mint-bazaar-rows.yml" && MEMORY_ARTIFACTS["listing-pass"] === ".github/workflows/listing-pass.yml", "the three artifact names map to the workflows that upload them");
+    const calls = [];
+    const runPaths = { 901: ".github/workflows/payai-listing.yml", 902: ".github/workflows/listing-pass.yml", 903: ".github/workflows/mint-bazaar-rows.yml", 908: ".github/workflows/other.yml" };
+    const f = async (url, init = {}) => {
+      const u = new URL(url);
+      calls.push({ url: String(url), auth: !!init.headers?.Authorization, redirect: init.redirect });
+      if (u.hostname === "blob.test") return new Response("zipbytes", { status: 200 });
+      const m = u.pathname.match(/\/actions\/artifacts$/);
+      if (m) return new Response(JSON.stringify({ artifacts: listing.filter((a) => a.name === u.searchParams.get("name")) }), { status: 200 });
+      const run = u.pathname.match(/\/actions\/runs\/(\d+)$/);
+      if (run) return new Response(JSON.stringify({ path: runPaths[run[1]] }), { status: 200 });
+      const z = u.pathname.match(/\/artifacts\/(\d+)\/zip$/);
+      if (z) return new Response(null, { status: 302, headers: { location: `https://blob.test/${z[1]}` } });
+      return new Response("", { status: 404 });
+    };
+    const out = mkdtempSync(join(tmpdir(), "listing-dl-"));
+    const unzipped = [];
+    const kept = await fetchMemory({ repo: "o/r", token: "tok", outDir: out, now: nowMs, fetchImpl: f, unzip: (zip, dir) => { unzipped.push(dir); writeFileSync(join(dir, "pass.json"), "{}"); }, log: () => {} });
+    ok(kept === 3 && unzipped.length === 3, `three artifacts kept; the one whose run is another workflow is ignored (${kept})`);
+    ok(calls.filter((c) => /actions\/artifacts\?name=/.test(c.url)).length === 3, "the artifacts are listed by each of the three names");
+    ok(calls.filter((c) => c.url.startsWith("https://blob.test")).every((c) => !c.auth) && calls.filter((c) => /\/zip$/.test(c.url)).every((c) => c.redirect === "manual" && c.auth), "the zip is fetched with the token, the redirect target without it");
+    let failed = false;
+    try { await fetchMemory({ repo: "o/r", token: "tok", outDir: out, now: nowMs, fetchImpl: async () => new Response("", { status: 403 }), unzip: () => {}, log: () => {} }); } catch { failed = true; }
+    ok(failed, "an API refusal is an error, so the job stops before the spending step");
+  }
+
+  // --- the Bazaar mint keeps records the listing pass reads back -------------
+  {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0xmint" })).toString("base64") });
+      res.end(JSON.stringify({ nonce: "5", nonceHex: "0x5" }));
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    const dir = mkdtempSync(join(tmpdir(), "mint-out-"));
+    const outFile = join(dir, "pass-mint.json");
+    // A throwaway key: the stub never answers 402, so nothing is signed.
+    const key = `0x${"11".repeat(32)}`;
+    const script = fileURLToPath(new URL("./mint-bazaar-rows.js", import.meta.url));
+    const code = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [script, "--live", "--only", "chain-nonce", "--out", outFile], { env: { PATH: process.env.PATH, HOME: process.env.HOME, TARGET_URL: `http://127.0.0.1:${port}`, BURNER_KEY: key }, stdio: ["ignore", "pipe", "pipe"] });
+      child.stdout.resume(); child.stderr.resume();
+      child.on("exit", resolve);
+    });
+    server.close();
+    const doc = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : null;
+    ok(code === 0 && doc?.registry === "bazaar" && doc?.chain === "base" && doc.records.length === 1 && doc.records[0].charged === true && doc.records[0].path === "/api/chain/nonce" && doc.records[0].tx === "0xmint", `mint-bazaar-rows --out records each buy in the listing pass's shape (exit ${code})`);
+    const memDir = mkdtempSync(join(tmpdir(), "mint-mem-"));
+    writeFileSync(join(memDir, "pass-mint.json"), readFileSync(outFile));
+    ok(loadPurchaseMemory(memDir).bought.has("bazaar base GET /api/chain/nonce"), "the listing pass's memory reads the mint record");
   }
   // Dry run spends nothing; a chain the pass cannot pay on is refused.
   {
