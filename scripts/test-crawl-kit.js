@@ -249,7 +249,9 @@ ok(!exc.pages.some((p) => /blog|target/.test(p.url)) && exc.skipped.pattern >= 3
 // sameHost:false widens to subdomains only
 fetched = [];
 const sub = await h("site-crawl")({ url: SITE, sameHost: false, limit: 20 });
-ok(fetched.some((u) => u.startsWith("https://docs.example.com/")) || sub.skipped.error >= 1, "site-crawl: sameHost:false admits the docs subdomain (fetched or errored, never offsite)");
+// An unresolvable subdomain is refused by the guard like a private one (one
+// answer for both), so it lands under unsafe rather than error.
+ok(fetched.some((u) => u.startsWith("https://docs.example.com/")) || sub.skipped.error + sub.skipped.unsafe >= 1, "site-crawl: sameHost:false admits the docs subdomain (fetched or refused, never offsite)");
 ok(!fetched.some((u) => /iana\.org/.test(u)), "site-crawl: sameHost:false still never leaves the site");
 
 // format text + maxCharsPerPage
