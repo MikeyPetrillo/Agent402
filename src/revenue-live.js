@@ -211,7 +211,7 @@ export const EVM = {
       ...(process.env.ALCHEMY_API_KEY ? [`https://opt-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
       "https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com",
     ],
-    explorer: (a) => `https://optimistic.etherscan.io/address/${a}`,
+    explorer: (a) => `https://optimistic.etherscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://optimistic.etherscan.io/tx/${h}`,
   },
   arc: {
@@ -232,7 +232,7 @@ export const EVM = {
       ...(process.env.ALCHEMY_API_KEY ? [`https://arc-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
       "https://rpc.mainnet.arc.io",
     ],
-    explorer: (a) => `https://explorer.arc.io/address/${a}`,
+    explorer: (a) => `https://explorer.arc.io/address/${a}?tab=token_transfers`,
     tx: (h) => `https://explorer.arc.io/tx/${h}`,
   },
   robinhood: {
@@ -244,7 +244,7 @@ export const EVM = {
       ...(process.env.ALCHEMY_API_KEY ? [`https://robinhood-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
       "https://rpc.mainnet.chain.robinhood.com",
     ],
-    explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}`,
+    explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}?tab=token_transfers`,
     tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
   },
 };
