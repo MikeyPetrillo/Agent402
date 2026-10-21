@@ -16,14 +16,16 @@
 //   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
-//   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
+//   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
 //                         sale); pays per successful call with no wallet
-//   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
+//   AGENT402_BUDGET       hard cap on total USD spent this session (default 40; off disables)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { quoteOf, guardSigning } from "./known-assets.js";
 import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
@@ -78,12 +80,37 @@ const ASYNC_TIMEOUT_MS = Number(process.env.AGENT402_ASYNC_TIMEOUT_MS) > 0 ? Num
 // string bumped by hand. Reading the manifest makes drift impossible.
 const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
-// Spend controls, enforced BEFORE a payment is ever signed, so a confused or
-// runaway model cannot drain the wallet. Unset = unlimited (back-compat).
-const num = (v) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
-const MAX_PER_CALL = num(process.env.AGENT402_MAX_PER_CALL) ?? Infinity;
-const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
+// Spend controls, enforced on the payment that is signed (see getPayFetch), so
+// a confused or runaway model cannot drain the wallet. On by default: the
+// per-call default is the dearest list price in the Agent402 catalog rounded up
+// to a whole dollar (mcp/test.js checks it still covers the catalog), and the
+// session default is ten of those. `off` disables one; a malformed value
+// reads as the default, never as off.
+const DEFAULT_MAX_PER_CALL_USD = 4;
+const DEFAULT_BUDGET_USD = 40;
+const capFromEnv = (name, def) => {
+  const raw = String(process.env[name] ?? "").trim().toLowerCase();
+  if (raw === "") return def;
+  if (raw === "off") return Infinity;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n;
+  console.error(`[agent402-mcp] ${name}=${JSON.stringify(process.env[name])} is not a USD amount or "off"; using the default ${def}`);
+  return def;
+};
+const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD);
+const BUDGET = capFromEnv("AGENT402_BUDGET", DEFAULT_BUDGET_USD);
 let spentUsd = 0;
+// Wallet calls in flight, each holding what it may sign until it settles or
+// fails, so concurrent calls cannot each pass against the same budget. The
+// signing guard reads the one being signed from signCtx.
+const pendingSpend = new Set();
+const signCtx = new AsyncLocalStorage();
+const pendingUsd = (except = null) => { let t = 0; for (const e of pendingSpend) if (e !== except) t += e.usd; return t; };
+/** The most the payment being signed may ask for: the per-call cap and what is
+ *  left of the session budget after every other call in flight. */
+function signAllowance() {
+  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - pendingUsd(signCtx.getStore() || null)));
+}
 
 const DEFAULT_CURATED = [
   // Flagship demand set, keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
@@ -161,7 +188,17 @@ function getPayFetch() {
     const { x402Client } = await import("@x402/core/client");
     const { wrapFetchWithPayment } = await import("@x402/fetch");
     const client = new x402Client();
-    client.setSpendControls?.(false); // @x402/core 2.23+ defaults to a $1 pegged-assets-only cap; this package bounds spend itself
+    // This package's guard (./known-assets.js) holds every signature to
+    // AGENT402_MAX_PER_CALL and what is left of AGENT402_BUDGET, priced from
+    // known assets only. It replaces the library's default control, which
+    // allows only that library's default assets (so no USDG on Robinhood
+    // Chain) under a fixed $1 cap.
+    client.setSpendControls?.(false);
+    guardSigning(client, {
+      allowance: signAllowance,
+      onSign: (usd) => { const e = signCtx.getStore(); if (e) { e.usd = usd; e.signed = true; } },
+      onRefuse: (detail) => { const e = signCtx.getStore(); if (e) e.refusal = detail; },
+    });
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
@@ -233,7 +270,8 @@ function walletRequiredText(tool) {
 // paths read the amount out of the 402 before spending anything.
 //
 // The preflight carries no payment header and no credits key, so it can only
-// ever draw an unpaid 402 - it never signs and never debits. Only run when a
+// ever draw an unpaid 402 - it never signs and never debits. It gives a
+// readable refusal; the cap that holds is the signing guard's. Only run when a
 // ceiling is configured: with none, the number changes nothing and the round
 // trip is pure cost.
 const CAPS_CONFIGURED = Number.isFinite(MAX_PER_CALL) || Number.isFinite(BUDGET);
@@ -249,48 +287,33 @@ function acceptsOf(obj) {
   return null;
 }
 
-/** The MAXIMUM across accepts: the wallet picks which chain to settle on and
- *  this server cannot know which, so the only sound ceiling is the dearest
- *  offer. An entry we cannot price makes the whole quote unreadable (null),
- *  never a guess. */
-function usdFromAccepts(accepts) {
-  if (!Array.isArray(accepts) || !accepts.length) return null;
-  let maxUsd = null;
-  for (const a of accepts) {
-    // v2 names the base-unit amount `amount`; x402 v1 called it `maxAmountRequired`.
-    const atomic = Number(a && (a.amount ?? a.maxAmountRequired));
-    if (!Number.isFinite(atomic) || atomic < 0) return null;
-    // USDC is 6 decimals on every chain these rails settle; a wrong exponent is
-    // a 1000x pricing error, so an out-of-range hint reads as unreadable.
-    const declared = (a && a.extra && a.extra.decimals) ?? (a && a.decimals);
-    const decimals = declared == null ? 6 : Number(declared);
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 30) return null;
-    const usd = atomic / 10 ** decimals;
-    if (maxUsd == null || usd > maxUsd) maxUsd = usd;
-  }
-  return maxUsd;
-}
-
-/** The quoted price for this request, or `listUsd` when the 402 cannot be read.
+/** The quoted price for this request, or `listUsd` when no 402 can be read.
  *  x402 v2 carries the challenge base64 in the PAYMENT-REQUIRED header and
- *  leaves the body `{}`; v1 sellers put it in the body. Header first. */
-async function quotedUsd(url, init, listUsd) {
-  if (!CAPS_CONFIGURED) return listUsd;
+ *  leaves the body `{}`; v1 sellers put it in the body. Header first.
+ *
+ *  Each accept is priced from the known-asset table (./known-assets.js), never
+ *  from a decimals value the seller sends. On the wallet path the signing guard
+ *  drops what it cannot price or afford, so the cheapest known accept is the
+ *  price; with no known accept at all, `unpriceable` is set. The credits gate
+ *  debits its own quote, so the dearest known accept is the price there. */
+async function quotedUsd(url, init, listUsd, { wallet = false } = {}) {
+  if (!CAPS_CONFIGURED) return { usd: listUsd };
+  let q = null;
   try {
     const pre = await ownFetch(url, init);
-    if (pre.status !== 402) return listUsd;
-    let quoted = null;
+    if (pre.status !== 402) return { usd: listUsd };
     const header = pre.headers.get("payment-required");
     if (header) {
-      try { quoted = usdFromAccepts(acceptsOf(JSON.parse(Buffer.from(header.trim(), "base64").toString("utf8")))); } catch { quoted = null; }
+      try { q = quoteOf(acceptsOf(JSON.parse(Buffer.from(header.trim(), "base64").toString("utf8")))); } catch { q = null; }
     }
-    if (quoted == null) {
+    if (!q) {
       let body = null; try { body = await pre.json(); } catch { body = null; }
-      quoted = usdFromAccepts(acceptsOf(body));
+      q = quoteOf(acceptsOf(body));
     }
-    // Larger of the two: an understated catalog must not lower the ceiling.
-    return quoted == null ? listUsd : Math.max(listUsd, quoted);
-  } catch { return listUsd; /* fail-open to the advertised price */ }
+  } catch { return { usd: listUsd }; /* no readable 402: the advertised price */ }
+  if (!q || q.max == null) return wallet && q ? { usd: listUsd, unpriceable: true } : { usd: listUsd };
+  // Larger of the two: an understated catalog must not lower the ceiling.
+  return { usd: Math.max(listUsd, wallet ? q.min : q.max) };
 }
 
 // A refused call's tool text. A 402 body from an x402 v2 seller may also carry
@@ -348,7 +371,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     // number - the credits gate holds and debits what the 402 quotes for THIS
     // body, not the route's list price.
     const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
-    const price = await quotedUsd(url, init, listUsd);
+    const { usd: price } = await quotedUsd(url, init, listUsd);
     if (price > MAX_PER_CALL) {
       return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
     }
@@ -363,33 +386,47 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       return { content: [{ type: "text", text: `Credits refused for "${tool.slug}": ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""}. Top up at ${body.topup || `${BASE}/credits`}.` }], isError: true };
     }
   } else if (HAS_WALLET) {
-    // The wallet signs whatever the challenge asks for (vendor spend controls
-    // are off - this package bounds spend itself), so the cap is checked
-    // against that amount, read from the 402 before anything is signed.
+    // The signing guard holds the payment that is signed to the caps; this
+    // preflight of the same 402 only makes the common refusal readable.
     const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
-    const price = await quotedUsd(url, init, listUsd);
+    const { usd: price, unpriceable } = await quotedUsd(url, init, listUsd, { wallet: true });
+    if (unpriceable) {
+      return {
+        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" offers no payment option in an asset this server can price (USDC or USDG on a known network), so nothing was signed.` }],
+        isError: true,
+      };
+    }
     if (price > MAX_PER_CALL) {
       return {
         content: [{ type: "text", text: `Refused without paying: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
         isError: true,
       };
     }
-    if (spentUsd + price > BUDGET) {
+    const inFlight = pendingUsd();
+    if (spentUsd + inFlight + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" is quoted $${price} for this request). Restart the MCP server or raise AGENT402_BUDGET.` }],
         isError: true,
       };
     }
     const payFetch = await getPayFetch();
-    try { res = await collect(await payFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders } })); }
+    // Held until the call settles or fails; the guard replaces `usd` with the
+    // amount it lets the wallet sign.
+    const entry = { usd: price, signed: false, refusal: null };
+    pendingSpend.add(entry);
+    try { res = await collect(await signCtx.run(entry, () => payFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders } }))); }
     catch (e) {
+      pendingSpend.delete(entry);
       // Still running past the wait: it may yet settle, so it counts as spent.
-      if (e instanceof AsyncJobPendingError) { spentUsd += price; return pendingJobResult(tool, e); }
+      if (e instanceof AsyncJobPendingError) { if (entry.signed) spentUsd += entry.usd; return pendingJobResult(tool, e); }
+      if (entry.refusal) return signingRefusal(tool, entry.refusal);
       throw e;
     }
-    // Count spend when the server confirms settlement (payment receipt header),
-    // falling back to any 2xx, conservative in the buyer's favor.
-    if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += price;
+    pendingSpend.delete(entry);
+    // Count spend when a payment was signed and the server confirms settlement
+    // (payment receipt header), falling back to any 2xx, conservative in the
+    // buyer's favor.
+    if (entry.signed && (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok)) spentUsd += entry.usd;
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
@@ -426,6 +463,14 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     };
   }
   return { content: [{ type: "text", text }], structuredContent: structured };
+}
+
+/** The tool result for a payment the signing guard refused. */
+function signingRefusal(tool, d) {
+  const text = d.reason === "unknown-asset"
+    ? `Refused without paying: "${tool.slug}" asked to be paid in an asset this server cannot price (USDC or USDG on a known network), so nothing was signed.`
+    : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed.`;
+  return { content: [{ type: "text", text }], isError: true };
 }
 
 /** The tool result for a job still running when the wait ended. */

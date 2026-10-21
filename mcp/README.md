@@ -66,21 +66,28 @@ Every variable the server reads (all optional):
 | `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`) already issued (new credits are not on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
-| `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). Applies to the wallet and the credits path. |
-| `AGENT402_BUDGET` | unlimited | Hard cap on total USD spent per session (e.g. `1.00`). Applies to the wallet and the credits path. |
+| `AGENT402_MAX_PER_CALL` | `4` | Refuse any single call priced above this many USD (e.g. `0.05`); `off` disables it. Applies to the wallet and the credits path. |
+| `AGENT402_BUDGET` | `40` | Hard cap on total USD spent per session (e.g. `1.00`); `off` disables it. Applies to the wallet and the credits path. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead; `always` uses a job on every route that runs as one. |
 | `AGENT402_ASYNC_TIMEOUT_MS` | `900000` | How long to poll a job before answering with its link (`structuredContent.jobUrl`) to collect later. |
 
-Spend controls are enforced **before a payment is signed** (or a credits call is
-sent) - a runaway model is refused, not billed. `payment.info` reports the
-caps, what's been spent, and what remains. With no wallet key and no credits key,
+Spend controls are on by default and enforced on the payment that is signed (or
+before a credits call is sent) - a runaway model is refused, not billed. The
+wallet's x402 client carries a policy that drops every payment option over the
+per-call cap or what is left of the budget, so the 402 the wallet signs is held
+to the caps, not only the one read on a preflight. Each option is priced from the
+known decimals of its asset (USDC on each rail, USDG on Robinhood Chain), never
+from a decimals value in the challenge, and an option in any other asset is not
+signed. A value that is not a USD amount or `off` reads as the default.
+`payment.info` reports the caps, what's been spent, and what remains. With no wallet key and no credits key,
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
 you intend to spend. Most tools cost $0.001–$0.02. The routing tiers top out
 at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
-so set `AGENT402_MAX_PER_CALL` if you want a hard per-call ceiling.
+so the default per-call cap of $4 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
+tighter ceiling.
 
 ## How it works
 

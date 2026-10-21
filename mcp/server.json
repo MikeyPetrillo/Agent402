@@ -33,13 +33,13 @@
         },
         {
           "name": "AGENT402_BUDGET",
-          "description": "Optional hard cap on total USDC spent per session (e.g. 1.00). Refused before any payment is signed.",
+          "description": "Hard cap on total USD spent per session (default 40; e.g. 1.00; off disables). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },
         {
           "name": "AGENT402_MAX_PER_CALL",
-          "description": "Optional max USD price for any single call (e.g. 0.01).",
+          "description": "Max USD price for any single call (default 4; e.g. 0.05; off disables). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },
