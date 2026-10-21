@@ -247,6 +247,51 @@ delete process.env.MPP_RECONCILE;
   ok(!JSON.stringify(responses).toLowerCase().includes(PAYER.slice(2)) && !readFileSync(join(xdir, "explained.json"), "utf8").toLowerCase().includes(PAYER.slice(2)), "nothing payer-shaped in any explain response or the stored explanations");
 }
 
+// --- the reported day and window never move backwards ----------------------
+// explain() re-runs the latest day and the older days that carry the
+// reference; a re-run that fails must never leave an older day (or its
+// window) reported as the current one.
+{
+  const ldir = mkdtempSync(join(tmpdir(), "mpp-rec-ld-"));
+  const D1 = "2026-10-03", D2 = "2026-10-04";
+  const d1 = dayStartMs(D1), d2 = d1 + 86_400_000;
+  const OLD_TX = h(0x3003), NEW_TX = h(0x4004);
+  let calls = 0;
+  const failOn = new Set(); // read numbers that fail
+  const L = createMppReconciler({
+    file: join(ldir, "state.json"), explainedFile: join(ldir, "explained.json"), log: () => {}, now: () => d2 + 86_400_000 + 5 * 3600e3,
+    ledgerRows: () => [], refunds: () => [], recipients: () => [RECIPIENT], currencies: () => [USDCE],
+    fetchTransfers: async () => {
+      if (failOn.has(++calls)) throw new Error("chain read down");
+      return { complete: true, source: "feed", rows: [xfer(0x4004, { amountAtomic: "2000000", ts: d2 + 36e6, sender: "0x" + "dd".repeat(20) }), xfer(0x3003, { ts: d1 + 36e6, sender: BURNER })] };
+    },
+  });
+  await L.ready();
+  await L.runOnce({ day: D1 });
+  await L.runOnce({ day: D2 });
+  const before = await L.status();
+  ok(before.day === D2 && before.window7d === "mismatch", "back-step: the latest day is reported, its window at mismatch");
+  // A direct re-run of an older day stores it but never makes it the reported day.
+  const older = await L.runOnce({ day: D1 });
+  const afterOlder = await L.status();
+  ok(older.ok && afterOlder.day === D2 && L.detail().lastDay === D2 && L.detail().window.to === D2, "back-step: re-running an older day keeps the latest day and its window reported");
+  // Shape A: the latest-day re-run fails, the older one succeeds.
+  failOn.add(calls + 1); // the first re-run (the latest day) fails, the older one succeeds
+  const e = await L.explain({ tx: OLD_TX, note: "own test transfer" });
+  const failed = e.reran.filter((r) => !r.ok).map((r) => r.day);
+  ok(e.reran.length === 2 && failed.join() === D2 && e.reran.find((r) => r.day === D1)?.ok === true, `back-step: the latest re-run failed, the older one ran, and reran says so (${JSON.stringify(e.reran)})`);
+  ok(e.status.day === D2 && e.status.window7d === "mismatch" && L.detail().lastDay === D2 && L.detail().window.to === D2,
+    `back-step: with the latest re-run failed the status stays on the latest day and its mismatch (${JSON.stringify(e.status)})`);
+  // Shape B (the review repro): the older re-run succeeds, the latest fails, whichever runs first.
+  await L.explain({ tx: OLD_TX, action: "restore" });
+  await L.runOnce({ day: D2 });
+  failOn.add(calls + 2); // the first re-run reads fine, the second fails
+  const e2 = await L.explain({ tx: OLD_TX, note: "own test transfer" });
+  ok(e2.reran.some((r) => !r.ok) && e2.status.day === D2 && e2.status.window7d === "mismatch" && L.detail().window.to === D2,
+    `back-step: one re-run failed and the reported day and window are still the latest (${JSON.stringify(e2.status)})`);
+  ok(!JSON.stringify(e2).includes(NEW_TX.slice(2)), "back-step: the explain answer carries no unrelated reference");
+}
+
 // --- chain readers ---------------------------------------------------------
 {
   const page = (data, nextCursor = null) => ({ ok: true, status: 200, json: async () => ({ data, nextCursor }) });

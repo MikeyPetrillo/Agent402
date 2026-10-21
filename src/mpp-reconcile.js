@@ -423,7 +423,11 @@ export function createMppReconciler({
   // this one has not: a run starts from the row, and its save writes only
   // the day it computed and the run fields onto the row as it is then.
   const PG = doc.backend === "pg";
-  const persist = (d = null) => {
+  // The reported day and its window never move backwards: a re-run of an
+  // older day (explain's affected days, an operator's runOnce({ day })) stores
+  // that day's summary but leaves lastDay and the window on the newest day, so
+  // a failed re-run of the newest day can never let an older one read as current.
+  const persist = (d = null, advances = true) => {
     if (!PG) { void doc.save(state); return true; }
     const mine = { ...state };
     return doc.update((b) => {
@@ -431,9 +435,10 @@ export function createMppReconciler({
       const days = { ...row.days, ...(d && mine.days[d] ? { [d]: mine.days[d] } : {}) };
       for (const k of Object.keys(days).sort().slice(0, -keepDays)) delete days[k];
       const newer = !row.lastRunAt || (mine.lastRunAt && mine.lastRunAt >= row.lastRunAt);
+      const moves = !!d && advances && (!row.lastDay || d >= row.lastDay);
       return {
         ...row, days,
-        ...(newer ? { window: d ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, ...(d ? { lastDay: d } : {}) } : {}),
+        ...(newer ? { window: moves ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, ...(moves ? { lastDay: d } : {}) } : {}),
         runs: Math.max(Number(row.runs) || 0, Number(mine.runs) || 0),
       };
     }, { fallback: null }).then((r) => { if (r.ok) absorb(r.body); return r.ok; });
@@ -502,15 +507,16 @@ export function createMppReconciler({
         const winSum = await reconcileRange(wStart, end, { transfers, explained });
         const pack = (s, extra) => ({ ...extra, generatedAt: new Date(t).toISOString(), tempoConfigured, ...s });
         state.days[d] = pack(daySum, { day: d });
-        state.window = pack(winSum, { from: utcDay(wStart), to: d });
+        const win = pack(winSum, { from: utcDay(wStart), to: d });
+        const advances = !state.lastDay || d >= state.lastDay;
+        if (advances) { state.window = win; state.lastDay = d; }
         for (const k of Object.keys(state.days).sort().slice(0, -keepDays)) delete state.days[k];
         state.lastRunAt = new Date(t).toISOString();
-        state.lastDay = d;
         state.lastError = null;
         state.runs = (state.runs || 0) + 1;
-        await persist(d);
+        await persist(d, advances);
         log(`[mpp-reconcile] ${d}: ${daySum.mismatchTotal} mismatch(es), chain ${daySum.sources.chain.source || "-"}${daySum.sources.chain.complete ? "" : " (incomplete)"}; 7d ${winSum.mismatchTotal}`);
-        return { ok: true, day: d, summary: state.days[d], window: state.window };
+        return { ok: true, day: d, summary: state.days[d], window: win };
       } catch (e) {
         state.lastError = String(e?.message || e).slice(0, 200);
         state.lastRunAt = new Date(t).toISOString();
@@ -599,9 +605,10 @@ export function createMppReconciler({
   /** Operator lever: mark one settlement reference as explained ({ tx, note })
    *  or lift the mark ({ tx, action: "restore" }). Only the explanations
    *  document is written; the ledgers and the chain are never touched. The
-   *  days whose stored summaries carry the reference are then re-run (the
-   *  latest day last, so it stays the reported day and its window is the one
-   *  published), so the status words move at once. Throws an Error with
+   *  days whose stored summaries carry the reference are then re-run, the
+   *  latest day first; an older day's re-run never moves the reported day or
+   *  window back (persist), so if the latest re-run fails the status keeps
+   *  the latest day as it last read, and reran reports the failure. Throws an Error with
    *  .statusCode on a refusal. */
   async function explain({ tx, note, action = "explain" } = {}) {
     if (action !== "explain" && action !== "restore") throw err(400, 'action must be "explain" (the default) or "restore"');
@@ -631,12 +638,12 @@ export function createMppReconciler({
     absorbExplained(w.body);
     // The other container may hold the newer days: start from the row.
     if (PG) { const r = await doc.read(); if (r.ok && r.exists) absorb(r.body); }
-    // Re-run: the days whose stored summary itemizes this reference, then the latest day.
+    // Re-run: the latest day, then the older days whose stored summary itemizes this reference.
     const reran = [];
     const last = state.lastDay && state.days[state.lastDay] ? state.lastDay : null;
     if (changed && last) {
       const affected = Object.keys(state.days).sort().filter((d) => d !== last && itemTxs(state.days[d]).includes(key));
-      for (const d of [...affected, last]) {
+      for (const d of [last, ...affected]) {
         if (running) await running.catch(() => {});
         const r = await runOnce({ day: d });
         reran.push({ day: d, ok: r?.ok === true, ...(r?.skipped ? { skipped: r.skipped } : {}), ...(r?.ok ? { status: statusWordFor(r.summary) } : {}) });
