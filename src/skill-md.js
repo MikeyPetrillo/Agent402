@@ -122,9 +122,9 @@ Generic MCP host config:
 \`\`\`
 
 \`AGENT402_MAX_PER_CALL\` refuses any single call above that price and
-\`AGENT402_BUDGET\` caps total spend for the session. Both are on by default
-and held on the payment that is signed; set them to your own ceilings (\`off\`
-disables one).
+\`AGENT402_BUDGET\` caps total spend for the session. The per-call cap is on
+by default ($4; \`off\` disables it) and the session budget is opt-in; both
+are held on the payment that is signed, so set them to your own ceilings.
 
 **Option B - Node SDK (any agent written in JS/TS).**
 

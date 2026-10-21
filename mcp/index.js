@@ -19,7 +19,7 @@
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
 //                         sale); pays per successful call with no wallet
-//   AGENT402_BUDGET       hard cap on total USD spent this session (default 40; off disables)
+//   AGENT402_BUDGET       hard cap on total USD spent this session (opt-in: unset = no session cap)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
 import { createHash } from "node:crypto";
@@ -81,20 +81,21 @@ const ASYNC_TIMEOUT_MS = Number(process.env.AGENT402_ASYNC_TIMEOUT_MS) > 0 ? Num
 const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
 // Spend controls, enforced on the payment that is signed (see getPayFetch), so
-// a confused or runaway model cannot drain the wallet. On by default: the
-// per-call default is the dearest list price in the Agent402 catalog rounded up
-// to a whole dollar (mcp/test.js checks it still covers the catalog), and the
-// session default is ten of those. `off` disables one; a malformed value
-// reads as the default, never as off.
+// a confused or runaway model cannot drain the wallet. The per-call cap is on
+// by default, at the dearest list price in the Agent402 catalog rounded up to
+// a whole dollar (mcp/test.js checks it still covers the catalog), and `off`
+// disables it; a malformed value reads as that default, never as off. The
+// session budget is opt-in: unset (or `off`) is no session cap, so a long
+// session is never refused by default.
 const DEFAULT_MAX_PER_CALL_USD = 4;
-const DEFAULT_BUDGET_USD = 40;
+const DEFAULT_BUDGET_USD = Infinity;
 const capFromEnv = (name, def) => {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
   if (raw === "") return def;
   if (raw === "off") return Infinity;
   const n = Number(raw);
   if (Number.isFinite(n) && n >= 0) return n;
-  console.error(`[agent402-mcp] ${name}=${JSON.stringify(process.env[name])} is not a USD amount or "off"; using the default ${def}`);
+  console.error(`[agent402-mcp] ${name}=${JSON.stringify(process.env[name])} is not a USD amount or "off"; using the default (${def === Infinity ? "no cap" : `$${def}`})`);
   return def;
 };
 const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD);

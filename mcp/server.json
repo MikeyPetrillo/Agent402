@@ -33,7 +33,7 @@
         },
         {
           "name": "AGENT402_BUDGET",
-          "description": "Hard cap on total USD spent per session (default 40; e.g. 1.00; off disables). Enforced on the payment that is signed.",
+          "description": "Optional hard cap on total USD spent per session (e.g. 1.00; unset or off = no session cap). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },

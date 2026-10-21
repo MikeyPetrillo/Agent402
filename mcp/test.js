@@ -556,7 +556,8 @@ try {
     }
 
     // Defaults: with neither variable set, a $5 quote is refused (the default
-    // per-call cap), and the default covers the dearest tool in the catalog.
+    // per-call cap), the default covers the dearest tool in the catalog, and
+    // there is no session budget (opt-in), so a long session is never refused.
     {
       const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
       try {
@@ -565,11 +566,11 @@ try {
         if (seen.signed !== 0 || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`the default per-call cap must refuse a $5 quote: ${text(r).slice(0, 300)}`);
         const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
         const perCall = info.spendControls?.maxPerCallUsd, budget = info.spendControls?.sessionBudgetUsd;
-        if (!(Number.isFinite(perCall) && Number.isFinite(budget) && budget >= perCall)) fail(`finite default caps expected: ${JSON.stringify(info.spendControls)}`);
+        if (!(Number.isFinite(perCall) && budget === "unlimited" && info.spendControls?.remainingUsd === "unlimited")) fail(`a finite default per-call cap and no default session budget expected: ${JSON.stringify(info.spendControls)}`);
         const pricing = await (await fetch(`${API}/api/pricing`)).json();
         const dearest = Math.max(...pricing.endpoints.map((e) => parseFloat(String(e.price).replace(/[^0-9.]/g, "")) || 0));
         if (!(dearest > 0 && perCall >= dearest)) fail(`the default per-call cap $${perCall} must cover the dearest catalog price $${dearest}`);
-        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), $${budget} per session ✓`);
+        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), no session budget ✓`);
       } finally { await defaults.close().catch(() => {}); }
     }
     await new Promise((r) => stub.close(r));
