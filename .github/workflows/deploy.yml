@@ -1874,6 +1874,8 @@ jobs:
           t node scripts/test-csp-form-action.js
           # The report page's image preview src comes only from an allowlisted image type and a plain base64 payload
           t node scripts/test-report-view-image.js
+          # The STATUS_PROBE_TOKEN comment names every route that accepts it, and the value is read once
+          t node scripts/test-status-probe-token-scope.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them

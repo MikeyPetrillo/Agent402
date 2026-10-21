@@ -4860,8 +4860,10 @@ function readCookie(req, name) {
 // /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
 // holding a master key to use exactly one door.
 //
-// STATUS_PROBE_TOKEN opens that one door and nothing else: it is read here and
-// nowhere else in the tree. Unset, behaviour is byte-identical to before (the
+// STATUS_PROBE_TOKEN is read only here, through statusProbeAuthed(), which two
+// routes call: POST /api/status/probe (writes the probe record) and GET
+// /api/selfcheck (may ask for a fresh run, still rate-bounded). It reaches no
+// operator surface. Unset, behaviour is byte-identical to before (the
 // operator token still works), which is what lets the two be rotated
 // independently without an observer going dark mid-rotation.
 const STATUS_PROBE_TOKEN = process.env.STATUS_PROBE_TOKEN || "";
