@@ -271,10 +271,12 @@ function walletRequiredText(tool) {
 // paths read the amount out of the 402 before spending anything.
 //
 // The preflight carries no payment header and no credits key, so it can only
-// ever draw an unpaid 402 - it never signs and never debits. It gives a
-// readable refusal; the cap that holds is the signing guard's. Only run when a
-// ceiling is configured: with none, the number changes nothing and the round
-// trip is pure cost.
+// ever draw an unpaid 402 - it never signs and never debits. Only the credits
+// path sends one: it has no signing step, so the preflight's quote is what its
+// caps are checked against. The wallet path sends none; its caps hold at
+// signing (guardSigning in getPayFetch). Only run when a ceiling is
+// configured: with none, the number changes nothing and the round trip is
+// pure cost.
 const CAPS_CONFIGURED = Number.isFinite(MAX_PER_CALL) || Number.isFinite(BUDGET);
 
 /** The accepts array, at the top level or under the envelope keys sellers wrap it in. */
@@ -293,11 +295,9 @@ function acceptsOf(obj) {
  *  leaves the body `{}`; v1 sellers put it in the body. Header first.
  *
  *  Each accept is priced from the known-asset table (./known-assets.js), never
- *  from a decimals value the seller sends. On the wallet path the signing guard
- *  drops what it cannot price or afford, so the cheapest known accept is the
- *  price; with no known accept at all, `unpriceable` is set. The credits gate
- *  debits its own quote, so the dearest known accept is the price there. */
-async function quotedUsd(url, init, listUsd, { wallet = false } = {}) {
+ *  from a decimals value the seller sends. The credits gate debits its own
+ *  quote, so the dearest known accept is the price. */
+async function quotedUsd(url, init, listUsd) {
   if (!CAPS_CONFIGURED) return { usd: listUsd };
   let q = null;
   try {
@@ -312,9 +312,9 @@ async function quotedUsd(url, init, listUsd, { wallet = false } = {}) {
       q = quoteOf(acceptsOf(body));
     }
   } catch { return { usd: listUsd }; /* no readable 402: the advertised price */ }
-  if (!q || q.max == null) return wallet && q ? { usd: listUsd, unpriceable: true } : { usd: listUsd };
+  if (!q || q.max == null) return { usd: listUsd };
   // Larger of the two: an understated catalog must not lower the ceiling.
-  return { usd: Math.max(listUsd, wallet ? q.min : q.max) };
+  return { usd: Math.max(listUsd, q.max) };
 }
 
 // A refused call's tool text. A 402 body from an x402 v2 seller may also carry
@@ -387,26 +387,23 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       return { content: [{ type: "text", text: `Credits refused for "${tool.slug}": ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""}. Top up at ${body.topup || `${BASE}/credits`}.` }], isError: true };
     }
   } else if (HAS_WALLET) {
-    // The signing guard holds the payment that is signed to the caps; this
-    // preflight of the same 402 only makes the common refusal readable.
-    const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
-    const { usd: price, unpriceable } = await quotedUsd(url, init, listUsd, { wallet: true });
-    if (unpriceable) {
-      return {
-        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" offers no payment option in an asset this server can price (USDC or USDG on a known network), so nothing was signed.` }],
-        isError: true,
-      };
-    }
+    // The signing guard (installed on every key-built client, getPayFetch)
+    // holds the payment that is signed to the caps and refuses an asset it
+    // cannot price, so no unpaid preflight is sent: the paid request's own 402
+    // is the one quote, read once, at signing. The list price is checked here
+    // first only because it costs no request: the quote is never below it for
+    // the cap's purposes (an understated catalog must not lower the ceiling).
+    const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
     if (price > MAX_PER_CALL) {
       return {
-        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
+        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" lists at ${tool.price}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
         isError: true,
       };
     }
     const inFlight = pendingUsd();
     if (spentUsd + inFlight + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" is quoted $${price} for this request). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
         isError: true,
       };
     }

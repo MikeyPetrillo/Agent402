@@ -390,11 +390,13 @@ try {
       resource: { url: `http://127.0.0.1${path}`, description: "paid", mimeType: "application/json" },
       accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", ...extra } }],
     })).toString("base64");
-    // /api/switch quotes $0.01 to the first unpaid request (the preflight) and
-    // $5 to every later one (the request the wallet signs for); /api/hinted
-    // quotes 5000000 base units of USDC ($5) beside a decimals hint of 18.
-    // A request carrying a signature is counted and answered 200.
+    // /api/switch lists at $0.01 and quotes $5 on its 402 (the request the
+    // wallet signs for); /api/hinted quotes 5000000 base units of USDC ($5)
+    // beside a decimals hint of 18; /api/fixed quotes $0.01. Every unpaid
+    // request is counted, and a request carrying a signature is counted and
+    // answered 200.
     const switchRow = { slug: "switch", method: "POST", path: "/api/switch", price: "$0.01", description: "switch", category: "util", computePayable: false };
+    const fixedRow = { slug: "fixed", method: "POST", path: "/api/fixed", price: "$0.01", description: "fixed", category: "util", computePayable: false };
     const hintedRow = { slug: "hinted", method: "POST", path: "/api/hinted", price: "$0.01", description: "hinted", category: "util", computePayable: false };
     seen.switchUnpaid = 0; seen.signed = 0;
     const catalogRow = { slug: "chat", method: "POST", path: "/v1/chat/completions", price: `$${LIST_USD}`, description: "chat", category: "llm", computePayable: false };
@@ -428,16 +430,16 @@ try {
     };
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow], payment: { network: "base" } });
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
-      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted")) {
+      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted") || req.url.startsWith("/api/fixed")) {
         req.resume();
         if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return send(200, { ok: true }); }
         const path = req.url.split("?")[0];
-        if (path === "/api/hinted") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 5000000, { decimals: 18 }) });
         seen.switchUnpaid++;
-        return send(402, {}, { "PAYMENT-REQUIRED": signable(path, seen.switchUnpaid === 1 ? 10000 : 5000000) });
+        if (path === "/api/hinted") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 5000000, { decimals: 18 }) });
+        return send(402, {}, { "PAYMENT-REQUIRED": signable(path, path === "/api/fixed" ? 10000 : 5000000) });
       }
       if (req.url.startsWith("/api/refused")) {
         if (req.headers["payment-signature"] || req.headers["x-payment"]) seen.refusedPaid++;
@@ -499,10 +501,10 @@ try {
     try {
       const refused = await call(wallet, "premium-model");
       if (!refused.isError || !/Refused without paying/.test(text(refused))) {
-        fail(`the wallet path must refuse an over-cap quote before signing: ${text(refused).slice(0, 300)}`);
+        fail(`the wallet path must refuse an over-cap quote at signing: ${text(refused).slice(0, 300)}`);
       }
       if (seen.authorized !== walletBefore) fail("the wallet path paid a call it had refused");
-      console.log("the wallet path reads the same quote and refuses before signing ✓");
+      console.log("the wallet path refuses an over-cap quote at signing ✓");
 
       // A refused PAID call reads as its reason, not as the offer the 402 body
       // also carries: kilobytes of accepts and schemas an agent cannot act on.
@@ -524,14 +526,23 @@ try {
       }
       console.log("a plain 400 and 502 reach the agent byte-identical, with no offer note ✓");
 
-      // The cap holds on the payment that is SIGNED: the paid request's own 402
-      // asks $5 after a $0.01 preflight, and the signing guard refuses it.
+      // No unpaid preflight on the wallet path: a capped call under the cap
+      // makes exactly one request before it pays (the paid request's own 402),
+      // then one signed request.
+      seen.switchUnpaid = 0; seen.signed = 0;
+      const fixed = await wallet.callTool({ name: "catalog.call", arguments: { slug: "fixed", params: { text: "x" } } });
+      if (fixed.isError) fail(`a quote inside the cap must pay: ${text(fixed).slice(0, 300)}`);
+      if (seen.switchUnpaid !== 1 || seen.signed !== 1) fail(`a capped wallet call must make one unpaid request then one signed one (saw ${seen.switchUnpaid} unpaid, ${seen.signed} signed)`);
+      console.log("a capped wallet call sends no preflight: one 402, then the signed request ✓");
+
+      // The cap holds on the payment that is SIGNED: the route lists at $0.01
+      // and its 402 asks $5, and the signing guard refuses it.
       seen.switchUnpaid = 0; seen.signed = 0;
       const switched = await wallet.callTool({ name: "catalog.call", arguments: { slug: "switch", params: { text: "x" } } });
-      if (seen.switchUnpaid !== 2) fail(`expected the preflight and the paid request's own 402 (saw ${seen.switchUnpaid} unpaid requests)`);
+      if (seen.switchUnpaid !== 1) fail(`expected only the paid request's own 402, no preflight (saw ${seen.switchUnpaid} unpaid requests)`);
       if (seen.signed !== 0) fail("the wallet signed a $5 payment over a $0.10 cap");
-      if (!switched.isError || !/Refused without paying/.test(text(switched)) || !/\$5\b/.test(text(switched))) fail(`a 402 that rises after the preflight must be refused at signing: ${text(switched).slice(0, 300)}`);
-      console.log("a quote that rises after the preflight is refused at signing ✓");
+      if (!switched.isError || !/Refused without paying/.test(text(switched)) || !/\$5\b/.test(text(switched))) fail(`a 402 quoting above the list price and the cap must be refused at signing: ${text(switched).slice(0, 300)}`);
+      console.log("an over-cap 402 is refused at signing ✓");
 
       // A seller decimals hint does not lower the price: 5000000 base units of
       // USDC is $5 whatever decimals the accept declares.
@@ -542,7 +553,7 @@ try {
     } finally { await wallet.close().catch(() => {}); }
 
     // The session budget is checked at signing too: $0.03 left, and the paid
-    // request asks $5 after a $0.01 preflight.
+    // request's 402 asks $5 for a route listed at $0.01.
     {
       const budgeted = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.03" });
       try {

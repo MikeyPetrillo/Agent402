@@ -77,7 +77,7 @@ enforced on the payment that is signed (or before a credits call is sent) - a
 runaway model is refused, not billed. The
 wallet's x402 client carries a policy that drops every payment option over the
 per-call cap or what is left of the budget, so the 402 the wallet signs is held
-to the caps, not only the one read on a preflight. Each option is priced from the
+to the caps, and a wallet call sends no unpaid preflight first. Each option is priced from the
 known decimals of its asset (USDC on each rail, USDG on Robinhood Chain), never
 from a decimals value in the challenge, and an option in any other asset is not
 signed. A value that is not a USD amount or `off` reads as the default (the
