@@ -25,6 +25,9 @@ import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
 // Both router lanes, read off the router's own per-route verdicts (one summary,
 // shared with seller-trust).
 import { routerLanes } from "../router-lanes.js";
+// The served display name is cleaned and capped like every agent-read seller
+// surface; the listing screen below reads the name as written.
+import { servedSellerName } from "../x402-index.js";
 
 const PLAIN = (v) => (v === undefined ? null : v);
 
@@ -129,7 +132,7 @@ export function composeSellerDossier(a) {
   const listingText = [detail.displayName, entry?.manifest?.description, ...(detail.tools || []).map((t) => `${t.name || ""} ${t.description || ""}`)].join(" \n ");
   const injected = typeof helpers.looksLikeListingInjection === "function" ? Boolean(helpers.looksLikeListingInjection(listingText)) : false;
   const identity = {
-    displayName: PLAIN(detail.displayName),
+    displayName: detail.displayName == null ? null : servedSellerName(detail.displayName, detail.origin),
     homepage: PLAIN(detail.homepage),
     discoveryPath: PLAIN(detail.discoveryPath),
     mppDualStack: detail.mpp === true,

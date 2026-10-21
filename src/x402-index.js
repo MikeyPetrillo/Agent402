@@ -6103,6 +6103,58 @@ export function screenSellerNameForServe(name, fallback = null) {
   return { name: kept, marker: untrustedMarker(finding, "the seller-written name tripped the listing screen; it is shown cleaned, or replaced") };
 }
 
+// Serve-time screens run once per stored object, not once per request. The
+// result is kept in a WeakMap keyed on the object the text was read from (a
+// crawled tool row, a cache entry, a snapshot row), so it is released with
+// that object when the cache or snapshot replaces it. The inputs ride with
+// the result and are compared by identity on every read (array inputs element
+// by element), so a row edited in place is screened again, never served stale.
+// Each object holds one result per named slot, so two callers that read the
+// same object with different inputs never evict each other.
+const serveScreenMemo = new WeakMap();
+let serveScreenRuns = 0;
+const sameServeInput = (a, b) => {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+const freezeServed = (v) => {
+  if (!v || typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return v;
+  for (const x of Object.values(v)) if (Array.isArray(x)) Object.freeze(x);
+  return Object.freeze(v);
+};
+/** `compute()` once per (`key`, `slot`) while `inputs` are unchanged. A key
+ *  that is not an object is never cached. The result is frozen (plain objects
+ *  and their array fields), since every caller shares it. */
+export function memoServeScreen(key, slot, inputs, compute) {
+  if (!key || (typeof key !== "object" && typeof key !== "function")) { serveScreenRuns++; return compute(); }
+  let slots = serveScreenMemo.get(key);
+  const hit = slots && slots[slot];
+  if (hit && hit.inputs.length === inputs.length && hit.inputs.every((x, i) => sameServeInput(x, inputs[i]))) return hit.value;
+  serveScreenRuns++;
+  const value = freezeServed(compute());
+  if (!slots) { slots = Object.create(null); serveScreenMemo.set(key, slots); }
+  slots[slot] = { inputs: inputs.map((x) => (Array.isArray(x) ? x.slice() : x)), value };
+  return value;
+}
+/** How many serve-time screens have actually run (a cache hit runs none). */
+export function _serveScreenRunsForTest() { return serveScreenRuns; }
+/** `screenListingForServe` for one crawled tool row, memoized on the row. */
+function screenToolForServe(t, category, fallbackName) {
+  const tags = t?.tags;
+  return memoServeScreen(t, "listing", [t?.name, t?.description, category, tags, fallbackName],
+    () => screenListingForServe({ name: t?.name, description: t?.description, category, tags }, { fallbackName }));
+}
+/** `servedSellerName`, memoized on the object the name was read from. */
+export function servedSellerNameOn(key, name, origin, slot = "sellerName") {
+  return memoServeScreen(key, slot, [name, origin], () => servedSellerName(name, origin));
+}
+/** `screenSellerNameForServe`, memoized on the row the name was read from. */
+export function screenSellerNameOn(key, name, fallback = null) {
+  return memoServeScreen(key, "screenedName", [name, fallback], () => screenSellerNameForServe(name, fallback));
+}
+
 let crawlerTimer = null;
 let firstCrawlTimer = null;
 let discoveryTimer = null;
@@ -7740,13 +7792,21 @@ export function sellerDetail(originOrHost) {
 export function screenSellerDetailForServe(d) {
   if (!d || typeof d !== "object") return d;
   const out = { ...d };
-  if ("displayName" in d) out.displayName = servedSellerName(d.displayName, d.origin);
+  // Memoized on the crawled entry and its tool rows (memoServeScreen), so a
+  // repeated lookup of the same seller does no screening work.
+  const entry = cache.get(d.origin);
+  if ("displayName" in d) out.displayName = servedSellerNameOn(entry, d.displayName, d.origin, "displayName");
   if (Array.isArray(d.tools)) {
-    const raw = new Map((cache.get(d.origin)?.tools || []).map((t) => [`${t?.method || ""} ${t?.route || ""}`, t]));
+    const rawTools = entry?.tools || [];
+    const raw = memoServeScreen(rawTools, "byRoute", [rawTools.length], () => new Map(rawTools.map((t) => [`${t?.method || ""} ${t?.route || ""}`, t])));
     out.tools = d.tools.map((t) => {
       if (!t || typeof t !== "object") return t;
-      const category = raw.get(`${t.method || ""} ${t.route || ""}`)?.category ?? t.category;
-      const s = screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags }, { fallbackName: t.route || null });
+      const rawRow = raw.get(`${t.method || ""} ${t.route || ""}`);
+      const category = rawRow?.category ?? t.category;
+      // Keyed on the crawled row (the served row is rebuilt per request); the
+      // served row's own text is the input, so a mismatch screens it afresh.
+      const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null],
+        () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags }, { fallbackName: t.route || null }));
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
       return { ...row, ...untrustedMarker(s.finding) };
@@ -9387,7 +9447,7 @@ function flatRowsForEntry(origin, v, self, seen, out) {
   if (normOrigin === "https://agent402.tools") return;
   if (v?.error) return;
   if (healthScore(v) <= 0) return;
-  const sellerName = servedSellerName(v?.manifest?.name, origin);
+  const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
@@ -9396,7 +9456,9 @@ function flatRowsForEntry(origin, v, self, seen, out) {
     // Seller text is cleaned here, at serve time, and a listing the screen
     // flags serves no description or tags (screenListingForServe); the crawled
     // row itself is unchanged.
-    const served = screenListingForServe({ name: t?.name, description: t?.description, category: t?.category, tags: t?.tags }, { fallbackName: route });
+    // Memoized on the crawled row, so a rebuild of the directory screens only
+    // the rows the crawl has replaced since the last one.
+    const served = screenToolForServe(t, t?.category, route);
     const description = String(served.description || "").trim();
     out.push({
       ours: false,

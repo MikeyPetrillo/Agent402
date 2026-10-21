@@ -32,7 +32,7 @@ const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
-import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX } from "./x402-index.js";
+import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 
 export { validateOriginInput };
 
@@ -774,11 +774,19 @@ export function screenMppSellerForServe(s) {
   const endpoints = Array.isArray(s.endpoints) ? s.endpoints : [];
   const tags = Array.isArray(s.tags) ? s.tags : [];
   const categories = Array.isArray(s.categories) ? s.categories : [];
+  // The screened fields are memoized on the cache entry (memoServeScreen), so
+  // a repeated /api/mpp-index read does no screening work; every other field
+  // is spread from the entry as it is now.
+  const screened = memoServeScreen(s, "mppSeller", [s.name, s.description, s.origin, tags, categories, endpoints, endpoints.map((e) => e?.description)],
+    () => screenMppSellerText(s, endpoints, tags, categories));
+  return { ...s, ...screened };
+}
+function screenMppSellerText(s, endpoints, tags, categories) {
   const text = [s.name, s.description, ...categories, ...tags, ...endpoints.map((e) => (typeof e?.description === "string" ? e.description : ""))]
     .filter((x) => typeof x === "string").join(" ");
   const finding = listingInjectionFinding(text);
   const fallback = String(s.origin || "").replace(/^https?:\/\//, "");
-  const out = { ...s, name: servedSellerName(s.name, s.origin) || fallback };
+  const out = { name: servedSellerName(s.name, s.origin) || fallback };
   if (!finding) {
     if (typeof s.description === "string") out.description = cleanListingText(s.description);
     out.tags = tags.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x));

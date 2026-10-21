@@ -14,8 +14,11 @@ import express from "express";
 import {
   allIndexedTools, routeQuery, sellerDetail, _cacheForTests, _resetFlatCacheForTest, _resetIndexRowsForTest,
   looksLikeListingInjection, listingInjectionFinding, cleanListingText, LISTING_NAME_MAX,
-  screenSellerDetailForServe, screenSellerNameForServe,
+  screenSellerDetailForServe, screenSellerNameForServe, _serveScreenRunsForTest, servedSellerNameOn,
 } from "../src/x402-index.js";
+import { buildSellerTrustTool } from "../src/tools/seller-trust.js";
+import { composeSellerDossier } from "../src/tools/seller-dossier.js";
+import { EXEC_TIERS } from "../src/tools/route-execute.js";
 import { screenMppSellerForServe } from "../src/mpp-index.js";
 import { stripHiddenCharacters, hasHiddenCharacters } from "../src/hidden-chars.js";
 
@@ -140,6 +143,83 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
     const r0 = m.results?.[0];
     ok(r0 && r0.name === "three.example, Clean" && r0.contentFinding === "instruction-phrase" && r0.untrustedContent === true, `MPP names are cleaned, an instruction name replaced and marked (${r0?.name})`);
   } finally { srv.close(); }
+}
+
+// ---- serve-time screens run once per stored row ----------------------------
+{
+  const runs = _serveScreenRunsForTest;
+  const serve = () => { _resetFlatCacheForTest(); _resetIndexRowsForTest(); return allIndexedTools({ ourTools: [], excludeOrigin: "http://127.0.0.1:1", limit: 50 }); };
+  serve();
+  const r0 = runs();
+  const first = serve();
+  const r1 = runs();
+  const second = serve();
+  const r2 = runs();
+  ok(r1 === r0 && r2 === r1, `a repeated /api/index/tools build screens nothing again (${r1 - r0}, ${r2 - r1} new screens)`);
+  ok(JSON.stringify(first.results) === JSON.stringify(second.results), "the memoized rows serve the same JSON");
+  // A replaced crawl entry is screened afresh, and only that entry.
+  const prevBad = cache.get(BAD);
+  cache.set(BAD, entry("Bad Seller", [row(BAD, { description: "Converts currency amounts, now clean." })]));
+  const third = serve();
+  const r3 = runs();
+  ok(r3 - r2 === 2, `a replaced entry screens its one row and its seller name again, nothing else (${r3 - r2})`);
+  ok(third.results.find((r) => r.seller === BAD)?.description === "Converts currency amounts, now clean." && !("untrustedContent" in third.results.find((r) => r.seller === BAD)), "the replaced row is served from its new text");
+  // A row edited in place (same object, new text) is never served stale.
+  const t = cache.get(BAD).tools[0];
+  t.description = badDesc;
+  const fourth = serve();
+  ok(fourth.results.find((r) => r.seller === BAD)?.contentFinding === "instruction-phrase", "a row edited in place is screened again");
+  cache.set(BAD, prevBad);
+
+  // Seller detail: the second lookup of a seller screens nothing.
+  screenSellerDetailForServe(sellerDetail("bad.example"));
+  const d0 = runs();
+  const again = screenSellerDetailForServe(sellerDetail("bad.example"));
+  ok(runs() === d0 && again.tools[0].contentFinding === "instruction-phrase", `a repeated ?seller= lookup screens nothing again (${runs() - d0})`);
+
+  // MPP: keyed on the cache entry; an in-place edit is screened again.
+  const m = { origin: "https://mppm.example", name: "Wx", description: "Weather data.", tags: ["wx"], categories: [], endpoints: [{ path: "/w", description: "forecast" }], verified: true };
+  screenMppSellerForServe(m);
+  const m0 = runs();
+  const mAgain = screenMppSellerForServe(m);
+  ok(runs() === m0 && mAgain.description === "Weather data.", "a repeated /api/mpp-index read screens nothing again");
+  m.endpoints[0].description = PHRASE;
+  ok(screenMppSellerForServe(m).contentFinding === "instruction-phrase" && runs() === m0 + 1, "an MPP entry edited in place is screened again");
+  m.lastProbeAt = 42;
+  ok(screenMppSellerForServe(m).lastProbeAt === 42, "fields outside the screen are read from the entry as it is now");
+
+  // Shared results are frozen, so one caller cannot alter what the next is served.
+  const shared = screenSellerDetailForServe(sellerDetail("clean.example")).tools[0];
+  ok(Array.isArray(shared.tags) && Object.isFrozen(shared.tags), "a memoized tag list is frozen");
+
+  // A memoized name follows the object it was read from.
+  const keyRow = { displayName: `Named${ZW}` };
+  ok(servedSellerNameOn(keyRow, keyRow.displayName, "https://k.example", "displayName") === "Named", "servedSellerNameOn cleans the name");
+  const k0 = runs();
+  servedSellerNameOn(keyRow, keyRow.displayName, "https://k.example", "displayName");
+  ok(runs() === k0, "...and a second read of the same row runs no screen");
+}
+
+// ---- displayName on /api/index and the seller tools ------------------------
+{
+  const detail = { origin: "https://dn.example", displayName: `Dn${ZW} ${"D".repeat(300)}`, toolCount: 1, health: 1, tools: [{ method: "POST", route: "/x", price: "$0.002", networks: ["eip155:8453"] }] };
+  const trust = buildSellerTrustTool({
+    getSellerDetail: () => detail, getSettledCalls: () => 0, getToolVerdicts: (d) => d.tools.map((t) => ({ ...t, routerDispatchEligible: false, routerDispatchReason: "x" })),
+    getUnprovenMaxUsd: () => 0.01, execTiers: EXEC_TIERS,
+  });
+  const r = trust.handler({ origin: "dn.example" });
+  ok(r.displayName.length === LISTING_NAME_MAX && !hasHiddenCharacters(r.displayName) && r.displayName.startsWith("Dn D"), "seller-trust serves the display name cleaned and capped");
+  ok(detail.displayName.includes(ZW), "...and the detail it read is unchanged");
+  const flagged = buildSellerTrustTool({
+    getSellerDetail: () => ({ ...detail, displayName: PHRASE }), getSettledCalls: () => 0, getToolVerdicts: () => [], getUnprovenMaxUsd: () => 0.01, execTiers: EXEC_TIERS,
+  }).handler({ origin: "dn.example" });
+  ok(flagged.displayName === "dn.example", "an instruction display name is served as the host");
+  const dossier = composeSellerDossier({ host: "dn.example", detail, entry: { manifest: {} }, helpers: { looksLikeListingInjection } });
+  ok(dossier.identity?.displayName?.length === LISTING_NAME_MAX && !hasHiddenCharacters(dossier.identity.displayName), "the dossier serves the display name cleaned and capped");
+  ok(dossier.identity?.listingTextLooksInjected === true, "...while its listing screen still reads the name as written");
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = src.indexOf("const slice = sellers.slice(page * perPage, page * perPage + perPage)");
+  ok(at > 0 && /displayName: servedSellerNameOn\(row, rest\.displayName, rest\.origin, "displayName"\)/.test(src.slice(at, at + 400)), "the paged /api/index snapshot serves each third-party displayName through servedSellerNameOn");
 }
 
 // ---- the routes call the screens (caller path) -----------------------------

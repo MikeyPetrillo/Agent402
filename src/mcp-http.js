@@ -44,7 +44,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
-import { routableSellerSummaries, screenSellerNameForServe } from "./x402-index.js";
+import { routableSellerSummaries, screenSellerNameOn } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
 import { recordWish } from "./wish.js";
@@ -1066,7 +1066,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // Seller-written names are cleaned and capped at serve time, and a
           // name that trips the listing screen is replaced and marked.
           const rows = board.map((r, i) => {
-            const named = r.self ? null : (r.sellers || []).map((s) => screenSellerNameForServe(s?.name, String(s?.url || "").replace(/^https?:\/\//, "") || null));
+            const named = r.self ? null : (r.sellers || []).map((s) => screenSellerNameOn(s, s?.name, String(s?.url || "").replace(/^https?:\/\//, "") || null));
             return {
             rank: i + 1,
             name: r.self ? "this host" : named.map((n) => n.name).filter(Boolean).join(", ") || "unnamed recipient",
@@ -1121,7 +1121,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             const isSelf = self && (r.wallet || "").toLowerCase() === self;
             // Seller-written name: cleaned and capped at serve time, replaced
             // and marked when it trips the listing screen.
-            const named = isSelf ? { name: r.name, marker: {} } : screenSellerNameForServe(r.name, String(r.homepage || "").replace(/^https?:\/\//, "") || null);
+            const named = isSelf ? { name: r.name, marker: {} } : screenSellerNameOn(r, r.name, String(r.homepage || "").replace(/^https?:\/\//, "") || null);
             return {
               rank: r.rank,
               name: named.name,

@@ -358,7 +358,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -7510,7 +7510,14 @@ app.get("/api/index", (req, res) => {
   // and removes a way to be quietly wrong.
   const perPage = pageSizeOf(req.query.limit, req.query.perPage);
   const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
-  const slice = sellers.slice(page * perPage, page * perPage + perPage).map(({ history, ...rest }) => (rest.local ? rest : withDispatchFields(rest)));
+  // A third-party seller's own name is cleaned and capped at serve time,
+  // memoized on the snapshot row (servedSellerNameOn); the snapshot itself, and
+  // every page that renders from it, keep the name as written.
+  const slice = sellers.slice(page * perPage, page * perPage + perPage).map((row) => {
+    const { history, ...rest } = row;
+    if (rest.local) return rest;
+    return withDispatchFields("displayName" in rest ? { ...rest, displayName: servedSellerNameOn(row, rest.displayName, rest.origin, "displayName") } : rest);
+  });
   // PAGE IS ZERO-BASED, and the envelope has to SAY so. It shipped saying
   // `pages: 17` next to "Use ?page=N" with no base named, and the obvious
   // reading of those two - iterate 1..pages - silently drops the FIRST 250
