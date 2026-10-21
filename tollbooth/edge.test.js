@@ -167,14 +167,15 @@ console.log("\nedge tollbooth: all assertions passed ✓");
 // 16. Worker: the public placeholder secret is refused; client-IP headers are stripped.
 {
   const base = { TOLLBOOTH_UPSTREAM: "https://origin.test", TOLLBOOTH_OBSERVE: "true" };
-  const r1 = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "change-me-to-a-long-random-string" }, null);
-  if (r1.status !== 500 || !/placeholder/.test(await r1.text())) fail("worker must refuse the change-me placeholder secret");
-  const r1b = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "Change-Me-please" }, null);
-  if (r1b.status !== 500) fail("worker refuses any change-me prefix, case-insensitive, like the CLI");
   const origFetch = globalThis.fetch;
   let forwarded = null;
   globalThis.fetch = async (url, init) => { forwarded = { url, headers: new Headers(init.headers) }; return new Response("origin ok"); };
   try {
+  const r1 = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "change-me-to-a-long-random-string" }, null);
+  if (r1.status !== 500 || !/placeholder/.test(await r1.text())) fail("worker must refuse the change-me placeholder secret");
+  const r1b = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "Change-Me-please" }, null);
+  if (r1b.status !== 500) fail("worker refuses any change-me prefix, case-insensitive, like the CLI");
+  if (forwarded) fail("a refused secret never reaches the origin");
     const spoof = Object.fromEntries(CLIENT_TRUST_HEADERS.map((h) => [h, "1.2.3.4"]));
     const r2 = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN, ...spoof, "x-keep": "yes" } }), { ...base, TOLLBOOTH_SECRET: "a-real-secret-for-tests" }, null);
     if (r2.status !== 200 || !forwarded) fail(`control: a real secret proxies to the origin (got ${r2.status})`);
