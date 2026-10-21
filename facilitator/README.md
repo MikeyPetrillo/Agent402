@@ -63,7 +63,7 @@ FACILITATOR_STELLAR_SECRET=S... npm start
 - `FACILITATOR_LOW_BALANCE_XLM`: optional, default `5`. Threshold for the
   `low` flag on `GET /health`.
 - `FACILITATOR_SETTLE_TIMEOUT_MS` / `FACILITATOR_VERIFY_TIMEOUT_MS` /
-  `FACILITATOR_HEALTH_TIMEOUT_MS`: optional, default `60000` / `30000` /
+  `FACILITATOR_HEALTH_TIMEOUT_MS`: optional, default `25000` / `30000` /
   `10000`. Bounds how long a single `/settle`, `/verify`, or `/health` call
   waits on the underlying Stellar RPC before failing fast with a
   self-explaining reason (`settle_timed_out` / `verify_timed_out`) instead of
@@ -72,11 +72,17 @@ FACILITATOR_STELLAR_SECRET=S... npm start
   `FACILITATOR_SETTLE_TIMEOUT_MS` also means raising
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` (or your platform's equivalent) to
   match, so a redeploy's grace period still comfortably exceeds it.
+- `FACILITATOR_SETTLE_HOLD_MAX_MS` (default settle timeout + 60000): once a
+  settle's deadline has passed, no pre-submit RPC step runs and nothing is
+  submitted; the settle queue stays held for that settle's remaining work (a
+  submission already sent, or its poll) for at most this long before the
+  next settle starts.
 - `FACILITATOR_RPC_FALLBACK_URLS`: optional CSV of Soroban RPC URLs tried, in
   order, when the primary fails at the TRANSPORT level (timeout, connection
   error, HTTP 5xx/429). Default on pubnet: `https://mainnet.sorobanrpc.com,
   https://rpc.ankr.com/stellar_soroban` (public, keyless; probed 2026-08-26);
-  on testnet `https://soroban-testnet.stellar.org`. `off` disables. A JSON-RPC
+  on testnet `https://rpc.ankr.com/stellar_testnet_soroban` (a different
+  operator from the default testnet primary). `off` disables. A JSON-RPC
   error (failed simulation, rejected transaction) is an answer and is never
   retried elsewhere. Each hop inherits the per-request timeout, so the worst
   case is (1 + fallbacks) x `FACILITATOR_RPC_TIMEOUT_MS`.

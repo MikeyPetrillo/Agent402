@@ -44,11 +44,14 @@ let installed = false;
 const IS_FALLBACK = Symbol.for("agent402.facilitator.rpcFallbackInstance");
 const TRANSPORT_CODES = new Set(["ECONNABORTED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ERR_NETWORK", "ERR_BAD_RESPONSE", "EPIPE", "RPC_REQUEST_TIMEOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]);
 
-/** Public keyless Soroban RPCs, probed 2026-08-26 (getLatestLedger answered
- *  on both). Overridden by FACILITATOR_RPC_FALLBACK_URLS. */
+/** Public keyless Soroban RPCs. Overridden by FACILITATOR_RPC_FALLBACK_URLS.
+ *  Each entry is a different operator's host from the network's primary (the
+ *  vendor default on testnet, FACILITATOR_MAINNET_RPC_URL on pubnet): a
+ *  fallback equal to the primary is skipped by failover() and disables the
+ *  hedge, so it would leave nowhere to go. */
 export const DEFAULT_FALLBACKS = {
   "stellar:pubnet": ["https://mainnet.sorobanrpc.com", "https://rpc.ankr.com/stellar_soroban"],
-  "stellar:testnet": ["https://soroban-testnet.stellar.org"],
+  "stellar:testnet": ["https://rpc.ankr.com/stellar_testnet_soroban"],
 };
 
 /** Is this failure the NODE's (retry elsewhere) or the TRANSACTION's (an
