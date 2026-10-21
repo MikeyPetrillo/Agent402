@@ -46,7 +46,7 @@ const cfg = decideConfig({});
   const sixDays = { ...tp, lastLiveAt: NOW - 6 * 86_400_000 };
   const w = scoreCandidates([{ row: fresh, fit: 0.8 }, { row: sixDays, fit: 0.8 }], { reliability: () => stats, weights: cfg.weights, now: NOW, halfLifeHours: 72, liveWithinHours: cfg.liveWithinHours });
   const { readFileSync } = await import("node:fs");
-  ok(/liveWithinHours: cfg\.liveWithinHours/.test(readFileSync(new URL("../services/decide/planner.js", import.meta.url), "utf8")), "the planner scores freshness against the live window");
+  ok(/liveWithinHours: cfg\.liveWithinHours/.test(readFileSync(new URL("../services/decide/base-planner.js", import.meta.url), "utf8")), "the planner scores freshness against the live window");
   ok(w[0].score === w[1].score, `inside the live window a six-day-old outside proof scores the same freshness as our own rows (${w.map((x) => x.parts.freshness).join(" = ")})`);
 }
 
