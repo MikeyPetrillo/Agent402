@@ -67,6 +67,16 @@ async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// A pre-wrapped payment fetch with no x402Client is the one mode where the caps
+// are checked on an unpaid preflight only, not on the payment that is signed.
+// Said once per process, on the first capped paid call in that mode.
+let advisoryCapsWarned = false;
+function warnAdvisoryCaps() {
+  if (advisoryCapsWarned) return;
+  advisoryCapsWarned = true;
+  console.warn("[agent402-client] spending caps are set with a pre-wrapped payment fetch and no x402Client, so they are checked on a preflight of the 402 only, not on the payment that is signed. Pass { x402Client } (the client your fetch wraps) to enforce them at signing.");
+}
+
 export class Agent402 {
   /**
    * @param {object} [opts]
@@ -489,6 +499,7 @@ export class Agent402 {
         // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
         const guarded = this._guarded;
+        if (!guarded && this._spendCapsConfigured()) warnAdvisoryCaps();
         const usd = await this._quotedUsd(send, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling

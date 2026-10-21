@@ -19,6 +19,9 @@ const proc = spawn("node", ["src/server.js"], {
 });
 const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
 let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
+// The advisory-caps warning is captured (and still printed) so a test can count it.
+const advisoryWarnings = [];
+{ const warn = console.warn; console.warn = (...args) => { const line = args.join(" "); if (line.includes("[agent402-client] spending caps")) advisoryWarnings.push(line); warn(...args); }; }
 
 // Offline: withNetworkPreference pins the settlement chain (e.g. USDG on
 // Robinhood Chain) on any duck-typed x402 client - no @x402 dependency here.
@@ -318,6 +321,15 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(seen.signed.length === 0, "with the guard, the $5 the paid request asked for was never signed");
     ok(e?.name === "SpendingLimitError" && e.atSigning === true && e.limit === "maxPerCallUsd" && e.priceUsd === 5 && /\$5\b/.test(e.message) && /\$0\.1\b/.test(e.message), `the refusal is a SpendingLimitError at signing naming the cap (${e?.message})`);
     ok(c.spendingSummary().calls === 0, "nothing was booked as spent");
+  }
+  // The pre-wrapped-fetch mode (no x402Client) is the one where caps are
+  // advisory, and says so once per process; a guarded client never warns.
+  {
+    ok(advisoryWarnings.length === 1 && /not on the payment that is signed/.test(advisoryWarnings[0]), `capped calls through a pre-wrapped fetch warned exactly once (saw ${advisoryWarnings.length})`);
+    const before = advisoryWarnings.length;
+    const { c } = build({ preflight: cheap, paid: cheap, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(advisoryWarnings.length === before, "a client given its x402Client does not warn");
   }
   // A mixed offer pays the option that fits.
   {

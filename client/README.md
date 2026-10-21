@@ -338,8 +338,15 @@ policy on it: every payment option that asks more than the per-call cap, or more
 than is left of the rolling caps, is dropped before the x402 client picks one,
 and the picked one is checked again just before it is signed. A refusal there is
 a `SpendingLimitError` with `atSigning: true`, and nothing is signed. The ledger
-books the amount actually signed. Without `x402Client`, the caps are checked on
-an unpaid preflight of the `402` only, before your wallet fetch runs.
+books the amount actually signed.
+
+**The one advisory mode.** A pre-wrapped payment `fetch` given without its
+`x402Client` is the only mode where the caps are advisory: they are checked on
+an unpaid preflight of the `402`, before your wallet fetch runs, but not on the
+`402` that fetch then signs. The client logs a one-time warning when caps are
+set in this mode. The adapters built on this client (agent402-agentkit,
+elizaos-plugin-agent402) construct their own x402 client and pass it, so their
+caps hold at signing by default.
 
 **How a quote is priced.** An x402 signer signs the option's raw base-unit
 `amount`, so each option is priced from a built-in table of known assets per
