@@ -57,7 +57,7 @@ import {
   Keypair, Asset, Operation, TransactionBuilder, BASE_FEE, Networks, xdr,
 } from "@stellar/stellar-sdk";
 import {
-  createEd25519Signer, ExactStellarScheme, USDC_TESTNET_ADDRESS, getHorizonClient,
+  createEd25519Signer, ExactStellarScheme, USDC_TESTNET_ADDRESS, getHorizonClient, getRpcClient,
 } from "@x402/stellar";
 import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "./shape.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
@@ -80,6 +80,7 @@ let passed = 0;
 const ok = (cond, msg) => { if (!cond) fail(msg); else { passed++; console.log("ok -", msg); } };
 
 const horizon = getHorizonClient(NETWORK);
+const sorobanRpc = getRpcClient(NETWORK);
 
 // 0) Offline unit tests for shape.js - fast, deterministic, no network.
 {
@@ -526,6 +527,19 @@ async function friendbotFund(publicKey) {
   throw new Error(`friendbot funded ${publicKey} but Horizon still does not serve the account after 30s`);
 }
 
+// The facilitator loads its signer through Soroban RPC, which ingests ledgers
+// on its own schedule, so an account Horizon serves can still read "Account not
+// found" there. Wait for RPC to serve it too, bounded.
+async function waitForRpcAccount(publicKey) {
+  for (let i = 0; i < 60; i++) {
+    try { await sorobanRpc.getAccount(publicKey); return; } catch (e) {
+      if (!/Account not found/i.test(String(e?.message || e))) throw e;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`Horizon serves ${publicKey} but Soroban RPC still does not after 60s`);
+}
+
 async function ensureTrustline(keypair) {
   const account = await horizon.loadAccount(keypair.publicKey());
   const hasLine = account.balances.some(
@@ -586,6 +600,7 @@ async function waitForHealthy(baseUrl, path = "/supported") {
 // 1) Facilitator signer - fresh every run, XLM only, fully automatable.
 const facilitatorKp = Keypair.random();
 await friendbotFund(facilitatorKp.publicKey());
+await waitForRpcAccount(facilitatorKp.publicKey());
 console.log(`facilitator signer funded: ${facilitatorKp.publicKey()}`);
 
 // 2) Seller (payTo) - fresh every run. Needs to exist on-ledger and hold a
@@ -755,6 +770,7 @@ proc.kill("SIGKILL");
 // signup" default).
 const hardenedFacilitatorKp = Keypair.random();
 await friendbotFund(hardenedFacilitatorKp.publicKey());
+await waitForRpcAccount(hardenedFacilitatorKp.publicKey());
 const AUTH_TOKEN = "test-secret-token-do-not-use-in-prod";
 const authProc = spawn(process.execPath, [join(ROOT, "index.js")], {
   cwd: ROOT,
@@ -816,6 +832,7 @@ const IMPATIENT_PORT = 4101;
 const IMPATIENT_BASE_URL = `http://localhost:${IMPATIENT_PORT}`;
 const impatientKp = Keypair.random();
 await friendbotFund(impatientKp.publicKey());
+await waitForRpcAccount(impatientKp.publicKey());
 const impatientProc = spawn(process.execPath, [join(ROOT, "index.js")], {
   cwd: ROOT,
   env: {
