@@ -81,6 +81,14 @@ export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
+// True when the answer was served with no handler run that this hold pays
+// for: the pre-paywall gateway cache (it marks req.gatewayCacheHit) or an
+// idempotent replay of a call this key already paid for.
+function servedWithoutRun(req, res) {
+  return req?.gatewayCacheHit === true
+    || String(res.getHeader?.("X-Idempotent-Replay") || "").toLowerCase() === "true";
+}
+
 export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now = () => Date.now(), log = console.log }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* writes fail loudly below */ }
@@ -555,8 +563,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       // the first byte would otherwise read as a served 200 and be charged).
       res.on("finish", () => {
         if (done) return; done = true;
-        // A prompt-cache hit (X-Cache: hit) cost nothing upstream and is served
-        // free to x402 buyers pre-paywall - credits buyers get the same.
+        // A prompt-cache hit answered BEFORE the paywall (req.gatewayCacheHit)
+        // cost nothing upstream and is served free to x402 buyers - credits
+        // buyers get the same. The header alone is not that signal: a route
+        // result cache inside a handler also sets X-Cache: hit, after the
+        // paywall, and that answer is charged on every rail.
         // An idempotent REPLAY (X-Idempotent-Replay: true, server.js) served the
         // stored body of a call this key already paid for: no handler ran, no
         // upstream spend, so it is released like a cache hit. Before this the
@@ -564,8 +575,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         // hold and a credits buyer's keyed retry was debited a second time - on
         // a metered route at the FULL worst-case hold, since no X-Metered-Usd
         // header exists on a replay (found in the 2026-08-26 security review).
-        const cacheHit = String(res.getHeader?.("X-Cache") || "").toLowerCase() === "hit"
-          || String(res.getHeader?.("X-Idempotent-Replay") || "").toLowerCase() === "true";
+        const cacheHit = servedWithoutRun(req, res);
         // A metered route reports actual usage x markup on X-Metered-Usd
         // (gateway-meter.js); the debit is that, never more than the hold.
         const metered = Number(res.getHeader?.("X-Metered-Usd"));
@@ -593,8 +603,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       let goneEarly = false;
       const decideGone = () => {
         if (done) return; done = true;
-        const cacheHit = String(res.getHeader?.("X-Cache") || "").toLowerCase() === "hit"
-          || String(res.getHeader?.("X-Idempotent-Replay") || "").toLowerCase() === "true";
+        const cacheHit = servedWithoutRun(req, res);
         if (res.statusCode >= 400 || cacheHit || chargeCancelledForClientGone(req)) { releaseHold(); return; }
         if (usePg) {
           // The hang-up hook reads the owed amount as the response ends, before
