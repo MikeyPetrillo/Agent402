@@ -5,14 +5,21 @@
 // Retry-After before any payment instead of signing for a call that can only
 // time out.
 //
-//   * Every RugCheck read reports its outcome. A deadline, an unreachable
-//     host, a 5xx or a "cannot produce a report" answer is a failure; any
-//     other answer (a report, or a refusal of the input) resets the count.
+//   * Every RugCheck read reports its outcome, keyed by the input it read (the
+//     mint). Only a failure that says RugCheck itself is down counts: an
+//     unreachable host, a deadline the read's own cap ran out on, a 5xx or a
+//     rate limit. A report, or a refusal of the input (4xx, no report), resets
+//     the count. A failure that belongs to the input or to the caller counts
+//     for nothing either way: "unable to generate" for a mint, or a deadline
+//     the handler's budget cut short or had already spent.
 //   * RUGCHECK_PAUSE_AFTER consecutive failures (default 3) pause the tools
-//     for RUGCHECK_PAUSE_MS (default 5 minutes).
+//     for RUGCHECK_PAUSE_MS (default 5 minutes), but only when they span at
+//     least two distinct inputs: one mint that reliably times out or errors
+//     is that mint's answer, not an outage, and never pauses the tools. An
+//     unreachable host is independent of the input, so it needs no second one.
 //   * After the cool-down the tools are offered again (fail open). The next
-//     read decides: a success clears the state, one more failure starts a
-//     new cool-down.
+//     reads decide: a success clears the state; an unreachable host, or
+//     failures on two distinct inputs, start a new cool-down.
 //
 // State is per process; each replica learns from its own reads.
 // RUGCHECK_PAUSE=off disables the pause (reads still report, nothing pauses).
@@ -32,23 +39,32 @@ function config(env = process.env) {
 }
 
 export function createRugcheckPause({ now = () => Date.now(), env = process.env, log = (m) => console.warn(m) } = {}) {
-  let failures = 0;
+  let streak = [];       // the consecutive failures' input keys
   let pausedUntil = 0;
-  let probation = false; // true after a cool-down ends, until the next read
+  let probation = false; // true after a cool-down ends, until the next success
+  let seq = 0;
 
-  function noteFailure(why = "failure") {
+  /**
+   * One read that failed with RugCheck down. `key` names the input (the
+   * mint); `kind` is "unreachable" (independent of the input), "deadline" or
+   * "upstream" (a 5xx or a rate limit). A failure without a key is one input.
+   */
+  function noteFailure(why = "failure", { key = null, kind = "deadline" } = {}) {
     const c = config(env);
-    failures++;
+    streak.push(kind === "unreachable" ? `#unreachable:${++seq}` : `in:${key ?? "?"}`);
+    if (streak.length > 64) streak = streak.slice(-64);
     if (!c.enabled) return;
-    if (probation || failures >= c.after) {
-      pausedUntil = now() + c.pauseMs;
-      probation = false;
-      log(`[rugcheck-pause] ${failures} consecutive RugCheck failures (last: ${why}); RugCheck tools paused for ${Math.round(c.pauseMs / 1000)} s`);
-    }
+    const distinct = new Set(streak).size;
+    const trip = probation ? distinct >= 2 || kind === "unreachable" : streak.length >= c.after && distinct >= 2;
+    if (!trip) return;
+    log(`[rugcheck-pause] ${streak.length} consecutive RugCheck failures across ${distinct} reads (last: ${why}); RugCheck tools paused for ${Math.round(c.pauseMs / 1000)} s`);
+    pausedUntil = now() + c.pauseMs;
+    probation = false;
+    streak = [];
   }
 
   function noteSuccess() {
-    failures = 0;
+    streak = [];
     probation = false;
     pausedUntil = 0;
   }
@@ -63,16 +79,40 @@ export function createRugcheckPause({ now = () => Date.now(), env = process.env,
     return { paused: false, retryAfterSeconds: 0 };
   }
 
-  return { noteFailure, noteSuccess, state, failures: () => failures };
+  return { noteFailure, noteSuccess, state, failures: () => streak.length };
 }
 
 export const rugcheckPause = createRugcheckPause();
 
+/**
+ * How a RugCheck read failure counts toward the pause:
+ *   "unreachable" | "deadline" | "upstream"  RugCheck itself is down
+ *   "neutral"  the input's or the caller's failure; counts for nothing
+ *   "answer"   RugCheck answered (a refusal of the input); resets the count
+ * `budgetShortened`: the read ran under less than its own cap because the
+ * handler's budget was nearly (or wholly) spent, so its deadline is the
+ * caller's, not RugCheck's.
+ */
+export function rugcheckFailureKind(err, { budgetShortened = false } = {}) {
+  if (!err) return "answer";
+  if (err.rugcheckNoReport) return "neutral";
+  if (err.upstreamFailure === "unreachable") return "unreachable";
+  if (err.upstreamFailure === "deadline") return budgetShortened ? "neutral" : "deadline";
+  if (err.statusCode === 502 || err.statusCode === 503) return "upstream";
+  return "answer";
+}
+
 /** True for a read failure that means RugCheck is not answering. */
-export function isRugcheckOutage(err) {
-  if (!err) return false;
-  if (err.upstreamFailure === "deadline" || err.upstreamFailure === "unreachable") return true;
-  return err.statusCode === 502 || err.statusCode === 503;
+export function isRugcheckOutage(err, opts) {
+  const k = rugcheckFailureKind(err, opts);
+  return k === "unreachable" || k === "deadline" || k === "upstream";
+}
+
+/** The input a RugCheck URL reads (the mint), for counting distinct inputs. */
+export function rugcheckInputKey(url) {
+  const s = String(url || "");
+  const m = /\/tokens\/([^/?#]+)/.exec(s);
+  return m ? m[1] : s;
 }
 
 /**

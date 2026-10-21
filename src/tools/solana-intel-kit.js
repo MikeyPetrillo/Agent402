@@ -34,9 +34,9 @@
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
-import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
-import { rugcheckPause, isRugcheckOutage } from "../rugcheck-pause.js";
+import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
@@ -145,17 +145,23 @@ function round(v, places = 4) {
 
 // One shared egress helper. Upstream bodies are NEVER relayed to the buyer:
 // the only text that leaves here is our own, keyed off the status class.
-// RugCheck reads report their outcome to the automatic pause
-// (src/rugcheck-pause.js), and a RugCheck outage names a retry delay.
+// RugCheck reads report their outcome, keyed by the mint they read, to the
+// automatic pause (src/rugcheck-pause.js), and a RugCheck outage names a
+// retry delay.
 async function upstreamJson(url, opts = {}) {
   if (opts.label !== "RugCheck") return upstreamJsonOnce(url, opts);
+  // A read capped below its own timeout by the handler's budget times out on
+  // the caller's clock, not RugCheck's.
+  const ownCap = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : JUPITER_MS;
+  const budgetShortened = capOf(ownCap, opts.budget === undefined ? currentBudget() : opts.budget) < ownCap;
   try {
     const out = await upstreamJsonOnce(url, opts);
     rugcheckPause.noteSuccess();
     return out;
   } catch (err) {
-    if (!isRugcheckOutage(err)) { rugcheckPause.noteSuccess(); throw err; }
-    rugcheckPause.noteFailure(`${opts.step || "read"}: ${err.upstreamFailure || err.statusCode}`);
+    const kind = rugcheckFailureKind(err, { budgetShortened });
+    if (kind === "answer") { rugcheckPause.noteSuccess(); throw err; }
+    if (kind !== "neutral") rugcheckPause.noteFailure(`${opts.step || "read"}: ${err.upstreamFailure || err.statusCode}`, { key: rugcheckInputKey(url), kind });
     if (!Number.isInteger(err.retryAfter)) err.retryAfter = Math.max(30, rugcheckPause.state().retryAfterSeconds);
     throw err;
   }
@@ -188,7 +194,8 @@ async function upstreamJsonOnce(url, { label, step = "data", timeoutMs = JUPITER
     // 503 rather than a 422 blaming the mint.
     const errText = await res.text().then((t) => t.slice(0, 500)).catch(() => "");
     if (/unable to generate|temporarily|try again|timeout/i.test(errText)) {
-      throw bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503);
+      // RugCheck answered for this input; the pause does not count it.
+      throw Object.assign(bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503), { rugcheckNoReport: true });
     }
     throw bad(notFound || `${label} has no data for that input`, 422);
   }
