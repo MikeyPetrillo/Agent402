@@ -3466,11 +3466,14 @@ app.get("/api/gateway-status", async (req, res) => {
       const status = n == null ? "unknown" : n > 0 ? "recent" : "ok";
       return full ? { status, windowHours: hours, count: n } : { status };
     })(),
-    // Money we owe a buyer (src/refund-ledger.js): "aging" when a debt has
-    // waited past REFUND_OWED_ALARM_HOURS, "stuck" when a row sits mid-send.
+    // Money we owe a buyer (src/refund-ledger.js): "owed" once any buyer's
+    // debt has stood past REFUND_OWED_NOTICE_MINUTES (default 15), "aging"
+    // when one has waited past REFUND_OWED_ALARM_HOURS, "stuck" when a row
+    // sits mid-send.
     // One word publicly, so the status Worker can page; counts for the operator.
     refundsOwed: (() => {
-      const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48 });
+      const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
+      const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48, noticeMinutes: Number.isFinite(notice) && notice >= 0 ? notice : 15 });
       return full ? r : { status: r.status };
     })(),
     // Recipients our spending wallets paid for the first time

@@ -129,7 +129,7 @@ try {
   ok(ev.filter((e) => e === "ALGO-file3").length === 1 && (await pgRows("evidence = $1", ["ALGO-file3"])).length === 1, "a debt missing from the table is restored from the file at the next boot (insert-if-absent by evidence), once");
   ok(ev.includes("0xnew1") && out.rows.find((r) => r[1] === "0xnew1")[2] === "paid", "the second boot reads the table's current state, not the file");
   ok(out.rows.find((r) => r[1] === "0xpush1")[3].endsWith("then disconnected"), "the second boot sees the note rewrite");
-  ok(out.alarm === "ok" || out.alarm === "aging", `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
+  ok(["ok", "owed", "aging"].includes(out.alarm), `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
 
   // ---- roll-forward after a rollback -----------------------------------------
   const boot = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());

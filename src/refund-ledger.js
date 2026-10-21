@@ -153,6 +153,8 @@ const releaseRow = db.prepare(`
   WHERE id = @id AND status = 'sending'
 `);
 const oldestOwedQ = db.prepare("SELECT count(*) AS n, min(createdAt) AS oldest FROM refunds WHERE status = 'owed' AND createdAt < ?");
+// Any buyer's debt (our own synthetic rows left out) past the notice grace.
+const owedNoticeQ = db.prepare("SELECT count(*) AS n, count(DISTINCT payer) AS buyers FROM refunds WHERE status = 'owed' AND synthetic = 0 AND createdAt < ?");
 const stuckSendingQ = db.prepare("SELECT count(*) AS n FROM refunds WHERE status = 'sending' AND (claimedAt IS NULL OR claimedAt < ?)");
 const totalsQ = db.prepare(`
   SELECT status, count(*) AS n, sum(priceUsd) AS usd, sum(synthetic) AS synth
@@ -814,17 +816,23 @@ export function refundTotals() {
  *  - "aging": a debt has been owed longer than `owedHours`. Debts held for
  *    review (hang-up budget denials) count too: 44 of them sat unnoticed for
  *    a day before this alarm existed.
+ *  - "owed": a buyer's debt (not one of our synthetic rows) has stood past
+ *    `noticeMinutes`, a short grace in which a Tempo push debt can still be
+ *    voided by its claim on retry. Every debt is repaid by a dispatched run,
+ *    so every one pages, not only an old one.
  *  - "ok" otherwise; "unknown" if the ledger cannot be read (in database
  *    mode, also until the first pull from Postgres has finished).
  * Counts are for the operator view only; the public view is the word.
  */
-export function refundAlarmStatus({ owedHours = 48, stuckMinutes = 30, now = Date.now() } = {}) {
+export function refundAlarmStatus({ owedHours = 48, stuckMinutes = 30, noticeMinutes = 15, now = Date.now() } = {}) {
   if (USE_PG && !loaded) return { status: "unknown" };
   try {
     const owed = oldestOwedQ.get(now - owedHours * 3600_000);
     const stuck = stuckSendingQ.get(now - stuckMinutes * 60_000);
-    const status = stuck.n > 0 ? "stuck" : owed.n > 0 ? "aging" : "ok";
-    return { status, owedHours, stuckMinutes, agingCount: owed.n, stuckCount: stuck.n,
+    const notice = owedNoticeQ.get(now - noticeMinutes * 60_000);
+    const status = stuck.n > 0 ? "stuck" : owed.n > 0 ? "aging" : notice.n > 0 ? "owed" : "ok";
+    return { status, owedHours, stuckMinutes, noticeMinutes, agingCount: owed.n, stuckCount: stuck.n,
+      owedCount: notice.n, owedBuyers: notice.buyers,
       oldestOwedHours: owed.oldest ? Math.floor((now - owed.oldest) / 3600_000) : null };
   } catch { return { status: "unknown" }; }
 }

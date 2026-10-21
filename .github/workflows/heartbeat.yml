@@ -715,22 +715,37 @@ jobs:
           esac
 
       # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
-      # aging / stuck page; ok closes; unknown does neither. The status Worker
-      # runs the same check every five minutes under the same title.
+      # owed (any buyer's debt past a 15 min grace) / aging / stuck page; ok
+      # closes; unknown does neither. The status Worker runs the same check
+      # every five minutes under the same title. The issue carries counts only
+      # (rows, distinct buyers, read from the operator view): never an address
+      # or an amount.
       - name: Refunds owed check (alarm when a debt to a buyer is waiting)
         if: always()
         continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
+          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          WORD=$(printf '%s' "$GW" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
+          case "$WORD" in owed|aging|stuck|ok|unknown) ;; *) WORD=unknown ;; esac
+          ROWS=$(printf '%s' "$GW" | jq -r '.refundsOwed.owedCount // empty | select(type == "number") | floor' 2>/dev/null || true)
+          BUYERS=$(printf '%s' "$GW" | jq -r '.refundsOwed.owedBuyers // empty | select(type == "number") | floor' 2>/dev/null || true)
           echo "refunds owed: $WORD"
+          COUNTS=""
+          if [ -n "$ROWS" ] && [ -n "$BUYERS" ]; then COUNTS=" Owed now: $ROWS debt(s) to $BUYERS buyer(s)."; fi
+          WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Refunds owed to a buyer are waiting"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            aging|stuck)
+            owed|aging|stuck)
+              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ).$COUNTS owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
+              # A debt can stay owed for days (held for review), so an open
+              # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports refundsOwed.status=$WORD. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48) - read /__operator/refunds.json and dispatch refund.yml (dry run first). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY" >/dev/null 2>&1 || true
               fi
               ;;
             ok)

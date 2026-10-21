@@ -737,9 +737,10 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ gateway: {} })[T], "quiet");
   });
 
-  await acheck("refunds owed: aging and stuck page, ok clears, unknown or absent does neither; body echoes only known words", async () => {
+  await acheck("refunds owed: owed, aging and stuck page, ok clears, unknown or absent does neither; body echoes only known words", async () => {
     const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Refunds owed to a buyer are waiting";
+    assert.equal(judge({ gateway: { refundsOwed: { status: "owed" } } })[T], "bad");
     assert.equal(judge({ gateway: { refundsOwed: { status: "aging" } } })[T], "bad");
     assert.equal(judge({ gateway: { refundsOwed: { status: "stuck" } } })[T], "bad");
     assert.equal(judge({ gateway: { refundsOwed: { status: "ok" } } })[T], "good");
@@ -748,7 +749,12 @@ for (const [name, over, detail] of failCases) {
     const a = ALARMS.find((x) => x.title === T);
     assert.match(a.body({ gateway: { refundsOwed: { status: "stuck" } } }), /refundsOwed\.status=stuck/);
     // An unexpected word is never echoed: the body names only a known word.
-    assert.match(a.body({ gateway: { refundsOwed: { status: "<b>x</b>" } } }), /refundsOwed\.status=aging\./);
+    assert.match(a.body({ gateway: { refundsOwed: { status: "<b>x</b>" } } }), /refundsOwed\.status=owed\./);
+    const owedBody = a.body({ gateway: { refundsOwed: { status: "owed" } } });
+    assert.match(owedBody, /refundsOwed\.status=owed\./);
+    assert.match(owedBody, /actions\/workflows\/refund\.yml/);
+    assert.match(owedBody, /dry run first, then live/);
+    assert.doesNotMatch(owedBody, /0x[0-9a-fA-F]{40}|\$\d/);
   });
 
   await acheck("outbound destinations: burst pages, ok and new clear, unknown or absent does neither; body never carries a word from the response", async () => {

@@ -468,18 +468,20 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund
     // job is dispatched by hand, so a debt can sit unpaid with nothing else
     // noticing (2026-10-06: 44 debts to one buyer, found by reading the
-    // ledger). aging and stuck page; ok clears; unknown or absent does neither.
+    // ledger). owed (any buyer's debt past a short grace), aging and stuck
+    // page; ok clears; unknown or absent does neither.
     title: "Refunds owed to a buyer are waiting",
     verdict: ({ gateway: b }) => {
       const w = b.refundsOwed?.status;
-      if (w === "aging" || w === "stuck") return "bad";
+      if (w === "owed" || w === "aging" || w === "stuck") return "bad";
       return w === "ok" ? "good" : "quiet";
     },
     body: ({ gateway: b }) => {
-      const w = b.refundsOwed?.status === "stuck" ? "stuck" : "aging";
+      const w = b.refundsOwed?.status === "stuck" ? "stuck" : b.refundsOwed?.status === "aging" ? "aging" : "owed";
       return `/api/gateway-status reports refundsOwed.status=${w}.
 
-- aging: a debt in the refund ledger has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). Read /__operator/refunds.json, then dispatch refund.yml (dry run first; include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
 - stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
 
 Auto-closes when the word is ok.`;
