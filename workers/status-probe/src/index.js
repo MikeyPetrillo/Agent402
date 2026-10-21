@@ -434,6 +434,21 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
+    // Arc settlements Circle left pending (src/circle-pending.js): unresolved
+    // (kept, needs an operator) and full page; ok and off clear;
+    // near_capacity and unknown do neither. Same title as heartbeat.yml.
+    title: "Arc pending settlements need attention",
+    verdict: ({ gateway: b }) => {
+      const w = b.circlePending?.status;
+      if (w === "unresolved" || w === "full") return "bad";
+      return w === "ok" || w === "off" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = b.circlePending?.status === "full" ? "full" : "unresolved";
+      return `/api/gateway-status reports circlePending.status=${w}. unresolved: an Arc settlement Circle reported as pending could not be resolved from its /status after repeated reads or within seven days; it is kept, never dropped. Look its paymentId up with Circle and on the Arc explorer, then book a refund if it settled. full: the pending book reached its bound and refused a new entry (the server log names it). Auto-closes when the word is ok.`;
+    },
+  },
+  {
     // A buyer paid and got an error. The server keeps the log and publishes one
     // word (chargedFailures on /api/gateway-status, 402 refusals excluded); the
     // charged-failure workflow ran every 4-6 h in practice (measured
