@@ -507,7 +507,6 @@ a { color: inherit; }
 }
 
 /* --- home hero (settled-calls proof, spec strip, staggered load) --- */
-@keyframes ml-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes ml-rise { to { opacity: 1; transform: none; } }
 /* Starts at 1% rather than 0: a fully transparent element is not a paint, so the
    largest-paint measure would wait on the animation (and on a busy main thread). */
@@ -518,7 +517,7 @@ a { color: inherit; }
 .ml-stagger > *:nth-child(4) { animation-delay: .26s; }
 .ml-stagger > *:nth-child(5) { animation-delay: .34s; }
 .ml-stagger > *:nth-child(6) { animation-delay: .42s; }
-.ml-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: ml-ring 2s infinite; flex: none; }
+.ml-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
 .ml-cta { transition: transform .12s ease; }
 .ml-cta:hover { transform: translateY(-2px); }
 .ml-spec-cell:last-child { border-right: none; margin-right: 0; }
@@ -547,7 +546,6 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 :root[data-theme="dark"] .hm-aura.is-on { opacity: .42; }
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
-  .ml-dot { animation: none; }
   .ml-nav-link, .ml-cta, .mlr-row, .ml-chip, .ml-faq-mark { transition: none !important; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }

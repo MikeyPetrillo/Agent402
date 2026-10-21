@@ -125,8 +125,8 @@ export function terminalTicker(rows = []) {
     return `<span class="t-tick ${d}"><b>${esc(r.host)}</b><span class="t-tick-v">${esc(r.value)}</span><span class="t-tick-d">${arrow}${r.pct != null ? esc(pct(r.pct)) : ""}</span></span>`;
   };
   const run = rows.map(cell).join("");
-  return `<div class="t-ticker" role="marquee" aria-label="Recent seller activity">
-      <div class="t-ticker-rail">${run}<span aria-hidden="true">${run}</span></div>
+  return `<div class="t-ticker" role="region" aria-label="Recent seller activity" tabindex="0">
+      <div class="t-ticker-rail">${run}</div>
     </div>`;
 }
 
@@ -289,14 +289,12 @@ export const TERMINAL_CSS = `
 .t-ok{color:var(--t-up);} .t-warn{color:var(--t-warn);}
 
 /* Ticker */
-.t-ticker{overflow:hidden;border-bottom:1px solid var(--t-rule);background:var(--t-panel);padding:5px 0;}
-.t-ticker-rail{display:inline-flex;white-space:nowrap;will-change:transform;animation:t-scroll 90s linear infinite;}
-.t-ticker:hover .t-ticker-rail,.t-ticker:focus-within .t-ticker-rail{animation-play-state:paused;}
+.t-ticker{overflow-x:auto;border-bottom:1px solid var(--t-rule);background:var(--t-panel);padding:5px 12px;scrollbar-width:thin;}
+.t-ticker-rail{display:inline-flex;white-space:nowrap;}
 .t-tick{display:inline-flex;align-items:baseline;gap:6px;padding:0 14px;border-right:1px solid var(--t-rule);}
 .t-tick b{font-weight:600;color:var(--t-ink);}
 .t-tick-v{color:var(--t-ink-dim);} .t-tick-d{font-size:var(--fs-2xs);}
-@keyframes t-scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-@media (prefers-reduced-motion: reduce){.t-ticker-rail{animation:none;}.t-ticker{overflow-x:auto;}}
+
 
 /* Grid */
 .t-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:1px;background:var(--t-rule);}
