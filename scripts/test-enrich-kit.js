@@ -95,6 +95,29 @@ try {
   ok(e.statusCode !== 400, `github-repo: dotted repo passes validation — non-400 upstream error is fine (got ${e.statusCode}: ${e.message})`);
 }
 
+// A private repository (what a token with access would see) answers exactly
+// like a missing one. The GitHub API is stubbed: no egress.
+{
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    seen.push(u);
+    if (u === "https://api.github.com/repos/acme/hidden") {
+      return new Response(JSON.stringify({ full_name: "acme/hidden", private: true, description: "internal notes", stargazers_count: 3 }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ message: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } });
+  };
+  try {
+    let hidden = null, missing = null;
+    try { await h("github-repo")({ owner: "acme", repo: "hidden" }); } catch (e) { hidden = e; }
+    try { await h("github-repo")({ owner: "acme", repo: "missing" }); } catch (e) { missing = e; }
+    ok(seen.includes("https://api.github.com/repos/acme/hidden"), "github-repo: (control) the stubbed API was read");
+    ok(hidden?.statusCode === 404 && missing?.statusCode === 404 && hidden.message.replace("hidden", "X") === missing.message.replace("missing", "X"),
+      `github-repo: a private repository answers 404 like a missing one (${hidden?.statusCode} ${hidden?.message})`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 // favicon-grab
 await throws(h("favicon-grab")({}), 400, "favicon-grab: missing url");
 await throws(h("favicon-grab")({ url: "x".repeat(2049) }), 400, "favicon-grab: url over 2048 chars");
