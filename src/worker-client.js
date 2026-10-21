@@ -71,7 +71,9 @@ export async function runOnWorker(slug, input, { signal } = {}) {
   const base = workerUrl();
   if (!base) throw Object.assign(new Error("render worker not configured"), { statusCode: 503 });
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), WORKER_TIMEOUT_MS);
+  // The timer's abort carries a TimeoutError, so the failure monitor counts
+  // it as the worker timing out rather than the caller cancelling.
+  const timer = setTimeout(() => ac.abort(new DOMException("render worker timed out", "TimeoutError")), WORKER_TIMEOUT_MS);
   if (signal) signal.addEventListener("abort", () => ac.abort(), { once: true });
   const token = workerToken();
   let res;
@@ -83,7 +85,7 @@ export async function runOnWorker(slug, input, { signal } = {}) {
       signal: ac.signal,
     });
   } catch (e) {
-    throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" ? "timeout" : e.message}`), { statusCode: 503 });
+    throw Object.assign(new Error(`render worker unreachable: ${e.name === "AbortError" || e.name === "TimeoutError" ? "timeout" : e.message}`), { statusCode: 503 });
   } finally { clearTimeout(timer); }
   const text = await readBounded(res, WORKER_MAX_BYTES);
   let body = null;

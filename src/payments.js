@@ -42,6 +42,8 @@ import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-histor
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
+import { withSettleDemotion, isFundsRefusal, demotedList } from "./settle-demotion.js";
+import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -755,7 +757,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Clients expose their base URL as `url`; a subclass that does not is
     // simply not diagnosed rather than a boot failure.
     const u = client?.url || client?.config?.url || client?.options?.url;
-    if (u) facilitatorUrls.push(u);
+    if (u) { facilitatorUrls.push(u); registerFacilitatorUpstream(u); }
     installFacilitatorDiagnostics(facilitatorUrls);
     return client;
   };
@@ -892,9 +894,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // pair it with a NETWORK_PRICE_PREMIUMS entry for eip155:42220.
   const solvadorCeloPrimary = /^(1|true|yes|on)$/i.test((process.env.SOLVADOR_CELO_PRIMARY || "").trim())
     && evmCaip2.includes(CELO_CAIP2) && !!process.env.SOLVADOR_KEY;
+  let solvadorCeloClient = null;
   if (solvadorCeloPrimary) {
     const solvadorAuth = { "X-API-Key": process.env.SOLVADOR_KEY };
-    addFacilitator("Solvador (Celo primary)", new NetworkFilteredFacilitatorClient({
+    solvadorCeloClient = addFacilitator("Solvador (Celo primary)", new NetworkFilteredFacilitatorClient({
       url: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
       createAuthHeaders: async () => ({ verify: solvadorAuth, settle: solvadorAuth, supported: solvadorAuth }),
     }, [CELO_CAIP2]));
@@ -1001,6 +1004,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       url: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
       createAuthHeaders: async () => ({ verify: solvadorAuth, settle: solvadorAuth, supported: solvadorAuth }),
     });
+    // Counted per host by the failure monitor like every facilitator.
+    registerFacilitatorUpstream(process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com");
   }
   // Solvador as PRIMARY, network-filtered. For chains where Solvador is our
   // ONLY facilitator (Optimism today; Unichain/World Chain/Linea are the
@@ -1415,6 +1420,25 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // Arc names no settle fallback: Circle is the one facilitator that settles
   // it, so a re-settle elsewhere could only fail, and an Arc payload is never
   // sent to a facilitator that does not own the chain.
+  // Celo's settle order follows the facilitator that is settling: after
+  // consecutive out-of-funds refusals the first-tried facilitator is demoted
+  // for a cool-down and its alternates settle first (src/settle-demotion.js).
+  const celoPrimary = solvadorCeloClient || celoClient;
+  if (celoPrimary) {
+    const label = solvadorCeloClient ? "Solvador (Celo primary)" : "Celo";
+    // Alternates only under the same opt-in as the fallback chain
+    // (PAYMENT_SETTLE_FALLBACK); without it a demotion is recorded and paged
+    // on (facilitatorFunds) but the order stays.
+    const fallbackOn = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
+    const alternates = () => (!fallbackOn ? [] : solvadorCeloClient
+      ? (celoClient ? [{ name: "Celo", client: celoClient }] : [])
+      : fallbackCandidatesFor(CELO_CAIP2, payAiClient, solvadorClient));
+    withSettleDemotion(celoPrimary, {
+      network: CELO_CAIP2, label, alternates, isPreBroadcast: isPreBroadcastSettleRejection,
+      onRefusal: (r) => toolFailureMonitor().noteFacilitatorRefusal(r),
+    });
+    DEMOTION_NETWORKS.add(CELO_CAIP2);
+  }
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
@@ -2100,6 +2124,14 @@ async function recordVerifyFailure(ctx, reason) {
   })).catch(() => {});
 }
 
+// Networks whose first-tried facilitator is wrapped by the settle demotion.
+const DEMOTION_NETWORKS = new Set();
+setDemotedReader(() => demotedList());
+/** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
+function registerFacilitatorUpstream(url) {
+  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
+}
+
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null) {
   server.onVerifyFailure(async (ctx) => {
     const reason = summarizeFacilitatorError(ctx?.error);
@@ -2192,6 +2224,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // (src/payment-reject.js): an errorReason that is a verdict about the
     // payment (insufficient_funds, transaction_failed, ...) is never
     // relabelled billing by words in its message.
+    // An out-of-funds or billing refusal feeds facilitatorFunds on
+    // /api/gateway-status; a network whose primary is wrapped by the settle
+    // demotion has already recorded its own.
+    if (isFundsRefusal(`${ctx?.error?.errorReason || ""} ${failure}`) && !(DEMOTION_NETWORKS.has(ctx?.requirements?.network) && ctx?.error?.__a402RefusalRecorded)) {
+      try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: ctx?.error?.__a402Facilitator || facilitatorFirstTriedByNetwork.get(ctx?.requirements?.network) || "primary", reason: failure }); } catch { /* bookkeeping only */ }
+    }
     if (isBillingRefusalReceipt({ success: false, errorReason: ctx?.error?.errorReason, errorMessage: failure })) {
       console.warn(
         `[payments] facilitator QUOTA exhausted on ${ctx?.requirements?.network} ` +
@@ -2234,6 +2272,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // lets the chain continue; any other failed result ends the chain and
         // the primary's refusal stands (never "recovered" with a failure).
         if (result?.success !== true) {
+          if (isFundsRefusal(result)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: String(result?.errorReason || result?.errorMessage || "") }); } catch { /* bookkeeping only */ } }
           console.warn(
             `[payments] ${name} settle fallback REJECTED on ${ctx?.requirements?.network}: ` +
               `${result?.errorReason || result?.errorMessage || "no reason given"}`
@@ -2253,6 +2292,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         );
         return { recovered: true, result };
       } catch (err) {
+        if (isFundsRefusal(`${err?.errorReason || ""} ${summarizeFacilitatorError(err)}`)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: summarizeFacilitatorError(err) }); } catch { /* bookkeeping only */ } }
         console.warn(
           `[payments] ${name} settle fallback ALSO failed on ${ctx?.requirements?.network}: ` +
             summarizeFacilitatorError(err)
