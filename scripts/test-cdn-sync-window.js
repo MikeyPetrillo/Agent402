@@ -28,7 +28,8 @@ import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { followsJobAnswer, cdnSyncLeftMs, cdnSyncMaxSeconds, cdnSyncWindowMiddleware } from "../src/cdn-sync-window.js";
-import { requiredCacheControl } from "../src/paid-no-store.js";
+import express from "express";
+import { requiredCacheControl, paidNoStoreMiddleware } from "../src/paid-no-store.js";
 import { paymentWindowTimeoutMs } from "../src/tools/llm-gateway-kit.js";
 import { cdnLinkTimeoutMs } from "../src/tools/llm-images-fast-kit.js";
 
@@ -70,6 +71,29 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   ok(requiredCacheControl({ status: 200, path: "/api/x", paidRequest: true, responseHeaders: { "cache-control": "no-store" } }) === null, "an existing no-store is kept");
   ok(requiredCacheControl({ status: 200, path: "/__operator/x.json", paidRequest: false, responseHeaders: {} }) === "private, no-store", "an operator answer is private, no-store");
   ok(requiredCacheControl({ status: 200, path: "/api/pricing", paidRequest: false, responseHeaders: { "cache-control": "public, max-age=60" } }) === null, "a public free surface keeps its header");
+
+  // The middleware over real HTTP: a handler that marks a 402 or a paid answer
+  // public is overridden, the writeHead(status, headers) form included; a free
+  // public answer keeps its header. (The booted server below already sends
+  // no-store on these paths; this proves the backstop on its own.)
+  {
+    const app = express();
+    app.use(paidNoStoreMiddleware());
+    app.get("/q402", (_req, res) => res.status(402).set("Cache-Control", "public, max-age=600").json({}));
+    app.get("/paid", (_req, res) => res.set("Cache-Control", "public, max-age=600").json({ ok: true }));
+    app.get("/inline", (_req, res) => { res.writeHead(200, { "Cache-Control": "public, max-age=600", "Content-Type": "application/json" }); res.end("{}"); });
+    app.get("/free", (_req, res) => res.set("Cache-Control", "public, max-age=600").json({}));
+    app.get("/__operator/x.json", (_req, res) => res.json({}));
+    const srv = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    const cc = async (p, h = {}) => (await fetch(`${base}${p}`, { headers: h })).headers.get("cache-control");
+    ok(await cc("/q402") === "no-store", "middleware: a 402 marked public goes out no-store");
+    ok(await cc("/paid", { "payment-signature": "x" }) === "private, no-store", "middleware: a paid answer marked public goes out private, no-store");
+    ok(await cc("/inline", { authorization: "Payment abc" }) === "private, no-store", "middleware: the writeHead(status, headers) form is covered");
+    ok(await cc("/free") === "public, max-age=600", "middleware: a free public answer keeps its header");
+    ok(await cc("/__operator/x.json") === "private, no-store", "middleware: an operator answer is private, no-store");
+    srv.close();
+  }
 
   // The window middleware never touches a direct request.
   let nexted = false;
