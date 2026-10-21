@@ -3326,6 +3326,8 @@ jobs:
           t node scripts/test-tollbooth-replay.js
           # Tollbooth verifier timeout/cancellation (FR4-10 — x402VerifierFromExpress honors the AbortSignal; a late settle can't grant — offline)
           t node scripts/test-tollbooth-verifier.js
+          # WordPress tollbooth plugin (static: skip rule reads what WordPress serves; verifier pass must be HMAC-bound to the request)
+          t node scripts/test-wp-tollbooth-plugin.js
 
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js

@@ -10,7 +10,7 @@ free.
 > **Status: beta.** Tested on WP 6.5+ / PHP 7.4+. Ships with a real
 > classifier and an observe-mode dashboard, those are pure PHP and
 > work standalone. The free **proof-of-work** rail and the paid **USDC
-> (x402)** rail delegate verification to a tiny external Worker because
+> (x402)** rail delegate verification to a verifier service you run because
 > a single PHP process can't safely share the HMAC + single-use replay
 > store across requests. See "Wire the rails" below.
 
@@ -21,11 +21,11 @@ free.
   [`agent402-tollbooth`](https://www.npmjs.com/package/agent402-tollbooth)
   npm package. An agency running mixed WordPress + Node clients sees one
   consistent dashboard.
-- **Runs as pure observe-or-block out of the box.** No Worker required
+- **Runs as pure observe-or-block out of the box.** No verifier required
   for the basic "deter AI-training scrapers" job. That's what most
   publishers want today anyway, the USDC payday turns on once AI
   vendors ship buyer-side x402.
-- **Delegates the cryptographic rails to a Worker** when you want the
+- **Delegates the cryptographic rails to a verifier** when you want the
   free PoW + paid USDC tiers (so a crawler with no wallet can still
   pass by burning CPU, and a crawler with a wallet can pay you USDC).
   See "Wire the rails."
@@ -57,7 +57,8 @@ no plugin setting can mitigate it.
 | USDC wallet | Your own Base wallet. USDC settles to it directly and we never hold it. Optional in `observe` mode. |
 | Price | Price per request (e.g. `$0.002`) advertised in the 402. |
 | Network | `base` (mainnet, default) / `base-sepolia` / `polygon` / `arbitrum`. |
-| Verifier URL | Optional external verifier (a Worker) for PoW + x402 rails. |
+| Verifier URL | Optional verifier service you run for the PoW + x402 rails (see "Wire the rails"). |
+| Verifier secret | Shared HMAC key; every verifier pass must be signed with it. Required for the Verifier URL to be used. |
 | Site ID | A label for this site, kept with the plugin settings. The plugin does not send it anywhere yet (see Roadmap). Default: your domain. |
 
 ## Stats
@@ -77,30 +78,61 @@ Agent402 Tollbooth** renders these live.
 
 ## Wire the rails (optional)
 
-The PoW + USDC rails are delegated to a verifier URL. Deploy the
-[Cloudflare Worker template](../cloudflare/): it's ~150 lines of code
-that exposes a `POST /verify` endpoint and signs/verifies tokens with
-its own `TOLLBOOTH_SECRET`. Paste the worker URL into the plugin's
-**Verifier URL** field. The plugin will:
+The PoW + USDC rails are delegated to a verifier service you run. No
+verifier ships with this plugin or with the Cloudflare Worker template
+(that Worker is a gate in front of an origin, not a verifier), so the
+verifier is yours to build against the contract below. Set two fields:
 
-- POST `{kind, token, resource, payTo, price, network}` to the
-  verifier on every gated request.
-- Trust a `{"ok": true}` response (8s timeout, conservative, any
-  failure or non-200 = fail-closed = send 402).
-- Bump `powSolved` / `x402Paid` on success and pass the request through
-  with the `X-Tollbooth-Paid` header set.
+- **Verifier URL**: where the plugin POSTs.
+- **Verifier secret**: a random string of 32 characters or more, shared
+  with the verifier. The plugin ignores the Verifier URL until it is set.
 
-If you don't want to run a Worker, leave Verifier URL blank: the plugin
+On every gated request that carries `X-Pow-Solution` or `X-Payment`, the
+plugin POSTs `{kind, token, resource, nonce, payTo, price, network}`,
+where `nonce` is 32 fresh hex characters. The request passes only when
+the verifier answers `200` with:
+
+```json
+{ "ok": true, "nonce": "<the same nonce>", "sig": "<hex HMAC-SHA256>" }
+```
+
+`sig` is HMAC-SHA256, keyed with the verifier secret, over these five
+lines joined with `\n`:
+
+```
+agent402-tollbooth-verify.v1
+<kind>
+<resource>
+<nonce>
+<hex sha256 of token>
+```
+
+A bare `{"ok": true}`, a wrong or missing `sig`, a different nonce, an
+error, a non-200 or an 8 s timeout all fail closed (the plugin sends
+402). The verifier owns the hard parts: checking the proof-of-work
+against its own challenge secret, settling the x402 payment, and making
+each credential single use.
+
+On a pass the plugin bumps `powSolved` / `x402Paid` and lets the request
+through with the `X-Tollbooth-Paid` header set.
+
+If you don't want to run a verifier, leave Verifier URL blank: the plugin
 still works as a pure observe-or-block gate, which is enough to deter
-AI training crawl today.
+AI training crawl today. For a gate that verifies on its own, run the
+[`agent402-tollbooth`](https://www.npmjs.com/package/agent402-tollbooth)
+npm package in front of the site (proof-of-work, and x402 settlement
+through a facilitator), or the [Cloudflare Worker template](../cloudflare/)
+(proof-of-work).
 
 ## What's skipped
 
 The gate explicitly **does not** charge:
 
-- `/wp-admin` and `/wp-login.php` (you want to log in)
+- The admin screens (`is_admin()`, which covers `/wp-admin`)
+- The login page, when `wp-login.php` is the script serving the request
 - `wp-cli` and cron contexts
-- The admin UI itself (`is_admin()`)
+
+The decision reads what WordPress is serving, not the text of the URL.
 
 The REST API and the public site (pages, posts, the home page, the
 public REST routes) **are** gated.
@@ -118,8 +150,9 @@ collector you run; see
 
 The gate logs nothing per-request. The stats above are aggregate
 integers in `wp_options`. If you point the plugin at a verifier URL,
-exactly one JSON envelope per gated request goes to that Worker:
-`{kind, token, resource, payTo, price, network}`. Nothing else.
+exactly one JSON envelope per gated request that carries a credential
+goes to that verifier: `{kind, token, resource, nonce, payTo, price,
+network}`. Nothing else. The verifier secret never leaves the site.
 
 ## Roadmap
 
