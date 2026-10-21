@@ -383,7 +383,13 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
 {
   const g = await import("../src/external-spend-guard.js");
   g.__reset(); noEnv(); delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
-  ok(g.globalUnsettledCeilingUsd() === g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD && g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD > 0, "the global ceiling has a positive default");
+  const chainSum = g.WALLET_CHAINS.reduce((s2, c) => s2 + g.walletDailyCeilingUsd(c), 0);
+  ok(g.globalUnsettledCeilingUsd() === chainSum && chainSum >= g.WALLET_CHAINS.length * g.__config.DEFAULT_WALLET_DAILY_MAX_USD,
+    `the default global ceiling is the sum of the chain wallets' daily ceilings ($${g.globalUnsettledCeilingUsd()})`);
+  process.env.SOR_WALLET_DAILY_MAX_USD_BASE = "40";
+  ok(g.globalUnsettledCeilingUsd() === chainSum + 15, "raising a chain's ceiling raises the default with it");
+  delete process.env.SOR_WALLET_DAILY_MAX_USD_BASE;
+  ok((await g.globalUnsettledStatus()).status === "ok", "status word: ok when nothing is unsettled");
   process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "5";
   const handles = [];
   let refusedAt = -1, refusal = null;
@@ -394,6 +400,7 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
   }
   ok(refusedAt === 3 && refusal?.code === "global_unsettled_ceiling", `distinct payers each under their own ceiling stop at the global one (refused at call ${refusedAt}, code ${refusal?.code})`);
   ok(/every buyer/.test(refusal?.reason || ""), "the refusal says it is a pause for every buyer");
+  ok((await g.globalUnsettledStatus()).status === "refusing", "status word: refusing after a refusal");
   ok(Math.abs(g.globalExposureUsd() - 4.5) < 1e-9, `the global exposure is the sum across payers (${g.globalExposureUsd()})`);
   g.resolveSpend(handles[0], true);
   ok(Math.abs(g.globalExposureUsd() - 3.0) < 1e-9 && (await g.reserveSpend("ip:198.51.100.99", 1.5)).ok === true, "a settled spend frees global room");
@@ -406,7 +413,26 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
   process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "off";
   ok(g.globalUnsettledCeilingUsd() === null && (await g.reserveSpend("ip:198.51.100.96", 5)).ok === true, "`off` disables the global ceiling");
   process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "banana";
-  ok(g.globalUnsettledCeilingUsd() === g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD, "a malformed value reads as the default, never as off");
+  ok(g.globalUnsettledCeilingUsd() === chainSum, "a malformed value reads as the default, never as off");
+  delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
+  g.__reset();
+
+  // Settled spend never accumulates: many calls, each settled, against a
+  // small ceiling all pass and leave nothing behind; a spend lowered to zero
+  // (nothing paid) leaves nothing; an unresolved row ages out with the window.
+  process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "5";
+  let allOk = true;
+  for (let i = 0; i < 500; i++) {
+    const d = await g.reserveSpend(`ip:203.0.113.${i % 250}`, 1.5);
+    if (!d.ok) { allOk = false; break; }
+    if (i % 2) g.resolveSpend(d.handle, true); else { g.adjustSpend(d.handle, 0); g.resolveSpend(d.handle, false); }
+  }
+  ok(allOk && g.globalExposureUsd() === 0, `500 settled or zeroed spends never accumulate (all passed ${allOk}, exposure ${g.globalExposureUsd()})`);
+  ok((await g.globalUnsettledStatus()).status === "ok", "and the status word stays ok");
+  const old = Date.now() - g.__config.STALE_MS - 1000;
+  await g.reserveSpend("ip:203.0.113.1", 4, { now: old });
+  ok(g.globalExposureUsd() === 0 && (await g.reserveSpend("ip:203.0.113.2", 4)).ok === true, "an unresolved spend ages out with the window");
+  ok((await g.globalUnsettledStatus()).status === "near", "status word: near at three quarters of the ceiling");
   delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
   g.__reset();
 }

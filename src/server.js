@@ -271,7 +271,7 @@ import { creditsPage, creditsThanksPage } from "./credits-page.js";
 import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
-import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
+import { resolveSpend as resolveExternalSpend, globalUnsettledStatus } from "./external-spend-guard.js";
 import { registerWellKnown, removeWellKnown, getWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
 import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
@@ -3428,6 +3428,8 @@ app.get("/api/gateway-status", async (req, res) => {
   await refreshOperatorAuthShared();
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
+  // The global unsettled external-spend ceiling: one word, never a figure.
+  const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
     ...gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer,
     xDataSpend: full ? spend.xDataSpend : publicBucket(spend.xDataSpend),
@@ -3437,6 +3439,7 @@ app.get("/api/gateway-status", async (req, res) => {
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
     // Hard daily ceilings (src/upstream-hard-caps.js): one word publicly.
     upstreamHardCaps: (() => { try { const h = hardCapStatus(); return full ? h : { status: h.status }; } catch { return { status: "unknown" }; } })(),
+    externalSpendGlobal,
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
     solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),

@@ -76,11 +76,21 @@ let seq = 0;
 // same unsettled-and-recent rule as the per-payer rows, and a spend that would
 // take the total past the ceiling is refused with its own code
 // (`global_unsettled_ceiling`) so the caller can word it as a pause for every
-// buyer. Sized at the per-chain wallet's daily ceiling: the unsettled total
-// never exceeds what one spending wallet may lose in a day.
-// `EXTERNAL_MAX_UNSETTLED_GLOBAL_USD` overrides it; `0` or `off` disables it;
-// a malformed value reads as unset, never as off.
-const DEFAULT_MAX_UNSETTLED_GLOBAL_USD = 25;
+// buyer. Only unsettled spend counts: a settled payment removes its row at
+// once, a spend lowered to what was actually paid lowers it, and a row nobody
+// resolves ages out with the same window as the per-payer rows, so the total
+// cannot creep upward over time and memory is bounded by one window's calls.
+//
+// The default is the sum of the chain wallets' daily ceilings (a disabled
+// chain counted at the default chain ceiling): no lower than everything the
+// spending wallets may pay out in their window, so ordinary routing never
+// meets it and it bites only when paid-out, not-settled-back spend piles up
+// across many payers. `EXTERNAL_MAX_UNSETTLED_GLOBAL_USD` overrides it; `0` or
+// `off` disables it; a malformed value reads as unset, never as off.
+// The state is one word on /api/gateway-status (globalUnsettledStatus).
+const GLOBAL_NEAR_FRACTION = 0.75;
+const GLOBAL_REFUSING_HOLD_MS = 60_000;
+let lastGlobalRefusalAt = 0;
 // [{ id, usd, at, settled }]
 let globalRows = [];
 const GLOBAL_KEY = "all";
@@ -449,7 +459,32 @@ function pruneChain(k, now) {
 /** The global unsettled ceiling in USD, or null when disabled (read at call time). */
 export function globalUnsettledCeilingUsd() {
   const v = parseCeiling(process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD);
-  return v === undefined ? DEFAULT_MAX_UNSETTLED_GLOBAL_USD : v;
+  return v === undefined ? defaultGlobalUnsettledUsd() : v;
+}
+/** The default global ceiling: the sum of the chain wallets' daily ceilings. */
+export function defaultGlobalUnsettledUsd() {
+  return WALLET_CHAINS.reduce((sum, c) => sum + (walletDailyCeilingUsd(c) ?? DEFAULT_WALLET_DAILY_MAX_USD), 0);
+}
+
+/**
+ * One word for the global ceiling, never a figure: "ok", "near" (at or past
+ * three quarters of it), "refusing" (at it, or a spend was refused on it in
+ * the last minute) or "off". Every replica's unsettled total when a shared
+ * store answers, else this process's.
+ */
+export async function globalUnsettledStatus(now = Date.now()) {
+  const ceiling = globalUnsettledCeilingUsd();
+  if (ceiling == null) return { status: "off" };
+  let exposure = globalExposureUsd(now);
+  if (SHARED) {
+    try {
+      const r = await shared.windowRead("esg-global", GLOBAL_KEY, { windowMs: STALE_MS, now });
+      if (r.ok) exposure = Math.max(exposure, r.sum / 1e6);
+    } catch { /* this process's figure stands */ }
+  }
+  if (exposure >= ceiling || now - lastGlobalRefusalAt < GLOBAL_REFUSING_HOLD_MS) return { status: "refusing" };
+  if (exposure >= ceiling * GLOBAL_NEAR_FRACTION) return { status: "near" };
+  return { status: "ok" };
 }
 
 /** Unsettled upstream spend across every non-exempt payer, in USD (this process). */
@@ -658,6 +693,7 @@ function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, 
     if (gc != null) {
       const gexp = Math.max(globalExposureUsd(now), Number.isFinite(sharedGlobalExposureUsd) ? sharedGlobalExposureUsd : 0);
       if (gexp + (Number(usd) || 0) > gc) {
+        lastGlobalRefusalAt = now;
         return {
           ok: false,
           code: "global_unsettled_ceiling",
@@ -841,7 +877,7 @@ export function walletDailyStatus(now = Date.now()) {
 /** Test-only. */
 export function __reset() {
   if (SHARED) { for (const k of ledger.keys()) void shared.windowClear("esg-payer", k); void shared.windowClear("esg-global", GLOBAL_KEY); }
-  ledger.clear(); chainLedger.clear(); globalRows = []; seq = 0;
+  ledger.clear(); chainLedger.clear(); globalRows = []; lastGlobalRefusalAt = 0; seq = 0;
   if (!PG) return undefined;
   // With the state database the document row goes too, so a test starts clean.
   return pgReady.then(() => withStateTx((c) => c.query(`DELETE FROM ${stateDbSchema()}.documents WHERE name = $1`, [DOC_NAME]))).catch(() => {});
@@ -853,4 +889,4 @@ export async function __flush() { while (pgWriting) await pgWriting; }
 export const __backend = PG ? "pg" : "file";
 /** Whether the per-payer ledger is written through to the shared store. */
 export const __sharedPayerLedger = SHARED;
-export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS, DEFAULT_MAX_UNSETTLED_GLOBAL_USD };
+export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS };

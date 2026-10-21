@@ -87,6 +87,7 @@ ok(typeof pubBody?.upstreamBudgets?.status === "string", "upstreamBudgets keeps 
 // The per-upstream rows name the upstreams and carry their daily ceilings;
 // together they are a map of where to push, so they stay on the operator view.
 ok(Object.keys(pubBody?.upstreamHardCaps || {}).join(",") === "status", `upstreamHardCaps publishes its word only (${JSON.stringify(pubBody?.upstreamHardCaps)})`);
+ok(Object.keys(pubBody?.externalSpendGlobal || {}).join(",") === "status" && ["ok", "near", "refusing", "off", "unknown"].includes(pubBody.externalSpendGlobal.status), `externalSpendGlobal publishes one word only (${JSON.stringify(pubBody?.externalSpendGlobal)})`);
 ok(Object.keys(opBody?.upstreamHardCaps?.upstreams || {}).length > 0, "the OPERATOR view keeps the hard-ceiling rows");
 ok(Object.keys(pubBody?.upstreamBudgets || {}).join(",") === "status", `upstreamBudgets publishes its word only (${JSON.stringify(pubBody?.upstreamBudgets)})`);
 ok(Object.keys(opBody?.upstreamBudgets?.upstreams || {}).length > 0 && Object.values(opBody.upstreamBudgets.upstreams).every((v) => typeof v.callsToday === "number"),
