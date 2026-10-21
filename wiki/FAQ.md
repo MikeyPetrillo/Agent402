@@ -19,7 +19,7 @@ Yes: 150+ pure-CPU tools accept proof-of-work (sub-second of your CPU), and the 
 An open HTTP payment standard built on the `402 Payment Required` status code: the server quotes a price, the client signs a stablecoin payment and retries, and a facilitator settles it on-chain. See [[Paying with x402]].
 
 **Which chain/asset?**
-USDC on Base (primary), Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar, or Algorand - plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin - gas is sponsored by the facilitator on the EVM chains. Fee handling on the other rails is described per rail in [[Paying with x402]] and [[Paying with MPP]].
+USDC on Base (primary), Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand - plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin - gas is sponsored by the facilitator on the EVM chains. Fee handling on the other rails is described per rail in [[Paying with x402]] and [[Paying with MPP]].
 
 **Does using this spend my AI tokens?**
 No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the `/v1` gateway tiers and judgment routes, the report products, Decide (`/api/decide`), the judgment model the Smart Order Router uses to pick among shortlisted tools, and the image, speech, transcription, embedding and AI-answer tools; each carries `modelBacked: true` in `/api/pricing`. Proof-of-work spends your CPU; x402 or MPP spends USDC.

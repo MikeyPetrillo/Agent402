@@ -67,7 +67,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > report.
 >
 > **Two payment wires, one URL.** Every paid endpoint accepts **x402**
-> (`PAYMENT-SIGNATURE`, USDC on 12 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
+> (`PAYMENT-SIGNATURE`, USDC on 11 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
@@ -102,7 +102,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 
 > Optionally, the same server can charge per call over the [x402
 > protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche,
-> Sei, Optimism, Arc, Stellar & Algorand, plus USDG on Robinhood Chain - 13 chains) - so the instance you
+> Sei, Optimism, Stellar & Algorand, plus USDG on Robinhood Chain - 12 chains) - so the instance you
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
@@ -512,7 +512,7 @@ instance. Payments are the default posture: a bare `npm start` **fails closed**,
 exiting unless `WALLET_ADDRESS` is set - running without payments is the
 explicit opt-in (`FREE_MODE=true npm start`). To charge, set `WALLET_ADDRESS`
 + CDP facilitator keys (free at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com))
-and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar,
+and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar,
 Algorand - or USDG on Robinhood Chain via `PAYMENT_NETWORKS=…,robinhood` +
 `ROBINHOOD_FACILITATOR_URL`) via standard x402 clients:
 
@@ -642,7 +642,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, 150+ pure-CPU utilities) - **add tools here** |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
-| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Arc/Stellar/Algorand + USDG on Robinhood Chain (13 chains), CDP facilitator, Bazaar discovery |
+| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand + USDG on Robinhood Chain (12 chains), CDP facilitator, Bazaar discovery |
 | `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js` | MPP on the same routes: `Payment` challenges/credentials translated to x402 (evm), native Tempo settlement via Tempo's relay, and Stripe cards over MPP |
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing, per-chain marketplace pages (`/stellar`, `/algorand`) |
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |
