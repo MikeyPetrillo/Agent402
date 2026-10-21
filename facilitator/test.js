@@ -57,7 +57,7 @@ import {
   Keypair, Asset, Operation, TransactionBuilder, BASE_FEE, Networks, xdr,
 } from "@stellar/stellar-sdk";
 import {
-  createEd25519Signer, ExactStellarScheme, USDC_TESTNET_ADDRESS, getHorizonClient,
+  createEd25519Signer, ExactStellarScheme, USDC_TESTNET_ADDRESS, getHorizonClient, getRpcClient,
 } from "@x402/stellar";
 import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "./shape.js";
 import { withTimeout, TimeoutError } from "./timeout.js";
@@ -80,6 +80,7 @@ let passed = 0;
 const ok = (cond, msg) => { if (!cond) fail(msg); else { passed++; console.log("ok -", msg); } };
 
 const horizon = getHorizonClient(NETWORK);
+const sorobanRpc = getRpcClient(NETWORK);
 
 // 0) Offline unit tests for shape.js - fast, deterministic, no network.
 {
@@ -328,6 +329,39 @@ const horizon = getHorizonClient(NETWORK);
   ok(err && /timeout/i.test(String(err.message)) && Array.isArray(err.fallbackErrors) && err.fallbackErrors.length === 1 && took < 8_000, `failover: all nodes down -> the primary's timeout error, fallbackErrors attached (${took}ms)`);
   for (const s of [good, fb2, rpcErr, blackhole, fbDown]) { s.closeAllConnections?.(); s.close(); }
   console.log("rpc-failover.js unit tests ✓");
+
+  // signer-reread.js: only the signer's not-found is reread, bounded.
+  {
+    const { installSignerReread } = await import("./signer-reread.js");
+    const SIGNER = "GSIGNER", OTHER = "GOTHER";
+    let calls = 0, missesLeft = 0;
+    const proto = { async getAccount(address) { calls++; if (address === SIGNER && missesLeft-- > 0) throw new Error(`Account not found: ${address}`); if (address === OTHER) throw new Error(`Account not found: ${address}`); return { address }; } };
+    ok(installSignerReread(SIGNER, { proto, pauseMs: 1, log: () => {} }) === true, "signer-reread: installs");
+    ok(installSignerReread(SIGNER, { proto, pauseMs: 1, log: () => {} }) === false, "signer-reread: idempotent");
+    missesLeft = 2; calls = 0;
+    ok((await proto.getAccount(SIGNER)).address === SIGNER && calls === 3, `signer-reread: two not-found answers for the signer, then served (${calls} reads)`);
+    missesLeft = 5; calls = 0;
+    let err = null; try { await proto.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 3, `signer-reread: bounded at 3 reads, then the not-found surfaces (${calls})`);
+    calls = 0; err = null; try { await proto.getAccount(OTHER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 1, "signer-reread: another address's not-found is an answer, read once");
+    const failing = { async getAccount() { calls++; throw new Error("timeout of 10000ms exceeded"); } };
+    installSignerReread(SIGNER, { proto: failing, pauseMs: 1, log: () => {} });
+    calls = 0; err = null; try { await failing.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/timeout/.test(err?.message) && calls === 1, "signer-reread: any other error is not reread here");
+    // The SDK reports a timed-out or 5xx read as "Account not found" too; a
+    // slow failure is not a node answering, so it is surfaced on the first read.
+    const slow = { async getAccount(address) { calls++; await new Promise((r) => setTimeout(r, 40)); throw new Error(`Account not found: ${address}`); } };
+    installSignerReread(SIGNER, { proto: slow, pauseMs: 1, fastMs: 20, log: () => {} });
+    calls = 0; err = null; try { await slow.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 1, `signer-reread: a slow not-found (timeout shape) is not reread (${calls})`);
+    // The budget stops rereads: a clock that jumps past it ends the walk.
+    let t = 0;
+    const budgeted = { async getAccount(address) { calls++; t += 3_000; throw new Error(`Account not found: ${address}`); } };
+    installSignerReread(SIGNER, { proto: budgeted, pauseMs: 1, fastMs: 5_000, budgetMs: 5_000, now: () => t, log: () => {} });
+    calls = 0; err = null; try { await budgeted.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 2, `signer-reread: no reread starts past the budget (${calls} reads)`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +560,19 @@ async function friendbotFund(publicKey) {
   throw new Error(`friendbot funded ${publicKey} but Horizon still does not serve the account after 30s`);
 }
 
+// The facilitator loads its signer through Soroban RPC, which ingests ledgers
+// on its own schedule, so an account Horizon serves can still read "Account not
+// found" there. Wait for RPC to serve it too, bounded.
+async function waitForRpcAccount(publicKey) {
+  for (let i = 0; i < 60; i++) {
+    try { await sorobanRpc.getAccount(publicKey); return; } catch (e) {
+      if (!/Account not found/i.test(String(e?.message || e))) throw e;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`Horizon serves ${publicKey} but Soroban RPC still does not after 60s`);
+}
+
 async function ensureTrustline(keypair) {
   const account = await horizon.loadAccount(keypair.publicKey());
   const hasLine = account.balances.some(
@@ -586,6 +633,7 @@ async function waitForHealthy(baseUrl, path = "/supported") {
 // 1) Facilitator signer - fresh every run, XLM only, fully automatable.
 const facilitatorKp = Keypair.random();
 await friendbotFund(facilitatorKp.publicKey());
+await waitForRpcAccount(facilitatorKp.publicKey());
 console.log(`facilitator signer funded: ${facilitatorKp.publicKey()}`);
 
 // 2) Seller (payTo) - fresh every run. Needs to exist on-ledger and hold a
@@ -755,6 +803,7 @@ proc.kill("SIGKILL");
 // signup" default).
 const hardenedFacilitatorKp = Keypair.random();
 await friendbotFund(hardenedFacilitatorKp.publicKey());
+await waitForRpcAccount(hardenedFacilitatorKp.publicKey());
 const AUTH_TOKEN = "test-secret-token-do-not-use-in-prod";
 const authProc = spawn(process.execPath, [join(ROOT, "index.js")], {
   cwd: ROOT,
@@ -816,6 +865,7 @@ const IMPATIENT_PORT = 4101;
 const IMPATIENT_BASE_URL = `http://localhost:${IMPATIENT_PORT}`;
 const impatientKp = Keypair.random();
 await friendbotFund(impatientKp.publicKey());
+await waitForRpcAccount(impatientKp.publicKey());
 const impatientProc = spawn(process.execPath, [join(ROOT, "index.js")], {
   cwd: ROOT,
   env: {

@@ -19,6 +19,7 @@ import { withTimeout } from "./timeout.js";
 import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
 import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
+import { installSignerReread } from "./signer-reread.js";
 import { installPollClamp } from "./settle-poll.js";
 import { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched } from "./fee-bid.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -132,6 +133,8 @@ if (!ALLOWED_PAYTO.length) {
 }
 
 const signer = loadSigner();
+// Outermost on getAccount, so each reread goes through failover and timeout.
+installSignerReread(signer.address);
 const horizon = getHorizonClient(NETWORK);
 
 // areFeesSponsored: true is not a preference - it's the only value the
