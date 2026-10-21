@@ -6119,6 +6119,11 @@ const sameServeInput = (a, b) => {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 };
+const sameServeInputs = (a, b) => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!sameServeInput(a[i], b[i])) return false;
+  return true;
+};
 const freezeServed = (v) => {
   if (!v || typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return v;
   for (const x of Object.values(v)) if (Array.isArray(x)) Object.freeze(x);
@@ -6131,7 +6136,7 @@ export function memoServeScreen(key, slot, inputs, compute) {
   if (!key || (typeof key !== "object" && typeof key !== "function")) { serveScreenRuns++; return compute(); }
   let slots = serveScreenMemo.get(key);
   const hit = slots && slots[slot];
-  if (hit && hit.inputs.length === inputs.length && hit.inputs.every((x, i) => sameServeInput(x, inputs[i]))) return hit.value;
+  if (hit && sameServeInputs(hit.inputs, inputs)) return hit.value;
   serveScreenRuns++;
   const value = freezeServed(compute());
   if (!slots) { slots = Object.create(null); serveScreenMemo.set(key, slots); }
@@ -6140,11 +6145,22 @@ export function memoServeScreen(key, slot, inputs, compute) {
 }
 /** How many serve-time screens have actually run (a cache hit runs none). */
 export function _serveScreenRunsForTest() { return serveScreenRuns; }
-/** `screenListingForServe` for one crawled tool row, memoized on the row. */
+/** `screenListingForServe` for one crawled tool row, memoized on the row. The
+ *  directory build calls this for every row, so its inputs are compared field
+ *  by field with no allocation on a hit (same rule as memoServeScreen). */
+const toolScreenMemo = new WeakMap();
 function screenToolForServe(t, category, fallbackName) {
-  const tags = t?.tags;
-  return memoServeScreen(t, "listing", [t?.name, t?.description, category, tags, fallbackName],
-    () => screenListingForServe({ name: t?.name, description: t?.description, category, tags }, { fallbackName }));
+  if (!t || typeof t !== "object") return memoServeScreen(null, "listing", [], () => screenListingForServe({}, { fallbackName }));
+  const name = t.name, description = t.description, tags = t.tags;
+  const hit = toolScreenMemo.get(t);
+  if (hit && hit.name === name && hit.description === description && hit.category === category && hit.fallbackName === fallbackName && sameServeInput(hit.tags, tags)) return hit.value;
+  serveScreenRuns++;
+  // The object is frozen but its tag list is not: the build slices it for
+  // every row, and slice on a frozen array leaves the fast path. The build
+  // never hands that list out, only its slice.
+  const value = Object.freeze(screenListingForServe({ name, description, category, tags }, { fallbackName }));
+  toolScreenMemo.set(t, { name, description, category, fallbackName, tags: Array.isArray(tags) ? tags.slice() : tags, value });
+  return value;
 }
 /** `servedSellerName`, memoized on the object the name was read from. */
 export function servedSellerNameOn(key, name, origin, slot = "sellerName") {
@@ -9460,7 +9476,7 @@ function flatRowsForEntry(origin, v, self, seen, out) {
     // the rows the crawl has replaced since the last one.
     const served = screenToolForServe(t, t?.category, route);
     const description = String(served.description || "").trim();
-    out.push({
+    const flatRow = {
       ours: false,
       seller: origin,
       sellerName,
@@ -9472,7 +9488,6 @@ function flatRowsForEntry(origin, v, self, seen, out) {
       described: description.length >= 12,
       category: t?.category || "other",
       tags: served.tags.slice(0, 6),
-      ...untrustedMarker(served.finding),
       // Was `typeof t.price === "number" ? t.price : null`, which silently
       // nulled every price stored as a string - and manifest and llms.txt
       // catalogues store them as "$0.002". parsePrice is what every other
@@ -9506,7 +9521,11 @@ function flatRowsForEntry(origin, v, self, seen, out) {
       // t.seller is not set on every row source.
       ...deliveryProjection(origin, t?.method, route),
       networks: Array.isArray(t?.networks) ? t.networks : [],
-    });
+    };
+    // A flagged row carries the marker. Added after the literal, so the common
+    // unflagged row keeps one shape and builds on the literal's fast path.
+    if (served.finding) Object.assign(flatRow, untrustedMarker(served.finding));
+    out.push(flatRow);
   }
   }
 
