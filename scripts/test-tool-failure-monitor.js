@@ -49,19 +49,19 @@ await check("tool words: 2 outside 5xx ok, 3 degraded, a >25% share over 8 calls
   const m = createToolFailureMonitor({ now: c.now, env: {} });
   m.noteTool("stock-quote", 500); m.noteTool("stock-quote", 502);
   for (let i = 0; i < 20; i++) m.noteTool("stock-quote", 500, { synthetic: true });
-  assert.equal((await m.status()).toolFailures.status, "ok", "two outside 5xx and any number of synthetic ones");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "ok", "two outside 5xx and any number of synthetic ones");
   m.noteTool("stock-quote", 504);
-  assert.equal((await m.status()).toolFailures.status, "degraded", "the third outside 5xx (504 counts)");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "degraded", "the third outside 5xx (504 counts)");
   for (let i = 0; i < 50; i++) m.noteTool("stock-quote", 200);
-  assert.equal((await m.status()).toolFailures.status, "degraded", "3 of 53 is degraded, not failing");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "degraded", "3 of 53 is degraded, not failing");
   const m2 = createToolFailureMonitor({ now: c.now, env: {} });
   for (let i = 0; i < 6; i++) m2.noteTool("render", 200);
   m2.noteTool("render", 503); m2.noteTool("render", 503); m2.noteTool("render", 503);
-  assert.equal((await m2.status()).toolFailures.status, "failing", "3 of 9 is over 25% across at least 8 calls");
+  assert.equal((await m2.status({ fresh: true })).toolFailures.status, "failing", "3 of 9 is over 25% across at least 8 calls");
   const m3 = createToolFailureMonitor({ now: c.now, env: {} });
   for (let i = 0; i < 10; i++) { m3.noteTool("dns", 400); m3.noteTool("dns", 402); m3.noteTool("dns", 499); m3.noteTool("dns", 503, { shed: true }); }
-  assert.equal((await m3.status()).toolFailures.status, "ok", "buyer errors, settle refusals, hang-ups and shed answers are not tool failures");
-  const full = await m2.status({ full: true });
+  assert.equal((await m3.status({ fresh: true })).toolFailures.status, "ok", "buyer errors, settle refusals, hang-ups and shed answers are not tool failures");
+  const full = await m2.status({ full: true, fresh: true });
   assert.deepEqual(full.toolFailures.tools.map((r) => r.slug), ["render"]);
 });
 
@@ -69,9 +69,9 @@ await check("the hour rolls: failures older than an hour leave the word but stay
   const c = clock();
   const m = createToolFailureMonitor({ now: c.now, env: {} });
   for (let i = 0; i < 4; i++) m.noteTool("pdf", 500);
-  assert.equal((await m.status()).toolFailures.status, "degraded");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "degraded");
   c.t += 3_600_000 + BUCKET_MS;
-  assert.equal((await m.status()).toolFailures.status, "ok");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "ok");
   const r = await m.report();
   assert.equal(r.tools[0].slug, "pdf");
   assert.equal(r.tools[0].day.outside.fail, 4);
@@ -83,7 +83,7 @@ await check("the hour rolls: failures older than an hour leave the word but stay
 await check("thresholds are env-tunable", async () => {
   const m = createToolFailureMonitor({ now: clock().now, env: { TOOL_FAIL_DEGRADED_5XX: "1" } });
   m.noteTool("meta", 500);
-  assert.equal((await m.status()).toolFailures.status, "degraded");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "degraded");
 });
 
 await check("upstream words: named hosts only; 5 timeouts degraded, a >25% share failing; synthetic excluded, background counted", async () => {
@@ -92,14 +92,14 @@ await check("upstream words: named hosts only; 5 timeouts degraded, a >25% share
   for (let i = 0; i < 4; i++) m.noteUpstream("hist.databento.com", "timeout", { origin: "outside" });
   for (let i = 0; i < 10; i++) m.noteUpstream("hist.databento.com", "timeout", { origin: "synthetic" });
   for (let i = 0; i < 40; i++) m.noteUpstream("hist.databento.com", "ok", { origin: "background" });
-  assert.equal((await m.status()).upstreamHealth.status, "ok", "four counted failures");
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "ok", "four counted failures");
   m.noteUpstream("hist.databento.com", "s5xx", { origin: "background" });
-  assert.equal((await m.status()).upstreamHealth.status, "degraded", "the fifth (background counts)");
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "degraded", "the fifth (background counts)");
   for (let i = 0; i < 5; i++) m.noteUpstream("api.exa.ai", "network", { origin: "outside" });
   for (let i = 0; i < 5; i++) m.noteUpstream("api.exa.ai", "ok", { origin: "outside" });
-  assert.equal((await m.status()).upstreamHealth.status, "failing", "5 of 10 failing");
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "failing", "5 of 10 failing");
   for (let i = 0; i < 20; i++) m.noteUpstream("api.rugcheck.xyz", "aborted"); for (let i = 0; i < 20; i++) m.noteUpstream("api.rugcheck.xyz", "throttled");
-  const full = await m.status({ full: true });
+  const full = await m.status({ full: true, fresh: true });
   assert.deepEqual(full.upstreamHealth.upstreams.map((u) => u.upstream), ["exa", "databento"], "a cancel or a 429 is not an outage");
   assert.equal(m.upstreamNameOf("data.sec.gov"), "edgar");
   assert.equal(m.upstreamNameOf("api.stlouisfed.org"), "fred");
@@ -146,10 +146,10 @@ await check("replica merge: each replica publishes its buckets and a read sums e
   a.noteTool("screenshot", 500); a.noteTool("screenshot", 500);
   b.noteTool("screenshot", 500);
   b.noteToolMessage("screenshot", 500, "render worker unreachable: timeout");
-  assert.equal((await a.status()).toolFailures.status, "ok", "two on this replica alone, nothing published yet");
+  assert.equal((await a.status({ fresh: true })).toolFailures.status, "ok", "two on this replica alone, nothing published yet");
   await a.publish(); await b.publish();
   c.t += 31_000; // past the read cache
-  const sa = await a.status(), sb = await b.status();
+  const sa = await a.status({ fresh: true }), sb = await b.status({ fresh: true });
   assert.equal(sa.toolFailures.status, "degraded", "2 + 1 across replicas");
   assert.equal(sb.toolFailures.status, "degraded");
   const r = await a.report();
@@ -161,18 +161,80 @@ await check("replica merge: each replica publishes its buckets and a read sums e
   assert.equal((await solo.report()).scope, "instance", "without a store the report says the counts are this process's");
 });
 
+await check("the words are cached for 30 s; a stale cache is served while one recompute runs after the response", async () => {
+  const c = clock();
+  const m = createToolFailureMonitor({ now: c.now, env: {} });
+  assert.equal((await m.status()).toolFailures.status, "ok", "first read computes");
+  for (let i = 0; i < 3; i++) m.noteTool("t", 500);
+  assert.equal((await m.status()).toolFailures.status, "ok", "inside 30 s the cached words are served");
+  c.t += 30_001;
+  assert.equal((await m.status()).toolFailures.status, "ok", "the first read past 30 s still answers from the cache");
+  await new Promise((r) => setImmediate(r)); await new Promise((r) => setTimeout(r, 5));
+  assert.equal((await m.status()).toolFailures.status, "degraded", "the recompute it started has landed");
+});
+
+await check("a replica not seen for 10 minutes is left out of the merge", async () => {
+  const c = clock();
+  const kv = new Map();
+  const store = {
+    async publish(id, json) { kv.set(id, json); return { ok: true }; },
+    async readAll() { return { ok: true, snapshots: [...kv].map(([id, v]) => ({ id, ...JSON.parse(v) })) }; },
+  };
+  const dead = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "dead" });
+  const live = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "live" });
+  const me = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "me" });
+  for (let i = 0; i < 3; i++) dead.noteTool("x", 500);
+  await dead.publish();
+  c.t += 11 * 60_000;
+  live.noteTool("y", 500);
+  await live.publish();
+  const r = await me.report();
+  assert.equal(r.replicasRead, 2, "this process and the live replica");
+  assert.deepEqual(r.tools.map((t) => t.slug), ["y"], "the dead replica's rows are gone");
+});
+
+await check("cost: at 300 slugs x 288 buckets x 10 replicas a gateway-status read is a cache read", async () => {
+  const t0 = T0;
+  const SLUGS = 300, BUCKETS = 288, REPLICAS = 10;
+  const others = [];
+  for (let r = 0; r < REPLICAS; r++) {
+    const m = createToolFailureMonitor({ replicaId: `r${r}`, now: () => t0, env: {} });
+    for (let sl = 0; sl < SLUGS; sl++) for (let b = 0; b < BUCKETS; b++) m.noteTool(`slug-${sl}`, b % 17 ? 200 : 503, { at: t0 - b * BUCKET_MS });
+    others.push(JSON.stringify(m.snapshot(t0)));
+  }
+  let reads = 0;
+  const store = { async publish() { return { ok: true }; }, async readAll() { reads++; return { ok: true, snapshots: others.map((j, i) => ({ id: `r${i}`, ...JSON.parse(j) })) }; } };
+  const c = clock(t0);
+  const me = createToolFailureMonitor({ replicaId: "me", now: c.now, env: {}, store });
+  await me.status();
+  const N = 200;
+  let a = performance.now();
+  for (let i = 0; i < N; i++) await me.status();
+  const perCall = (performance.now() - a) / N;
+  assert.ok(perCall < 1, `a cached read costs ${perCall.toFixed(3)} ms`);
+  assert.equal(reads, 1, "the replicas are read once per window, not per request");
+  c.t += 30_001;
+  a = performance.now();
+  await me.status();
+  const staleRead = performance.now() - a;
+  assert.ok(staleRead < 5, `the first read past the window answers from the cache (${staleRead.toFixed(2)} ms); the merge runs after it`);
+  await new Promise((r) => setImmediate(r)); await new Promise((r) => setTimeout(r, 50));
+  assert.equal(reads, 2, "and the recompute read the replicas once more");
+  console.log(`# cached read ${perCall.toFixed(3)} ms, stale read ${staleRead.toFixed(2)} ms`);
+});
+
 await check("facilitator refusals: the word reads refused inside the hour, demoted while a facilitator is in cool-down", async () => {
   const c = clock();
   let demoted = [];
   const m = createToolFailureMonitor({ now: c.now, env: {}, isDemoted: () => demoted });
-  assert.equal((await m.status()).facilitatorFunds.status, "ok");
+  assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok");
   m.noteFacilitatorRefusal({ network: "eip155:42220", facilitator: "Celo", reason: "Out of mainnet settlement funds" });
-  assert.equal((await m.status()).facilitatorFunds.status, "refused");
+  assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
   demoted = [{ network: "eip155:42220", facilitator: "Celo" }];
-  assert.equal((await m.status()).facilitatorFunds.status, "demoted");
+  assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "demoted");
   demoted = [];
   c.t += 3_600_001;
-  assert.equal((await m.status()).facilitatorFunds.status, "ok");
+  assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok");
   assert.ok(isFundsRefusal("Out of mainnet settlement funds"));
   assert.ok(isFundsRefusal({ errorReason: "free_tier_exhausted" }));
   assert.ok(!isFundsRefusal("subcent_quota_exceeded"), "the sub-cent quota has its own gate");

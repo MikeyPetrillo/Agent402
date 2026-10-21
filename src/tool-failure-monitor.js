@@ -26,8 +26,15 @@
 // TOOL_FAILURE_PUBLISH_MS, and a read merges the other replicas' latest
 // snapshots with this process's live counts. Without Redis (or when it does
 // not answer) the counts are this process's own, and the operator view says
-// so (`scope: "instance"`). A replica's snapshot outlives its process for its
-// TTL, so a deploy does not erase the last day.
+// so (`scope: "instance"`). A snapshot not republished for
+// TOOL_FAILURE_REPLICA_STALE_MS (default 10 minutes) belongs to a replica that
+// is gone (an earlier deploy) and is left out of the merge.
+//
+// Cost: the other replicas' snapshots are read and merged once per
+// REMOTE_MAX_AGE_MS (30 s), and the words are computed at most once per that
+// window and cached; /api/gateway-status reads the cache. A stale cache is
+// served while one recompute runs after the response, so no request waits
+// on a merge.
 //
 // Public surface: /api/gateway-status carries toolFailures, upstreamHealth
 // and facilitatorFunds as one word each. Slugs, upstream names, counts and
@@ -44,6 +51,7 @@ export const FUNDS_WORDS = ["ok", "refused", "demoted"];
 const MAX_SLUGS = 2_000;
 const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
+const REMOTE_MAX_AGE_MS = 30_000;
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 export function thresholds(env = process.env) {
@@ -142,7 +150,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const lastUpstream = new Map();  // name -> { at, kind, host, status }
   const refusals = [];          // { at, network, facilitator, reason }
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
-  let remote = { at: 0, snapshots: [], ok: false };
+  let remote = { at: 0, snapshots: [], ok: false, merged: null };
+  let cached = null;      // { at, e }: the last evaluation the words are read from
+  let recomputing = false;
 
   const bucketOf = (t) => Math.floor(t / BUCKET_MS);
   const prune = (m, t) => { const floor = bucketOf(t - DAY_MS); for (const k of m.keys()) if (k <= floor) m.delete(k); };
@@ -244,18 +254,25 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     try { return await store.publish(id, JSON.stringify(snapshot(t)), t); } catch (e) { return { ok: false, error: String(e?.message || e).slice(0, 120) }; }
   }
 
-  async function refreshRemote(t = now(), { maxAgeMs = 30_000 } = {}) {
+  async function refreshRemote(t = now(), { maxAgeMs = REMOTE_MAX_AGE_MS } = {}) {
     if (!store) return remote;
     if (remote.at && t - remote.at < maxAgeMs) return remote;
+    const staleMs = num(env.TOOL_FAILURE_REPLICA_STALE_MS, 10 * 60_000);
     try {
       const r = await store.readAll(t);
-      remote = { at: t, ok: !!r.ok, snapshots: (r.snapshots || []).filter((s) => s.id !== id) };
-    } catch { remote = { at: t, ok: false, snapshots: [] }; }
+      // A replica that has not published within staleMs is gone.
+      const snapshots = (r.snapshots || []).filter((s) => s.id !== id && Number(s.at) >= t - staleMs);
+      remote = { at: t, ok: !!r.ok, snapshots, merged: r.ok ? mergeSnapshots(snapshots) : null };
+    } catch { remote = { at: t, ok: false, snapshots: [], merged: null }; }
     return remote;
   }
 
+  /** The live counts plus the other replicas' (merged once per remote read). */
   function merged(t = now()) {
-    const all = [snapshot(t), ...(remote.ok ? remote.snapshots : [])];
+    return mergeSnapshots([snapshot(t), ...(remote.ok && remote.merged ? [remote.merged] : [])]);
+  }
+
+  function mergeSnapshots(all) {
     const toolsM = {}, upM = {}, lastT = {}, lastU = {};
     const refs = [];
     for (const s of all) {
@@ -349,10 +366,28 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     };
   }
 
-  /** Words for /api/gateway-status (public: the word only). */
-  async function status({ full = false, t = now() } = {}) {
+  async function recompute(t = now()) {
     await refreshRemote(t);
-    const e = evaluate(t);
+    cached = { at: t, e: evaluate(t) };
+    return cached.e;
+  }
+
+  /** The last evaluation, at most REMOTE_MAX_AGE_MS old; a stale one is served
+   *  while a single recompute runs after the response. */
+  async function cachedEvaluation(t = now()) {
+    if (cached && t - cached.at < REMOTE_MAX_AGE_MS) return cached.e;
+    if (!cached) return recompute(t);
+    if (!recomputing) {
+      recomputing = true;
+      setImmediate(() => { recompute().catch(() => {}).finally(() => { recomputing = false; }); });
+    }
+    return cached.e;
+  }
+
+  /** Words for /api/gateway-status (public: the word only). `fresh` recomputes
+   *  now instead of reading the cache (tests and one-off reads). */
+  async function status({ full = false, t = now(), fresh = false } = {}) {
+    const e = fresh ? await recompute(t) : await cachedEvaluation(t);
     if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds } };
     const failingTools = e.tools.filter((r) => r.status !== "ok");
     const badUps = e.upstreams.filter((r) => r.status !== "ok");
@@ -397,7 +432,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   return {
     id, noteTool, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; remote = { at: 0, snapshots: [], ok: false }; },
+    _reset() { tools.clear(); upstreams.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 
