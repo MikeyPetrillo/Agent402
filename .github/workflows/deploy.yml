@@ -1868,6 +1868,8 @@ jobs:
           t node scripts/test-ledger-recent.js
           # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
           t node scripts/test-escape-quotes.js
+          # The document CSP's form-action allows only this origin and mailto:, and every form in the tree submits inside it
+          t node scripts/test-csp-form-action.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them
