@@ -14,7 +14,7 @@
 //   3. HEAD on free surfaces (/health, /llms.txt) stays 200 — only paid
 //      catalog routes are gated.
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 
 const PORT = 3087;
 const FAC_PORT = 3088;
@@ -25,6 +25,19 @@ let facilitator = null;
 const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The spelling variants go out over node:http, so no URL parser on the
+// client side rewrites the path before the server reads it.
+const rawRequest = (method, path) => new Promise((resolve, reject) => {
+  const body = method === "POST" ? "{}" : null;
+  const rq = httpRequest({ host: "127.0.0.1", port: PORT, method, path, headers: body ? { "content-type": "application/json", "content-length": String(body.length) } : {} }, (r) => {
+    let bodyLength = 0;
+    r.on("data", (c) => { bodyLength += c.length; });
+    r.on("end", () => resolve({ status: r.statusCode, headers: r.headers, bodyLength }));
+  });
+  rq.on("error", reject);
+  if (body) rq.write(body);
+  rq.end();
+});
 
 // Stub facilitator: only /supported is needed — the test never pays, it only
 // needs the paywall able to mint 402 challenges (requires synced kinds).
@@ -61,6 +74,17 @@ try {
     for (const method of ["HEAD", "GET", "POST"]) {
       const r = await fetch(`${B}${variant}`, { method, ...(method === "POST" ? { headers: { "Content-Type": "application/json" }, body: "{}" } : {}) });
       ok(r.status === 402 && !!r.headers.get("payment-required"), `unpaid ${method} ${variant} -> 402 with PAYMENT-REQUIRED (got ${r.status})`);
+    }
+  }
+  // A percent-encoded or repeated-slash spelling resolves the way the
+  // load-shed gate and the unpaid-quote budget resolve it
+  // (normalizeCatalogPath), so it takes the same gate chain too. Sent over
+  // node:http so the path reaches the server exactly as written.
+  for (const variant of ["/api/%75uid", "/api/%75%75id", "//api//uuid", "/api//uuid", "//API//UUID//", "/%61pi/uuid/", "/api/%55UID?version=4"]) {
+    for (const method of ["HEAD", "GET", "POST"]) {
+      const r = await rawRequest(method, variant);
+      ok(r.status === 402 && !!r.headers["payment-required"], `unpaid ${method} ${variant} -> 402 with PAYMENT-REQUIRED (got ${r.status})`);
+      if (method === "HEAD") ok(r.bodyLength === 0, `HEAD ${variant} body is empty (got ${r.bodyLength} bytes)`);
     }
   }
   const headPostVariant = await fetch(`${B}/API/HASH/`, { method: "HEAD" });

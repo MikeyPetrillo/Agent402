@@ -43,7 +43,26 @@ export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CP
 
 const LAG_SHED_MS = Number(process.env.SHED_LAG_MS) || 250;
 const INFLIGHT_SHED = Number(process.env.SHED_INFLIGHT) || 400;
-const counters = { shed: 0, shedLag: 0, shedInflight: 0, discoveryBudget: 0, discoveryInflight: 0, discoveryDeadline: 0, since: Date.now() };
+const counters = { shed: 0, shedLag: 0, shedInflight: 0, discoveryBudget: 0, discoveryInflight: 0, discoveryDeadline: 0, chainSellerView: 0, shedOther: 0, since: Date.now() };
+
+// Shed kind -> its counter. A kind not listed here counts as shedOther.
+const KIND_COUNTER = {
+  lag: "shedLag",
+  inflight: "shedInflight",
+  "discovery-budget": "discoveryBudget",
+  "discovery-inflight": "discoveryInflight",
+  // A discovery compute that passed its deadline: the slot was released and the
+  // caller refused, so it is a shed with its own count (server.js, serveCachedDiscovery).
+  "discovery-deadline": "discoveryDeadline",
+  // A chain market ?seller= view whose build the build cap refused (server.js).
+  "chain-seller-view": "chainSellerView",
+};
+// Counters of FREE work refused by its own bound (the discovery gates and the
+// seller-view build cap) while the shared gate let it through: those bounds
+// trip on a burst of free requests alone, whatever paid traffic is doing.
+// Everything else (lag, in-flight, and any kind not named here) is shedding
+// by the shared gate, which means the serving path itself was strained.
+export const FREE_SHED_COUNTERS = ["discoveryBudget", "discoveryInflight", "discoveryDeadline", "chainSellerView"];
 
 /** Why free traffic should be refused right now, or null. */
 // Lag sheds only while the loop is SATURATED: the smoothed lag is high AND at
@@ -69,17 +88,31 @@ export function shouldShedFree({ inFlight = 0, lagMs = recentLagMs(), lateTicks 
 
 export function noteShed(kind) {
   counters.shed++;
-  if (kind === "lag") counters.shedLag++;
-  else if (kind === "inflight") counters.shedInflight++;
-  else if (kind === "discovery-budget") counters.discoveryBudget++;
-  else if (kind === "discovery-inflight") counters.discoveryInflight++;
-  // A discovery compute that passed its deadline: the slot was released and the
-  // caller refused, so it is a shed with its own count (server.js, serveCachedDiscovery).
-  else if (kind === "discovery-deadline") counters.discoveryDeadline++;
+  const c = Object.prototype.hasOwnProperty.call(KIND_COUNTER, kind) ? KIND_COUNTER[kind] : "shedOther";
+  counters[c]++;
 }
 
-/** Counts only, for /__operator/perf.json and the heartbeat. */
-export function shedStatus() { return { ...counters, lagShedMs: LAG_SHED_MS, inFlightShed: INFLIGHT_SHED }; }
+/** Counts only, for /__operator/perf.json and the heartbeat. `free` and
+ *  `serving` split `shed` by FREE_SHED_COUNTERS; they always sum to it. */
+export function shedStatus() {
+  const free = FREE_SHED_COUNTERS.reduce((n, k) => n + counters[k], 0);
+  return { ...counters, free, serving: counters.shed - free, lagShedMs: LAG_SHED_MS, inFlightShed: INFLIGHT_SHED };
+}
+
+/** The serving-health words for shedding. `shedding` (degrades) when the
+ *  shared gate's sheds (lag, in-flight, any unlisted kind) pass the hourly
+ *  threshold; `free-shedding` (informational, does not degrade) when free work
+ *  refused by its own bound passes it. Paid routes are never shed (the gate
+ *  protects them), and their errors and the loop's lag have reasons of their own. */
+export function shedVerdict(status, threshold, now = Date.now()) {
+  const reasons = [], info = [];
+  if (!status || now - status.since >= 3600_000) return { reasons, info };
+  const free = Number.isFinite(status.free) ? status.free : FREE_SHED_COUNTERS.reduce((n, k) => n + (Number(status[k]) || 0), 0);
+  const serving = Number.isFinite(status.serving) ? status.serving : (Number(status.shed) || 0) - free;
+  if (serving > threshold) reasons.push("shedding");
+  if (free > threshold) info.push("free-shedding");
+  return { reasons, info };
+}
 
 /** `extra` (optional) adds fields to the body, such as a `reason` naming which
  *  bound refused the call; the error text and Retry-After stay the same. */

@@ -956,9 +956,11 @@ jobs:
           esac
 
       # Serving health: event-loop stalls, 5xx and paid-call error rates, and
-      # load shedding, from /__operator/serving-health.json (counts only). Two
-      # readings 30 s apart must agree, because a reading taken while a deploy
-      # swaps containers can be bad on its own.
+      # load shedding by the shared gate, from /__operator/serving-health.json
+      # (counts only). Only .status pages; free work refused by its own bounds
+      # is an .info word and reaches the run log. Two readings 30 s apart must
+      # agree, because a reading taken while a deploy swaps containers can be
+      # bad on its own.
       - name: Serving health check (alarm on stalls, paid-call errors, 5xx or shedding)
         if: always()
         continue-on-error: true
@@ -971,7 +973,7 @@ jobs:
           if [ "$S1" = "degraded" ]; then sleep 30; J=$(read1); fi
           STATUS=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
           # The run log keeps the figures; the issue (public) carries the reason words only.
-          SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed)"' 2>/dev/null || echo "unreadable")
+          SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) info=\((.info // [])|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed) shedServing=\(.shed.serving) shedFree=\(.shed.free)"' 2>/dev/null || echo "unreadable")
           REASONS=$(echo "$J" | jq -r '(.reasons // []) | join(", ")' 2>/dev/null || echo "unreadable")
           echo "serving health: $STATUS ($SUMMARY)"
           TITLE="Serving health DEGRADED"
