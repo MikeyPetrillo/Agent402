@@ -22,6 +22,7 @@
 //   2. that rail's own facilitator answers /supported RIGHT NOW.
 // A rail that is genuinely down is reported and left alone - restarting would
 // not fix it and would just churn production on someone else's outage.
+import { railRecovered } from "./lib/rail-recovered.js";
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 
 // Rails with a DEDICATED facilitator are the ones that can drop on their own;
@@ -69,7 +70,7 @@ for (const r of down) {
   if (!url) { console.log(`  ${r.network}: no dedicated facilitator known - cannot confirm recovery, leaving alone`); continue; }
   try {
     const s = await j(`${url.replace(/\/+$/, "")}/supported`);
-    if (s.ok && Array.isArray(s.body?.kinds)) {
+    if (railRecovered(r.network, s)) {
       console.log(`  ${r.network}: facilitator ANSWERS again (${s.status}) - recovered upstream`);
       recovered.push(r.network);
     } else {

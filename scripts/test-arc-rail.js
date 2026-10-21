@@ -29,10 +29,11 @@ import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import { parseSignature, signatureToCompactSignature, serializeCompactSignature } from "viem";
 import { getFreePorts } from "./lib/free-port.js";
 import {
   ARC_CAIP2, ARC_USDC, CIRCLE_FACILITATOR_BASE, CircleFacilitatorClient,
-  arcKindsFromSupported, preflightArcPayment, safeReason,
+  arcKindsFromSupported, preflightArcPayment, safeReason, withoutArcKinds,
 } from "../src/circle-facilitator.js";
 
 let failures = 0;
@@ -220,11 +221,96 @@ await check("an expired or not-yet-valid authorization is refused locally", asyn
   assert.equal((await preflightArcPayment(q, arcReq(), now())).reason, "invalid_exact_evm_payload_authorization_valid_after");
 });
 
-await check("a contract-wallet signature (not 65-byte EOA form) is left to Circle's on-chain check", async () => {
+// Every signature form is verified locally: 65-byte v 27/28, 65-byte v 0/1 and
+// 64-byte EIP-2098 compact. A Base-domain signature in any of those forms, and
+// a form this server cannot verify (a contract wallet's), never reach Circle.
+const asV01 = (sig) => { const v = parseInt(sig.slice(130), 16); return sig.slice(0, 130) + (v - 27).toString(16).padStart(2, "0"); };
+const asCompact = (sig) => serializeCompactSignature(signatureToCompactSignature(parseSignature(sig)));
+for (const [form, conv] of [["65-byte v 27/28", (s) => s], ["65-byte v 0/1", asV01], ["64-byte EIP-2098 compact", asCompact]]) {
+  await check(`a valid Arc signature in ${form} form passes the local check`, async () => {
+    const p = await signed();
+    p.payload.signature = conv(p.payload.signature);
+    if (form.startsWith("64")) assert.equal(p.payload.signature.length, 130);
+    assert.equal(await preflightArcPayment(p, arcReq()), null);
+  });
+  await check(`a Base-domain signature in ${form} form is refused locally`, async () => {
+    const p = await signed({ chainId: 8453 });
+    p.payload.signature = conv(p.payload.signature);
+    assert.equal((await preflightArcPayment(p, arcReq()))?.reason, "invalid_exact_evm_payload_signature");
+  });
+}
+await check("a signature this server cannot verify (a contract-wallet form) is refused before Circle", async () => {
+  const f = stubFetch({ "/verify": () => json(200, { isValid: true }) });
+  const c = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: f });
   const p = await signed();
   p.payload.signature = `0x${"11".repeat(200)}`;
-  assert.equal(await preflightArcPayment(p, arcReq()), null);
+  assert.equal((await preflightArcPayment(p, arcReq()))?.reason, "invalid_exact_evm_payload_signature");
+  assert.equal((await c.verify(p, arcReq())).isValid, false);
+  assert.equal(f.calls.length, 0);
 });
+
+// Only Circle's client may claim Arc: any other client's /supported has the
+// Arc networks removed before @x402 routes on it.
+await check("a non-Circle facilitator advertising Arc has Arc stripped from its /supported", async () => {
+  const other = { async getSupported() { return { kinds: [
+    { scheme: "exact", network: "eip155:8453" }, { scheme: "exact", network: ARC_CAIP2 }, { scheme: "exact", network: "eip155:5042002" },
+  ], extensions: [], signers: { [ARC_CAIP2]: ["0x0000000000000000000000000000000000000001"], "eip155:8453": [] } }; } };
+  withoutArcKinds(other);
+  const s = await other.getSupported();
+  assert.deepEqual(s.kinds.map((k) => k.network), ["eip155:8453"]);
+  assert.deepEqual(Object.keys(s.signers), ["eip155:8453"]);
+});
+
+// A settlement still pending after the client's window is booked by paymentId,
+// and the reconcile pass resolves it from Circle's final status.
+await check("a settle still pending after the window is handed to the booking hook with its paymentId", async () => {
+  const id = "5b3f6c1e-9d2a-4f08-b1c7-2e9a14d0c3ac";
+  const booked = [];
+  const f = stubFetch({
+    "/settle": () => json(200, { success: false, errorReason: "settlement_pending", transaction: "", network: ARC_CAIP2, extensions: { "settlement-status": { paymentId: id } } }),
+    "/status/:id": () => json(200, { paymentId: id, status: "pending", network: ARC_CAIP2 }),
+  });
+  const c = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: f, pendingPollMs: 5, pendingBudgetMs: 40, onPending: (e) => { booked.push(e); } });
+  const p = await signed();
+  p.resource = { url: "https://agent402.tools/api/uuid" };
+  const s = await c.settle(p, arcReq());
+  assert.equal(s.success, false);
+  assert.equal(booked.length, 1);
+  assert.equal(booked[0].paymentId, id);
+  assert.equal(booked[0].amount, "1000");
+  assert.equal(booked[0].payer.toLowerCase(), acct.address.toLowerCase());
+});
+
+{
+  const pendingDir = mkdtempSync(join(tmpdir(), "a402-circle-pending-"));
+  const { createCirclePendingBook } = await import("../src/circle-pending.js");
+  const ids = { done: "11111111-2222-4333-8444-555555555555", fail: "11111111-2222-4333-8444-666666666666", wait: "11111111-2222-4333-8444-777777777777" };
+  const owed = [];
+  const book = createCirclePendingBook({ file: join(pendingDir, "circle-pending.json"), recordOwed: async (row) => { owed.push(row); return true; }, log: () => {} });
+  for (const id of Object.values(ids)) await book.book({ paymentId: id, payer: acct.address, network: ARC_CAIP2, amount: "2500", resource: "https://agent402.tools/api/uuid" });
+  await book.book({ paymentId: "../../not-a-uuid", payer: acct.address, network: ARC_CAIP2, amount: "1" });
+  const finalTx = `0x${"9a".repeat(32)}`;
+  const statusOf = { [ids.done]: { status: "completed", transaction: finalTx }, [ids.fail]: { status: "failed", transaction: null }, [ids.wait]: { status: "pending", transaction: null } };
+  const r = await book.reconcile({ status: async (id) => statusOf[id] || null });
+  await check("reconcile: a late completion becomes an owed refund keyed by its settlement tx", () => {
+    assert.equal(r.owed, 1);
+    assert.equal(owed.length, 1);
+    assert.equal(owed[0].tx, finalTx);
+    assert.equal(owed[0].network, ARC_CAIP2);
+    assert.equal(owed[0].priceUsd, 0.0025);
+    assert.equal(owed[0].slug, "uuid");
+  });
+  await check("reconcile: a failed payment owes nothing and is dropped; a pending one is kept; a bad id is never booked", () => {
+    assert.equal(r.failed, 1);
+    assert.equal(r.pending, 1);
+    assert.deepEqual(book.list().map((e) => e.paymentId), [ids.wait]);
+  });
+  await check("reconcile: the booking survives a reload from its store", async () => {
+    const again = createCirclePendingBook({ file: join(pendingDir, "circle-pending.json"), recordOwed: async () => true, log: () => {} });
+    assert.deepEqual(again.list().map((e) => e.paymentId), [ids.wait]);
+  });
+  rmSync(pendingDir, { recursive: true, force: true });
+}
 
 for (const [label, resp, wantReason] of [
   ["HTTP 500 HTML echoing the key", () => new Response(`<b>${MARKER}</b> ${KEY}`, { status: 500, headers: { "content-type": "text/html" } }), "non_json_response"],
@@ -307,10 +393,24 @@ await check("a timeout and a network error keep the 'may have broadcast' shape (
   assert.deepEqual(fallbackCandidatesFor(ARC_CAIP2, { settle() {} }, { settle() {} }, { [ARC_CAIP2]: [] }), [], "Arc names no fallback facilitator");
 });
 
+await check("paid canary: the Arc leg is gated (absent from the 402 = skipped, not a rail failure); its funding check follows the shared low-water rule", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./paid-canary.js", import.meta.url), "utf8");
+  assert.match(src, /\{ key: "arc", caip2: "eip155:5042",[^}]*gated: true/);
+  const skipAt = src.indexOf("if (!accepts.length && leg.gated)");
+  const failAt = src.indexOf("NOT among the live 402 accepts", skipAt);
+  assert.ok(skipAt > 0 && failAt > skipAt, "the gated skip runs before the dropped-rail failure");
+  const { CHAIN_FUNDING, chainLowWaterReport } = await import("./paid-canary.js");
+  const arc = CHAIN_FUNDING.find((c) => c.key === "arc");
+  assert.ok(arc && arc.lowWater === undefined, "Arc funding has no special threshold");
+  const r = chainLowWaterReport([{ key: "arc", label: "Arc", usd: 0.1 }, { key: "sei", label: "Sei", usd: 0.1 }], { chainLowWater: 0.5 });
+  assert.deepEqual(r.low.map((x) => x.key).sort(), ["arc", "sei"], "a low Arc balance pages exactly like a low Sei balance");
+});
+
 // ---------------------------------------------------------------- part 2
 console.log("part 2: the paid server");
 
-const [P_PAYAI, P_CIRCLE, ...SERVER_PORTS] = await getFreePorts(9);
+const [P_PAYAI, P_CIRCLE, ...SERVER_PORTS] = await getFreePorts(10);
 const st = { payai: "ok", circle: "full", circleHits: [], payaiHits: [] };
 const rawJson = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json", Connection: "close" }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { r(JSON.parse(b || "{}")); } catch { r({}); } }); });
@@ -319,8 +419,14 @@ const payaiStub = createServer(async (req, res) => {
   st.payaiHits.push({ url: req.url, body });
   if (req.url === "/supported") {
     if (st.payai === "die") { res.writeHead(500, { Connection: "close" }); return res.end("down"); }
-    return rawJson(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    // payaiArc: a general facilitator that starts advertising Arc. It must
+    // never be routed an Arc payment (only Circle's client may claim Arc).
+    const kinds = [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }];
+    if (st.payaiArc) kinds.push({ x402Version: 2, scheme: "exact", network: ARC_CAIP2 }, { x402Version: 2, scheme: "exact", network: "eip155:5042002" });
+    return rawJson(res, 200, { kinds, extensions: [], signers: {} });
   }
+  if (req.url === "/verify" && body?.paymentRequirements?.network === ARC_CAIP2) return rawJson(res, 200, { isValid: true, payer: body?.paymentPayload?.payload?.authorization?.from });
+  if (req.url === "/settle" && body?.paymentRequirements?.network === ARC_CAIP2) return rawJson(res, 200, { success: true, transaction: `0x${"77".repeat(32)}`, network: ARC_CAIP2, payer: body?.paymentPayload?.payload?.authorization?.from });
   if (req.url === "/verify") return rawJson(res, 200, { isValid: false, invalidReason: "invalid_exact_evm_payload_signature" });
   return rawJson(res, 404, {});
 });
@@ -370,7 +476,7 @@ async function boot(extraEnv) {
       PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
       ARC_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
       SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), INFLIGHT_COVER: "off",
+      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`),
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       ...extraEnv,
     },
@@ -409,15 +515,41 @@ const noLeak = async (leg, base, log) => {
   assert.ok(!leaks(all), `${leg}: the key or an upstream body appeared in a response or log line`);
 };
 
+// The runtime surfaces that may name Arc, read once per leg.
+async function arcSurfaces(base) {
+  const page = (await fetch(`${base}/arc`)).status;
+  const panel = (await fetch(`${base}/api/market/arc/panel`)).status;
+  const manifest = await (await fetch(`${base}/.well-known/x402`)).json();
+  const sitemap = await (await fetch(`${base}/sitemap.xml`)).text();
+  const howToPay = await (await fetch(`${base}/how-to-pay`)).text();
+  const home = await (await fetch(`${base}/`)).text();
+  return {
+    page, panel,
+    chains: manifest.ecosystem?.chains || [],
+    sitemap: /\/arc<\/loc>/.test(sitemap),
+    howToPay: /\bArc\b/.test(howToPay),
+    nav: /href="\/arc"/.test(home),
+  };
+}
+const assertArcHidden = (s, leg) => {
+  assert.equal(s.page, 404, `${leg}: /arc is not served (got ${s.page})`);
+  assert.equal(s.panel, 404, `${leg}: the Arc market panel is not served`);
+  assert.ok(!s.chains.includes("Arc"), `${leg}: the manifest's chains do not name Arc (${s.chains})`);
+  assert.ok(!s.sitemap && !s.howToPay && !s.nav, `${leg}: no sitemap entry, how-to-pay mention or nav link (${JSON.stringify(s)})`);
+};
+
 // Leg A: no key. Arc absent, the server serves, nothing errors.
 await check("key unset: Arc is absent, the 402 still serves, a warning names the drop, no Circle call", async () => {
   st.circle = "full"; st.circleHits = [];
-  const { base, log, proc } = await boot({});
+  const { base, log, proc } = await boot({ PAYMENT_NETWORKS: "base,polygon,arc" });
   try {
     const { nets } = await offeredNets(base);
     assert.ok(nets.has("eip155:8453") && !nets.has(ARC_CAIP2), `accepts: ${[...nets]}`);
-    assert.match(log.text, /CIRCLE_FACILITATOR_API_KEY is unset - dropping Arc/);
+    assert.match(log.text, /CIRCLE_FACILITATOR_API_KEY is unset - Arc is not configured/);
     assert.equal(st.circleHits.length, 0, "no request to Circle without a key");
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    assert.ok(!JSON.stringify(rails).includes("arc"), "/api/rails does not count Arc as configured without the key");
+    assertArcHidden(await arcSurfaces(base), "key unset");
     const h = await fetch(`${base}/health`);
     assert.equal(h.status, 200);
     assert.ok(!/RouteConfigurationError|Unhandled|TypeError/.test(log.text), "no errors in the boot log");
@@ -426,9 +558,13 @@ await check("key unset: Arc is absent, the 402 still serves, a warning names the
 
 // Leg B: key set, Circle lists Arc.
 await check("key set + Arc listed: the Arc accept is offered, bound to Arc USDC, the treasury and the Base amount", async () => {
-  st.circle = "full"; st.circleHits = []; st.settle = "ok";
+  st.circle = "full"; st.circleHits = []; st.settle = "ok"; st.payaiArc = true; st.payaiHits = [];
   const { base, log, proc } = await boot({ CIRCLE_FACILITATOR_API_KEY: KEY });
   try {
+    const surf = await arcSurfaces(base);
+    assert.equal(surf.page, 200, "/arc is served once Arc is offered");
+    assert.ok(surf.chains.includes("Arc"), `the manifest names Arc (${surf.chains})`);
+    assert.ok(surf.sitemap && surf.howToPay && surf.nav, `sitemap, how-to-pay and nav name Arc (${JSON.stringify(surf)})`);
     const { env } = await offeredNets(base);
     const arc = env.accepts.find((a) => a.network === ARC_CAIP2 && a.scheme === "exact");
     const baseAcc = env.accepts.find((a) => a.network === "eip155:8453" && a.scheme === "exact");
@@ -476,6 +612,10 @@ await check("key set + Arc listed: the Arc accept is offered, bound to Arc USDC,
       assert.equal(rr.status, 402, `a tampered or cross-chain Arc payment is refused (got ${rr.status})`);
     }
     assert.equal(st.circleHits.length, hitsBefore, "none of them reached Circle");
+    // The PayAI stub advertises Arc (and would approve and settle it): no Arc
+    // payment, good or tampered, was ever routed to it.
+    assert.ok(!st.payaiHits.some((h) => (h.url === "/verify" || h.url === "/settle") && String(h.body?.paymentRequirements?.network || "").startsWith("eip155:5042")),
+      "a general facilitator advertising Arc is never routed an Arc payment");
 
     // An Arc-signed authorization presented against the BASE requirement goes
     // to the Base facilitator, never to Circle, and is not served.
@@ -494,7 +634,19 @@ await check("key set + Arc listed: the Arc accept is offered, bound to Arc USDC,
     assert.ok(!leaks(`${rfText} ${JSON.stringify(Object.fromEntries(rf.headers))}`), "the buyer's 402 carries no upstream body or key");
     await new Promise((r2) => setTimeout(r2, 300));
     await noLeak("key set", base, log);
-  } finally { proc.kill("SIGKILL"); }
+  } finally { proc.kill("SIGKILL"); st.payaiArc = false; }
+});
+
+// A general facilitator advertising Arc while Circle does not list it: Arc
+// must still be dropped (it is Circle's alone), not handed to that facilitator.
+await check("a non-Circle facilitator advertising Arc cannot keep Arc in the offer when Circle drops it", async () => {
+  st.circle = "noarc"; st.payaiArc = true;
+  const { base, proc } = await boot({ CIRCLE_FACILITATOR_API_KEY: KEY });
+  try {
+    const { nets } = await offeredNets(base);
+    assert.ok(nets.has("eip155:8453") && !nets.has(ARC_CAIP2), `accepts: ${[...nets]}`);
+    assertArcHidden(await arcSurfaces(base), "Arc advertised only by PayAI");
+  } finally { proc.kill("SIGKILL"); st.payaiArc = false; }
 });
 
 await check("key set: Arc joins a multi-chain list without an `arc` entry in PAYMENT_NETWORKS", async () => {
@@ -519,6 +671,7 @@ for (const [label, circleMode, payaiMode] of [
       if (payaiMode === "ok") {
         const { nets } = await offeredNets(base);
         assert.ok(nets.has("eip155:8453") && !nets.has(ARC_CAIP2), `accepts: ${[...nets]}`);
+        assertArcHidden(await arcSurfaces(base), label);
       } else {
         // Fail-open shape for the other rails: the paywall answers as before
         // (a 500 until a facilitator is reachable), and the offer never names Arc.

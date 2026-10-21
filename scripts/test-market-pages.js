@@ -651,5 +651,17 @@ for (const c of NEW_CHAINS) {
   ok(/All gasless USDC transfers on Base/.test(econ) && /not x402 volume/.test(econ), "economy strip: labelled as all EIP-3009 transfers, not x402 volume");
 }
 
+// Chain tabs wrap into balanced rows for ANY chain count (a gated rail joining
+// the offer makes 14 tabs, which as plain flex items left one alone on the last
+// row at 1440, measured by test-wrap-quality). The tabs are inline atoms in a
+// text-wrap:balance block above the phone breakpoint; no inline flex overrides it.
+{
+  const bar = marketFilterBar("base", "https://agent402.tools");
+  ok(/<div class="mfb-tabs">/.test(bar) && !/class="mfb-tabs" style=/.test(bar), "chain tabs carry no inline flex layout");
+  const chrome = readFileSync(new URL("../src/ledger-chrome.js", import.meta.url), "utf8");
+  ok(/\.mfb-tabs\{display:block;text-wrap:balance;/.test(chrome) && /\.mfb-tabs \.mfb-tab\{display:inline-block;/.test(chrome),
+    "chain tabs are balanced inline atoms, so no chain count leaves a lone last tab");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

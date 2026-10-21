@@ -9,6 +9,7 @@
 // evergreen "500+" only, per the project rule.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { resolveRailCountTokens } from "./rails.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
 const FAQS = [
@@ -17,7 +18,7 @@ const FAQS = [
   { q: "Which protocols does agentic finance run on today?", a: "Two open HTTP-native standards carry it: x402 (an HTTP 402 with machine-readable payment requirements, settled in USDC by a facilitator on chains such as Base, Solana, Polygon and others) and MPP, the Machine Payments Protocol (the Payment HTTP authentication scheme, an IETF Internet-Draft, settled on Base and Celo, or natively on Tempo). Both put the price in the 402 and the payment in the retry, so an agent needs nothing but a funded wallet." },
   { q: "What does Agent402 do in agentic finance?", a: "Agent402 is the applied layer: a catalog of 500+ pay-per-call tools an agent can buy over x402 or MPP, the open cross-seller index and Smart Order Router that finds the best external seller, buys the result from it and resells it to the agent, an on-chain seller leaderboard, live transaction and revenue transparency, and the open-source tollbooth that lets any site or API earn per request from agents. It is open source and self-hostable." },
   { q: "Do agents need crypto to participate?", a: "To pay, an agent needs a wallet holding a stablecoin (USDC, or USDG on Robinhood Chain, or USDC.e or PathUSD on Tempo) on a supported chain; gas is sponsored on the EVM rails, so no native token is required. Agent402 also offers a free tier: pure-CPU tools are payable with a proof-of-work solve instead of money, so an agent without a wallet still has a path through." },
-  { q: "Is agentic finance real today or a thesis?", a: "It is settling on mainnet every day. Agent402 publishes its own numbers live: thousands of external per-call payments settled on chain, twelve x402 chains plus Tempo over MPP, and a daily canary that buys real tools over both x402 and MPP so the claim is re-proven continuously. Every figure on the revenue page links to its on-chain proof." },
+  { q: "Is agentic finance real today or a thesis?", a: "It is settling on mainnet every day. Agent402 publishes its own numbers live: thousands of external per-call payments settled on chain, {{railCount}} x402 chains plus Tempo over MPP, and a daily canary that buys real tools over both x402 and MPP so the claim is re-proven continuously. Every figure on the revenue page links to its on-chain proof." },
   { q: "How do I start selling into agentic finance?", a: "Put a price on an endpoint and answer 402. The fastest path is the open-source agent402-tollbooth: one Express middleware or reverse proxy that charges AI agents per request over x402 and MPP while humans browse free, non-custodial, no signup. Then register your origin so the index and router can find you." },
 ];
 
@@ -25,7 +26,7 @@ const STACK = [
   ["Agents", "Autonomous software with a wallet: MCP-connected assistants, crawlers, trading and research agents, other services' agents.", "the buyers, and now sellers"],
   ["Applied layer", "Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.", "Agent402: index, router, tools, tollbooth"],
   ["Payment protocols", "x402 (HTTP 402 with machine-readable requirements) and MPP (the Payment HTTP auth scheme). Open, HTTP-native, wallet-as-identity.", "the wire"],
-  ["Rails and money", "Stablecoins settled on public chains: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand; USDG on Robinhood Chain; native Tempo.", "twelve x402 chains plus Tempo"],
+  ["Rails and money", "Stablecoins settled on public chains: USDC on {{usdcRailsAnd}}; USDG on Robinhood Chain; native Tempo.", "{{railCount}} x402 chains plus Tempo"],
 ];
 
 const ROLES = [
@@ -44,19 +45,22 @@ const TOC = [
 ];
 
 export function agenticFinancePage(baseUrl) {
+  // Rail counts resolve from the live offer at render (src/rails.js).
+  const faqs = FAQS.map((f) => ({ ...f, a: resolveRailCountTokens(f.a) }));
+  const stack = STACK.map((row) => row.map((cell) => resolveRailCountTokens(cell)));
   const canonical = `${baseUrl}/agentic-finance`;
   const title = "What is Agentic Finance (AIFI)? Agents that pay and get paid";
   const description =
     "Agentic Finance (AIFI) is software agents transacting on their own: discovering services, paying per request from a wallet over open protocols like x402 and MPP, receiving verifiable receipts, and earning per request in return. The definition, the stack, and where Agent402 fits as its applied layer.";
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol", "MPP", "agentic payments", "AI agents"] };
-  const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: FAQS[0].a, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
+  const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: faqs[0].a, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Agentic Finance (AIFI)", item: canonical },
   ] };
   const articleLd = { "@type": "Article", "@id": `${canonical}#article`, headline: title, description, about: { "@id": `${canonical}#term` }, publisher: { "@id": `${baseUrl}/#organization` }, author: { "@id": `${baseUrl}/#organization` }, mainEntityOfPage: canonical, keywords: "agentic finance, AIFI, agentic payments, x402, MPP, machine payments protocol, AI agents, pay-per-call, machine-to-machine payments" };
-  const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
+  const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
   const extraCss = `
 @media (max-width:900px){.af-2col,.af-4col,.af-stack-row{grid-template-columns:minmax(0,1fr)!important}}
@@ -65,13 +69,13 @@ export function agenticFinancePage(baseUrl) {
   const tocHtml = TOC.map(([href, label]) =>
     `<a href="${href}" style="padding:11px 18px;border-bottom:1px solid var(--panel-rule);text-decoration:none;color:var(--on-panel-soft);font-size:var(--fs-md);">${esc(label)}</a>`
   ).join("");
-  const stackHtml = STACK.map(([layer, what, who], i) =>
+  const stackHtml = stack.map(([layer, what, who], i) =>
     `<div style="display:grid;grid-template-columns:210px minmax(0,1fr) 240px;gap:20px;padding:20px 24px;border-bottom:1px solid var(--hairline);align-items:baseline;" class="af-stack-row"><div><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">0${i + 1} ·</span> <span style="color:var(--ink);font-weight:800;font-size:var(--fs-lg);white-space:nowrap;">${esc(layer)}</span></div><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(what)}</p><p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:0;">${esc(who)}</p></div>`
   ).join("");
   const rolesHtml = ROLES.map(([tag, h, p, href, cta]) =>
     `<div style="padding:24px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(tag)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(h)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;flex:1;">${esc(p)}</p><a href="${href}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);align-self:flex-start;">${esc(cta)} →</a></div>`
   ).join("");
-  const faqHtml = FAQS.map((f) =>
+  const faqHtml = faqs.map((f) =>
     `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
   ).join("");
 

@@ -36,7 +36,8 @@ import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onc
 import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
-import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, circleClientFromEnv, circleKeyConfigured } from "./circle-facilitator.js";
+import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds } from "./circle-facilitator.js";
+import { markGatedRailOffered } from "./gated-rails.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -282,6 +283,7 @@ function makeCeloUsdcScheme() {
  *  default is the single primary network (current behavior, zero change). The
  *  primary `network` is always included and listed first (it carries the Bazaar
  *  resource + is what the facilitator must support). */
+let warnedArcWithoutKey = false;
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -294,10 +296,18 @@ export function enabledNetworks(network) {
   }
   const names = [network, ...requested.filter((n) => n !== network)];
   // Arc's switch is the Circle key: set, it joins a multi-chain list without a
-  // PAYMENT_NETWORKS edit; unset, it is never offered (an explicit `arc` entry
-  // is then dropped with a warning in buildPaymentMiddleware). A single-network
-  // server stays single-network.
-  if (names.length > 1 && circleKeyConfigured() && !names.includes("arc")) names.push("arc");
+  // PAYMENT_NETWORKS edit; unset, Arc is not even configured (an explicit `arc`
+  // entry is ignored), so /api/rails and the rail self-heal never count a rail
+  // nobody can settle. A single-network server stays single-network.
+  if (circleKeyConfigured()) {
+    if (names.length > 1 && !names.includes("arc")) names.push("arc");
+  } else if (names.includes("arc")) {
+    if (!warnedArcWithoutKey) {
+      warnedArcWithoutKey = true;
+      console.warn("WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - Arc is not configured (other chains unaffected).");
+    }
+    for (let i = names.length - 1; i >= 0; i--) if (names[i] === "arc") names.splice(i, 1);
+  }
   const seen = new Set();
   const out = [];
   for (const n of names) {
@@ -711,6 +721,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
     labelFacilitatorErrors(label, client);
+    // Arc is Circle's alone. @x402 routes a network to the FIRST client whose
+    // /supported lists it, and CDP/PayAI are registered before Circle, so a
+    // general facilitator that starts listing Arc would take its payments past
+    // the Circle client's preflight. Every other client's answer has the Arc
+    // networks removed, so only the Circle client can verify or settle Arc.
+    if (!(client instanceof CircleFacilitatorClient)) withoutArcKinds(client);
     facilitatorClients.push(memoizeGetSupported(client));
     facilitatorLabels.push(label);
     facilitatorRegistry.push({ label, client: facilitatorClients[facilitatorClients.length - 1] });
@@ -900,7 +916,28 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // all-probes-failed fail-open path, or when the boot probe is skipped.
   let circleClient = null;
   if (evmCaip2.includes(ARC_CAIP2)) {
-    circleClient = circleClientFromEnv();
+    // A settlement Circle leaves pending past the client's window is booked
+    // by paymentId and resolved by a leased reconcile pass (src/circle-pending.js).
+    let pendingBook = null;
+    const bookPending = async (entry) => {
+      pendingBook = pendingBook || (await import("./circle-pending.js")).createCirclePendingBook();
+      return pendingBook.book(entry);
+    };
+    circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
+    if (circleClient && process.env.X402_SYNC_ON_START !== "false") {
+      const { leased } = await import("./state-db.js");
+      const client = circleClient;
+      const tick = leased("circle-pending-reconcile", { ttlMs: 10 * 60_000 }, async () => {
+        pendingBook = pendingBook || (await import("./circle-pending.js")).createCirclePendingBook();
+        await pendingBook.ready;
+        if (!pendingBook.list().length) return null;
+        const r = await pendingBook.reconcile({ status: (id) => client.paymentStatus(id) });
+        if (r.owed || r.failed) console.warn(`[circle] pending reconcile: ${r.owed} completed (booked owed), ${r.failed} failed (nothing owed), ${r.pending} still pending`);
+        return r;
+      });
+      const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
+      if (typeof t.unref === "function") t.unref();
+    }
     if (!circleClient) {
       console.warn(
         "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
@@ -1361,6 +1398,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // Observe the outcome for railStatus(); does not affect it.
   railsConfigured = [...networks];
   railsOffered = [...offeredNames];
+  // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
+  // chain page, nav, live revenue read) only now, from the FINAL offer.
+  if (offeredCaip2.has(ARC_CAIP2)) markGatedRailOffered(ARC_CAIP2);
   console.log(
     `Accepting USDC on: ${offeredNames.join(", ")} (${[...offeredCaip2].join(", ")})` +
       (robinhoodEnabled ? " - note: robinhood settles USDG, not USDC" : "")
