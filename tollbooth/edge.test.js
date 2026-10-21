@@ -1,5 +1,7 @@
 // Offline test for the edge gate (Web Crypto + Fetch globals; Node 20+).
-import { createEdgeTollbooth, memorySink } from "./edge.js";
+import { createEdgeTollbooth, createEdgePow, memorySink } from "./edge.js";
+import worker from "./worker.js";
+import { CLIENT_TRUST_HEADERS, HOP_BY_HOP_HEADERS } from "./strip-headers.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const lz = (bytes) => { let n = 0; for (const b of bytes) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
@@ -145,4 +147,46 @@ console.log("\nedge tollbooth: all assertions passed ✓");
   const custom = createEdgeTollbooth({ secret: "s", payTo: payload.to, verifyX402: async () => true, network: "eip155:4663", asset: "USDG", mppAssetAddress: "0x" + "ab".repeat(20), mppAssetName: "USDG" });
   if (!(await custom(req(BOT))).headers.get("www-authenticate")) fail("an explicit token address mints a challenge");
   console.log("14. MPP is withheld without verifier/secret, when mpp:false, or for an unknown token (unless named) ✓");
+}
+
+// 15. A solution is held to the CONFIGURED difficulty, not only the one its token claims.
+{
+  const low = createEdgePow({ secret: "shared-secret", difficulty: 4 });
+  const high = createEdgePow({ secret: "shared-secret", difficulty: 12 });
+  const c = await low.challenge("https://site.test/article");
+  // a nonce that meets 4 bits but not 12, so the policy check is what refuses
+  let guess = 0;
+  for (;;) { const bits = lz(await sha(`${c.challenge}:${guess}`)); if (bits >= 4 && bits < 12) break; guess++; }
+  const v = await high.verify(`${c.token}:${guess}`, "https://site.test/article");
+  if (v.ok || v.reason !== "difficulty below policy") fail(`a token minted at 4 bits must not pass a 12-bit gate (got ${JSON.stringify(v)})`);
+  const same = await low.verify(`${c.token}:${guess}`, "https://site.test/article");
+  if (!same.ok) fail(`control: the same solution passes the 4-bit gate that minted it (got ${JSON.stringify(same)})`);
+  console.log("15. claimed difficulty below the configured difficulty is refused (control passes) ✓");
+}
+
+// 16. Worker: the public placeholder secret is refused; client-IP headers are stripped.
+{
+  const base = { TOLLBOOTH_UPSTREAM: "https://origin.test", TOLLBOOTH_OBSERVE: "true" };
+  const origFetch = globalThis.fetch;
+  let forwarded = null;
+  globalThis.fetch = async (url, init) => { forwarded = { url, headers: new Headers(init.headers) }; return new Response("origin ok"); };
+  try {
+  const r1 = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "change-me-to-a-long-random-string" }, null);
+  if (r1.status !== 500 || !/placeholder/.test(await r1.text())) fail("worker must refuse the change-me placeholder secret");
+  const r1b = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN } }), { ...base, TOLLBOOTH_SECRET: "Change-Me-please" }, null);
+  if (r1b.status !== 500) fail("worker refuses any change-me prefix, case-insensitive, like the CLI");
+  if (forwarded) fail("a refused secret never reaches the origin");
+    const spoof = Object.fromEntries(CLIENT_TRUST_HEADERS.map((h) => [h, "1.2.3.4"]));
+    const r2 = await worker.fetch(new Request("https://site.test/a", { headers: { "user-agent": HUMAN, ...spoof, "x-keep": "yes" } }), { ...base, TOLLBOOTH_SECRET: "a-real-secret-for-tests" }, null);
+    if (r2.status !== 200 || !forwarded) fail(`control: a real secret proxies to the origin (got ${r2.status})`);
+    const leaked = CLIENT_TRUST_HEADERS.filter((h) => forwarded.headers.get(h) === "1.2.3.4");
+    if (leaked.length) fail(`worker forwarded client-set trust headers: ${leaked.join(", ")}`);
+    if (forwarded.headers.get("x-keep") !== "yes") fail("worker keeps ordinary headers");
+    if (!new URL(forwarded.url).hostname.endsWith("origin.test")) fail("worker proxies to the configured upstream");
+  } finally { globalThis.fetch = origFetch; }
+  for (const h of ["x-real-ip", "cf-connecting-ip", "true-client-ip", "x-client-ip", "fastly-client-ip", "x-forwarded-proto", "x-forwarded-port", "via", "forwarded", "x-forwarded-host"]) {
+    if (!CLIENT_TRUST_HEADERS.includes(h)) fail(`shared strip list lost ${h}`);
+  }
+  if (HOP_BY_HOP_HEADERS.some((h) => CLIENT_TRUST_HEADERS.includes(h))) fail("hop-by-hop and trust lists overlap");
+  console.log("16. worker refuses the placeholder secret and strips the shared client-trust header list ✓");
 }

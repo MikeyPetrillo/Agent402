@@ -6,7 +6,7 @@
 //
 //   node scripts/test-decide-cost.js
 
-import { decide, state, summarizeCost, isReady, handler, plainDbConnection } from "../services/decide/server.js";
+import { decide, state, summarizeCost, isReady, handler, plainDbConnection, decideDbSsl } from "../services/decide/server.js";
 import { makeLlm } from "../services/decide/llm.js";
 import { embedTexts, _resetEmbedBudget } from "../services/decide/embed.js";
 import { MemoryDecisionStore, makeDecisionCache } from "../services/decide/decision-store.js";
@@ -93,6 +93,12 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
 }
 
 ok(plainDbConnection("postgres://u@postgres.railway.internal:5432/x") && plainDbConnection("postgres://u@127.0.0.1:5433/x") && !plainDbConnection("postgres://u@db.example.com/x"), "TLS is skipped only on the private network or loopback");
+
+ok(decideDbSsl("postgres://u@postgres.railway.internal:5432/x") === false && decideDbSsl("postgres://u@127.0.0.1:5433/x") === false && decideDbSsl("postgres://u@db.example.com/x?sslmode=disable") === false, "no TLS on the private network, loopback, or an explicit sslmode=disable");
+ok(decideDbSsl("postgres://u@db.example.com:5432/x")?.rejectUnauthorized === true && decideDbSsl("postgres://u@abc.proxy.rlwy.net:12345/x")?.rejectUnauthorized === true, "a public database host must present a verified certificate");
+ok(decideDbSsl("not a url")?.rejectUnauthorized === true, "an unparseable URL is treated as public and verified");
+const decideSrc = (await import("node:fs")).readFileSync(new URL("../services/decide/server.js", import.meta.url), "utf8");
+ok(/ssl: decideDbSsl\(DB_URL\)/.test(decideSrc) && !/rejectUnauthorized: false/.test(decideSrc), "the pool uses decideDbSsl and never disables verification itself");
 
 console.log(`\ntest-decide-cost: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

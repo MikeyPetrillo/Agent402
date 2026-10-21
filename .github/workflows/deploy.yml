@@ -2455,6 +2455,8 @@ jobs:
           t node scripts/test-client-mpp.js
           # "Facilitator diagnostics (an HTML error page must name itself: block vs rate limit vs origin failure, and never touch the response — offline)"
           t node scripts/test-facilitator-diagnostics.js
+          # Facilitator access policy (open-mainnet startup warning, constant-time bearer compare; offline)
+          t node scripts/test-facilitator-access-policy.js
 
   test-unit-b4:
     # The second half of test-unit-b2 (2026-08-25, split by the seconds each item
@@ -3143,6 +3145,8 @@ jobs:
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
           t node scripts/test-workflow-runner-pins.js
+          # Workflow trust gates (workflow_run jobs need a push run of this repo; PyPI build has no id-token; wish text fenced)
+          t node scripts/test-workflow-trust-gates.js
           # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
           t node scripts/test-gateway-meter.js
           t node scripts/test-metered-quote-binding.js
@@ -3338,6 +3342,8 @@ jobs:
           t node scripts/test-tollbooth-replay.js
           # Tollbooth verifier timeout/cancellation (FR4-10 — x402VerifierFromExpress honors the AbortSignal; a late settle can't grant — offline)
           t node scripts/test-tollbooth-verifier.js
+          # WordPress tollbooth plugin (static: skip rule reads what WordPress serves; verifier pass must be HMAC-bound to the request)
+          t node scripts/test-wp-tollbooth-plugin.js
 
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js

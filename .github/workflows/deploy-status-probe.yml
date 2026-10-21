@@ -69,10 +69,11 @@ jobs:
           # LISTING accounts, which is a second permission on the credential
           # purely to answer a question we already know the answer to.
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        # --var MERGES with the [vars] block (verified against wrangler 4.127.1,
-        # dry-run: PROD survives alongside BUILD_SHA), so the injected sha does
-        # not clobber the configured PROD origin.
-        run: npx --yes wrangler@4 deploy --var BUILD_SHA:"$GITHUB_SHA"
+        # Exact wrangler version, never a floating major. --var MERGES with the
+        # [vars] block (verified against wrangler 4.127.1, dry-run: PROD
+        # survives alongside BUILD_SHA), so the injected sha does not clobber
+        # the configured PROD origin.
+        run: npx --yes wrangler@4.127.1 deploy --var BUILD_SHA:"$GITHUB_SHA"
 
       # Prove the deploy with the running system, not with the deploy's own exit
       # code: drive the real Worker against real production and require that the

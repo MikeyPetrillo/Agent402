@@ -229,5 +229,19 @@ server.close();
   }
 }
 
+// ---- startup warning: Tempo single use without a shared replayStore ----
+{
+  const warned = (opts) => {
+    const seen = [];
+    const orig = console.warn;
+    console.warn = (...a) => { seen.push(a.join(" ")); };
+    try { createTollbooth({ price: "$0.001", mode: "all", pow: false, powSecret: SECRET, tempo: { apiKey: "k", recipient: RECIPIENT, relay: { validate: async () => ({ ok: true }), broadcast: async () => ({ ok: true }) } }, ...opts }); }
+    finally { console.warn = orig; }
+    return seen.some((m) => /Tempo rail enabled with NO shared replayStore/.test(m));
+  };
+  ok(warned({}) === true, "startup: Tempo with no replayStore warns that single use is per process");
+  ok(warned({ replayStore: { claim: () => true } }) === false, "startup: Tempo with a shared replayStore does not warn");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

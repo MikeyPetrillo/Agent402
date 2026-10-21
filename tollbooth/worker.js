@@ -15,6 +15,7 @@
 //   # ↑ same TOLLBOOTH_KV is reused for durable stats aggregation across isolates.
 import { createEdgeTollbooth, kvStatsSink } from "./edge.js";
 import { dashboardHtml } from "./dashboard.js";
+import { CLIENT_TRUST_HEADERS } from "./strip-headers.js";
 
 // Constant-time string compare, Cloudflare Workers don't ship node:crypto's
 // timingSafeEqual. Short-circuiting `===` on a secret token leaks length and
@@ -26,6 +27,9 @@ function constEq(a, b) {
   for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return r === 0;
 }
+
+// Same rule as the CLI (index.js startCli): any value starting "change-me".
+export const isPlaceholderSecret = (s) => /^change-me/i.test(String(s || ""));
 
 const kvStore = (kv) => ({
   // Best-effort claim. KV has no native compare-and-set, so this is get-then-put
@@ -73,6 +77,11 @@ export default {
   async fetch(request, env, ctx) {
     if (!env.TOLLBOOTH_SECRET) {
       return new Response("Tollbooth misconfigured: set TOLLBOOTH_SECRET (wrangler secret put TOLLBOOTH_SECRET)", { status: 500 });
+    }
+    // The deploy template's placeholder is public, so tokens signed with it can
+    // be minted by anyone. Refuse it, as the CLI does.
+    if (isPlaceholderSecret(env.TOLLBOOTH_SECRET)) {
+      return new Response("Tollbooth misconfigured: TOLLBOOTH_SECRET is the public placeholder from the deploy template. Generate a real secret (openssl rand -hex 32) and set it with wrangler secret put TOLLBOOTH_SECRET.", { status: 500 });
     }
     // F05: pick the replay store, strongest first. A Durable Object
     // (TOLLBOOTH_REPLAY) gives ATOMIC, strict single-use across isolates and
@@ -151,9 +160,10 @@ export default {
     target.protocol = origin.protocol;
     target.hostname = origin.hostname;
     target.port = origin.port;
-    // Strip client-forgeable trust/forwarding headers before forwarding to origin.
+    // Strip client-forgeable trust/forwarding/client-IP headers before
+    // forwarding to origin (the same list the Node proxy strips).
     const headers = new Headers(request.headers);
-    for (const h of ["x-tollbooth-paid", "x-tollbooth-error", "x-pow-error", "x-forwarded-host", "forwarded"]) headers.delete(h);
+    for (const h of CLIENT_TRUST_HEADERS) headers.delete(h);
     headers.set("x-forwarded-for", request.headers.get("cf-connecting-ip") || "");
     const init = { method: request.method, headers, redirect: "manual" };
     if (request.method !== "GET" && request.method !== "HEAD") init.body = request.body;
