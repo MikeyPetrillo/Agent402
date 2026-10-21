@@ -92,6 +92,18 @@ const stub = (answers, model = "jev-1.13.0", status = 200) => async (url, init) 
   await refuses(() => K.locate({ image: IMG, targets: ["x"] }, { fetchImpl: stub({ t0_box: { type: "box", box: { top: 0.5, bottom: 0.1, left: 0, right: 1 }, confidence: 0.5 }, t0_present: { type: "noul", noul: 0.9 } }) }), 502, /malformed box/, "an inverted box from upstream is a 502, not a paid malformed answer");
 }
 {
+  // Only the two token counts are passed through, on every route: an upstream
+  // usage object with extra fields does not reach the buyer.
+  const rich = (answers) => async () => new Response(JSON.stringify({ model: "jev-preview", answers, usage: { input_tokens: 600, output_tokens: 20, cost_usd: 0.5, account: "acct_x", cached_tokens: 7 } }), { status: 200, headers: { "content-type": "application/json" } });
+  const v = await K.judgeVision({ images: { pic: IMG }, questions: Q }, { fetchImpl: rich({ q: { type: "noul", noul: 0.9 } }) });
+  const L = await K.locate({ image: IMG, targets: ["the thing"] }, { fetchImpl: rich({ t0_box: { type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.6 }, confidence: 0.8 }, t0_present: { type: "noul", noul: 0.9 } }) });
+  const g = await K.judgeLong({ state: "doc", questions: { q: { type: "noul", instructions: "?" } } }, { fetchImpl: rich({ q: { type: "noul", noul: 0.1 } }) });
+  for (const [label, r] of [["vision", v], ["locate", L], ["long", g]]) {
+    ok(JSON.stringify(Object.keys(r.usage || {}).sort()) === JSON.stringify(["input_tokens", "output_tokens"]) && r.usage.input_tokens === 600 && r.usage.output_tokens === 20,
+      `${label}: usage carries only input_tokens and output_tokens (${JSON.stringify(r.usage)})`);
+  }
+}
+{
   // No rate in the table: the route refuses before the call and charges nothing.
   setUpstreamCostsForTest(table({ maxShare: 1 }));
   const before = calls.length;
