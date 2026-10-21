@@ -55,6 +55,17 @@ try {
   const headBody = await head.text();
   ok(headBody.length === 0, `HEAD body is empty (got ${headBody.length} bytes)`);
 
+  // A path that differs from the catalog's only by case or trailing slashes
+  // takes the same gate chain (Express routes those to the same handler).
+  for (const variant of ["/API/UUID", "/api/uuid/", "/Api/Uuid//", "/api/uuid/?version=4"]) {
+    for (const method of ["HEAD", "GET", "POST"]) {
+      const r = await fetch(`${B}${variant}`, { method, ...(method === "POST" ? { headers: { "Content-Type": "application/json" }, body: "{}" } : {}) });
+      ok(r.status === 402 && !!r.headers.get("payment-required"), `unpaid ${method} ${variant} -> 402 with PAYMENT-REQUIRED (got ${r.status})`);
+    }
+  }
+  const headPostVariant = await fetch(`${B}/API/HASH/`, { method: "HEAD" });
+  ok(headPostVariant.status === 402, `unpaid HEAD on a case-changed POST-only path -> 402 (got ${headPostVariant.status})`);
+
   const get = await fetch(`${B}/api/uuid`);
   ok(get.status === 402, `unpaid GET still 402s (got ${get.status})`);
   // POST on a GET-only tool takes the SAME gate chain (2026-08-28 alias): an

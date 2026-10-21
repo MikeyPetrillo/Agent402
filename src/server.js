@@ -2306,6 +2306,31 @@ const app = express();
 // Drop the Express fingerprint header (security audit A402-13): no reason to
 // advertise the stack to every caller.
 app.disable("x-powered-by");
+// Catalog paths are matched exactly by every gate here ("METHOD /path"),
+// while Express routes ignore case and a trailing slash. A request whose path
+// differs from a catalog path only by case or trailing slashes is rewritten
+// to the catalog spelling first, query kept, so every gate and the handler
+// see the same path.
+let catalogPathByFold = null;
+const foldPath = (p) => p.replace(/\/+$/, "").toLowerCase();
+app.use((req, _res, next) => {
+  if (!catalogPathByFold) {
+    catalogPathByFold = new Map();
+    for (const key of Object.keys(CATALOG)) {
+      const path = key.slice(key.indexOf(" ") + 1);
+      if (!catalogPathByFold.has(foldPath(path))) catalogPathByFold.set(foldPath(path), path);
+    }
+  }
+  const path = req.path;
+  if (path.length > 1 && !path.startsWith("//")) {
+    const canonical = catalogPathByFold.get(foldPath(path));
+    if (canonical && canonical !== path) {
+      const q = req.url.indexOf("?");
+      req.url = canonical + (q >= 0 ? req.url.slice(q) : "");
+    }
+  }
+  next();
+});
 // Every request renders inside its own path so the page shell can tell a
 // bearer link from its section canonical (src/ledger-chrome.js renderPathStore).
 app.use((req, _res, next) => renderPathStore.run(req.path, next));
