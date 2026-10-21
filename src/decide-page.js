@@ -34,7 +34,7 @@ function exampleResponse(catalog = {}) {
     decisionId: "dec_…",
     plan,
     estimatedCostUsd: cost, estimatedLatencyMs: 3000, confidence: 0.95, gaps: [],
-    executionCredit: { amountUsd: decideConfig().prices.plan, token: "dc_…" },
+    executionCredit: { amountUsd: Math.round(decideConfig().prices.plan * decideConfig().credit.percentOfFee / 100 * 1e6) / 1e6, token: "dc_…" },
   };
 }
 
@@ -95,8 +95,8 @@ export function decidePage(baseUrl, catalog) {
   ];
   const depths = [
     ["quick", p.quick, "The single best tool for the whole job, with fallbacks."],
-    ["plan", p.plan, "The job split into steps, each with a primary tool, fallbacks and dependencies."],
-    ["full", p.full, "The plan plus params filled from your task, a compiled prompt to run it, and cost and latency estimates."],
+    ["plan", p.plan, "The job split into steps, each with a primary tool, fallbacks, dependencies and params filled from your task."],
+    ["full", p.full, "The plan plus a compiled prompt an agent can run as is, with more time to plan."],
   ];
 
   const body = `

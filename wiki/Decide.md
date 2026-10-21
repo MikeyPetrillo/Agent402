@@ -20,13 +20,17 @@ curl -X POST https://agent402.tools/api/decide \
   -d '{"task":"Resolve the ENS name vitalik.eth and list its token balances on Base","depth":"plan"}'
 ```
 
-The first call answers 402 with the price for that depth; pay it with any x402 or MPP client and repeat.
+The first call answers 402 with the price for that depth; pay it with any x402 or MPP client and repeat. To see the shape of a plan first, `GET /api/find?q=<task>` answers a multi-step task with a free keyword sketch, and that sketch runs through `POST /api/decide/execute` without a decision.
+
+A `decisionId` comes only from a paid `/api/decide` answer. `POST /api/decide/execute` answers an id it never issued with a free 404 that says so, before any 402.
 
 ## Depths
 
 - `quick`: the single best tool for the whole job, with fallbacks.
-- `plan`: the job split into steps, each with a primary tool, fallbacks and dependencies.
-- `full`: the plan plus params filled from your task, a compiled prompt to run it, and cost and latency estimates.
+- `plan` (the default): the job split into steps, each with a primary tool, fallbacks, dependencies and params filled from your task.
+- `full`: the plan plus a compiled prompt an agent can run as is, with more time to plan.
+
+Every depth carries cost and latency estimates, a confidence score and any gaps.
 
 ## What a plan contains
 

@@ -369,8 +369,9 @@ import { mppMarketPage } from "./mpp-market-page.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
 import { getLeaderboardSnapshot, getLeaderboardWalletEvidence, getLeaderboardCircularWallets, startLeaderboardRefresh, leaderboardLogCacheStatus, rankBy, CONCENTRATION, configureSellerFunding, sellerFundingStatus, setSellerFundingEnabled } from "./leaderboard.js";
 import { decideIndexExportHandler } from "./decide/index-export.js";
-import { buildDecideTools, decideEnabled, makeFeedbackHandler } from "./tools/decide-kit.js";
+import { buildDecideTools, decideEnabled, makeFeedbackHandler, UNKNOWN_DECISION_MESSAGE, decideUpgradeOffer } from "./tools/decide-kit.js";
 import { openDecideLedger, singleWriterTopology } from "./decide/ledger.js";
+import { aggregateDecideStats, STATS_WINDOWS_DAYS as DECIDE_STATS_WINDOWS_DAYS } from "./decide/stats.js";
 let _decideLedger = null;
 // A ledger that cannot open (bad file, unwritable path) leaves the feature
 // off rather than taking the whole app down at boot.
@@ -622,7 +623,10 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
 const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
-const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger() }) : [];
+// Own traffic on a decision or run: a signed probe (heartbeat token, the
+// status probe's mark) or a payer that is one of our wallets. Stats only.
+const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
+const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
 const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
@@ -3072,10 +3076,18 @@ app.use(express.json({ limit: "100kb" }));
 // synchronously from the ledger's mirror when the 402 is priced. Before any
 // gate runs, both are read fresh from the database, so a plan made or a
 // credit minted on the other container moments ago is priced correctly.
-app.post("/api/decide/execute", async (req, _res, next) => {
+// A decisionId this server never answered is refused here, free, before any
+// 402: a quote for it could only buy the handler's 404. Only a definite "not
+// in the ledger" refuses; a slow or failing read leaves it to the paid path.
+app.post("/api/decide/execute", async (req, res, next) => {
   try {
     const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
     if (L?.warmForQuote && req.body && typeof req.body === "object") await L.warmForQuote(req.body.decisionId, req.body.creditToken);
+    const id = req.body && typeof req.body === "object" ? req.body.decisionId : undefined;
+    if (L && typeof id === "string" && id) {
+      const found = await Promise.race([Promise.resolve().then(() => L.getDecision(id)), new Promise((r) => setTimeout(() => r(undefined), 1500).unref?.())]);
+      if (found === null) return res.status(404).json({ error: UNKNOWN_DECISION_MESSAGE, decide: "POST /api/decide", freeSketch: "GET /api/find?q=<task>", charged: false });
+    }
   } catch { /* the mirror prices as before */ }
   next();
 });
@@ -3893,6 +3905,24 @@ app.get("/api/calls/daily", (req, res) => {
 // wallet scan that endpoint reads never sees a Tempo transaction at all.
 // This reads src/sales-ledger.js's own recorded rows directly instead - real
 // dollars, unlike the free-tier lane, since a Tempo settlement is real money.
+// Decide funnel for the operator: decisions, payers, runs, outcomes, skip
+// codes, per plan shape and per planner version, outside buyers and our own
+// traffic apart. Aggregates only (src/decide/stats.js).
+app.get("/__operator/decide-stats.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store");
+  const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
+  if (!L || typeof L.statsRows !== "function") return res.json({ enabled: false });
+  try {
+    const now = Date.now();
+    const rows = await L.statsRows(now - Math.max(...DECIDE_STATS_WINDOWS_DAYS) * 86_400_000);
+    // A payer key is the raw wallet, or rail-prefixed (tempo:, credits:, ip:).
+    const isOurs = (r) => r.synthetic === true || isOwnWallet(String(r.payer || "").replace(/^tempo:/, ""));
+    res.json({ enabled: true, ...aggregateDecideStats(rows, { now, isOurs }) });
+  } catch (e) {
+    res.status(500).json({ error: "decide stats failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
 // Decide usage for the /revenue monitor: per slug (decide, decide-execute),
 // all-time and 30 days, settlements with ours counted separately, outside
 // dollars and distinct outside buyers. Aggregates only, never a per-call row.
@@ -6190,7 +6220,7 @@ const externalServes = async (q, meter = null) => {
 // the judged plan with inputs filled in stays the paid decide tool.
 const decideUpgrade = () => {
   const d = CATALOG["POST /api/decide"];
-  return d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide-execute" } : null;
+  return d ? decideUpgradeOffer() : null;
 };
 const planSketchFor = (q) => {
   try {

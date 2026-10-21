@@ -308,6 +308,7 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
     const wholeBest = depth === "quick" ? null
       : S.whole.slice(0, 8).map((c) => ({ c, f: S.stepFit.get(`${wholeStepIndex}:${c.row.id}`) ?? 0 })).filter((x) => x.f >= WHOLE_TASK_FIT && knowsInputs(x.c.row)).sort((a, b) => b.f - a.f)[0]?.c || null;
     S.judgedStepIndex = S.steps.map((_, i) => i);
+    S.collapsedToOneStep = !!wholeBest;
     if (depth === "quick") { S.steps = [{ purpose: task, query: task, dependsOn: [], candidates: S.whole }]; S.judgedStepIndex = [0]; }
     else if (wholeBest) {
       S.steps = [{ purpose: task, query: task, dependsOn: [], candidates: S.whole }];
@@ -512,6 +513,8 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
     ...(outNotes.length ? { notes: outNotes } : {}),
     ranking: { weights: cfg.weights, firstPartyWeight: 0 },
     _rankingLog: S.rankingLog,
+    // Kept with the decision, never returned: what its plan shape is built from.
+    _shapeMeta: { categories: S.plan.map((p) => p._row?.category || ""), collapsedToOneStep: !!S.collapsedToOneStep, judgeFailed: !S.fits },
   };
   if (depth === "full") out.compiledPrompt = compilePrompt(out);
   // Each step's primary row, in plan order, for the router's plan measures.
