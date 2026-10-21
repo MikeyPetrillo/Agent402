@@ -232,6 +232,73 @@ if (!existsSync("/data")) {
   for (const key of ["baseExtraWallets", "algorandExtraWallets"]) ok(pairs.includes(key) && tick.includes(key), `${key}: folded by the summary AND scanned by the tick`);
 }
 
+// --- a chain floor and a rate-limited RPC (stub RPC, no network) -------------
+// EVM config `fromBlock` is the lowest block a scan needs: a new cursor starts
+// there, an older cursor below it is lifted to it, and REVENUE_LEDGER_FROM_<CHAIN>
+// still wins. A rate-limit answer stops that chain's tick (no same-tick retry,
+// no range halving) and the next tick resumes from the cursor.
+{
+  const { syncEvmChain, startBlockFor, ledgerFloorBlock } = await import("../src/revenue-ledger.js");
+  const { EVM, isRateLimitError, recentInbound } = await import("../src/revenue-live.js");
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(process.env.REVENUE_LEDGER_DB);
+  const FLOOR = EVM.arc.fromBlock;
+  const HEAD = FLOOR + 30_000;
+  ok(Number.isInteger(FLOOR) && FLOOR > 0, `arc declares a scan floor (${FLOOR})`);
+  ok(ledgerFloorBlock("arc") === FLOOR && ledgerFloorBlock("base") === null, "only a chain that declares fromBlock has a floor");
+  ok(await startBlockFor("arc", HEAD, { getHeader: async () => { throw new Error("no header read expected"); } }) === FLOOR, "a new arc cursor starts at the floor, with no block-clock search");
+  process.env.REVENUE_LEDGER_FROM_ARC = "123";
+  ok(await startBlockFor("arc", HEAD) === 123 && ledgerFloorBlock("arc") === null, "REVENUE_LEDGER_FROM_ARC takes precedence over the floor");
+  delete process.env.REVENUE_LEDGER_FROM_ARC;
+
+  const AW = "0x00000000000000000000000000000000000a4c00";
+  db.prepare("INSERT OR REPLACE INTO cursors (chain, wallet, next_block, newest_sig, backfilled, caught_up, updated_ts) VALUES (?,?,?,?,?,?,?)")
+    .run("arc", AW, 900_000, null, 1, 0, 1700000000);
+  const cursorNext = () => db.prepare("SELECT next_block FROM cursors WHERE chain='arc' AND wallet=?").get(AW).next_block;
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  let limitAfter = Infinity; // getLogs answers a rate limit once this many have been served
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init?.body || "{}");
+    const reply = (o) => new Response(JSON.stringify(Array.isArray(body) ? body.map((b) => ({ jsonrpc: "2.0", id: b.id, ...o })) : { jsonrpc: "2.0", id: 1, ...o }), { status: 200, headers: { "content-type": "application/json" } });
+    const m = Array.isArray(body) ? body.map((b) => b.method).join("+") : body.method;
+    calls.push({ m, from: body.params?.[0]?.fromBlock ? parseInt(body.params[0].fromBlock, 16) : null });
+    if (m === "eth_blockNumber") return reply({ result: "0x" + (HEAD + 100).toString(16) });
+    if (m === "eth_getLogs") {
+      if (calls.filter((c) => c.m === "eth_getLogs").length > limitAfter) return reply({ error: { code: -32005, message: "rate limit exceeded" } });
+      return reply({ result: [] });
+    }
+    return reply({ result: null });
+  };
+  try {
+    limitAfter = 2;
+    let r = await syncEvmChain("arc", AW);
+    const logs = calls.filter((c) => c.m === "eth_getLogs");
+    ok(logs[0]?.from === FLOOR, `a cursor below the floor resumes at the floor (first getLogs from ${logs[0]?.from})`);
+    ok(r.rateLimited === true && r.caughtUp === false, "a rate-limit answer stops the chain's tick, not caught up");
+    ok(logs.length === 3, `no same-tick retry after the rate limit (getLogs calls: ${logs.length})`);
+    const span = (EVM.arc.chunkBlocks);
+    ok(cursorNext() === FLOOR + 2 * span, `the cursor holds the two chunks read before the limit (${cursorNext()})`);
+    calls.length = 0; limitAfter = Infinity;
+    r = await syncEvmChain("arc", AW);
+    const resumed = calls.filter((c) => c.m === "eth_getLogs");
+    ok(resumed[0]?.from === FLOOR + 2 * span && resumed.every((c, i) => i === 0 || c.from > resumed[i - 1].from), "the next tick resumes from the cursor at full chunk size");
+    ok(r.caughtUp === true && !r.rateLimited, "the next tick catches up once the RPC answers");
+    ok(isRateLimitError(new Error('all 1 RPCs failed - rpc.mainnet.arc.io: {"code":-32005,"message":"rate limit exceeded"}')) && !isRateLimitError(new Error('{"code":-32005,"message":"query returned more than 10000 results"}')), "rate limits are told apart from a result-size cap that shares code -32005");
+
+    // The live view's window scan: no window below the floor, and a rate
+    // limit ends the scan with no immediate retry.
+    calls.length = 0; limitAfter = 0;
+    const scan = await recentInbound(EVM.arc, AW, HEAD);
+    const scanned = calls.filter((c) => c.m === "eth_getLogs");
+    ok(scanned.length === 1 && scan.missed === scan.chunks && scan.chunks > 0, `a rate-limited window scan stops after one call and reads as partial (${scanned.length} calls, ${scan.missed}/${scan.chunks})`);
+    calls.length = 0; limitAfter = Infinity;
+    const low = await recentInbound(EVM.arc, AW, FLOOR + 5_000);
+    const lowCalls = calls.filter((c) => c.m === "eth_getLogs");
+    ok(lowCalls.length === 2 && lowCalls.every((c) => c.from >= FLOOR) && low.missed === 0 && low.chunks === 2, `the window scan stops at the floor (${lowCalls.length} windows, missed ${low.missed}/${low.chunks})`);
+  } finally { globalThis.fetch = realFetch; db.close(); }
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

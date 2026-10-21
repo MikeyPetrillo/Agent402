@@ -221,6 +221,10 @@ export const EVM = {
     // about 5.5 h; the public RPC refuses getLogs ranges of 10k blocks, so the
     // scan reads in 4,900-block chunks.
     label: "Arc", asset: "USDC", span: 40000, chunkBlocks: 4900,
+    // The treasury held no Arc USDC before this block (archive balanceOf is 0
+    // at every earlier height), so no scan reads below it: the ledger starts
+    // here and lifts an older cursor to it, and the window scan stops here.
+    fromBlock: 27_000_000,
     token: "0x3600000000000000000000000000000000000000",
     rpcs: ["https://rpc.mainnet.arc.io"],
     explorer: (a) => `https://explorer.arc.io/address/${a}`,
@@ -318,6 +322,15 @@ export const pad = (a) => "0x" + "0".repeat(24) + a.toLowerCase().replace(/^0x/,
 // Entries are plain URL strings, or { url, headers } for endpoints that need
 // auth (the Sei relay's Bearer token) — same convention as the Algorand
 // relay's getJsonAcross entries.
+/** True for an RPC answer that says "slow down" ("rate limit", "too many
+ *  requests", HTTP 429). Matched on the words, not on code -32005, which some
+ *  providers also use for a result-size cap that a narrower range fixes.
+ *  Retrying a rate limit at once only extends it. */
+export function isRateLimitError(e) {
+  const msg = String(e?.message || e || "");
+  return /rate.?limit|too many requests|HTTP 429/i.test(msg);
+}
+
 export async function rpcCall(urls, method, params, timeoutMs = 5000) {
   let lastErr;
   const failures = [];
@@ -398,7 +411,7 @@ function laneName(entry) {
 // verified 2026-07-08) with a minimum of 4. A failed chunk is a partial
 // window, never an error: the balance (a cheap head read) stays up and the
 // card says the scan was partial instead of parroting vendor text.
-async function recentInbound(c, wallet, latest) {
+export async function recentInbound(c, wallet, latest) {
   // Per-chain chunk cap: default 9,000 (the Alchemy bound above); chains whose
   // RPCs enforce tighter getLogs ranges declare chunkBlocks (Sei: 1,900).
   const LOG_CHUNKS = Math.max(4, Math.ceil(c.span / (c.chunkBlocks || 9000)));
@@ -407,11 +420,14 @@ async function recentInbound(c, wallet, latest) {
   const logs = [];
   let missed = 0;
   let attempted = 0;
+  const floor = Number.isFinite(c.fromBlock) ? c.fromBlock : 0;
+  let windows = LOG_CHUNKS; // the windows at or above the floor
   for (let i = 0; i < LOG_CHUNKS && logs.length < 8 && Date.now() < deadline; i++) {
-    attempted++;
     const to = latest - i * chunk;
-    if (to <= 0) break;
-    const from = Math.max(0, to - chunk + 1);
+    // Nothing below the chain's floor can hold a transfer to this wallet.
+    if (to <= 0 || to < floor) { windows = i; break; }
+    attempted++;
+    const from = Math.max(0, floor, to - chunk + 1);
     // One retry per failed chunk (budget permitting): the newest chunk holds
     // the most recent settles, and a single transient RPC failure there made
     // the card show "no inbound transfers" for a full snapshot TTL even
@@ -428,11 +444,21 @@ async function recentInbound(c, wallet, latest) {
         part = await attemptChunk();
       } catch (e1) {
         if (Date.now() + 4500 > deadline) throw e1; // no budget left for a retry
+        if (isRateLimitError(e1)) throw e1; // a retry now only extends the limit
         part = await attemptChunk();
       }
       if (Array.isArray(part)) logs.push(...part);
     } catch (e) {
       missed++;
+      // A rate-limited RPC answers the rest of this scan the same way: stop
+      // here (the windows not read are counted below).
+      if (isRateLimitError(e)) {
+        if (!loggedChunkFailure.has(c.label)) {
+          loggedChunkFailure.add(c.label);
+          console.warn(`[revenue] ${c.label} getLogs rate-limited; window scan stopped: ${pubErr(e, 160)}`);
+        }
+        break;
+      }
       // One line per rail per process: the scan's missed counter destroyed
       // the evidence of WHY chunks fail (2026-07-28: Sei read 28/28
       // unavailable through a relay that answered prod's egress in 39ms,
@@ -473,8 +499,8 @@ async function recentInbound(c, wallet, latest) {
   // Windows never attempted (deadline exit or early stop with zero finds)
   // count as missed when the scan found NOTHING - a budget cutoff must not
   // read as a clean empty. Early stop after real finds stays a success.
-  if (logs.length === 0 && attempted < LOG_CHUNKS) missed += LOG_CHUNKS - attempted;
-  return { recent, missed, chunks: LOG_CHUNKS };
+  if (logs.length === 0 && attempted < windows) missed += windows - attempted;
+  return { recent, missed, chunks: windows };
 }
 
 const loggedChunkFailure = new Set();

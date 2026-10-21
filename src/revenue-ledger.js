@@ -30,7 +30,7 @@ import { join } from "node:path";
 import {
   EVM, SOLANA_RPCS, rpcCall, pad, TRANSFER_TOPIC, USDC_SOL_MINT,
   MAX_CALL_USD, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS, USDC_ISSUER,
-  getJsonAcross, ALGORAND_INDEXER_BASES,
+  getJsonAcross, ALGORAND_INDEXER_BASES, isRateLimitError,
 } from "./revenue-live.js";
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
@@ -417,15 +417,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *  200 ms), silently skipping the oldest revenue; the timestamp search is right
  *  either side of that change. Falls back to the rate estimate when no header
  *  can be read. `getHeader` is injectable for tests. */
-export async function startBlockFor(chain, head, { getHeader = null, epochMs = LEDGER_EPOCH_MS } = {}) {
+const envStartBlock = (chain) => {
   const env = parseInt(process.env[`REVENUE_LEDGER_FROM_${chain.toUpperCase()}`] || "", 10);
-  if (Number.isFinite(env)) return Math.max(0, env);
+  return Number.isFinite(env) ? Math.max(0, env) : null;
+};
+
+/** The lowest block a chain's scan ever needs (EVM config `fromBlock`: the
+ *  wallet held nothing before it), or null. REVENUE_LEDGER_FROM_<CHAIN> takes
+ *  precedence: with it set, the operator's block is the start and no floor
+ *  applies. */
+export function ledgerFloorBlock(chain) {
+  if (envStartBlock(chain) != null) return null;
+  const f = EVM[chain]?.fromBlock;
+  return Number.isFinite(f) && f > 0 ? f : null;
+}
+
+export async function startBlockFor(chain, head, { getHeader = null, epochMs = LEDGER_EPOCH_MS } = {}) {
+  const env = envStartBlock(chain);
+  if (env != null) return env;
+  const floor = ledgerFloorBlock(chain) ?? 0;
   const estimate = Math.max(0, head - Math.ceil((Date.now() - epochMs) / msPerBlock(chain)));
+  // A floor at or past the epoch's estimate is the start: no block-clock
+  // search (a few dozen header reads) is needed to find a lower one.
+  if (floor && floor >= estimate) return floor;
   try {
     const reader = getHeader || rpcHeaderReader((m, p) => rpcCall(EVM[chain].rpcs, m, p, 6000));
     const at = await createBlockClock(reader, { fallbackMsPerBlock: msPerBlock(chain) }).blockAtOrAfter(Math.floor(epochMs / 1000), { headNumber: head });
-    return at.source === "chain" ? at.block : Math.min(estimate, at.block);
-  } catch { return estimate; }
+    return Math.max(floor, at.source === "chain" ? at.block : Math.min(estimate, at.block));
+  } catch { return Math.max(floor, estimate); }
 }
 
 /** getLogs window for one chain's ledger sync. Chains whose RPCs enforce a
@@ -518,6 +537,15 @@ async function getLogsAdaptive(c, wallet, from, to, onNarrow, { chain = null, he
   throw new Error(`${c.label}: getLogs kept failing down to ${span}-block ranges`);
 }
 
+const loggedRateLimit = new Set();
+function rateLimitedStop(c, next, head, e) {
+  if (!loggedRateLimit.has(c.label)) {
+    loggedRateLimit.add(c.label);
+    console.warn(`revenue-ledger: ${c.label} RPC rate-limited; this tick stops and the next resumes from the cursor (${String(e?.message || e).slice(0, 100)})`);
+  }
+  return { caughtUp: false, next, head, rateLimited: true };
+}
+
 export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const c = EVM[chain];
   // The head comes from the configured list (keyed first), as before: a
@@ -530,9 +558,19 @@ export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   // leaves the schedule in charge), so the margin, the public depth and the
   // chunk sizes below are counted at the rate the chain runs now.
   if (blockTimeChanges(chain)) await refreshBlockMs(chain, rpcHeaderReader((m, p) => rpcCall(c.rpcs, m, p, 6000)));
-  const head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - headMarginBlocks(chain));
+  let head;
+  try {
+    head = Math.max(0, parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16) - headMarginBlocks(chain));
+  } catch (e) {
+    if (isRateLimitError(e)) return rateLimitedStop(c, null, null, e);
+    throw e;
+  }
   const cur = await readCursor(chain, wallet);
   let next = cur?.next_block ?? await startBlockFor(chain, head);
+  // A cursor written before the chain had a floor (or below it) moves up to
+  // it: nothing below the floor can hold a transfer to this wallet.
+  const floor = ledgerFloorBlock(chain);
+  if (floor != null && next < floor) next = floor;
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
   // the live view's recentInbound) — Alchemy rejects getLogs ranges over 10k
   // on some chains (Robinhood, verified 2026-07-08). Without the cap, any
@@ -543,7 +581,17 @@ export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   let chunks = 0;
   while (next <= head && chunks < maxChunks) {
     const to = Math.min(next + chunkSize - 1, head);
-    const { logs, scannedTo } = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; }, { chain, head });
+    let got;
+    try {
+      got = await getLogsAdaptive(c, wallet, next, to, (smaller) => { chunkSize = smaller; }, { chain, head });
+    } catch (e) {
+      // A rate limit is not a range error and is not retried in this tick:
+      // the chain's tick stops here and the next one resumes from the cursor,
+      // which already holds every chunk read so far.
+      if (isRateLimitError(e)) return rateLimitedStop(c, next, head, e);
+      throw e;
+    }
+    const { logs, scannedTo } = got;
     // EXACT dates, so a row never depends on a block-rate estimate again.
     // Only blocks that actually CONTAIN a transfer are fetched, and transfers
     // are rare (a handful per chain per day), so this is a few extra calls a
