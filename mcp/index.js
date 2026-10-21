@@ -24,7 +24,7 @@
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { parseNetworkPrefs, withNetworkPreference } from "./networks.js";
+import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -51,6 +51,10 @@ import {
 } from "./output-schemas.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
+// Catalog and seller requests (the 402 and the paid retry included) go through
+// a dedicated dispatcher that refuses a TLS chain through a distrusted
+// intermediate CA (networks.js).
+const ownFetch = distrustFetch();
 const AGENT_KEY = process.env.AGENT_KEY || "";
 // Solana secret key: base58 string (Phantom/solana-keygen export) or a JSON
 // byte array. Either key alone enables paid calls; with both, the buyer can
@@ -165,7 +169,7 @@ function getPayFetch() {
     // Without it the client effectively always picks Base on multi-chain
     // sellers, leaving non-default rails unreachable.
     withNetworkPreference(client, parseNetworkPrefs(process.env.AGENT402_NETWORKS));
-    return wrapFetchWithPayment(fetch, client);
+    return wrapFetchWithPayment(ownFetch, client);
   })();
   return payFetchPromise;
 }
@@ -265,7 +269,7 @@ function usdFromAccepts(accepts) {
 async function quotedUsd(url, init, listUsd) {
   if (!CAPS_CONFIGURED) return listUsd;
   try {
-    const pre = await fetch(url, init);
+    const pre = await ownFetch(url, init);
     if (pre.status !== 402) return listUsd;
     let quoted = null;
     const header = pre.headers.get("payment-required");
@@ -321,7 +325,7 @@ async function callEndpoint(tool, args = {}) {
     if (spentUsd + price > BUDGET) {
       return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request).` }], isError: true };
     }
-    res = await fetch(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${CREDITS_KEY}` } });
+    res = await ownFetch(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${CREDITS_KEY}` } });
     if (res.ok) spentUsd += price;
     if (res.status === 402) {
       let body = {}; try { body = await res.clone().json(); } catch { /* plain */ }
@@ -355,7 +359,7 @@ async function callEndpoint(tool, args = {}) {
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
     const challenge = await getDiscoveryJson(`proof-of-work challenge for "${tool.slug}"`, `${BASE}/api/pow/challenge?slug=${encodeURIComponent(tool.slug)}`);
     const nonce = solvePow(challenge);
-    res = await fetch(url, { ...init, headers: { ...init.headers, "X-Pow-Solution": `${challenge.token}:${nonce}` } });
+    res = await ownFetch(url, { ...init, headers: { ...init.headers, "X-Pow-Solution": `${challenge.token}:${nonce}` } });
   } else {
     return { content: [{ type: "text", text: walletRequiredText(tool) }], isError: true };
   }

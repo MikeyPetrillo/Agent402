@@ -5,10 +5,14 @@
 // DISCOVERY_ATTEMPTS tries in all, each wait capped at DISCOVERY_MAX_WAIT_MS.
 // A paid or priced call never goes through here: a repeat of one could settle
 // twice.
+import { distrustFetch } from "./networks.js";
+
 export const DISCOVERY_ATTEMPTS = 3;
 export const DISCOVERY_MAX_WAIT_MS = 5000;
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Discovery reads go through the distrusted-intermediate refusal (networks.js).
+const ownFetch = distrustFetch();
 
 /** The wait (ms) a shed 503 asks for, or null when `r` is not one. */
 export async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
@@ -30,7 +34,7 @@ export async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
  * response (2xx or not) and how many attempts it took; the caller decides how
  * to report a failure, naming the surface and `res.status`.
  */
-export async function fetchDiscovery(url, init, { fetchImpl = globalThis.fetch, sleep = sleepMs, attempts: max = DISCOVERY_ATTEMPTS } = {}) {
+export async function fetchDiscovery(url, init, { fetchImpl = ownFetch, sleep = sleepMs, attempts: max = DISCOVERY_ATTEMPTS } = {}) {
   let res;
   let attempts = 0;
   for (;;) {

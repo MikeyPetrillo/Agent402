@@ -33,6 +33,7 @@
 //
 // Usage (needs a GitHub token with actions:read and the operator token):
 //   GH_TOKEN=… OP_TOKEN=… node scripts/backfill-status-history.js [--dry] [--limit N]
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 const REPO = process.env.GITHUB_REPOSITORY || "MikeyPetrillo/Agent402";
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const WORKFLOW = process.env.BACKFILL_WORKFLOW || "heartbeat.yml";
