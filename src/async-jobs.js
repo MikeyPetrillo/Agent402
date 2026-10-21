@@ -59,7 +59,9 @@ const sameToken = (a, b) => {
 };
 
 /** What GET /api/jobs/:id returns: no owner, pid or boot id.
- *  status is queued | running | succeeded | failed. `profile` is the route's
+ *  `status` keeps its original values (working | completed | failed), so a
+ *  poller written for them still finishes; `state` is the lifecycle
+ *  (queued | running | succeeded | failed) with the progress fields. `profile` is the route's
  *  async profile (src/slow-routes.js) with its estimate basis, or null. */
 export function publicJob(rec, { basePath = "/api/jobs", profile = null, now = Date.now() } = {}) {
   const expiresAt = rec.ttlMs != null ? new Date((rec.createdAtMs || 0) + rec.ttlMs).toISOString() : null;
@@ -68,9 +70,9 @@ export function publicJob(rec, { basePath = "/api/jobs", profile = null, now = D
     now, pollSeconds,
     basisSeconds: profile?.basisSeconds ?? null, expectedSeconds: profile?.expectedSeconds ?? null, maxSeconds: profile?.maxSeconds ?? null,
   });
-  const final = progress.status === "succeeded" || progress.status === "failed";
+  const final = progress.state === "succeeded" || progress.state === "failed";
   return {
-    jobId: rec.taskId, ...progress, slug: rec.slug,
+    jobId: rec.taskId, status: rec.status, ...progress, slug: rec.slug,
     ...(rec.statusMessage ? { message: rec.statusMessage } : {}),
     createdAt: rec.createdAt, updatedAt: rec.lastUpdatedAt, expiresAt,
     statusUrl: `${basePath}/${rec.taskId}`,
@@ -185,7 +187,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     const statusUrl = `${basePath}/${rec.taskId}`;
     const doc = publicJob(rec, { basePath, profile: profileOfSlug(def.slug) });
     res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(doc.pollIntervalSeconds || Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
-      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is succeeded or failed. Payment settles only when the result is ready; on x402 a failed run is not charged.` });
+      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready; on x402 a failed run is not charged.` });
   }
 
   /** GET /api/jobs/:id - free. */

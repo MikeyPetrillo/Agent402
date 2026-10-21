@@ -196,16 +196,16 @@ const imgHandle = (await callComposite("image-gen-premium")).result;
 ok(imgHandle?.resultType === "task", "a slow non-composite route (asyncProfile) answers with a task handle");
 ok(typeof calls.at(-1).progressKey === "string" && calls.at(-1).progressKey.length >= 32, "the task's loopback carries an in-process progress key");
 const early = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
-ok(early.result?._meta?.[TASK_PROGRESS_META]?.status === "queued", `before the handler starts the task's progress says queued (${early.result?._meta?.[TASK_PROGRESS_META]?.status})`);
+ok(early.result?._meta?.[TASK_PROGRESS_META]?.state === "queued", `before the handler starts the task's progress says queued (${early.result?._meta?.[TASK_PROGRESS_META]?.state})`);
 await sleep(450);
 const mid = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
 const midP = mid.result?._meta?.[TASK_PROGRESS_META];
-ok(mid.result?.status === "working" && midP?.status === "running" && midP?.stage === "rendering" && midP?.progress === 0.5 && midP?.steps?.total === 2, `a running task carries the route's stage and steps (${JSON.stringify(midP)})`);
+ok(mid.result?.status === "working" && midP?.state === "running" && midP?.stage === "rendering" && midP?.progress === 0.5 && midP?.steps?.total === 2, `a running task carries the route's stage and steps (${JSON.stringify(midP)})`);
 ok(/Running image-gen-premium: rendering \(1 of 2 steps done\)/.test(mid.result?.statusMessage || ""), `statusMessage names the stage (${mid.result?.statusMessage})`);
 ok(mid.result?.pollIntervalMs >= 1000 && Number.isInteger(midP?.etaSeconds), "a running task's poll interval and ETA follow its progress");
 await sleep(700);
 const fin = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
-ok(fin.result?.status === "completed" && fin.result?._meta?.[TASK_PROGRESS_META]?.status === "succeeded" && fin.result?._meta?.[TASK_PROGRESS_META]?.progress === 1, "the finished task says succeeded with progress 1");
+ok(fin.result?.status === "completed" && fin.result?._meta?.[TASK_PROGRESS_META]?.state === "succeeded" && fin.result?._meta?.[TASK_PROGRESS_META]?.progress === 1, "the finished task says succeeded with progress 1");
 ok(fin.result?.statusMessage !== mid.result?.statusMessage, "a late progress write never reopens or relabels the finished task");
 
 // ------------------------------------------------------------- 3. failures

@@ -123,7 +123,8 @@ export function throttledProgressWriter(write, { minGapMs = 2000, now = () => Da
 
 /**
  * The progress view of a job record, for GET /api/jobs/:id and tasks/get.
- *   status: queued | running | succeeded | failed
+ *   state: queued | running | succeeded | failed (the record's own `status`
+ *   keeps the task vocabulary working | completed | failed for existing pollers)
  *   stage, progress (0-1 or null), progressEstimated, steps, etaSeconds,
  *   elapsedSeconds, expectedSeconds, maxSeconds, retryAfterSeconds (non-final)
  * A record with no reported progress gets an estimate from elapsed time
@@ -135,8 +136,8 @@ export function progressView(rec, { now = Date.now(), basisSeconds = null, expec
   const terminal = rec.status === "completed" || rec.status === "failed" || rec.status === "cancelled";
   // A working record with no phase predates progress reporting: its run had
   // already started, so it reads as running.
-  const status = rec.status === "completed" ? "succeeded" : terminal ? "failed" : rec.phase === "queued" ? "queued" : "running";
-  const view = { status };
+  const state = rec.status === "completed" ? "succeeded" : terminal ? "failed" : rec.phase === "queued" ? "queued" : "running";
+  const view = { state };
   const startMs = Number(rec.startedAtMs) || null;
   const elapsed = startMs ? Math.max(0, (now - startMs) / 1000) : 0;
   if (terminal) {
@@ -146,7 +147,7 @@ export function progressView(rec, { now = Date.now(), basisSeconds = null, expec
     if (startMs) view.elapsedSeconds = Math.round(((Number(rec.endedAtMs) || now) - startMs) / 1000);
     return view;
   }
-  if (status === "queued") {
+  if (state === "queued") {
     view.stage = "queued";
     view.progress = 0;
     view.etaSeconds = basisSeconds != null ? Math.round(basisSeconds) : null;

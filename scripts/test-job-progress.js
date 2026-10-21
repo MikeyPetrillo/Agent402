@@ -8,7 +8,7 @@
 //     never touches PAYMENT-REQUIRED;
 //   - a sink is reached only through its in-process key; a header from
 //     outside matches nothing and is removed;
-//   - progressView: queued, running (reported vs estimated), final states;
+//   - progressView: state queued, running (reported vs estimated), final states;
 //     Retry-After only while not final;
 //   - the throttled writer writes stage changes at once, drops no-op patches
 //     and never writes after cancel;
@@ -121,9 +121,9 @@ async function through(mw, req, res, body) {
   const now = 1_000_000;
   const base = { status: "working", phase: "queued", pollIntervalMs: 5000 };
   const q = progressView(base, { now, basisSeconds: 90, expectedSeconds: 90, maxSeconds: 180 });
-  ok(q.status === "queued" && q.stage === "queued" && q.progress === 0 && q.etaSeconds === 90 && q.retryAfterSeconds >= 1, "queued");
+  ok(q.state === "queued" && q.stage === "queued" && q.progress === 0 && q.etaSeconds === 90 && q.retryAfterSeconds >= 1, "queued");
   const est = progressView({ ...base, phase: "running", startedAtMs: now - 30_000, stage: "started" }, { now, basisSeconds: 90, expectedSeconds: 90, maxSeconds: 180 });
-  ok(est.status === "running" && est.progressEstimated === true && Math.abs(est.progress - 1 / 3) < 0.01 && est.etaSeconds === 60 && est.elapsedSeconds === 30, `running with an estimate (${JSON.stringify(est)})`);
+  ok(est.state === "running" && est.progressEstimated === true && Math.abs(est.progress - 1 / 3) < 0.01 && est.etaSeconds === 60 && est.elapsedSeconds === 30, `running with an estimate (${JSON.stringify(est)})`);
   const over = progressView({ ...base, phase: "running", startedAtMs: now - 200_000 }, { now, basisSeconds: 90, maxSeconds: 180 });
   ok(over.progress === 0.95 && over.progressEstimated === true && over.etaSeconds >= 0, "an estimate past the typical run holds under 1");
   const rep = progressView({ ...base, phase: "running", startedAtMs: now - 20_000, stage: "writing report", done: 3, total: 4, progress: 0.75 }, { now, basisSeconds: 90, maxSeconds: 180 });
@@ -132,10 +132,10 @@ async function through(mw, req, res, body) {
   const none = progressView({ ...base, phase: "running", startedAtMs: now - 5000 }, { now });
   ok(none.progress === null && none.etaSeconds === null && none.retryAfterSeconds === 5, "no profile and no report: progress and ETA are null, not guessed");
   const done = progressView({ status: "completed", startedAtMs: now - 50_000, endedAtMs: now - 1000 }, { now });
-  ok(done.status === "succeeded" && done.progress === 1 && done.stage === "done" && done.elapsedSeconds === 49 && !("retryAfterSeconds" in done), "succeeded: no Retry-After");
+  ok(done.state === "succeeded" && done.progress === 1 && done.stage === "done" && done.elapsedSeconds === 49 && !("retryAfterSeconds" in done), "succeeded: no Retry-After");
   const failed = progressView({ status: "failed" }, { now });
   const cancelled = progressView({ status: "cancelled" }, { now });
-  ok(failed.status === "failed" && cancelled.status === "failed" && cancelled.stage === "cancelled" && !("retryAfterSeconds" in failed), "failed and cancelled are final");
+  ok(failed.state === "failed" && cancelled.state === "failed" && cancelled.stage === "cancelled" && !("retryAfterSeconds" in failed), "failed and cancelled are final");
 }
 
 // ---- throttled writer -------------------------------------------------------------

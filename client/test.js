@@ -639,7 +639,7 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   const { createServer } = await import("node:http");
   const { AsyncJobPendingError } = await import("./index.js");
   const seen = { prefer: [], polls: 0, sleeps: [] };
-  let jobPlan = ["running", "running", "succeeded"], jobFail = false, foreignLocation = false;
+  let jobPlan = ["running", "running", "succeeded"], jobFail = false, foreignLocation = false, oldServer = false;
   const srv = createServer((req, res) => {
     const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
     if (req.url === "/api/pricing") return send(200, { endpoints: [
@@ -653,13 +653,14 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
       if (!req.headers.prefer) return send(402, { x402Version: 2, accepts: [] });
       seen.polls = 0;
       const id = "ab".repeat(24);
-      return send(202, { jobId: id, status: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 3 }, { location: foreignLocation ? "https://elsewhere.example/api/jobs/x" : `/api/jobs/${id}`, "retry-after": "3" });
+      return send(202, { jobId: id, status: "working", state: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 3 }, { location: foreignLocation ? "https://elsewhere.example/api/jobs/x" : `/api/jobs/${id}`, "retry-after": "3" });
     }
     if (req.url.startsWith("/api/jobs/")) {
       const st = jobPlan[Math.min(seen.polls++, jobPlan.length - 1)];
-      if (st === "running") return send(200, { status: "running", stage: "generating", progress: 0.5, etaSeconds: 20, pollIntervalSeconds: 2 }, { "retry-after": "2" });
-      if (jobFail) return send(200, { status: "failed", message: "The call ended with HTTP 502 and nothing was charged.", error: { httpStatus: 502, body: { error: "upstream down" } } });
-      return send(200, { status: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "payment-response": "cmVjZWlwdA==" }, body: { clip: "done" } } });
+      if (st === "running") return send(200, { status: "working", state: "running", stage: "generating", progress: 0.5, etaSeconds: 20, pollIntervalSeconds: 2 }, { "retry-after": "2" });
+      if (jobFail) return send(200, { status: "failed", state: "failed", message: "The call ended with HTTP 502 and nothing was charged.", error: { httpStatus: 502, body: { error: "upstream down" } } });
+      if (oldServer) return send(200, { status: "completed", result: { httpStatus: 200, body: { clip: "done" } } });
+      return send(200, { status: "completed", state: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "payment-response": "cmVjZWlwdA==" }, body: { clip: "done" } } });
     }
     send(404, {});
   });
@@ -667,7 +668,7 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   const base = `http://127.0.0.1:${srv.address().port}`;
   try {
     const progress = [];
-    const c = new Agent402({ baseUrl: base, cache: false, fetch: fetch, fetchImpl: fetch, tlsDistrust: false, onProgress: (d) => progress.push(d.status), dailyLimitUsd: 10 });
+    const c = new Agent402({ baseUrl: base, cache: false, fetch: fetch, fetchImpl: fetch, tlsDistrust: false, onProgress: (d) => progress.push(d.state), dailyLimitUsd: 10 });
     c._sleep = async (ms) => { seen.sleeps.push(ms); };
     const out = await c.call("slow", { prompt: "x" });
     ok(out.clip === "done", "a slow route's job answer is returned as the call's result");
@@ -691,6 +692,10 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
     jobPlan = ["succeeded"];
     const collected = await c.collectJob(e.jobUrl);
     ok(collected.clip === "done", "collectJob(jobUrl) collects the answer later");
+    oldServer = true;
+    const fromOld = await c.collectJob(e.jobUrl);
+    ok(fromOld.clip === "done", "a server that sends only the original status (completed) is still collected");
+    oldServer = false;
     foreignLocation = true;
     e = null; try { await c.call("slow", { prompt: "w" }); } catch (x) { e = x; }
     ok(e instanceof AsyncJobPendingError && /another origin/.test(e.message), "a job link on another origin is never followed");

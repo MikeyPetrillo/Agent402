@@ -203,8 +203,9 @@ header instead of a payment.
 5. **Slow routes:** reports and media take minutes; their 402 carries
    \`X-Async-Recommended\` and their /api/pricing row an \`async\` block. Send the
    paid call with \`Prefer: respond-async\` to get \`202\` and a job link, then poll
-   \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) for its status, stage,
-   progress and ETA until it succeeds; payment settles only on the answer.
+   \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is
+   \`completed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` show where it
+   is. Payment settles only on the answer.
 
 ### Request Templates
 

@@ -744,7 +744,9 @@ const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 const ASYNC_JOB_SCHEMA = {
   type: "object",
   properties: {
-    jobId: { type: "string" }, status: { type: "string", enum: ["queued", "running", "succeeded", "failed"], description: "queued until the paid handler starts (payment verified), running while it works, then succeeded or failed." },
+    jobId: { type: "string" },
+    status: { type: "string", enum: ["working", "completed", "failed"], description: "The original job status: working until the answer is ready, then completed or failed." },
+    state: { type: "string", enum: ["queued", "running", "succeeded", "failed"], description: "The lifecycle: queued until the paid handler starts (payment verified), running while it works, then succeeded or failed." },
     stage: { type: "string", description: "What the run is doing: queued, started, a route-specific stage (video: submitted, generating, downloading; reports: their named steps), running, done or failed." },
     progress: { type: ["number", "null"], minimum: 0, maximum: 1, description: "Fraction done, when known." },
     progressEstimated: { type: "boolean", description: "true when progress is elapsed time against the route's typical run rather than reported by the run itself." },
@@ -753,7 +755,7 @@ const ASYNC_JOB_SCHEMA = {
     elapsedSeconds: { type: "integer" }, expectedSeconds: { type: "integer", description: "The route's typical run, measured." }, maxSeconds: { type: "integer", description: "The route's run budget." },
     statusUrl: { type: "string" }, message: { type: "string" }, pollIntervalSeconds: { type: "integer", description: "Seconds to wait before the next poll (also sent as Retry-After)." },
     createdAt: { type: "string" }, updatedAt: { type: "string" }, expiresAt: { type: "string" },
-    result: { type: "object", description: "On succeeded: { httpStatus, headers (payment receipt), body }." },
+    result: { type: "object", description: "On completed (state succeeded): { httpStatus, headers (payment receipt), body }." },
     error: { type: "object", description: "On failed: { httpStatus, body or message }." },
   },
 };
@@ -867,7 +869,7 @@ export function openapiSpec(baseUrl, catalog) {
         name: "Prefer",
         in: "header",
         required: false,
-        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; poll GET /api/jobs/{id} (free, honor Retry-After) until status is succeeded or failed.${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready.`,
+        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready.`,
         schema: { type: "string", enum: ["respond-async"] },
       }] : []),
       ...(isComputePayable(tool) ? [{
@@ -895,7 +897,7 @@ export function openapiSpec(baseUrl, catalog) {
       op.requestBody = openapiRequestBody(discovery);
       op.parameters = headerParams;
     }
-    if (tool.asyncProfile && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): the job is queued or running; poll its statusUrl, waiting Retry-After seconds between polls. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
+    if (tool.asyncProfile && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): status working, state queued; poll its statusUrl, waiting Retry-After seconds between polls. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
     // Machine-readable duration and async advice (src/slow-routes.js): the
     // same block /api/pricing rows and a slow route's 402 body carry.
     if (tool.asyncProfile) op["x-agent402-async"] = asyncAdvice(tool);
@@ -907,7 +909,7 @@ export function openapiSpec(baseUrl, catalog) {
       operationId: "getAsyncJob",
       security: [],
       summary: "Collect a job started with Prefer: respond-async",
-      description: "Free. Returns the job's status (queued, running, succeeded, failed) with its stage, progress (0 to 1 when known, labeled progressEstimated when it is elapsed time against the route's typical run) and etaSeconds; a state that is not final sets Retry-After. A succeeded job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (on x402 a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
+      description: "Free. Returns the job's status (working, completed, failed, as since the feature shipped) and its state (queued, running, succeeded, failed) with its stage, progress (0 to 1 when known, labeled progressEstimated when it is elapsed time against the route's typical run) and etaSeconds; a state that is not final sets Retry-After. A succeeded job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (on x402 a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
       tags: ["jobs"],
       parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^[0-9a-f]{48}$" } }],
       responses: {

@@ -53,9 +53,18 @@ function sameOrigin(url, baseUrl) {
   try { return new URL(url).origin === new URL(baseUrl).origin; } catch { return false; }
 }
 
+// The job's lifecycle: `state` (queued | running | succeeded | failed) when
+// the server sends it, else the original `status` (working | completed | failed).
+const STATUS_TO_STATE = { working: "running", completed: "succeeded", failed: "failed", cancelled: "failed" };
+export function jobState(doc) {
+  if (typeof doc?.state === "string" && doc.state) return doc.state;
+  const s = typeof doc?.status === "string" ? doc.status : "";
+  return STATUS_TO_STATE[s] || s || null;
+}
+
 /** An ordinary Response for a finished job's answer. */
 export function responseFromJob(doc) {
-  const done = doc?.status === "succeeded" || doc?.status === "completed";
+  const done = jobState(doc) === "succeeded";
   const part = done ? doc.result || {} : doc?.error || {};
   const status = Number(part.httpStatus) || (done ? 200 : 502);
   const body = part.body !== undefined ? part.body : done ? {} : { error: part.message || doc?.message || "The job failed." };
@@ -92,7 +101,7 @@ export async function awaitJob(res, { baseUrl, fetchImpl, timeoutMs = DEFAULT_AS
   let failures = 0;
   for (;;) {
     if (now() + wait > deadline) {
-      throw new AsyncJobPendingError(`"${slug}" is still running (${doc.status || "running"}${doc.stage ? `, ${doc.stage}` : ""}); collect it from ${jobUrl} (free) until it expires`, { jobUrl, slug, job: doc });
+      throw new AsyncJobPendingError(`"${slug}" is still running (${jobState(doc) || "running"}${doc.stage ? `, ${doc.stage}` : ""}); collect it from ${jobUrl} (free) until it expires`, { jobUrl, slug, job: doc });
     }
     await sleep(wait);
     let g;
@@ -109,7 +118,8 @@ export async function awaitJob(res, { baseUrl, fetchImpl, timeoutMs = DEFAULT_AS
     failures = 0;
     try { doc = await g.json(); } catch { doc = {}; }
     report(doc);
-    if (doc.status === "succeeded" || doc.status === "completed" || doc.status === "failed") return responseFromJob(doc);
+    const st = jobState(doc);
+    if (st === "succeeded" || st === "failed") return responseFromJob(doc);
     wait = retryAfterMs(g.headers, doc);
   }
 }

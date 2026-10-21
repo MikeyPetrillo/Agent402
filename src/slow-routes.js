@@ -85,8 +85,8 @@ export function asyncAdvice(def) {
     accepted: 202,
     statusUrl: ASYNC_STATUS_PATH,
     how: p.slow
-      ? "This route is slow. Send the paid call with the header Prefer: respond-async: it answers 202 with a Location job link at once. Poll GET /api/jobs/{id} (free), waiting Retry-After seconds between polls, until status is succeeded or failed. Payment settles only on a delivered result."
-      : "Send the paid call with the header Prefer: respond-async to get 202 and a job link instead of waiting on the connection, then poll GET /api/jobs/{id} (free) until status is succeeded or failed. Payment settles only on a delivered result.",
+      ? "This route is slow. Send the paid call with the header Prefer: respond-async: it answers 202 with a Location job link at once. Poll GET /api/jobs/{id} (free), waiting Retry-After seconds between polls, until status is completed or failed (state: queued, running, succeeded, failed). Payment settles only on a delivered result."
+      : "Send the paid call with the header Prefer: respond-async to get 202 and a job link instead of waiting on the connection, then poll GET /api/jobs/{id} (free) until status is completed or failed. Payment settles only on a delivered result.",
   };
 }
 

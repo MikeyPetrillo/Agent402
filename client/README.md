@@ -190,7 +190,9 @@ minutes, longer than many HTTP clients wait. Their `/api/pricing` row carries
 `call()` sends the paid request with `Prefer: respond-async`: the server answers
 `202` with a job link at once, and the SDK polls `GET /api/jobs/{id}` (free),
 waiting `Retry-After` seconds between polls, until the job has succeeded or
-failed. Payment settles only on the delivered answer, so a failed job is a
+failed (it reads the job's `state` and falls back to its `status`, working,
+completed or failed, on a server that sends only that). Payment settles only on
+the delivered answer, so a failed job is a
 failed call and its spend is released.
 
 ```js

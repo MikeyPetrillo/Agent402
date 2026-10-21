@@ -26,7 +26,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
-import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
+import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -320,7 +320,7 @@ function progressNotifier(req, extra) {
     const value = pct;
     last = value;
     const eta = Number.isFinite(doc?.etaSeconds) ? `, about ${doc.etaSeconds} s left` : "";
-    const message = `${doc?.status || "running"}${doc?.stage ? `: ${doc.stage}` : ""}${doc?.steps ? ` (${doc.steps.done} of ${doc.steps.total} steps)` : ""}${doc?.progressEstimated ? " (estimated)" : ""}${eta}`;
+    const message = `${jobState(doc) || "running"}${doc?.stage ? `: ${doc.stage}` : ""}${doc?.steps ? ` (${doc.steps.done} of ${doc.steps.total} steps)` : ""}${doc?.progressEstimated ? " (estimated)" : ""}${eta}`;
     extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: value, total: 100, message } }).catch(() => {});
   };
 }

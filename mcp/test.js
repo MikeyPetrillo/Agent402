@@ -144,13 +144,13 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     if (u.pathname === "/openapi.json") return send(200, { paths: { "/v1/slow-report": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { query: { type: "string" } } } } } } } } } });
     if (u.pathname === "/v1/slow-report") {
       seen.prefer = req.headers.prefer || null; seen.auth = req.headers.authorization || null; seen.polls = 0;
-      return send(202, { jobId: "cd".repeat(24), status: "queued", statusUrl: `/api/jobs/${"cd".repeat(24)}`, pollIntervalSeconds: 1 }, { location: `/api/jobs/${"cd".repeat(24)}`, "retry-after": "1" });
+      return send(202, { jobId: "cd".repeat(24), status: "working", state: "queued", statusUrl: `/api/jobs/${"cd".repeat(24)}`, pollIntervalSeconds: 1 }, { location: `/api/jobs/${"cd".repeat(24)}`, "retry-after": "1" });
     }
     if (u.pathname.startsWith("/api/jobs/")) {
       seen.polls++;
-      if (seen.polls === 1) return send(200, { status: "running", stage: "searching", steps: { done: 1, total: 5 }, progress: 0.2, etaSeconds: 60 }, { "retry-after": "1" });
-      if (seen.polls === 2) return send(200, { status: "running", stage: "writing report", steps: { done: 4, total: 5 }, progress: 0.8, etaSeconds: 10 }, { "retry-after": "1" });
-      return send(200, { status: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "x-credits-balance": "9.40" }, body: { report: "the answer" } } });
+      if (seen.polls === 1) return send(200, { status: "working", state: "running", stage: "searching", steps: { done: 1, total: 5 }, progress: 0.2, etaSeconds: 60 }, { "retry-after": "1" });
+      if (seen.polls === 2) return send(200, { status: "working", state: "running", stage: "writing report", steps: { done: 4, total: 5 }, progress: 0.8, etaSeconds: 10 }, { "retry-after": "1" });
+      return send(200, { status: "completed", state: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "x-credits-balance": "9.40" }, body: { report: "the answer" } } });
     }
     return send(404, { error: "not found" });
   });
