@@ -3812,7 +3812,7 @@ export const LLM_GATEWAY_TOOLS = [
     binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],
     discovery: {
       bodyType: "json",
-      input: { input: "Agent402 serves fourteen hundred tools, paid per call.", voice: "alloy" },
+      input: { input: "Agent402 serves 500+ tools, paid per call.", voice: "alloy" },
       inputSchema: {
         properties: {
           input: { type: "string", description: "Text to speak (up to 2,000 chars)" },
