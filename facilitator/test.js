@@ -272,6 +272,12 @@ const sorobanRpc = getRpcClient(NETWORK);
   ok(!isTransportFailure({ code: -32602, message: "invalid params" }) && !isTransportFailure(new Error("simulation failed: HostError")) && !isTransportFailure({ response: { status: 400 } }) && !isTransportFailure(null), "isTransportFailure: a JSON-RPC error, a simulation failure, a 4xx are ANSWERS, never failed over");
   // config
   ok(resolveFallbackUrls("stellar:pubnet", undefined).join(",") === DEFAULT_FALLBACKS["stellar:pubnet"].join(",") && resolveFallbackUrls("stellar:testnet", "").length === 1, "resolveFallbackUrls: network defaults when the env is unset");
+  {
+    const { DEFAULT_TESTNET_RPC_URL } = await import("@x402/stellar");
+    const primaryHost = new URL(DEFAULT_TESTNET_RPC_URL).host;
+    const testnetHosts = resolveFallbackUrls("stellar:testnet", undefined).map((u) => new URL(u).host);
+    ok(testnetHosts.length >= 1 && testnetHosts.every((h) => h !== primaryHost), `resolveFallbackUrls: every testnet fallback is a different host from the primary ${primaryHost} (${testnetHosts.join(", ")})`);
+  }
   ok(resolveFallbackUrls("stellar:pubnet", " https://a.example/ , https://b.example, junk, https://a.example ").join(",") === "https://a.example,https://b.example", "resolveFallbackUrls: env CSV wins, trimmed, deduped, junk dropped");
   ok(resolveFallbackUrls("stellar:pubnet", "off").length === 0 && resolveFallbackUrls("stellar:pubnet", "none").length === 0, "resolveFallbackUrls: off/none disables");
 

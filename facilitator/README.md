@@ -76,7 +76,8 @@ FACILITATOR_STELLAR_SECRET=S... npm start
   order, when the primary fails at the TRANSPORT level (timeout, connection
   error, HTTP 5xx/429). Default on pubnet: `https://mainnet.sorobanrpc.com,
   https://rpc.ankr.com/stellar_soroban` (public, keyless; probed 2026-08-26);
-  on testnet `https://soroban-testnet.stellar.org`. `off` disables. A JSON-RPC
+  on testnet `https://rpc.ankr.com/stellar_testnet_soroban` (a different
+  operator from the default testnet primary). `off` disables. A JSON-RPC
   error (failed simulation, rejected transaction) is an answer and is never
   retried elsewhere. Each hop inherits the per-request timeout, so the worst
   case is (1 + fallbacks) x `FACILITATOR_RPC_TIMEOUT_MS`.
