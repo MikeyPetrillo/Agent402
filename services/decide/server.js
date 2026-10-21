@@ -25,6 +25,7 @@ import { embedTexts, embedBudgetStatus } from "./embed.js";
 import { decideConfig } from "../../src/decide/config.js";
 import { makeLlm, judgeText, plannerVersion } from "./llm.js";
 import { planShape } from "../../src/decide/plan-shape.js";
+import { dbSsl } from "../../src/db-ssl.js";
 import { makeJevJudge } from "./jev.js";
 import { buildDecision, parseDecideInput, cacheKeyFor } from "./planner.js";
 import { MemoryDecisionStore, PgDecisionStore, makeGate, makeDecisionCache } from "./decision-store.js";
@@ -102,6 +103,13 @@ export function plainDbConnection(url) {
     const u = new URL(url);
     return /\.railway\.internal$/.test(u.hostname) || ["localhost", "127.0.0.1", "::1", "[::1]"].includes(u.hostname) || u.searchParams.get("sslmode") === "disable";
   } catch { return false; }
+}
+
+/** pg `ssl` option for the decide database: no TLS on the private network or
+ *  loopback (plainDbConnection), otherwise the main app's rule (src/db-ssl.js):
+ *  a public host must present a verified certificate. */
+export function decideDbSsl(url) {
+  return plainDbConnection(url) ? false : dbSsl(url);
 }
 
 /** One decision's serving cost, from the meter. Kept with the decision in the
@@ -233,7 +241,7 @@ export async function boot() {
   if (DB_URL) {
     // A statement that runs long here holds a connection on a database the
     // main app shares, so every statement is bounded.
-    state.pool = new pg.Pool({ connectionString: DB_URL, max: 5, connectionTimeoutMillis: 20_000, statement_timeout: 15_000, ssl: plainDbConnection(DB_URL) ? false : { rejectUnauthorized: false } });
+    state.pool = new pg.Pool({ connectionString: DB_URL, max: 5, connectionTimeoutMillis: 20_000, statement_timeout: 15_000, ssl: decideDbSsl(DB_URL) });
     await migrate(state.pool);
     state.store = new PgToolStore(state.pool);
     state.decisions = new PgDecisionStore(state.pool);
