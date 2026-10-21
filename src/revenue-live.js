@@ -226,7 +226,13 @@ export const EVM = {
     // here and lifts an older cursor to it, and the window scan stops here.
     fromBlock: 27_000_000,
     token: "0x3600000000000000000000000000000000000000",
-    rpcs: ["https://rpc.mainnet.arc.io"],
+    // Alchemy first when the key is set (the network must be enabled on the
+    // Alchemy app; a not-enabled network falls through to the public RPC),
+    // then Arc's public RPC, which rate-limits sustained reads.
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://arc-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://rpc.mainnet.arc.io",
+    ],
     explorer: (a) => `https://explorer.arc.io/address/${a}`,
     tx: (h) => `https://explorer.arc.io/tx/${h}`,
   },
