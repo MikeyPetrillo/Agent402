@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { openapiRequestBody } from "./openapi-request.js";
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
@@ -882,15 +883,8 @@ export function openapiSpec(baseUrl, catalog) {
         ...headerParams,
       ];
     } else {
-      op.requestBody = {
-        required: true,
-        content: {
-          "application/json": {
-            schema: { type: "object", properties: props, required: required.length ? required : undefined },
-            example: discovery?.input ?? {},
-          },
-        },
-      };
+      // JSON for every route but the multipart ones (src/openapi-request.js).
+      op.requestBody = openapiRequestBody(discovery);
       op.parameters = headerParams;
     }
     if (tool.runSeconds && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): the job is running; poll its statusUrl. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };

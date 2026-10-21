@@ -114,7 +114,8 @@ import { pathToFileURL } from "node:url";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { REPORT_TIERS } from "../src/report-tiers.js";
-import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, chainOf, CHAINS } from "./listing-coverage.js";
+import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, multipartKeysFromOpenapi, chainOf, CHAINS } from "./listing-coverage.js";
+import { multipartBodyFrom } from "../src/openapi-request.js";
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -580,9 +581,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   log(renderTable(before));
   const spec = await (await fetchImpl(`${target}/openapi.json`, { signal: AbortSignal.timeout(60_000) })).json();
   const examples = examplesFromOpenapi(spec);
-  // A route on the OpenAI transcription wire takes a multipart `file` part;
-  // its published example marks that part with a "multipart" string, so the
-  // pass uploads the server's own speech fixture there (as catalog-buy does).
+  // A route on the OpenAI transcription wire takes a multipart `file` part:
+  // its body is published as multipart/form-data, and its example marks that
+  // part with a "multipart" string, so the pass uploads the server's own
+  // speech fixture there (as catalog-buy does).
+  const multipartKeys = multipartKeysFromOpenapi(spec);
   let fixture = null;
   const fixtureBytes = async () => {
     if (!fixture) {
@@ -597,11 +600,8 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   const urlFor = async (r) => {
     const ex = purposefulInputFor(r, inputs) || examples.get(routeKeyOf(r)) || {};
     if (r.method === "GET") return { url: `${target}${r.path}${Object.keys(ex).length ? "?" + new URLSearchParams(ex).toString() : ""}`, body: undefined };
-    if (isMultipartExample(ex)) {
-      const form = new FormData();
-      form.append("file", new Blob([await fixtureBytes()], { type: "audio/wav" }), "sample-speech.wav");
-      for (const [k, v] of Object.entries(ex)) if (k !== "file" && v != null && typeof v !== "object") form.append(k, String(v));
-      return { url: `${target}${r.path}`, body: form };
+    if (multipartKeys.has(routeKeyOf(r)) || isMultipartExample(ex)) {
+      return { url: `${target}${r.path}`, body: multipartBodyFrom(ex, { bytes: await fixtureBytes(), type: "audio/wav", filename: "sample-speech.wav" }) };
     }
     return { url: `${target}${r.path}`, body: JSON.stringify(ex) };
   };

@@ -19,6 +19,7 @@ import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetReque
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
 import { stripScripts, stripTags as stripTagsWith } from "./lib/html-text.js";
+import { requestExampleOf } from "../src/openapi-request.js";
 // Remove every tag, repeating until none remain (one pass can leave a tag
 // formed by the text it removed).
 const stripTags = (s) => stripTagsWith(s, "");
@@ -273,7 +274,7 @@ try {
       const ex = o.op.responses?.[200]?.content?.["application/json"]?.example;
       if (!ex || typeof ex !== "object") continue;
       if (!(ex.status === "success" || ex.found === true || ex.settled === true)) continue;
-      const input = JSON.stringify(o.op.requestBody?.content?.["application/json"]?.example ?? (o.op.parameters || []).map((p) => p.example));
+      const input = JSON.stringify(requestExampleOf(o.op)?.example ?? (o.op.parameters || []).map((p) => p.example));
       ok(!ZERO.test(input), `/openapi.json ${o.op.operationId}: success-shaped example is not fed an all-zero hash`);
     }
   }

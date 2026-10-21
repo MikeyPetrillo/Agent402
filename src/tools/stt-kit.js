@@ -438,7 +438,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe"),
@@ -455,7 +455,7 @@ export const STT_TOOLS = [
     discovery: {
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
-      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
+      inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
       output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
     },
     handler: makeMultipartHandler("transcribe-pro"),

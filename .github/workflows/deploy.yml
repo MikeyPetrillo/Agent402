@@ -1782,6 +1782,8 @@ jobs:
           t node scripts/test-payai-listing-pass.js
           # The listing pass's purposeful inputs validate against each route's published input schema (booted FREE_MODE, offline)
           t node scripts/test-listing-inputs.js
+          # Multipart routes publish multipart/form-data on /openapi.json; the example sent that way answers 402 unpaid and reaches the handler on FREE_MODE, a JSON body gets 400 (two boots, stub facilitator, keys blank, offline)
+          t node scripts/test-multipart-openapi.js
           # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub facilitators, offline)
           t node scripts/test-settle-preference.js
           # Tool resolver (/api/find ranking, guards)

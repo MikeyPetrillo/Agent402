@@ -19,6 +19,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { requestExampleOf } from "../src/openapi-request.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
@@ -61,7 +62,7 @@ let examples = 0;
 for (const [path, ops] of Object.entries(spec.paths || {})) {
   for (const [method, op] of Object.entries(ops)) {
     if (!op || typeof op !== "object") continue;
-    const ex = [op.requestBody?.content?.["application/json"]?.example, (op.parameters || []).map((p) => p.example)];
+    const ex = [requestExampleOf(op)?.example, (op.parameters || []).map((p) => p.example)];
     const route = `${method.toUpperCase()} ${path}`;
     examples++;
     walk(ex, (s) => {

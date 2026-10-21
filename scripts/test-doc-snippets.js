@@ -38,6 +38,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { requestExampleOf } from "../src/openapi-request.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -142,7 +143,7 @@ function inputFieldsOf(slug) {
   const path = e.path || String(e.route || "").split(" ").pop();
   const op = openapi.paths?.[path]?.[String(e.method || "post").toLowerCase()];
   if (!op) return null;
-  const body = op.requestBody?.content?.["application/json"]?.schema?.properties;
+  const body = requestExampleOf(op)?.schema?.properties;
   return new Set([...Object.keys(body || {}), ...(op.parameters || []).map((x) => x.name)]);
 }
 
