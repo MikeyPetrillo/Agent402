@@ -65,23 +65,23 @@ const setting = (runtime, key) => {
 };
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 
-let payFetchCache = null; // key -> Promise<fetch|null>
-async function payFetchFromKey(pk, fetchImpl) {
+/** A fresh x402 client and its paying fetch for one agent402-client instance,
+ *  which registers its signing guard on the client (the ceilings then hold on
+ *  the payment that is signed, priced from known assets). One per instance, so
+ *  a client rebuilt with new ceilings never inherits the old one's guard. */
+async function x402FromKey(pk, fetchImpl) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(pk || "")) return null;
-  if (payFetchCache && payFetchCache.key === pk) return payFetchCache.value;
-  const value = (async () => {
-    try {
-      const [{ wrapFetchWithPayment, x402Client }, { privateKeyToAccount }, { toClientEvmSigner }, { registerExactEvmScheme }] = await Promise.all([
-        import("@x402/fetch"), import("viem/accounts"), import("@x402/evm"), import("@x402/evm/exact/client"),
-      ]);
-      const client = new x402Client();
-      client.setSpendControls?.(false); // @x402/core 2.23+ defaults to a $1 pegged-assets-only cap; this package bounds spend itself
-      registerExactEvmScheme(client, { signer: toClientEvmSigner(privateKeyToAccount(pk)) });
-      return wrapFetchWithPayment(fetchImpl, client);
-    } catch { return null; } // peers absent: free tier + credits still work
-  })();
-  payFetchCache = { key: pk, value };
-  return value;
+  try {
+    const [{ wrapFetchWithPayment, x402Client }, { privateKeyToAccount }, { toClientEvmSigner }, { registerExactEvmScheme }] = await Promise.all([
+      import("@x402/fetch"), import("viem/accounts"), import("@x402/evm"), import("@x402/evm/exact/client"),
+    ]);
+    const client = new x402Client();
+    // agent402-client's guard replaces the library's default control (its own
+    // default assets only, a fixed $1), which would refuse USDG.
+    client.setSpendControls?.(false);
+    registerExactEvmScheme(client, { signer: toClientEvmSigner(privateKeyToAccount(pk)) });
+    return { client, payFetch: wrapFetchWithPayment(fetchImpl, client) };
+  } catch { return null; } // peers absent: free tier + credits still work
 }
 
 /** ONE client per runtime, kept for the runtime's lifetime. Settings are still
@@ -101,8 +101,8 @@ async function clientFor(runtime, fetchImpl = globalThis.fetch) {
   const key = runtime && typeof runtime === "object" ? runtime : clientFor;
   const prev = clients.get(key);
   if (prev?.sig === sig) return prev.client;
-  const payFetch = creditsKey ? undefined : await payFetchFromKey(walletKey, fetchImpl) || undefined;
-  const client = new Agent402({ baseUrl, fetchImpl, fetch: payFetch, creditsKey: creditsKey || null, maxPerCallUsd, dailyLimitUsd });
+  const paying = creditsKey ? null : await x402FromKey(walletKey, fetchImpl);
+  const client = new Agent402({ baseUrl, fetchImpl, fetch: paying?.payFetch, x402Client: paying?.client, creditsKey: creditsKey || null, maxPerCallUsd, dailyLimitUsd });
   // The ledger outlives the client: what was spent under the old settings was
   // still spent. (The client keeps it as a plain array; sharing the array is
   // the whole mechanism.)

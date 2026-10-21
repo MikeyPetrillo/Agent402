@@ -113,7 +113,7 @@ params, an unreachable catalog and no match are typed failures sent nowhere.
 | `AGENT402_CREDITS_KEY` | | a prepaid credits key already issued (`a402_...`) |
 | `AGENT402_WALLET_KEY` | | EVM private key paying USDC over x402 |
 | `AGENT402_BASE_URL` | `https://agent402.tools` | self-hosters point this at their instance |
-| `AGENT402_MAX_PER_CALL_USD` | `1` | refuse any single paid call above this |
+| `AGENT402_MAX_PER_CALL_USD` | `1` | refuse any single paid call above this; enforced on the payment that is signed |
 | `AGENT402_DAILY_LIMIT_USD` | | refuse once the runtime's rolling 24h paid spend would exceed this |
 | `AGENT402_MAX_RESULT_CHARS` | unset (no bound) | when set, a result JSON longer than this is an explicit `result_too_large` failure carrying the whole result in `data.result`; nothing partial reaches the text |
 

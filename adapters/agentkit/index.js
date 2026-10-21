@@ -90,8 +90,10 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
   const clientFor = async (walletProvider) => {
     const key = walletProvider && typeof walletProvider === "object" ? walletProvider : NO_WALLET;
     if (clients.has(key)) return clients.get(key);
-    const payFetch = creditsKey ? undefined : await payFetchFor(walletProvider, fetchImpl, { payees });
-    const client = new Agent402({ baseUrl: base, fetch: payFetch, fetchImpl, creditsKey, maxPerCallUsd, dailyLimitUsd, maxPerHostUsd });
+    // The x402 client is handed to agent402-client too, which holds every
+    // payment it signs to the ceilings below (guardX402Client).
+    const paying = creditsKey ? null : await x402For(walletProvider, fetchImpl, { payees, guarded: true });
+    const client = new Agent402({ baseUrl: base, fetch: paying?.payFetch, x402Client: paying?.client, fetchImpl, creditsKey, maxPerCallUsd, dailyLimitUsd, maxPerHostUsd });
     clients.set(key, client);
     return client;
   };
@@ -132,10 +134,12 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
       params: z.record(z.any()).optional().describe("Input matching the tool's example from agent402_find"),
     }),
     invoke: async (walletProvider, { slug, params = {} }) => {
-      // Spend bounds ride with every paid call: a per-call ceiling (default $1,
-      // the same default AgentKit's own x402 provider uses), optional rolling
-      // daily and per-host ceilings, and an optional payee allowlist - a
-      // mis-set baseUrl can never drain the wallet.
+      // Spend bounds ride with every paid call and are checked on the payment
+      // that is signed: a per-call ceiling (default $1, the same default
+      // AgentKit's own x402 provider uses), optional rolling daily and
+      // per-host ceilings, and an optional payee allowlist. With a per-call
+      // ceiling set (the default), no single payment is signed above it,
+      // whatever baseUrl is set to; set dailyLimitUsd to bound the total too.
       const client = await clientFor(walletProvider);
       const out = await client.call(slug, params);
       return typeof out === "string" ? out : JSON.stringify(out);
@@ -187,9 +191,17 @@ export async function agent402ActionProvider(opts = {}) {
  * agent402-client then pays free-tier tools with proof-of-work only.
  */
 export async function payFetchFor(walletProvider, fetchImpl = globalThis.fetch, { payees = null } = {}) {
-  if (!walletProvider || typeof walletProvider.toSigner !== "function") return undefined;
+  return (await x402For(walletProvider, fetchImpl, { payees, guarded: false }))?.payFetch;
+}
+
+/** The x402 client and its paying fetch. `guarded`: agent402-client registers
+ *  its own signing guard on the client (the caller does that), which replaces
+ *  the library's default spend control; unguarded (payFetchFor on its own),
+ *  that default control stays on. */
+async function x402For(walletProvider, fetchImpl, { payees = null, guarded = false } = {}) {
+  if (!walletProvider || typeof walletProvider.toSigner !== "function") return null;
   const account = await walletProvider.toSigner();
-  if (!account || typeof account.signTypedData !== "function") return undefined;
+  if (!account || typeof account.signTypedData !== "function") return null;
   const signer = typeof walletProvider.readContract === "function"
     ? { ...account, readContract: (args) => walletProvider.readContract(args) }
     : account;
@@ -197,13 +209,16 @@ export async function payFetchFor(walletProvider, fetchImpl = globalThis.fetch, 
     import("@x402/fetch"), import("@x402/evm/exact/client"),
   ]);
   const client = new x402Client();
-  client.setSpendControls?.(false); // @x402/core 2.23+ defaults to a $1 pegged-assets-only cap; this package bounds spend itself
+  // Guarded, agent402-client's signing guard holds each payment to this
+  // package's ceilings and prices it from known assets, so the library's
+  // default control (its own default assets only, a fixed $1) is replaced.
+  if (guarded) client.setSpendControls?.(false);
   registerExactEvmScheme(client, { signer });
   if (Array.isArray(payees) && payees.length) {
     const { withPayeeAllowlist } = await import("agent402-client");
     withPayeeAllowlist(client, payees);
   }
-  return wrapFetchWithPayment(fetchImpl, client);
+  return { client, payFetch: wrapFetchWithPayment(fetchImpl, client) };
 }
 
 async function loadZod() {

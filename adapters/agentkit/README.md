@@ -70,6 +70,9 @@ against production.
 
 - `maxPerCallUsd` (default `1`): a paid call above this is refused before any
   signature. `dailyLimitUsd` and `maxPerHostUsd` bound rolling 24-hour spend.
+  The caps are enforced on the payment that is signed, priced from the known
+  decimals of its asset, so a 402 that changes between the preflight and the
+  paid request is held to them too.
 - `payees`: an allowlist of `payTo` addresses; a 402 naming any other address
   is refused before signing, so a mis-set `baseUrl` cannot spend the wallet.
 - `baseUrl` for a self-hosted Agent402, `fetchImpl` to inject a fetch, `zod` to
