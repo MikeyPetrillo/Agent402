@@ -68,6 +68,23 @@ function exemptSet() {
 const ledger = new Map();
 let seq = 0;
 
+// ---- the GLOBAL unsettled ceiling ------------------------------------------------
+// The per-payer ceiling is only as strong as the payer key: a buyer who can
+// present a fresh key per call (a fresh wallet, a fresh IP) gets a fresh
+// ceiling each time. This bound does not care who the buyer is: every
+// non-exempt spend is also booked in one window across all payers, with the
+// same unsettled-and-recent rule as the per-payer rows, and a spend that would
+// take the total past the ceiling is refused with its own code
+// (`global_unsettled_ceiling`) so the caller can word it as a pause for every
+// buyer. Sized at the per-chain wallet's daily ceiling: the unsettled total
+// never exceeds what one spending wallet may lose in a day.
+// `EXTERNAL_MAX_UNSETTLED_GLOBAL_USD` overrides it; `0` or `off` disables it;
+// a malformed value reads as unset, never as off.
+const DEFAULT_MAX_UNSETTLED_GLOBAL_USD = 25;
+// [{ id, usd, at, settled }]
+let globalRows = [];
+const GLOBAL_KEY = "all";
+
 // ---- the shared half of the PER-PAYER ledger ------------------------------------
 // The chain ledger below is shared through the state database. The per-payer
 // unsettled ledger was this process's alone, so each replica let a payer carry
@@ -429,6 +446,18 @@ function pruneChain(k, now) {
   return rows;
 }
 
+/** The global unsettled ceiling in USD, or null when disabled (read at call time). */
+export function globalUnsettledCeilingUsd() {
+  const v = parseCeiling(process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD);
+  return v === undefined ? DEFAULT_MAX_UNSETTLED_GLOBAL_USD : v;
+}
+
+/** Unsettled upstream spend across every non-exempt payer, in USD (this process). */
+export function globalExposureUsd(now = Date.now()) {
+  globalRows = globalRows.filter((r) => !r.settled && now - r.at < STALE_MS);
+  return globalRows.reduce((s, r) => s + r.usd, 0);
+}
+
 /** Upstream spend booked against a chain's wallet in the last 24 h (settled + unsettled). */
 export function walletDailySpentUsd(chain, now = Date.now()) {
   const k = chainKeyOf(chain);
@@ -477,7 +506,15 @@ async function withSharedExposure(payer, opts = {}) {
   if (!SHARED) return opts;
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const exposure = await sharedPayerExposureUsd(keyOf(payer), now);
-  return exposure == null ? opts : { ...opts, sharedExposureUsd: exposure };
+  return withSharedGlobal(exposure == null ? opts : { ...opts, sharedExposureUsd: exposure });
+}
+/** `opts` with every replica's global unsettled total folded in. */
+async function withSharedGlobal(opts = {}) {
+  if (!SHARED) return opts;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const r = await shared.windowRead("esg-global", GLOBAL_KEY, { windowMs: STALE_MS, now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return opts; }
+  return { ...opts, sharedGlobalExposureUsd: r.sum / 1e6 };
 }
 
 /** Database mode: a chain spend while the day's ledger has never been read is refused. */
@@ -512,7 +549,7 @@ export function reserveSpend(payer, usd, opts = {}) {
       if (pre?.refusal) return pre.refusal;
       // Reserved: the window holds it, so the payer check below reads only
       // this process's rows. Not reserved (store away): the read-then-book path.
-      const o = pre?.reserved ? { ...opts, now } : await withSharedExposure(payer, { ...opts, now });
+      const o = pre?.reserved ? await withSharedGlobal({ ...opts, now }) : await withSharedExposure(payer, { ...opts, now });
       const d = decideSpend(payer, usd, o);
       if (!d.ok) { releasePayerShared(pre); return d; }
       return { ...d, handle: bookLocal(keyOf(payer), chainKeyOf(opts.chain), Number(usd) || 0, now, pre) };
@@ -526,7 +563,7 @@ async function reserveSpendPg(payer, usd, opts0) {
   const now = Number.isFinite(opts0.now) ? opts0.now : Date.now();
   const pre = await reservePayerShared(payer, usd, { ...opts0, now });
   if (pre?.refusal) return pre.refusal;
-  const opts = pre?.reserved ? opts0 : await withSharedExposure(payer, opts0);
+  const opts = pre?.reserved ? await withSharedGlobal(opts0) : await withSharedExposure(payer, opts0);
   const ck = chainKeyOf(opts.chain);
   const amount = Number(usd) || 0;
   if (!ck) {
@@ -589,7 +626,7 @@ export function composeReserve(may, note) {
 }
 /** Test-only: awaited between the locked read and the decision of a reservation. */
 export function __onReserveRead(fn) { reserveReadHook = typeof fn === "function" ? fn : null; }
-function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd, sharedExposureUsd = null } = {}) {
+function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, now = Date.now(), chain = null, walletDailyMaxUsd, sharedExposureUsd = null, maxGlobalUnsettledUsd, sharedGlobalExposureUsd = null } = {}) {
   // The chain-wallet ceiling is checked FIRST and for every caller, attributable
   // payer or not: it bounds the wallet, not the buyer. `code` is the field a
   // caller branches on - the per-payer refusal below carries none.
@@ -614,8 +651,27 @@ function decideSpend(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UNSETTLED_USD, 
     }
   }
   const k = keyOf(payer);
-  if (!k) return { ok: true, reason: "payer not attributable - bounded by the tier cap alone" };
-  if (exemptSet().has(k.toLowerCase())) return { ok: true, reason: "exempt" };
+  const exempt = Boolean(k) && exemptSet().has(k.toLowerCase());
+  // The global unsettled ceiling: every non-exempt spend, attributable or not.
+  if (!exempt) {
+    const gc = maxGlobalUnsettledUsd !== undefined ? maxGlobalUnsettledUsd : globalUnsettledCeilingUsd();
+    if (gc != null) {
+      const gexp = Math.max(globalExposureUsd(now), Number.isFinite(sharedGlobalExposureUsd) ? sharedGlobalExposureUsd : 0);
+      if (gexp + (Number(usd) || 0) > gc) {
+        return {
+          ok: false,
+          code: "global_unsettled_ceiling",
+          exposure: gexp,
+          ceilingUsd: gc,
+          reason:
+            `upstream spend from recent calls whose payments have not settled yet has reached the service-wide ceiling ($${gc});` +
+            " external routing is paused for every buyer, not this wallet in particular, until those settle or age out.",
+        };
+      }
+    }
+  }
+  if (!k) return { ok: true, reason: "payer not attributable - bounded by the tier cap and the global ceiling" };
+  if (exempt) return { ok: true, reason: "exempt" };
   // The shared figure (every replica's unsettled spend for this payer) when
   // it was read, never below this process's own.
   const exposure = Math.max(payerExposureUsd(k, now), Number.isFinite(sharedExposureUsd) ? sharedExposureUsd : 0);
@@ -648,6 +704,12 @@ export function noteSpend(payer, usd, opts = undefined) {
  *  already put in the shared window is not added again. */
 function bookLocal(k, ck, amount, now, pre = null) {
   const id = pre?.id || ++seq;
+  const global = !(k && exemptSet().has(k.toLowerCase()));
+  if (global) {
+    globalExposureUsd(now); // prune
+    globalRows.push({ id, usd: amount, at: now, settled: false });
+    if (SHARED) void sharedWrite(CONTROL, shared.windowAdd("esg-global", GLOBAL_KEY, { windowMs: STALE_MS, member: `${SHARED_PROC}:${id}`, weight: microOf(amount), now, score: now }));
+  }
   if (k) {
     const rows = prune(ledger.get(k) || [], now);
     rows.push({ id, usd: amount, at: now, settled: false });
@@ -663,7 +725,7 @@ function bookLocal(k, ck, amount, now, pre = null) {
     chainLedger.set(ck, rows);
     if (!PG) persistChainLedgerSoon();
   }
-  return { payer: k, id, chain: ck };
+  return { payer: k, id, chain: ck, global };
 }
 
 /**
@@ -684,6 +746,18 @@ export function adjustSpend(handle, usd) {
   if (!handle || typeof handle !== "object") return;
   const actual = Number(usd);
   if (!Number.isFinite(actual) || actual < 0) return;
+  if (handle.global) {
+    const g = globalRows.find((r) => r.id === handle.id);
+    if (g && actual < g.usd) {
+      const before = g.usd;
+      g.usd = actual;
+      if (SHARED) {
+        const member = `${SHARED_PROC}:${handle.id}`;
+        void sharedWrite(CONTROL, shared.windowRemove("esg-global", GLOBAL_KEY, { member, weight: microOf(before) }))
+          .then(() => sharedWrite(CONTROL, shared.windowAdd("esg-global", GLOBAL_KEY, { windowMs: STALE_MS, member, weight: microOf(actual), now: Date.now(), score: g.at })));
+      }
+    }
+  }
   const lower = (rows, own = false) => {
     // On the database every process numbers its own rows, so a chain row is
     // matched by this process's tag as well as its id.
@@ -712,6 +786,14 @@ export function adjustSpend(handle, usd) {
  * succeeding is precisely the state that precedes a settlement failure.
  */
 export function resolveSpend(handle, settled) {
+  if (settled && handle?.global) {
+    const g = globalRows.find((r) => r.id === handle.id && !r.settled);
+    if (g) {
+      g.settled = true;
+      globalRows = globalRows.filter((r) => !r.settled);
+      if (SHARED) void sharedWrite(CONTROL, shared.windowRemove("esg-global", GLOBAL_KEY, { member: `${SHARED_PROC}:${handle.id}`, weight: microOf(g.usd) }));
+    }
+  }
   if (!handle?.payer) return;
   const rows = ledger.get(handle.payer);
   if (!rows) return;
@@ -758,8 +840,8 @@ export function walletDailyStatus(now = Date.now()) {
 
 /** Test-only. */
 export function __reset() {
-  if (SHARED) for (const k of ledger.keys()) void shared.windowClear("esg-payer", k);
-  ledger.clear(); chainLedger.clear(); seq = 0;
+  if (SHARED) { for (const k of ledger.keys()) void shared.windowClear("esg-payer", k); void shared.windowClear("esg-global", GLOBAL_KEY); }
+  ledger.clear(); chainLedger.clear(); globalRows = []; seq = 0;
   if (!PG) return undefined;
   // With the state database the document row goes too, so a test starts clean.
   return pgReady.then(() => withStateTx((c) => c.query(`DELETE FROM ${stateDbSchema()}.documents WHERE name = $1`, [DOC_NAME]))).catch(() => {});
@@ -771,4 +853,4 @@ export async function __flush() { while (pgWriting) await pgWriting; }
 export const __backend = PG ? "pg" : "file";
 /** Whether the per-payer ledger is written through to the shared store. */
 export const __sharedPayerLedger = SHARED;
-export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS };
+export const __config = { DEFAULT_MAX_UNSETTLED_USD, STALE_MS, DEFAULT_WALLET_DAILY_MAX_USD, WALLET_DAY_MS, DEFAULT_MAX_UNSETTLED_GLOBAL_USD };

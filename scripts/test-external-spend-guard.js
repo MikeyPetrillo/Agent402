@@ -308,7 +308,7 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
   ok(maySpend(null, 0.001, { chain: "solana" }).ok === false && maySpend(null, 0.001, { chain: "base" }).ok === true,
     "the override is what the check reads (solana paused at $0.50, base still open at $3)");
   process.env.SOR_WALLET_DAILY_MAX_USD_SOLANA = "off";
-  ok(walletDailyCeilingUsd("solana") === null && maySpend(null, 999, { chain: "solana" }).ok === true, "`off` disables the ceiling for that chain");
+  ok(walletDailyCeilingUsd("solana") === null && maySpend(null, 999, { chain: "solana", maxGlobalUnsettledUsd: null }).ok === true, "`off` disables the ceiling for that chain");
   process.env.SOR_WALLET_DAILY_MAX_USD_SOLANA = "0";
   ok(walletDailyCeilingUsd("solana") === null, "`0` disables it too");
   process.env.SOR_WALLET_DAILY_MAX_USD_SOLANA = "lots";
@@ -317,7 +317,7 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
   process.env.SOR_WALLET_DAILY_MAX_USD = "banana";
   ok(walletDailyCeilingUsd("base") === __config.DEFAULT_WALLET_DAILY_MAX_USD, "a malformed global value falls back to the DEFAULT, never to disabled");
   process.env.SOR_WALLET_DAILY_MAX_USD = "off";
-  ok(walletDailyCeilingUsd("base") === null && maySpend(null, 1e6, { chain: "base" }).ok === true, "`off` globally disables every chain's ceiling");
+  ok(walletDailyCeilingUsd("base") === null && maySpend(null, 1e6, { chain: "base", maxGlobalUnsettledUsd: null }).ok === true, "`off` globally disables every chain's ceiling");
   noEnv();
 }
 
@@ -375,6 +375,48 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
   const split = await Promise.all([0, 1].map(async () => { const d = await g.maySpend(null, 0.6, { chain: "solana", walletDailyMaxUsd: 1 }); if (d.ok) await g.noteSpend(null, 0.6, { chain: "solana" }); return d.ok; }));
   ok(split.every(Boolean), "(control) a check and a booking an await apart both pass: the race reserveSpend closes");
   g.__reset();
+}
+
+// --- the global unsettled ceiling -------------------------------------------
+// The per-payer ceiling is per key, so a fresh key per call gets a fresh
+// ceiling. The global window bounds the unsettled total across all payers.
+{
+  const g = await import("../src/external-spend-guard.js");
+  g.__reset(); noEnv(); delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
+  ok(g.globalUnsettledCeilingUsd() === g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD && g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD > 0, "the global ceiling has a positive default");
+  process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "5";
+  const handles = [];
+  let refusedAt = -1, refusal = null;
+  for (let i = 0; i < 10; i++) {
+    const d = await g.reserveSpend(`ip:198.51.100.${i}`, 1.5);
+    if (!d.ok) { refusedAt = i; refusal = d; break; }
+    handles.push(d.handle);
+  }
+  ok(refusedAt === 3 && refusal?.code === "global_unsettled_ceiling", `distinct payers each under their own ceiling stop at the global one (refused at call ${refusedAt}, code ${refusal?.code})`);
+  ok(/every buyer/.test(refusal?.reason || ""), "the refusal says it is a pause for every buyer");
+  ok(Math.abs(g.globalExposureUsd() - 4.5) < 1e-9, `the global exposure is the sum across payers (${g.globalExposureUsd()})`);
+  g.resolveSpend(handles[0], true);
+  ok(Math.abs(g.globalExposureUsd() - 3.0) < 1e-9 && (await g.reserveSpend("ip:198.51.100.99", 1.5)).ok === true, "a settled spend frees global room");
+  g.adjustSpend(handles[1], 0.1);
+  ok(Math.abs(g.globalExposureUsd() - 3.1) < 1e-9, `lowering a spend lowers the global total (${g.globalExposureUsd()})`);
+  ok((await g.reserveSpend("ip:198.51.100.98", 1.5)).ok === true && (await g.reserveSpend("ip:198.51.100.97", 1.5)).ok === false, "and the ceiling still binds after the corrections");
+  process.env.EXTERNAL_SPEND_EXEMPT = "0xexempt";
+  ok((await g.reserveSpend("0xexempt", 100)).ok === true, "an exempt payer is outside the global window");
+  delete process.env.EXTERNAL_SPEND_EXEMPT;
+  process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "off";
+  ok(g.globalUnsettledCeilingUsd() === null && (await g.reserveSpend("ip:198.51.100.96", 5)).ok === true, "`off` disables the global ceiling");
+  process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "banana";
+  ok(g.globalUnsettledCeilingUsd() === g.__config.DEFAULT_MAX_UNSETTLED_GLOBAL_USD, "a malformed value reads as the default, never as off");
+  delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
+  g.__reset();
+}
+
+// route-execute keys a non-EVM x402 buyer on the signer of its payload and
+// words the global refusal as a pause for everyone.
+{
+  const src = await readFile(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
+  ok(/nonEvmPayerFromRequest\(req\)/.test(src) && src.indexOf("nonEvmPayerFromRequest(req)") < src.indexOf("`ip:${req.ip}`"), "route-execute keys a non-EVM payer on its signer before the IP fallback");
+  ok(/global_unsettled_ceiling/.test(src), "route-execute words the global refusal as a pause for everyone");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

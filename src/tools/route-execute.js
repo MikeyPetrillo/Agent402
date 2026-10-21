@@ -19,6 +19,7 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
+import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { findTools } from "../find.js";
 import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
@@ -511,8 +512,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // request would get a fresh ceiling each time. A Tempo pull
           // credential reaches this handler only with a verified sender (the
           // gate refuses it otherwise; see spendsBeforeSettlement).
+          // A Solana, Algorand or Stellar x402 buyer is keyed on the signer
+          // its verified payload names (src/non-evm-payer.js), so a buyer on
+          // those rails keeps one ceiling across IPs. The global ceiling in
+          // external-spend-guard.js bounds every payer key together.
           const spendPayer = payerFromRequest(req)
             || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
+            || (req ? await nonEvmPayerFromRequest(req) : null)
             || (req?.ip ? `ip:${req.ip}` : null);
           // Book the WORST CASE this call could cost, not the seller's declared
           // price. `cap` is what payExternal will refuse to exceed, so it is the
@@ -527,6 +533,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // cannot both pass a ceiling that has room for one.
           const allowed = await reserveSpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
+            if (allowed.code === "global_unsettled_ceiling") throw bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
           }
