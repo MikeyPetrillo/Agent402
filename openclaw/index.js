@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PLUGIN_ID } from "./provider.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { stripTrailingSlashes } from "./models.js";
+import { acceptUsd } from "./known-assets.js";
+export { acceptUsd, KNOWN_ASSETS } from "./known-assets.js";
 
 export const STATE_DIR = () => join(process.env.AGENT402_OPENCLAW_HOME || join(homedir(), ".openclaw"), "agent402");
 export const CREDITS_KEY_FILE = () => join(STATE_DIR(), "credits.key");
@@ -63,17 +65,12 @@ export function maxPerCallUsd(pluginConfig = {}) {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_PER_CALL_USD;
 }
-/** Dollar value of an accept's quote: `amount` (v2) or `maxAmountRequired` (v1)
- *  in base units over the asset's `extra.decimals` (USDC on Base: 6). Unknown
- *  shape reads as null, and null is REFUSED under a finite ceiling: a quote we
- *  cannot read is not one we sign. */
-export function acceptUsd(accept) {
-  const raw = accept?.amount ?? accept?.maxAmountRequired;
-  if (raw == null || !/^\d+$/.test(String(raw))) return null;
-  const dec = Number(accept?.extra?.decimals ?? 6);
-  if (!Number.isInteger(dec) || dec < 0 || dec > 36) return null;
-  return Number(raw) / 10 ** dec;
-}
+// The dollar value of an accept's quote is acceptUsd (./known-assets.js):
+// `amount` (v2) or `maxAmountRequired` (v1) in base units over the KNOWN
+// decimals of its asset, never a decimals value the seller sends, since the
+// signer signs the raw amount. An accept in an asset outside the table, or
+// with no whole-number amount, reads as null, and null is REFUSED under a
+// finite ceiling: a quote we cannot price is not one we sign.
 export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity } = {}) {
   const list = Array.isArray(accepts) ? accepts : [];
   const pick = (preferUpto && list.find((a) => a?.scheme === "upto" && a?.network === BASE_CAIP2))
@@ -106,7 +103,7 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
       upto = uptoReady(allowance);
       const maxUsd = maxPerCallUsd(pluginConfig);
       const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: upto, maxUsd }));
-      client.setSpendControls?.(false); // the vendor default ($1, pegged assets only) would refuse USDG and any quote over $1; selectAccept enforces our own maxPerCallUsd (same $1 default) instead
+      client.setSpendControls?.(false); // the vendor default ($1, its own default assets only) would refuse USDG and any quote over $1; selectAccept holds the accept that is signed to our own maxPerCallUsd instead
       registerExactEvmScheme(client, { signer });
       if (upto) client.register(BASE_CAIP2, new UptoEvmScheme(signer));
       log(upto
@@ -117,7 +114,7 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
       // The allowance read or the upto scheme failed: exact still works.
       log(`[agent402-openclaw] upto unavailable (${String(e?.message || e).slice(0, 120)}) - paying exact`);
       const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: false, maxUsd: maxPerCallUsd(pluginConfig) }));
-      client.setSpendControls?.(false); // the vendor default ($1, pegged assets only) would refuse USDG and any quote over $1; selectAccept enforces our own maxPerCallUsd (same $1 default) instead
+      client.setSpendControls?.(false); // the vendor default ($1, its own default assets only) would refuse USDG and any quote over $1; selectAccept holds the accept that is signed to our own maxPerCallUsd instead
       registerExactEvmScheme(client, { signer });
       return wrapFetchWithPayment(fetch, client);
     }

@@ -18,6 +18,9 @@
 //   // paid tools: pass an x402-wrapped fetch (your wallet signs)
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { quoteOf, guardSigning } from "./known-assets.js";
+export { KNOWN_ASSETS, knownAsset, acceptUsd } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
@@ -64,6 +67,16 @@ async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// A pre-wrapped payment fetch with no x402Client is the one mode where the caps
+// are checked on an unpaid preflight only, not on the payment that is signed.
+// Said once per process, on the first capped paid call in that mode.
+let advisoryCapsWarned = false;
+function warnAdvisoryCaps() {
+  if (advisoryCapsWarned) return;
+  advisoryCapsWarned = true;
+  console.warn("[agent402-client] spending caps are set with a pre-wrapped payment fetch and no x402Client, so they are checked on a preflight of the 402 only, not on the payment that is signed. Pass { x402Client } (the client your fetch wraps) to enforce them at signing.");
+}
+
 export class Agent402 {
   /**
    * @param {object} [opts]
@@ -76,6 +89,8 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
+   * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
+   *                                         enforced on the payment that is signed (see guardX402Client)
    * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) already issued (new credits are
    *                                         not on sale) - pays wallet-only tools when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
@@ -94,7 +109,7 @@ export class Agent402 {
    *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
-    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null,
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null } = {}) {
     this.respondAsync = respondAsync;
@@ -135,11 +150,63 @@ export class Agent402 {
       perHost: numOrNull(maxPerHostUsd),
       log: [], // [{ ts, host, usd }] - settled paid calls in the last 24h
     };
+    // The paid call being signed right now, so the signing guard can tell this
+    // call's own reservation from every other one (see guardX402Client).
+    this._signCtx = new AsyncLocalStorage();
+    this._guarded = false;
+    if (x402Client) this.guardX402Client(x402Client);
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
     // Buyer-owned delivery policy. The callback stays entirely local and may
     // use Ajv, Zod, agent-payment-policy, or ordinary application code.
     this.outputValidator = normalizeOutputValidator(outputValidator, "constructor");
+  }
+
+  /**
+   * Enforce this client's spending caps on the payment that is signed.
+   *
+   * Register it on the x402Client your `fetch` wraps (or pass it as the
+   * `x402Client` option): every accept that cannot be priced from a known
+   * asset, or that asks more than the per-call cap or what is left of the
+   * rolling caps, is dropped before the client selects one, and the selected
+   * one is checked again just before its payload is built. The preflight read
+   * of the 402 still runs for a readable refusal, but the challenge that is
+   * signed is the one this guard sees, so the caps hold on the paid request's
+   * own 402 whatever the preflight said. Returns the client.
+   */
+  guardX402Client(client) {
+    guardSigning(client, {
+      allowance: () => this._signAllowance().cap,
+      onSign: (usd) => {
+        const ctx = this._signCtx.getStore();
+        if (!ctx) return;
+        ctx.signedUsd = usd;
+        if (ctx.reservation) ctx.reservation.usd = usd;
+      },
+      onRefuse: (detail) => {
+        const ctx = this._signCtx.getStore();
+        if (ctx) ctx.refusal = { ...detail, limit: this._signAllowance().limit };
+      },
+    });
+    this._guarded = true;
+    return client;
+  }
+
+  /** The most the payment being signed may ask for: the per-call cap and what
+   *  is left of the rolling-24h caps, net of every other call's reservation
+   *  (this call's own one is what is being replaced). */
+  _signAllowance() {
+    const s = this._spend;
+    const own = this._signCtx.getStore()?.reservation || null;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const others = s.log.filter((e) => e.ts >= cutoff && e !== own);
+    const host = hostOf(this.baseUrl);
+    let cap = Infinity, limit = null;
+    const tighten = (value, name) => { if (value < cap) { cap = value; limit = name; } };
+    if (s.maxPerCall != null) tighten(s.maxPerCall, "maxPerCallUsd");
+    if (s.daily != null) tighten(s.daily - others.reduce((a, e) => a + e.usd, 0), "dailyLimitUsd");
+    if (s.perHost != null) tighten(s.perHost - others.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0), "maxPerHostUsd");
+    return { cap: Math.max(0, cap), limit };
   }
 
   /**
@@ -431,24 +498,38 @@ export class Agent402 {
         // amount THIS request is quoted. Fail-open: a 402 we cannot read
         // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
-        const usd = await this._quotedUsd(send, listUsd);
+        const guarded = this._guarded;
+        if (!guarded && this._spendCapsConfigured()) warnAdvisoryCaps();
+        const usd = await this._quotedUsd(send, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
-        // cap; release the reservation if the call doesn't settle.
-        const reservation = this._spendReserve(host, usd, slug, listUsd);
+        // cap; release the reservation if the call doesn't settle. With the
+        // signing guard on, the reservation is replaced by the amount actually
+        // signed, and a call that signed nothing spends nothing.
+        const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded });
+        const ctx = { reservation, signedUsd: null, refusal: null };
+        const signedNothing = () => guarded && ctx.signedUsd == null;
         let settled = false;
         try {
-          const r = await collect(await send(asyncHeaders, this.payFetch));
+          const r = await collect(await this._signCtx.run(ctx, () => send(asyncHeaders, this.payFetch)));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
-          this._spendSettle(reservation); // confirm the reservation as settled spend
+          if (signedNothing()) this._spendRelease(reservation);
+          else this._spendSettle(reservation); // confirm the reservation as settled spend
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // An invalid or oversized paid HTTP-success body is failed delivery,
           // not a rollback of money that already moved. A job still running
           // past the wait may yet settle, so its reservation stands.
-          if (e instanceof AsyncJobPendingError) this._spendSettle(reservation);
+          if (e instanceof AsyncJobPendingError && !signedNothing()) this._spendSettle(reservation);
           else if (!settled) this._spendRelease(reservation);
+          if (ctx.refusal) {
+            const d = ctx.refusal;
+            throw new SpendingLimitError(d.reason === "unknown-asset"
+              ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
+              : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
+            { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e });
+          }
           throw e;
         }
       }
@@ -462,7 +543,7 @@ export class Agent402 {
         // debit.
         const host = hostOf(this.baseUrl);
         const listUsd = parseUsd(tool.price);
-        const usd = await this._quotedUsd(send, listUsd);
+        const usd = await this._quotedUsd(send, listUsd, { slug, mode: "credits" });
         const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
@@ -552,17 +633,34 @@ export class Agent402 {
    *  body. Only preflights when a ceiling is configured (it costs a round trip,
    *  and with no cap the number changes nothing). The preflight send carries no
    *  payment header and no credits key, so it can only ever draw a 402.
-   *  @returns {Promise<number>} the quoted amount, or `listUsd` when unreadable */
-  async _quotedUsd(send, listUsd) {
+   *
+   *  Each accept is priced from the table of known assets (./known-assets.js),
+   *  never from a decimals value the seller sends. `mode` says who signs:
+   *  "guarded" (the signing guard holds every signature to the caps, so the
+   *  cheapest known accept is what can be paid, and unknown ones are dropped
+   *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
+   *  one counts, and one that cannot be priced is refused here), or "credits"
+   *  (nothing is signed; the dearest known accept counts).
+   *  @returns {Promise<number>} the quoted amount, or `listUsd` when there is no readable 402 */
+  async _quotedUsd(send, listUsd, { slug = "", mode = "wallet" } = {}) {
     if (!this._spendCapsConfigured()) return listUsd;
+    let q = null;
     try {
       const pre = await send();
       if (pre?.status !== 402) return listUsd;
-      const quoted = await quoted402Usd(pre);
-      // Larger of the two: an understated catalog must not lower the ceiling
-      // the cap is checked against.
-      return quoted == null ? listUsd : Math.max(listUsd, quoted);
-    } catch { return listUsd; /* fail-open to the advertised price */ }
+      q = quoteOf(await challengeAccepts(pre));
+    } catch { return listUsd; /* no readable 402: the advertised price */ }
+    if (!q) return listUsd;
+    if (q.max == null || (mode === "wallet" && q.unknown > 0)) {
+      if (mode === "credits") return listUsd;
+      throw new SpendingLimitError(
+        `refusing to pay for "${slug}" - ${q.max == null ? "no" : "a"} payment option it offers is in an asset this client cannot price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
+        { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
+    }
+    const quoted = mode === "guarded" ? q.min : q.max;
+    // Larger of the two: an understated catalog must not lower the ceiling
+    // the cap is checked against.
+    return Math.max(listUsd, quoted);
   }
 
   /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
@@ -640,9 +738,9 @@ export class Agent402 {
    *  concurrent calls account for each other's in-flight reservations instead of
    *  all passing against the same pre-commit total. Returns a reservation handle
    *  (or null for a $0 call). Throws SpendingLimitError before reserving if over. */
-  _spendReserve(host, usd, slug, listUsd = null) {
+  _spendReserve(host, usd, slug, listUsd = null, { always = false } = {}) {
     this._spendCheck(host, usd, slug, listUsd);
-    if (!(usd > 0)) return null;
+    if (!(usd > 0) && !always) return null;
     const entry = { ts: Date.now(), host, usd, pending: true };
     this._spend.log.push(entry);
     return entry;
@@ -705,23 +803,30 @@ export class SpendingLimitError extends Error {
   }
 }
 
-// Parse the USD amount an x402 `402` challenge actually requires - the max across
-// the offered rails. x402 is stablecoin-settled (USDC/USDG), so
-// atomic / 10^decimals ≈ USD. Returns null if the body isn't a parseable 402
-// challenge, so the caller fails open to the advertised catalog price.
 /** The dearest amount a 402 asks for, in USD, or null when it cannot be read.
+ *
+ *  Each accept is priced from the known-asset table (./known-assets.js): the
+ *  base-unit amount over that asset's real decimals, never a decimals value
+ *  the seller sends. One accept that is not a known asset makes the whole
+ *  quote unreadable (null).
  *
  *  x402 v2 carries the challenge base64 in the `PAYMENT-REQUIRED` HEADER and
  *  leaves the body `{}`, so a body-only reader learns nothing from a stock v2
  *  seller and silently falls back to the catalog price. Header first, then the
  *  body (v1 sellers, and sellers that serve both). */
 export async function quoted402Usd(res) {
-  const header = res?.headers?.get?.("payment-required");
-  const fromHeader = usdFromAccepts(decodeChallengeHeader(header));
-  if (fromHeader != null) return fromHeader;
+  const q = quoteOf(await challengeAccepts(res));
+  // Every accept must be priceable: the wallet picks which one to sign.
+  return q && q.unknown === 0 ? q.max : null;
+}
+
+/** The accepts array of a 402, from the PAYMENT-REQUIRED header first, then the body. */
+async function challengeAccepts(res) {
+  const fromHeader = decodeChallengeHeader(res?.headers?.get?.("payment-required"));
+  if (fromHeader) return fromHeader;
   let body = null;
   try { body = await res.json(); } catch { body = null; }
-  return usdFromAccepts(acceptsOf(body));
+  return acceptsOf(body);
 }
 
 function decodeChallengeHeader(header) {
@@ -738,29 +843,6 @@ function acceptsOf(obj) {
     if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) return nested.accepts;
   }
   return null;
-}
-
-/** The MAXIMUM across accepts: the wallet picks which chain to settle on and
- *  this client cannot know which, so the only sound ceiling is the dearest
- *  offer. Any entry we cannot price returns null (unreadable, never a guess -
- *  the caller falls back to the advertised price). */
-function usdFromAccepts(accepts) {
-  if (!Array.isArray(accepts) || !accepts.length) return null;
-  let maxUsd = null;
-  for (const a of accepts) {
-    // v2 names the base-unit amount `amount`; x402 v1 called it `maxAmountRequired`.
-    const atomic = Number(a && (a.amount ?? a.maxAmountRequired));
-    if (!Number.isFinite(atomic) || atomic < 0) return null;
-    // USDC is 6 decimals on every chain these rails settle; an accept may say
-    // otherwise, and a wrong exponent is a 1000x pricing error, so a
-    // non-integer or out-of-range hint makes the whole quote unreadable.
-    const declared = (a && a.extra && a.extra.decimals) ?? (a && a.decimals);
-    const decimals = declared == null ? 6 : Number(declared);
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 30) return null;
-    const usd = atomic / 10 ** decimals;
-    if (maxUsd == null || usd > maxUsd) maxUsd = usd;
-  }
-  return maxUsd;
 }
 
 function numOrNull(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }

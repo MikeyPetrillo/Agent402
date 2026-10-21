@@ -1944,6 +1944,8 @@ jobs:
           # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
           t node scripts/test-resale-copy.js
           t node scripts/test-mcp-dockerfiles.js
+          # Buyer packages price quotes from one known-asset table: copies identical, table matches the rails (offline)
+          t node scripts/test-known-assets.js
           # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
           t node scripts/test-tls-distrust.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)

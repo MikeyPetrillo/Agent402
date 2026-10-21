@@ -215,7 +215,7 @@ that runs as one.
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above) |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above) |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
@@ -224,6 +224,7 @@ that runs as one.
 | `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result |
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
+| `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
 | `a.clearCache()` | Drop the in-memory result cache |
 
@@ -306,8 +307,13 @@ call that would exceed one is **refused before any payment is signed** (it throw
 ```js
 import { Agent402, SpendingLimitError } from "agent402-client";
 
+const client = new x402Client();
+registerExactEvmScheme(client, { signer });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
 const a = new Agent402({
   fetch: payFetch,
+  x402Client: client,    // the caps are enforced on the payment that is signed
   maxPerCallUsd: 0.05,   // reject any single call priced above $0.05
   dailyLimitUsd: 5,      // rolling-24h ceiling across all sellers
   maxPerHostUsd: 1,      // rolling-24h ceiling per seller host
@@ -326,16 +332,33 @@ that later fails byte, JSON, or output validation remains settled spend. Free
 proof-of-work calls are never counted. Omit a cap (or leave it `null`) for no
 limit; with none set, behavior is unchanged.
 
-**What the caps check.** When a cap is set, the client preflights the `402` and
-checks the ceiling against the **larger** of the advertised price (from the
-seller's `/api/pricing`) and the amount the `402` challenge actually quotes - so a
-server that under-advertises and then quotes more in the `402` is refused *before*
-your wallet fetch signs anything. If the `402` can't be read (FREE_MODE, or an
-unrecognized challenge shape) it falls back to the advertised price rather than
-block a legitimate payment. Caps hold under **concurrency** too: each call reserves
-its amount synchronously, so N simultaneous calls can't each pass against the same
-pre-commit total. (The `402` amount is derived assuming stablecoin settlement -
-`atomic / 10^decimals ≈ USD` - which matches x402's USDC/USDG rails.)
+**Caps are enforced on the payment that is signed.** Pass the `x402Client` your
+`fetch` wraps (or call `a.guardX402Client(client)`) and the client registers a
+policy on it: every payment option that asks more than the per-call cap, or more
+than is left of the rolling caps, is dropped before the x402 client picks one,
+and the picked one is checked again just before it is signed. A refusal there is
+a `SpendingLimitError` with `atSigning: true`, and nothing is signed. The ledger
+books the amount actually signed.
+
+**The one advisory mode.** A pre-wrapped payment `fetch` given without its
+`x402Client` is the only mode where the caps are advisory: they are checked on
+an unpaid preflight of the `402`, before your wallet fetch runs, but not on the
+`402` that fetch then signs. The client logs a one-time warning when caps are
+set in this mode. The adapters built on this client (agent402-agentkit,
+elizaos-plugin-agent402) construct their own x402 client and pass it, so their
+caps hold at signing by default.
+
+**How a quote is priced.** An x402 signer signs the option's raw base-unit
+`amount`, so each option is priced from a built-in table of known assets per
+network (`KNOWN_ASSETS`: USDC on each Agent402 rail, USDG on Robinhood Chain,
+with their on-chain decimals), never from a decimals value the seller sends. An
+option in an asset outside the table cannot be priced, and a capped wallet never
+signs it. When a cap is set, the client preflights the `402` and checks the
+ceiling against the **larger** of the advertised price (from the seller's
+`/api/pricing`) and the amount the `402` quotes; if no `402` comes back
+(FREE_MODE) it checks the advertised price. Caps hold under **concurrency** too:
+each call reserves its amount synchronously, so N simultaneous calls can't each
+pass against the same pre-commit total.
 
 - **Zero dependencies** for the free/proof-of-work path (uses `node:crypto`).
 - **Non-custodial:** paid settlement is your `@x402/fetch` / `mppx` fetch + wallet (or a prepaid credits key you bought); this client never sees a private key.

@@ -17,6 +17,7 @@
   "files": [
     "index.js",
     "async-job.js",
+    "known-assets.js",
     "networks.js",
     "discovery.js",
     "output-schemas.js",

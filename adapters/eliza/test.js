@@ -92,6 +92,32 @@ async function main() {
   r = await callAction.handler(rtWallet, msg({ text: "", slug: "hash", params: { text: "abc", algo: "sha256" } }));
   ok(r.success === true, `a wallet key (x402 peers present or not) still pays the free tier with proof-of-work (got: ${r.text})`);
 
+  // The per-call ceiling holds on the payment that is SIGNED: a stub seller
+  // quotes $0.01 to the unpaid preflight and $5 to the request the wallet
+  // signs for. The wallet is a throwaway key; the stub records any signature.
+  {
+    const seen = { unpaid: 0, signed: 0 };
+    const offer = (amount) => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: "http://127.0.0.1/api/dear", description: "dear", mimeType: "application/json" },
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }],
+    })).toString("base64");
+    const dear = createServer((req, res) => {
+      const j = (code, body, headers = {}) => { res.writeHead(code, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+      if (req.url.startsWith("/api/pricing")) return j(200, { endpoints: [{ slug: "dear", method: "POST", path: "/api/dear", price: "$0.01", computePayable: false }] });
+      req.resume();
+      if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return j(200, { ok: true }); }
+      seen.unpaid++;
+      return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : 5000000) });
+    });
+    await new Promise((resolve) => dear.listen(0, "127.0.0.1", resolve));
+    const rtDear = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "22".repeat(32) });
+    r = await callAction.handler(rtDear, msg({ text: "", slug: "dear", params: { q: "x" } }));
+    ok(seen.unpaid === 2 && seen.signed === 0, `the $5 payment the paid request asked for was never signed under the default $1 ceiling (unpaid ${seen.unpaid}, signed ${seen.signed})`);
+    ok(r.success === false && r.data?.errorCode === "spend_limit", `the call answers a spend-limit refusal (got: ${r.text})`);
+    dear.close();
+  }
+
   // provider: names the payment mode without leaking a key
   const p = await agent402Provider.get(rtKey, msg({ text: "" }), {});
   ok(/card credits/.test(p.text) && p.values.agent402PaymentMode === "card credits" && !p.text.includes(KEY), "provider context names the payment mode (card credits) and never the key");

@@ -380,8 +380,23 @@ try {
     const seen = { preflights: 0, authorized: 0 };
     const challenge = (usd) => Buffer.from(JSON.stringify({
       x402Version: 2,
-      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: "0xUSDC", payTo: "0xdead", extra: { name: "USD Coin" } }],
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } }],
     })).toString("base64");
+    // A signable offer (real address shapes) at `amount` base units of Base
+    // USDC, with optional extra fields.
+    const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const signable = (path, amount, extra = {}) => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: `http://127.0.0.1${path}`, description: "paid", mimeType: "application/json" },
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", ...extra } }],
+    })).toString("base64");
+    // /api/switch quotes $0.01 to the first unpaid request (the preflight) and
+    // $5 to every later one (the request the wallet signs for); /api/hinted
+    // quotes 5000000 base units of USDC ($5) beside a decimals hint of 18.
+    // A request carrying a signature is counted and answered 200.
+    const switchRow = { slug: "switch", method: "POST", path: "/api/switch", price: "$0.01", description: "switch", category: "util", computePayable: false };
+    const hintedRow = { slug: "hinted", method: "POST", path: "/api/hinted", price: "$0.01", description: "hinted", category: "util", computePayable: false };
+    seen.switchUnpaid = 0; seen.signed = 0;
     const catalogRow = { slug: "chat", method: "POST", path: "/v1/chat/completions", price: `$${LIST_USD}`, description: "chat", category: "llm", computePayable: false };
     // A route that refuses every request, the paid retry included, the way this
     // server's paywall does: 402 + PAYMENT-REQUIRED + a JSON body that mirrors
@@ -413,9 +428,17 @@ try {
     };
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow], payment: { network: "base" } });
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
+      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return send(200, { ok: true }); }
+        const path = req.url.split("?")[0];
+        if (path === "/api/hinted") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 5000000, { decimals: 18 }) });
+        seen.switchUnpaid++;
+        return send(402, {}, { "PAYMENT-REQUIRED": signable(path, seen.switchUnpaid === 1 ? 10000 : 5000000) });
+      }
       if (req.url.startsWith("/api/refused")) {
         if (req.headers["payment-signature"] || req.headers["x-payment"]) seen.refusedPaid++;
         req.resume();
@@ -500,7 +523,55 @@ try {
         if (!r.isError || pt !== PLAIN[row.path][1]) fail(`${row.slug}: an error body with no x402 offer must reach the agent byte-identical, got: ${pt.slice(0, 300)}`);
       }
       console.log("a plain 400 and 502 reach the agent byte-identical, with no offer note ✓");
+
+      // The cap holds on the payment that is SIGNED: the paid request's own 402
+      // asks $5 after a $0.01 preflight, and the signing guard refuses it.
+      seen.switchUnpaid = 0; seen.signed = 0;
+      const switched = await wallet.callTool({ name: "catalog.call", arguments: { slug: "switch", params: { text: "x" } } });
+      if (seen.switchUnpaid !== 2) fail(`expected the preflight and the paid request's own 402 (saw ${seen.switchUnpaid} unpaid requests)`);
+      if (seen.signed !== 0) fail("the wallet signed a $5 payment over a $0.10 cap");
+      if (!switched.isError || !/Refused without paying/.test(text(switched)) || !/\$5\b/.test(text(switched))) fail(`a 402 that rises after the preflight must be refused at signing: ${text(switched).slice(0, 300)}`);
+      console.log("a quote that rises after the preflight is refused at signing ✓");
+
+      // A seller decimals hint does not lower the price: 5000000 base units of
+      // USDC is $5 whatever decimals the accept declares.
+      seen.signed = 0;
+      const hinted = await wallet.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
+      if (seen.signed !== 0 || !hinted.isError || !/Refused without paying/.test(text(hinted))) fail(`a $5 quote declared at 18 decimals must be refused: ${text(hinted).slice(0, 300)}`);
+      console.log("a quote is priced from the known asset, not the seller's decimals hint ✓");
     } finally { await wallet.close().catch(() => {}); }
+
+    // The session budget is checked at signing too: $0.03 left, and the paid
+    // request asks $5 after a $0.01 preflight.
+    {
+      const budgeted = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.03" });
+      try {
+        seen.switchUnpaid = 0; seen.signed = 0;
+        const r = await budgeted.callTool({ name: "catalog.call", arguments: { slug: "switch", params: { text: "x" } } });
+        if (seen.signed !== 0 || !r.isError || !/AGENT402_BUDGET/.test(text(r))) fail(`the budget must hold at signing: ${text(r).slice(0, 300)}`);
+        const info = JSON.parse(text(await budgeted.callTool({ name: "get_payment_info", arguments: {} })));
+        if (info.spendControls?.maxPerCallUsd !== "unlimited" || info.spendControls?.spentThisSessionUsd !== 0) fail(`off disables the per-call cap and a refusal spends nothing: ${JSON.stringify(info.spendControls)}`);
+        console.log("the session budget holds at signing; off disables the per-call cap ✓");
+      } finally { await budgeted.close().catch(() => {}); }
+    }
+
+    // Defaults: with neither variable set, a $5 quote is refused (the default
+    // per-call cap), and the default covers the dearest tool in the catalog.
+    {
+      const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
+      try {
+        seen.signed = 0;
+        const r = await defaults.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
+        if (seen.signed !== 0 || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`the default per-call cap must refuse a $5 quote: ${text(r).slice(0, 300)}`);
+        const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
+        const perCall = info.spendControls?.maxPerCallUsd, budget = info.spendControls?.sessionBudgetUsd;
+        if (!(Number.isFinite(perCall) && Number.isFinite(budget) && budget >= perCall)) fail(`finite default caps expected: ${JSON.stringify(info.spendControls)}`);
+        const pricing = await (await fetch(`${API}/api/pricing`)).json();
+        const dearest = Math.max(...pricing.endpoints.map((e) => parseFloat(String(e.price).replace(/[^0-9.]/g, "")) || 0));
+        if (!(dearest > 0 && perCall >= dearest)) fail(`the default per-call cap $${perCall} must cover the dearest catalog price $${dearest}`);
+        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), $${budget} per session ✓`);
+      } finally { await defaults.close().catch(() => {}); }
+    }
     await new Promise((r) => stub.close(r));
   }
 

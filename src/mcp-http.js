@@ -1181,7 +1181,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
-            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session" },
+            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call (on by default; off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (on by default; off disables)", enforced: "on the payment that is signed" },
             balanceAndHistory: {
               balance: "check a wallet's USDC balance via catalog.call with slug wallet-balances (multi-chain) or wallet-balance (single)",
               transactions: "pull a wallet's transaction history via catalog.call with slug wallet-transactions",
