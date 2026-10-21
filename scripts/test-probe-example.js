@@ -28,7 +28,9 @@ const { probeAttemptsFor } = await import("../src/x402-live-quote.js");
 const { boundedProbeExample, manifestEntryExample, openapiOperationExample, probeExampleFor, noteProbeExample, probeExamplePath, ProbeExampleMemo, MAX_EXAMPLE_BYTES } = await import("../src/probe-example.js");
 
 let pass = 0, fail = 0;
-const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
+// Straight to stdout, so an assertion made while console is captured is shown.
+const say = (line) => process.stdout.write(`${line}\n`);
+const ok = (c, m) => { if (c) { pass++; say(`ok - ${m}`); } else { fail++; say(`FAIL - ${m}`); } };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} (got ${JSON.stringify(a)})`);
 
 const ARC = "eip155:5042";
