@@ -4542,6 +4542,8 @@ jobs:
           t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js
+          # tweet.js media upload: --upload-only honors DRY_RUN=1 and --dry-run (no request at all), a refused STATUS read while a video processes is exit 2 with the status (stub fetch preload, nothing reaches X)
+          t node scripts/test-tweet-cli.js
           # Public reports: buyer toggle by session id, unguessable public id, indexable page, revocable (boots FREE_MODE)
           t node scripts/test-public-reports.js
           # House style on every report tier: no em/en dashes in delivered copy (offline)

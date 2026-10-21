@@ -24,7 +24,7 @@
 //   DRY_RUN=1 node scripts/tweet.js --text "dry run, nothing leaves the box"
 //   node scripts/tweet.js --text "over 280 on purpose…" --force   # skip length guard
 //   node scripts/tweet.js --verify   # read-only credential check (GET /2/users/me); posts nothing
-//   node scripts/tweet.js --media clip.mp4 --upload-only   # upload (chunked for .mp4/.mov), print the media id, post nothing
+//   node scripts/tweet.js --media clip.mp4 --upload-only   # upload (chunked for .mp4/.mov), print the media id, post nothing (DRY_RUN=1 / --dry-run: upload nothing)
 //
 // Exit codes: 0 posted (or dry-run/verify OK), 1 usage/credential/length error, 2 API error.
 
@@ -135,7 +135,10 @@ async function uploadVideo(path, mediaType) {
     await new Promise((r) => setTimeout(r, Math.max(1, Number(state.check_after_secs) || 2) * 1000));
     const q = { command: "STATUS", media_id: mediaId };
     const res = await fetch(`${MEDIA_URL}?${new URLSearchParams(q)}`, { headers: { Authorization: authHeader("GET", MEDIA_URL, q) } });
-    state = (await res.json().catch(() => ({}))).processing_info;
+    const json = await res.json().catch(() => ({}));
+    // A refused STATUS read (401, 429, 5xx) is an error, never "processing done".
+    if (!res.ok) { console.error(`media STATUS ${res.status}:`, JSON.stringify(json).slice(0, 300)); process.exit(2); }
+    state = json.processing_info;
   }
   if (state && state.state !== "succeeded") { console.error("media processing did not finish"); process.exit(2); }
   return mediaId;
@@ -208,8 +211,13 @@ async function main() {
   // that an upload (a video's chunks and processing included) goes through.
   if (args.uploadOnly) {
     if (!args.media) { console.error("--upload-only needs --media <path>"); process.exit(1); }
-    requireCredentials();
     const videoType = VIDEO_TYPES[extname(args.media).toLowerCase()];
+    if (DRY || args.dryRun) {
+      const bytes = readFileSync(args.media).length;
+      console.log(`DRY RUN: would upload ${args.media} (${bytes} bytes, ${videoType ? `${videoType}, chunked` : "image"}); nothing uploaded, nothing posted`);
+      return;
+    }
+    requireCredentials();
     const id = videoType ? await uploadVideo(args.media, videoType) : await uploadMedia(args.media);
     console.log(`uploaded, media id ${id} (nothing posted)`);
     return;
