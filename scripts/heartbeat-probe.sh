@@ -67,13 +67,17 @@ probe_once() {
   # anywhere (the 2026-07-02 incident class: buyers simply never see
   # the option). Base is always required; Robinhood/USDG is required
   # iff the ROBINHOOD_FACILITATOR_URL secret says the operator
-  # intends the rail.
+  # intends the rail, and Arc iff ARC_RAIL_INTENDED=true (set from the
+  # presence of the Circle facilitator key secret, never its value).
   if [ "$PW" = "402" ]; then
     NETS=$(tr -d '\r' < /tmp/hb-402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1 \
       | base64 -d 2>/dev/null | jq -r '[.accepts[]?.network] | join(",")' 2>/dev/null || echo "")
     case "$NETS" in *eip155:8453*) : ;; *) FAILS="$FAILS rails(base-missing:${NETS:-unparsed})";; esac
     if [ -n "$ROBINHOOD_FACILITATOR_URL" ]; then
       case "$NETS" in *eip155:4663*) : ;; *) FAILS="$FAILS rails(robinhood-missing:${NETS:-unparsed})";; esac
+    fi
+    if [ "$ARC_RAIL_INTENDED" = "true" ]; then
+      case "$NETS" in *eip155:5042,*|*eip155:5042) : ;; *) FAILS="$FAILS rails(arc-missing:${NETS:-unparsed})";; esac
     fi
   fi
   node --input-type=module -e '

@@ -11,7 +11,7 @@ until it is spent, and a card report purchase is held by the payment processor
 until the report is delivered. See [Security](https://agent402.tools/security).) The caller needs no API key: the
 tools read public chain state through the server's own RPC providers. The chain
 tools take a `network` param (default `base`): **Base, Polygon, Arbitrum,
-Optimism, Ethereum, Monad, Celo, Avalanche and Sei**, plus Robinhood Chain for
+Optimism, Ethereum, Monad, Celo, Avalanche, Sei and Arc**, plus Robinhood Chain for
 the chain-read tools (`tx-status`, `gas-estimate`).
 
 Walkthrough with runnable examples: [the x402 payments guide](https://agent402.tools/guides/x402-payments-toolkit).

@@ -9,7 +9,7 @@
 3. Client signs a USDC `transferWithAuthorization` from its own wallet (no gas needed - the facilitator sponsors it) and retries with the payment header.
 4. Facilitator verifies + settles on-chain; the server serves the result. End-to-end this is seconds.
 
-The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand** - no ETH, no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
+The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar, or Algorand** - no ETH, no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
 
 ## What the 402 carries
 

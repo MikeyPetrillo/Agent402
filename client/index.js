@@ -25,7 +25,7 @@ export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUS
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.14";
+const VERSION = "0.8.15";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -796,6 +796,7 @@ export const NETWORK_CAIP2 = {
   arbitrum: "eip155:42161",
   "base-sepolia": "eip155:84532",
   robinhood: "eip155:4663",
+  arc: "eip155:5042",
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
 };

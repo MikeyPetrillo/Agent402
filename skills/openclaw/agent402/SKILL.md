@@ -33,7 +33,7 @@ curl "https://agent402.tools/api/pricing"
 1. **Wallet, USDC over x402.** Set `EVM_PRIVATE_KEY` to a **dedicated** wallet
    that holds only a small working balance, never a treasury or personal
    wallet. Base is the default rail; the same call also settles on Solana,
-   Polygon, Arbitrum, Stellar, Algorand, Monad, Avalanche, Sei, Optimism,
+   Polygon, Arbitrum, Stellar, Algorand, Monad, Avalanche, Sei, Optimism, Arc,
    Robinhood Chain (USDG) and Celo, as listed in each tool's 402.
 2. **Prepaid card credits.** Buy a pack at `https://agent402.tools/credits` and
    send `Authorization: Bearer a402_<key>`. The list price is held before the

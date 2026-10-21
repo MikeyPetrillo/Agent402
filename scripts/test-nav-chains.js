@@ -4,6 +4,7 @@
 // dropped Stellar, Algorand, and Robinhood from both menus the moment the
 // 10th rail shipped (found by the operator on a phone, 2026-07-22, not by CI).
 import { ledgerShell, setNavIndexProvider } from "../src/ledger-chrome.js";
+import { RAILS as RAIL_TABLE, railKey } from "../src/rails.js";
 
 let failed = 0;
 const ok = (cond, msg) => {
@@ -14,9 +15,9 @@ const ok = (cond, msg) => {
   }
 };
 
-const RAILS = ["base", "solana", "polygon", "arbitrum", "monad", "celo", "avalanche", "sei", "optimism", "stellar", "algorand", "robinhood"];
+const RAILS = RAIL_TABLE.map(railKey);
 
-// ---- 1. static fallback (no provider): all 12 rails reachable ----
+// ---- 1. static fallback (no provider): every rail reachable ----
 {
   setNavIndexProvider(null);
   const html = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
@@ -25,7 +26,7 @@ const RAILS = ["base", "solana", "polygon", "arbitrum", "monad", "celo", "avalan
   }
 }
 
-// ---- 2. live provider with all 12 chains: nothing truncated away ----
+// ---- 2. live provider with every rail: nothing truncated away ----
 {
   setNavIndexProvider(() => ({
     chains: RAILS.map((label) => ({ label, href: `/${label}`, sellers: 5, tools: 9, healthy: true })),
@@ -37,17 +38,17 @@ const RAILS = ["base", "solana", "polygon", "arbitrum", "monad", "celo", "avalan
   }
 }
 
-// ---- 3. far-future ceiling: >16 chains truncates to 16, never below the roster (12 rails + a gated one fit) ----
+// ---- 3. far-future ceiling: >16 chains truncates to 16, never below the roster (every rail + a gated one fit) ----
 {
   const many = [...RAILS, ...Array.from({ length: 8 }, (_, i) => `chain${13 + i}`)].map((label) => ({ label, href: `/${label}`, sellers: 1, healthy: true }));
   setNavIndexProvider(() => ({ chains: many }));
   const html = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
   const shown = many.filter((c) => html.includes(`href="/${c.label}"`)).length;
-  ok(shown === 16, `20 chains truncate to exactly 16 (got ${shown})`);
-  const thirteen = many.slice(0, 13);
-  setNavIndexProvider(() => ({ chains: thirteen }));
-  const html13 = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
-  ok(thirteen.every((c) => html13.includes(`href="/${c.label}"`)), "13 chains (12 rails plus a gated rail in the live offer) are all shown");
+  ok(shown === 16, `${many.length} chains truncate to exactly 16 (got ${shown})`);
+  const plusOne = many.slice(0, RAILS.length + 1);
+  setNavIndexProvider(() => ({ chains: plusOne }));
+  const htmlPlus = ledgerShell({ title: "t", description: "d", canonical: "https://x/", baseUrl: "https://x", body: "" });
+  ok(plusOne.every((c) => htmlPlus.includes(`href="/${c.label}"`)), `${plusOne.length} chains (every rail plus a gated rail in the live offer) are all shown`);
 }
 
 setNavIndexProvider(null);

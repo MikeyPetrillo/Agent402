@@ -8,7 +8,7 @@
 //   node scripts/test-payai-listing-pass.js
 import assert from "node:assert/strict";
 import { CHAINS, coverageFor } from "./listing-coverage.js";
-import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, SETTLE_VIA } from "./payai-listing-pass.js";
+import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, SETTLE_VIA, isMultipartExample } from "./payai-listing-pass.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -162,6 +162,14 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
   const refused = await main(["--max-spend", "two"], {});
   ok(refused === 2, `main refuses an unreadable ceiling before any read or buy (exit ${refused})`);
   ok(SETTLE_VIA === "payai", "the pass names the facilitator the server registers");
+}
+
+{
+  // The OpenAI transcription wire publishes its upload part as a "multipart"
+  // placeholder; the pass sends those routes a FormData body, never JSON.
+  ok(isMultipartExample({ file: "<audio bytes, multipart part named file>" }) === true, "a multipart file placeholder is a multipart example");
+  ok(isMultipartExample({ file: "https://example.com/a.wav" }) === false, "a file URL in JSON is not a multipart example");
+  ok(isMultipartExample({ url: "https://example.com" }) === false && isMultipartExample(undefined) === false, "an ordinary or missing example is not multipart");
 }
 
 console.log(`test-payai-listing-pass: ${n} passed`);

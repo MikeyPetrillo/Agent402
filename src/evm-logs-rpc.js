@@ -48,6 +48,8 @@ export const EVM_LOGS_PUBLICS = Object.freeze({
   avalanche: [{ url: "https://api.avax.network/ext/bc/C/rpc", maxRange: 9_000 }, { url: "https://avalanche-c-chain-rpc.publicnode.com", maxRange: 9_000 }],
   optimism: [{ url: "https://mainnet.optimism.io", maxRange: 9_000 }, { url: "https://optimism-rpc.publicnode.com", maxRange: 9_000 }],
   robinhood: [{ url: "https://rpc.mainnet.chain.robinhood.com", maxRange: 9_000 }],
+  // Refuses 10,000-block ranges; serves 4,900. A rate-limit answer cools it.
+  arc: [{ url: "https://rpc.mainnet.arc.io", maxRange: 4_900 }],
 });
 
 /** A lane's depth gate in blocks: `maxDepthSeconds` at the chain's live block

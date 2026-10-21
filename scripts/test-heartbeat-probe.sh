@@ -61,6 +61,14 @@ rm -f "$CAPTURE"; record_observation down "pow-paid-call" >/dev/null
 [ "$(field paid-call)" = "false" ] && ok "paid-call failure maps to paid-call" || bad "paid-call failure maps to paid-call" "got $(field paid-call)"
 [ "$(field paywall)" = "true" ]    && ok "paid-call failure leaves paywall up" || bad "paid-call failure leaves paywall up" "got $(field paywall)"
 
+rm -f "$CAPTURE"; record_observation down "rails(arc-missing:eip155:8453,eip155:5042002)" >/dev/null
+[ "$(field rails)" = "false" ] && ok "an Arc rail missing from the offer maps to rails" || bad "an Arc rail missing from the offer maps to rails" "got $(field rails)"
+# The Arc match is exact: the testnet id (eip155:5042002) never satisfies it.
+for nets in "eip155:8453,eip155:5042002" "eip155:5042002"; do
+  case "$nets" in *eip155:5042,*|*eip155:5042) bad "arc match is exact ($nets)" "matched" ;; *) ok "arc match is exact ($nets)" ;; esac
+done
+grep -q 'case "$NETS" in \*eip155:5042,\*|\*eip155:5042)' "$(dirname "$0")/heartbeat-probe.sh" && ok "the probe uses the exact Arc pattern" || bad "the probe uses the exact Arc pattern" "pattern not found"
+
 # The retired-converter checks share the substring "paywall(" with the real
 # paywall check. They must not be confused for each other.
 rm -f "$CAPTURE"; record_observation down "retired-convert-paywall(200)" >/dev/null

@@ -557,13 +557,12 @@ await check("a timeout and a network error keep the 'may have broadcast' shape (
   assert.deepEqual(fallbackCandidatesFor(ARC_CAIP2, { settle() {} }, { settle() {} }, { [ARC_CAIP2]: [] }), [], "Arc names no fallback facilitator");
 });
 
-await check("paid canary: the Arc leg is gated (absent from the 402 = skipped, not a rail failure); its funding check follows the shared low-water rule", async () => {
+await check("paid canary: the Arc leg is a peer leg (absent from the 402 = a rail failure, never a skip); its funding check follows the shared low-water rule", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("./paid-canary.js", import.meta.url), "utf8");
-  assert.match(src, /\{ key: "arc", caip2: "eip155:5042",[^}]*gated: true/);
-  const skipAt = src.indexOf("if (!accepts.length && leg.gated)");
-  const failAt = src.indexOf("NOT among the live 402 accepts", skipAt);
-  assert.ok(skipAt > 0 && failAt > skipAt, "the gated skip runs before the dropped-rail failure");
+  assert.match(src, /\{ key: "arc", caip2: "eip155:5042", sym: "USDC", chainLabel: "Arc", tx:/);
+  assert.ok(!/gated: true/.test(src) && !src.includes("leg.gated"), "no leg is skipped for being absent from the 402");
+  assert.ok(src.includes("NOT among the live 402 accepts"), "a dropped rail fails its leg");
   const { CHAIN_FUNDING, chainLowWaterReport } = await import("./paid-canary.js");
   const arc = CHAIN_FUNDING.find((c) => c.key === "arc");
   assert.ok(arc && arc.lowWater === undefined, "Arc funding has no special threshold");
@@ -1036,15 +1035,19 @@ async function arcSurfaces(base) {
     page, panel,
     chains: manifest.ecosystem?.chains || [],
     sitemap: /\/arc<\/loc>/.test(sitemap),
-    howToPay: /\bArc\b/.test(howToPay),
+    // The rail table row (the site chrome's static rail list names every rail).
+    howToPay: /<th scope="row"[^>]*>Arc<\/th>/.test(howToPay),
     nav: /href="\/arc"/.test(home),
   };
 }
+// Arc not in the live offer: the surfaces that state what this server takes
+// (the manifest's chains, how-to-pay) do not name it; the /arc market page,
+// its panel, the nav and the sitemap are static, as for every rail.
 const assertArcHidden = (s, leg) => {
-  assert.equal(s.page, 404, `${leg}: /arc is not served (got ${s.page})`);
-  assert.equal(s.panel, 404, `${leg}: the Arc market panel is not served`);
   assert.ok(!s.chains.includes("Arc"), `${leg}: the manifest's chains do not name Arc (${s.chains})`);
-  assert.ok(!s.sitemap && !s.howToPay && !s.nav, `${leg}: no sitemap entry, how-to-pay mention or nav link (${JSON.stringify(s)})`);
+  assert.ok(!s.howToPay, `${leg}: how-to-pay does not name Arc (${JSON.stringify(s)})`);
+  assert.equal(s.page, 200, `${leg}: /arc is a static market page like every rail's (got ${s.page})`);
+  assert.ok(s.sitemap && s.nav, `${leg}: the sitemap and nav list /arc like every rail (${JSON.stringify(s)})`);
 };
 
 // Leg A: no key. Arc absent, the server serves, nothing errors.

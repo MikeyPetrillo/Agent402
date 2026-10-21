@@ -192,7 +192,7 @@ import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
 import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
-import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars } from "./price-usd.js";
+import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
@@ -2665,6 +2665,26 @@ function dollarLabelOf(obj) {
   return null;
 }
 
+/** A row whose only figure is an `amount` with no payment context of its own
+ *  and no dollar field beside it. */
+function bareAmountEntry(raw) {
+  return !!raw && typeof raw === "object" && raw.amount != null
+    && raw.price_usd == null && raw.priceUsd == null && raw.price == null
+    && raw.unit == null && raw.currency == null
+    && !acceptShaped(raw) && !atomicContext(raw) && dollarLabelOf(raw) == null;
+}
+
+/** A whole `amount` is read as base units only where the dollar reading is
+ *  not a per-call price ($1,000 or more) and the base-unit reading is one (at
+ *  least $0.000001); a small whole figure such as 1 or 5 stays dollars. */
+const BARE_AMOUNT_DOLLAR_CEILING = 1000;
+function baseUnitReading(ctx, amount) {
+  const text = String(amount).trim();
+  if (!/^\d+$/.test(text) || Number(text) < BARE_AMOUNT_DOLLAR_CEILING) return null;
+  const usd = atomicAmountToDollars(ctx, text);
+  return typeof usd === "number" && usd >= 0.000001 ? usd : null;
+}
+
 function parseManifestPrice(raw) {
   let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
@@ -2891,6 +2911,12 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   const metaByPath = new Map();
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
+  // A catalogue row that carries only a bare `amount` under a manifest whose
+  // own accepts name an asset by identifier is quoting that accept's base
+  // units, as the x402 field means; read alone it is a dollar figure a million
+  // times too large.
+  const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
+    .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
   const notePathMeta = (path, { name, description, price, slug, pay }) => {
     if (!path) return;
     const cur = metaByPath.get(path) || {};
@@ -2926,6 +2952,10 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
         name = String(raw.name || raw.title || raw.operationId || "").trim();
         description = String(raw.summary || raw.description || "").trim();
         price = parseManifestPrice(raw);
+        if (manifestAtomic && bareAmountEntry(raw)) {
+          const usd = baseUnitReading(manifestAtomic, raw.amount);
+          if (usd != null) price = `$${usd}`;
+        }
         // The input schema a seller declares beside the route (issue #1503).
         inputSchema = raw.input_schema && typeof raw.input_schema === "object" ? raw.input_schema
           : (raw.inputSchema && typeof raw.inputSchema === "object" ? raw.inputSchema : null);
@@ -7704,7 +7734,7 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
 // Short chain names buyers may pass to ?network= — resolved to CAIP-2.
 const ROUTE_NETWORKS = {
   base: "eip155:8453", polygon: "eip155:137", arbitrum: "eip155:42161",
-  robinhood: "eip155:4663", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  robinhood: "eip155:4663", arc: "eip155:5042", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
 };
 
 // The decorated remote pool per entry and the per-tool statics (lowercased

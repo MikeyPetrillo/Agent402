@@ -68,6 +68,10 @@ jobs:
           # the live 402 accepts when it is set, so intentionally disabling the
           # rail (removing the secret) never pages.
           ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
+          # "true" when the Circle facilitator key secret is set: the operator
+          # intends the Arc rail, so the rails check requires eip155:5042. Only
+          # the comparison reaches the job, never the key.
+          ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
         run: |
           . scripts/heartbeat-probe.sh
           for attempt in 1 2 3; do
@@ -1206,6 +1210,7 @@ jobs:
         env:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
+          ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
           # Narrow credential for POST /api/status/probe; falls back to OP_TOKEN.
           PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}

@@ -67,7 +67,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > report.
 >
 > **Two payment wires, one URL.** Every paid endpoint accepts **x402**
-> (`PAYMENT-SIGNATURE`, USDC on 11 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
+> (`PAYMENT-SIGNATURE`, USDC on 12 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
@@ -102,7 +102,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 
 > Optionally, the same server can charge per call over the [x402
 > protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche,
-> Sei, Optimism, Stellar & Algorand, plus USDG on Robinhood Chain - 12 chains) - so the instance you
+> Sei, Optimism, Arc, Stellar & Algorand, plus USDG on Robinhood Chain - 13 chains) - so the instance you
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
@@ -512,7 +512,7 @@ instance. Payments are the default posture: a bare `npm start` **fails closed**,
 exiting unless `WALLET_ADDRESS` is set - running without payments is the
 explicit opt-in (`FREE_MODE=true npm start`). To charge, set `WALLET_ADDRESS`
 + CDP facilitator keys (free at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com))
-and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar,
+and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar,
 Algorand - or USDG on Robinhood Chain via `PAYMENT_NETWORKS=…,robinhood` +
 `ROBINHOOD_FACILITATOR_URL`) via standard x402 clients:
 
@@ -561,7 +561,7 @@ Every claim links to the surface that proves it (the live version, a section of 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
 2. **A failed x402 call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
 3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
-4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on twelve chains and native MPP on Tempo.
+4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on thirteen chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
 6. **We source from other sellers.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, buys the result from that seller with our wallet and sells it to you under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Base or Solana seller under a small per-call ceiling.
 7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every on-chain rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
@@ -642,7 +642,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, 150+ pure-CPU utilities) - **add tools here** |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
-| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand + USDG on Robinhood Chain (12 chains), CDP facilitator, Bazaar discovery |
+| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Arc/Stellar/Algorand + USDG on Robinhood Chain (13 chains), CDP facilitator, Bazaar discovery |
 | `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js` | MPP on the same routes: `Payment` challenges/credentials translated to x402 (evm), native Tempo settlement via Tempo's relay, and Stripe cards over MPP |
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing, per-chain marketplace pages (`/stellar`, `/algorand`) |
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |

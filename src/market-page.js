@@ -239,6 +239,24 @@ export const CHAIN_PAGES = {
     honestyNetworkPhrase: "the Optimism network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
+  arc: {
+    chainName: "Arc",
+    // Arc's gas is paid in USDC; there is no separate native token.
+    ticker: "USDC",
+    tickerLabel: "ARC · MAINNET",
+    caip2: "eip155:5042",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.arc.io",
+    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
+    networkParam: "arc",
+    acceptNetwork: "eip155:5042",
+    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
+    // ("eip155:5042002"), so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:5042",
+    honestyNetworkPhrase: "the Arc network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
   stellar: {
     chainName: "Stellar",
     ticker: "XLM",
@@ -301,27 +319,8 @@ export const CHAIN_PAGES = {
 // nav, sitemap or /<chain> route names them, until src/payments.js reports the
 // rail in the live offer; then the entry joins CHAIN_PAGES and every surface
 // that iterates it at request time (nav, sitemap, the /<chain> page) picks it
-// up. Until then /arc answers 404, the same as an unknown chain.
-export const GATED_CHAIN_PAGES = {
-  arc: {
-    chainName: "Arc",
-    // Arc's gas is paid in USDC; there is no separate native token.
-    ticker: "USDC",
-    tickerLabel: "ARC · MAINNET",
-    caip2: "eip155:5042",
-    asset: "USDC",
-    settledBy: "an x402 facilitator",
-    explorerUrl: "explorer.arc.io",
-    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
-    networkParam: "arc",
-    acceptNetwork: "eip155:5042",
-    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
-    // ("eip155:5042002"), so an exact match can't be fooled.
-    isNetwork: (n) => n === "eip155:5042",
-    honestyNetworkPhrase: "the Arc network",
-    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
-  },
-};
+// up. Empty while no rail is gated (Arc graduated into CHAIN_PAGES).
+export const GATED_CHAIN_PAGES = {};
 onGatedRailOffered((caip2) => {
   for (const [key, cfg] of Object.entries(GATED_CHAIN_PAGES)) {
     if (cfg.caip2 === caip2 && !CHAIN_PAGES[key]) CHAIN_PAGES[key] = cfg;
@@ -1314,6 +1313,13 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // per-chain stats would mean every /{chain} page computing all 12 chains'
   // numbers on every load just to render its own tab strip - real added
   // cost for a value only this page needs.
+  // A chain count that leaves one card alone on the grid's last row at some
+  // column count (2 to 8 columns across the breakpoints) gets one more card,
+  // the page that lists every rail, so no row ends on a single card.
+  const chainGridFiller = (n) => ([2, 3, 4, 5, 6, 7, 8].some((k) => n % k === 1) ? `<a href="/how-to-pay" title="How to pay on every rail" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
+      <span style="display:block;margin-bottom:12px;font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);">Every rail</span>
+      <span style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">how to pay on each chain &rarr;</span>
+    </a>` : "");
   const chainGridHtml = CHAIN_ORDER.map(([slug, name]) => {
     const chainSellers = marketSellers(slug, { sellers });
     const sellerCount = marketOperatorCount(slug, { sellers }, leaderboardSnap);
@@ -1323,7 +1329,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
       <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:var(--fs-sm);flex-wrap:wrap;"><span style="color:var(--ok);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">tool${toolCount === 1 ? "" : "s"}</span></span>
     </a>`;
-  }).join("");
+  }).join("") + chainGridFiller(CHAIN_ORDER.length);
 
   const chainGridSection = `
   <h2 style="font-size:var(--fs-xl);font-weight:700;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>

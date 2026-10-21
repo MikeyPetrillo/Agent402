@@ -8,6 +8,7 @@
 - [[Paying with x402]]
 - [[Paying with MPP]]
 - [[Robinhood Chain (USDG)|Robinhood-Chain]]
+- [[Arc (USDC)|Arc]]
 - [[Paying with Compute]]
 - [[MCP Connector]]
 - [[Adapters]]
