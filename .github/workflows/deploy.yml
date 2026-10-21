@@ -491,10 +491,11 @@ jobs:
 
   bazaar-solana:
     # One-shot sweep: pays every catalog route priced <= $0.05 once VIA SOLANA
-    # (SVM client -> PayAI facilitator), so settlement-driven indexes register
-    # each tool for Solana — PayAI's merchant listing, x402scan's facilitator
-    # view — and every harvester re-observes the live 402 with the full
-    # multi-chain accepts. Skips the LLM/image/audio/code proxies (real
+    # (SVM client, settled at the boot order's first facilitator, CDP), so
+    # settlement-driven indexes register each tool for Solana and every
+    # harvester re-observes the live 402 with the full multi-chain accepts.
+    # The PayAI registry is filled by listing-pass.yml, which asks for PayAI
+    # per request. Skips the LLM/image/audio/code proxies (real
     # upstream credit per call). Payments recycle burner -> revenue wallet.
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-solana' || needs.markers.outputs.bazaar_solana == 'true'

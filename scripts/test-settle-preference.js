@@ -14,7 +14,9 @@
 //      the Solana accept and changes nothing else in the envelope;
 //   4. a paid call carrying the header and token is verified and settled at
 //      the second stub only, and an untagged paid call at the first only;
-//   5. a tagged paid retry that drops the header is refused before any
+//   5. a tagged paid Base call is settled at the second stub too (the scope
+//      is network-generic), and an untagged one at the first;
+//   6. a tagged paid retry that drops the header is refused before any
 //      facilitator is asked (the quoted feePayer no longer matches).
 //
 //   node scripts/test-settle-preference.js
@@ -214,6 +216,37 @@ const paidPlain = await pay(solAccept(plain.pr));
 after = counts();
 ok(paidPlain.status === 200, `untagged paid call answers 200 (got ${paidPlain.status})`);
 ok(after.a[0] === before2.a[0] + 1 && after.a[1] === before2.a[1] + 1 && after.b[0] === before2.b[0] && after.b[1] === before2.b[1], "untagged paid call: verified and settled at the FIRST facilitator only");
+
+// Base: the scope is network-generic, so a tagged Base payment is verified and
+// settled at the preferred facilitator too, whenever its /supported lists
+// Base (both stubs do), and an untagged one at the first.
+const baseAccept = (pr) => (pr?.accepts || []).find((a) => a.network === BASE && a.scheme === "exact");
+ok(isDeepStrictEqual(baseAccept(tagged.pr), baseAccept(plain.pr)), "the tagged Base accept is the untagged one (no facilitator signer on an EVM accept)");
+const evmCredential = (accepted) => Buffer.from(JSON.stringify({
+  x402Version: 2, resource: { url: ROUTE, description: "", mimeType: "" }, accepted,
+  payload: {
+    signature: `0x${"ab".repeat(65)}`,
+    authorization: {
+      from: "0x00000000000000000000000000000000000000b1", to: accepted.payTo, value: String(accepted.amount),
+      validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 600), nonce: `0x${String(++txN).padStart(64, "0")}`,
+    },
+  },
+})).toString("base64");
+async function payBase(accepted, headers = {}) {
+  const r = await fetch(ROUTE, { headers: { Accept: "application/json", "payment-signature": evmCredential(accepted), ...headers } });
+  const text = await r.text();
+  return { status: r.status, text };
+}
+const beforeB = counts();
+const baseTagged = await payBase(baseAccept(tagged.pr), { "X-Agent402-Settle-Via": "payai", "X-Operator-Token": TOKEN });
+after = counts();
+ok(baseTagged.status === 200, `tagged Base paid call answers 200 (got ${baseTagged.status} ${baseTagged.text.slice(0, 160)})`);
+ok(after.b[0] === beforeB.b[0] + 1 && after.b[1] === beforeB.b[1] + 1 && after.a[0] === beforeB.a[0] && after.a[1] === beforeB.a[1], "tagged Base paid call: verified and settled at the SECOND facilitator only");
+ok(second.settle.at(-1)?.paymentRequirements?.network === BASE, "...on Base requirements");
+const beforeB2 = counts();
+const basePlain = await payBase(baseAccept(plain.pr));
+after = counts();
+ok(basePlain.status === 200 && after.a[1] === beforeB2.a[1] + 1 && after.b[1] === beforeB2.b[1], `untagged Base paid call: settled at the FIRST facilitator only (got ${basePlain.status})`);
 
 const before3 = counts();
 const dropped = await pay(solAccept(tagged.pr));
