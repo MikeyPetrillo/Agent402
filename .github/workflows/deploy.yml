@@ -3001,6 +3001,8 @@ jobs:
           t node scripts/test-refund-monitor.js
           # Bazaar register verdict (harvester lag is not a failure; a failed or unpaid route is — offline)
           t node scripts/test-bazaar-verdict.js
+          # Bazaar feed read (two full passes must agree, a third on disagreement; only routes absent from every pass are bought; short pages never end a walk — offline)
+          t node scripts/test-bazaar-twopass.js
           # External-buy spend cap (reserve before send; release only on a conclusive on-chain miss — offline)
           t node scripts/test-spend-budget.js
           # Third-party catalog (disclaimers present, seller strings inert, links nofollowed — offline)

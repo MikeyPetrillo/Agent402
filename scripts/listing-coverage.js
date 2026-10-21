@@ -198,6 +198,34 @@ export async function walkUnion(base, { walks = 1, fetchJson = getJson, log = ()
   return { items: [...byKey.values()], total };
 }
 
+/** Walk a registry in full passes until two consecutive passes agree on the
+ *  feed's total and on the set of rows `isOurs` selects (keyed by `keyOf`).
+ *  The feed indexes with a lag, so one walk can come back partially populated;
+ *  two passes always run, and a disagreement buys one more (up to `maxPasses`).
+ *  A caller that acts on "absent" should treat a key as absent only when it is
+ *  absent from every pass: `items` is every pass's selected rows, so a key
+ *  present in any pass is present. Each pass is walkRegistry's full walk (a
+ *  short page before pagination.total never ends it). */
+export async function walkAgreed(base, { isOurs = () => true, keyOf = (it) => it?.resource, minPasses = 2, maxPasses = 3, fetchJson = getJson, log = () => {} } = {}) {
+  const passes = [];
+  const walk = async () => {
+    const r = await walkRegistry(base, { fetchJson });
+    const items = r.items.filter(isOurs);
+    const keys = new Set(items.map(keyOf).filter((k) => k != null && k !== ""));
+    passes.push({ total: r.total, rows: items.length, keys, items });
+    log(`  feed pass ${passes.length}: ${r.total} rows in the feed, ${keys.size} of ours`);
+  };
+  const same = (a, b) => a.total === b.total && a.keys.size === b.keys.size && [...a.keys].every((k) => b.keys.has(k));
+  const passFloor = Math.max(2, minPasses);
+  while (passes.length < passFloor) await walk();
+  let agreed = same(passes.at(-1), passes.at(-2));
+  while (!agreed && passes.length < Math.max(passFloor, maxPasses)) {
+    await walk();
+    agreed = same(passes.at(-1), passes.at(-2));
+  }
+  return { passes, agreed, items: passes.flatMap((p) => p.items), total: passes.at(-1).total };
+}
+
 /** The live measurement: /api/pricing plus both registries. */
 export async function measureCoverage({ target, origin, chains = DEFAULT_CHAINS, bazaarUrl = BAZAAR_REGISTRY_URL, payaiUrl = PAYAI_REGISTRY_URL, walks = 2, fetchJson = getJson, log = () => {} } = {}) {
   const t = String(target || "https://agent402.tools").replace(/\/+$/, "");
