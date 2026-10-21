@@ -6,6 +6,44 @@ import { powCostPhrase } from "./pow.js";
 import { REPO_URL } from "./repo-link.js";
 export const BLOG_POSTS = [
   {
+    slug: "pay-per-call-tools-on-arc",
+    date: "2026-10-21",
+    title: "Pay-per-call tools for agents, now on Arc",
+    excerpt: "Agent402 now settles on Arc mainnet. An agent pays for one tool call at a time in USDC on Arc, settled through Circle's facilitator, with gas paid in USDC too. What Agent402 is, how a paid call works, and one real Arc payment, end to end.",
+    body: `<p>Agent402 now settles on <a href="/arc">Arc mainnet</a>. An agent that holds USDC on Arc can pay for any wallet-priced tool in the catalog one call at a time, and the payment settles through Circle's facilitator. Arc pays gas in USDC, so the wallet that pays for the call needs nothing else.</p>
+
+<h2>What Agent402 is</h2>
+
+<p>Agent402 is a catalog of 500+ tools an AI agent can call and pay for per request: web search and cited answers, browser rendering, market data, document and media tools, speech, an LLM gateway and finished reports. There are no accounts and no API keys. The price is in the answer to the first call, the agent pays it, and the tool runs. The pure-CPU tools are also free through a small proof-of-work, and the whole server is open source and self-hostable.</p>
+
+<p>Payment rides two open protocols: <strong>x402</strong>, the HTTP 402 payment flow, and <strong>MPP</strong>. One catalog answers on both, on every chain listed on <a href="/how-to-pay">how to pay</a>, and Arc is the newest.</p>
+
+<h2>How a paid call works</h2>
+
+<ol>
+  <li>The agent calls a tool, for example <code>POST /api/hash</code>, with no payment.</li>
+  <li>The server answers <code>402 Payment Required</code> with its offer: the price, the asset and an <code>accepts</code> entry for each chain it takes, Arc included (<code>eip155:5042</code>).</li>
+  <li>The agent signs a USDC transfer authorization for exactly that price on the chain it chooses and sends the call again with the signature.</li>
+  <li>The tool runs, and only a successful answer is settled on x402: an answer with an error status is not settled. The successful answer carries a receipt with the transaction.</li>
+</ol>
+
+<p>The agent signs; it never sends a raw transfer and never hands over a key. On Arc, the settlement goes through Circle's facilitator, which submits the transfer on chain.</p>
+
+<h2>One real payment on Arc</h2>
+
+<p>Our daily canary buys a call on every rail. On its first Arc run it called <code>/api/hash</code> and paid from our own test wallet on Arc. The call answered, the payment settled, and the transfer is on Arc's explorer: <a href="https://explorer.arc.io/tx/0x0f010b255aa2c6d6c2a954552240765d3d4a8e97117864a9614f88f26bbcd258">0x0f010b25...d258</a>. That run now repeats every day alongside the other chains, and its result feeds the <a href="/status">status page</a>.</p>
+
+<h2>Paying from your agent</h2>
+
+<ul>
+  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@latest</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
+  <li><strong>SDK:</strong> <code>agent402-client</code> wraps <code>fetch</code>: it reads the 402, signs the offer on your chosen chain and retries. <code>arc</code> is a network name it accepts.</li>
+  <li><strong>Any x402 client:</strong> the offer is a standard x402 v2 <code>exact</code> accept on <code>eip155:5042</code>, so a stock x402 client that signs EVM transfers pays it as is.</li>
+</ul>
+
+<p>Fund the wallet with USDC on Arc and that is the whole setup. Every chain, with its asset and how to pay on it, is on <a href="/how-to-pay">how to pay</a>, and the Arc details are on the <a href="${REPO_URL}/wiki/Arc">wiki</a>.</p>`,
+  },
+  {
     slug: "decide-plans-for-agents",
     date: "2026-10-01",
     title: "Decide: describe the job, get a plan your agent can run",
