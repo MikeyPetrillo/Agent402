@@ -349,6 +349,18 @@ const sorobanRpc = getRpcClient(NETWORK);
     installSignerReread(SIGNER, { proto: failing, pauseMs: 1, log: () => {} });
     calls = 0; err = null; try { await failing.getAccount(SIGNER); } catch (e) { err = e; }
     ok(/timeout/.test(err?.message) && calls === 1, "signer-reread: any other error is not reread here");
+    // The SDK reports a timed-out or 5xx read as "Account not found" too; a
+    // slow failure is not a node answering, so it is surfaced on the first read.
+    const slow = { async getAccount(address) { calls++; await new Promise((r) => setTimeout(r, 40)); throw new Error(`Account not found: ${address}`); } };
+    installSignerReread(SIGNER, { proto: slow, pauseMs: 1, fastMs: 20, log: () => {} });
+    calls = 0; err = null; try { await slow.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 1, `signer-reread: a slow not-found (timeout shape) is not reread (${calls})`);
+    // The budget stops rereads: a clock that jumps past it ends the walk.
+    let t = 0;
+    const budgeted = { async getAccount(address) { calls++; t += 3_000; throw new Error(`Account not found: ${address}`); } };
+    installSignerReread(SIGNER, { proto: budgeted, pauseMs: 1, fastMs: 5_000, budgetMs: 5_000, now: () => t, log: () => {} });
+    calls = 0; err = null; try { await budgeted.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 2, `signer-reread: no reread starts past the budget (${calls} reads)`);
   }
 }
 
