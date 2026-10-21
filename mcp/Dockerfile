@@ -12,7 +12,7 @@
 # Same hardening as the root Dockerfile.mcp (scripts/test-mcp-dockerfiles.js
 # holds the two to it): the base pinned by digest, dependency install with no
 # lifecycle scripts, and the server run as the unprivileged `node` user.
-FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+FROM node:22.23.4-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 WORKDIR /app
 COPY mcp/package.json mcp/package-lock.json ./
 # --ignore-scripts: the mcp deps are pure JS, so no dependency lifecycle

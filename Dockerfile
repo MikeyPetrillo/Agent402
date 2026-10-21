@@ -14,7 +14,7 @@
 #   docker pull node:22-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
 # (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/22-slim -> .digest)
-FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+FROM node:22.23.4-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 
 WORKDIR /app
 ENV NODE_ENV=production
