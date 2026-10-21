@@ -283,7 +283,10 @@ import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
+import { cdnClientIpMiddleware } from "./cdn-client-ip.js";
+import { paidNoStoreMiddleware } from "./paid-no-store.js";
+import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware } from "./cdn-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
@@ -2341,6 +2344,16 @@ app.use((req, _res, next) => renderPathStore.run(req.path, next));
 // attacker-supplied XFF value. This is what the per-IP rate limiters key on,
 // so spoofing it must not mint a fresh bucket. Tune for other topologies.
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
+// Through the CDN proxy the edge-reported peer is a CDN address and the client
+// is CF-Connecting-IP; from any other peer that header is ignored. req.ip is
+// redefined here, before any reader, so every limiter and attribution keys on
+// the resolved client (src/cdn-client-ip.js). A CDN request also carries the
+// deadline its synchronous answer must meet (src/cdn-sync-window.js).
+app.use(cdnClientIpMiddleware());
+app.use(cdnSyncDeadlineMiddleware());
+// Paid answers, every 402 and operator surfaces are never kept by a shared
+// cache (src/paid-no-store.js).
+app.use(paidNoStoreMiddleware());
 // Server-side memo for public surfaces whose body is built from SQLite
 // aggregates (revenue, sales, status, proof). A Cache-Control header only
 // asks browsers to reuse a response; every crawler and bot hit still rebuilt
@@ -8891,14 +8904,19 @@ const asyncProfileBySlug = (slug) => {
   asyncProfilesBySlug ??= new Map(Object.values(CATALOG).filter((d) => d.asyncProfile).map((d) => [d.slug, d.asyncProfile]));
   return asyncProfilesBySlug.get(slug) || null;
 };
+const asyncRouteOf = (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.asyncProfile ? def : null; };
 const asyncJobs = createAsyncJobs({
   port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
-  asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.asyncProfile ? def : null; },
+  asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
 });
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
+// Through the CDN proxy, a paid call to a route that can outlast the proxy's
+// wait runs as a job when the client follows a 202 on its own, and is
+// refused before any gate otherwise (src/cdn-sync-window.js).
+app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
