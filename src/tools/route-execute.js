@@ -43,7 +43,7 @@ export const EXEC_TIERS = [
   // so a mid-priced external tool could only ride the max tier. This tier
   // keeps the fee proportional and unlocks mid-priced external inventory.
   { slug: "route-execute-plus", execPriceUsd: 0.05, underlyingMaxUsd: 0.04 },
-  { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+  { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5, externalExample: true },
   // 2026-08-07: the $0.50 underlying ceiling excluded every indexed tool priced
   // above it, so the router could only answer those with a 409 pointing at the
   // seller's own direct route. The fee curve stays proportional rather than
@@ -54,8 +54,16 @@ export const EXEC_TIERS = [
   // cap raises exactly one exposure: what a buyer whose payment verifies and
   // then fails to settle can make us spend before we stop them. Keep
   // EXTERNAL_MAX_UNSETTLED_USD sized against THIS tier's underlying cap.
-  { slug: "route-execute-pro", execPriceUsd: 3.3, underlyingMaxUsd: 3.0 },
+  { slug: "route-execute-pro", execPriceUsd: 3.3, underlyingMaxUsd: 3.0, externalExample: true },
 ];
+// The published example of a tier marked externalExample: a task the router
+// buys from a proven outside seller (include:"external"), which is what those
+// tiers exist for. Their old example resolved to one of this host's own
+// tools, so a registry showed the tier's flat price for a lookup the catalog
+// sells directly, and buying the example never exercised the external leg.
+// The params match the request contract the top-ranked outside weather
+// sellers publish (lat and lon); the coordinates are a public city center.
+export const EXTERNAL_EXAMPLE_INPUT = Object.freeze({ task: "weather forecast", include: "external", params: Object.freeze({ lat: 40.7128, lon: -74.006 }) });
 const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
 /** Which execution tier (if any) can run a tool at `underlyingUsd`, and the
  *  price to pay it. Used by /api/route to quote the buyer the exact tier. */
@@ -236,7 +244,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       // A wallet-only tool resolved from a task: the router's use. A pure-CPU
       // tool such as hash runs free with proof-of-work, so it would teach the
       // dearest way to run a free tool.
-      input: { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
+      input: tier.externalExample
+        ? { task: EXTERNAL_EXAMPLE_INPUT.task, include: EXTERNAL_EXAMPLE_INPUT.include, params: { ...EXTERNAL_EXAMPLE_INPUT.params } }
+        : { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
@@ -247,7 +257,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         },
       },
       output: {
-        example: {
+        example: tier.externalExample ? {
+          receipt: { slug: "weather", route: "POST https://seller.example/weather", underlyingPriceUsd: 0.002, paidUsd: EXEC_PRICE_USD, routingFeeUsd: Number((EXEC_PRICE_USD - 0.002).toFixed(6)), seller: "https://seller.example", external: true, settleTx: "0x…", settleNetwork: "eip155:8453", wire: "x402", resolvedBy: "task-external", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          result: { forecast: ["…"], untrustedContent: true },
+        } : {
           receipt: { slug: "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { name: "example.com", type: "A", records: ["…"] },
         },

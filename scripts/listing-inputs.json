@@ -113,5 +113,21 @@
       }
     ],
     "max_tokens": 1200
+  },
+  "POST /api/route/execute-max": {
+    "task": "weather forecast",
+    "include": "external",
+    "params": {
+      "lat": 40.7128,
+      "lon": -74.006
+    }
+  },
+  "POST /api/route/execute-pro": {
+    "task": "weather forecast",
+    "include": "external",
+    "params": {
+      "lat": 40.7128,
+      "lon": -74.006
+    }
   }
 }

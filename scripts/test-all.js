@@ -103,8 +103,10 @@ const NETWORK = new Set([
   // seller-payability pays an external seller's probe from the spending
   // wallet - 503 without X402_UPSTREAM_BUYER_KEY (CI boots keyless).
   "/api/seller-payability",
-  // route-execute-max/-plus: external tiers may pay an upstream seller — lenient.
-  "/api/route/execute-max", "/api/route/execute-plus",
+  // route-execute-max/-plus/-pro: external tiers may pay an upstream seller,
+  // and the max and pro examples route to one (include:"external", refused
+  // with a 409 on a host without external routing) - lenient.
+  "/api/route/execute-max", "/api/route/execute-plus", "/api/route/execute-pro",
   // captcha-verify hits a live provider siteverify (egress) — lenient.
   "/api/captcha-verify",
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",

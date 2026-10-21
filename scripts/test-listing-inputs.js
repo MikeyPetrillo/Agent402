@@ -17,19 +17,23 @@ import Ajv from "ajv";
 import { getFreePort } from "./lib/free-port.js";
 import { parseInputs } from "./payai-listing-pass.js";
 import { X_DATA_TOOLS } from "../src/tools/x-data-kit.js";
+import { EXTERNAL_EXAMPLE_INPUT } from "../src/tools/route-execute.js";
+import { requestExampleOf } from "../src/openapi-request.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 // The routes the owner asked for purposeful inputs on. The two route-execute
-// tiers keep their published example (a safe task, no added outside spend).
+// tiers that exist to buy from an outside seller carry the same task as their
+// published example (src/tools/route-execute.js EXTERNAL_EXAMPLE_INPUT).
 const REQUIRED_ROUTES = [
   "POST /v1/research/pro", "POST /v1/research/max", "POST /v1/linkedin-article",
   "POST /v1/token-risk", "POST /v1/token-risk/pro", "POST /v1/token-brief",
   "POST /v1/ticker-pack", "POST /v1/recall-report", "POST /api/x-users-lookup",
   "POST /v1/premium/chat/completions", "POST /v1/premium/messages", "POST /v1/premium/gemini",
   "POST /v1/premium/responses", "POST /api/llm-premium",
+  "POST /api/route/execute-max", "POST /api/route/execute-pro",
 ];
 
 async function bootServer() {
@@ -53,7 +57,9 @@ const raw = JSON.parse(readFileSync(path.join(HERE, "listing-inputs.json"), "utf
 const inputs = parseInputs(raw, "listing-inputs.json");
 ok(inputs.size === Object.keys(raw).length, `the file parses as an inputs map (${inputs.size} routes)`);
 for (const k of REQUIRED_ROUTES) ok(inputs.has(k), `${k} has a purposeful input`);
-ok(!inputs.has("POST /api/route/execute-max") && !inputs.has("POST /api/route/execute-pro"), "the route-execute tiers keep their published example");
+for (const k of ["POST /api/route/execute-max", "POST /api/route/execute-pro"]) {
+  ok(JSON.stringify(inputs.get(k)) === JSON.stringify(EXTERNAL_EXAMPLE_INPUT), `${k}: the input is the tier's published external example`);
+}
 const text = readFileSync(path.join(HERE, "listing-inputs.json"), "utf8");
 ok(!/—/.test(text), "no em dash in the inputs");
 ok(!/(sk-|Bearer |0x[0-9a-fA-F]{64}|PRIVATE|SECRET|api[_-]?key\s*[:=])/.test(text), "no key, token or secret-shaped string in the inputs");
@@ -66,7 +72,7 @@ try {
   for (const [key, body] of inputs) {
     const [method, p] = key.split(" ");
     const op = openapi.paths?.[p]?.[method.toLowerCase()];
-    const schema = op ? (method === "GET" ? null : op.requestBody?.content?.["application/json"]?.schema) : kitSchema.get(key)?.schema;
+    const schema = op ? (method === "GET" ? null : requestExampleOf(op)?.schema) : kitSchema.get(key)?.schema;
     const priced = (pricing.endpoints || []).some((e) => e.method === method && e.path === p) || kitSchema.has(key);
     ok(priced, `${key} is a priced route`);
     if (method === "GET") {
