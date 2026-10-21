@@ -112,7 +112,7 @@ try {
     let hidden = null, missing = null;
     try { await h("github-repo")({ owner: "acme", repo: "hidden" }); } catch (e) { hidden = e; }
     try { await h("github-repo")({ owner: "acme", repo: "missing" }); } catch (e) { missing = e; }
-    ok(seen.includes("https://api.github.com/repos/acme/hidden"), "github-repo: (control) the stubbed API was read");
+    ok(seen.some((u) => u === "https://api.github.com/repos/acme/hidden"), "github-repo: (control) the stubbed API was read");
     ok(hidden?.statusCode === 404 && missing?.statusCode === 404 && hidden.message.replace("hidden", "X") === missing.message.replace("missing", "X"),
       `github-repo: a private repository answers 404 like a missing one (${hidden?.statusCode} ${hidden?.message})`);
   } finally { globalThis.fetch = realFetch; }
