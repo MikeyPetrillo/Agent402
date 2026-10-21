@@ -30,6 +30,23 @@ for (const df of ["Dockerfile.mcp", "mcp/Dockerfile"]) {
   const missing = [...need].filter((f) => !copied.has(f));
   ok(missing.length === 0, `${df} copies every file the server imports${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
 }
+// Both images carry the same hardening: a base pinned by digest (the same
+// one), an install that runs no dependency lifecycle script, and a server that
+// runs as the unprivileged `node` user, set before the entrypoint.
+const fromOf = (text) => (text.match(/^FROM\s+(\S+)/m) || [])[1] || "";
+const bases = [];
+for (const df of ["Dockerfile.mcp", "mcp/Dockerfile"]) {
+  const text = readFileSync(join(ROOT, df), "utf8");
+  const base = fromOf(text);
+  bases.push(base);
+  ok(/@sha256:[0-9a-f]{64}$/.test(base), `${df} pins its base image by digest (${base || "no FROM"})`);
+  const installs = text.split("\n").filter((l) => /^\s*RUN\s.*\bnpm\s+(ci|install)\b/.test(l));
+  ok(installs.length > 0 && installs.every((l) => /--ignore-scripts\b/.test(l)), `${df} installs dependencies with --ignore-scripts`);
+  const user = text.search(/^USER\s+node\s*$/m), entry = text.search(/^ENTRYPOINT\s/m);
+  ok(user >= 0 && entry > user, `${df} runs the server as USER node`);
+}
+ok(bases[0] && bases[0] === bases[1], `both images use the same pinned base (${bases.join(" vs ")})`);
+
 const files = JSON.parse(readFileSync(join(ROOT, "mcp", "package.json"), "utf8")).files || [];
 const notShipped = [...need].filter((f) => !files.includes(f));
 ok(notShipped.length === 0, `mcp/package.json "files" ships every imported file${notShipped.length ? ` (missing: ${notShipped.join(", ")})` : ""}`);
