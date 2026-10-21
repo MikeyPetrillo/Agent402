@@ -75,7 +75,7 @@ function declaredDecimalsOf(obj) {
  *
  *  A declaration that CONTRADICTS the chain (USDC is six decimals on every rail
  *  we settle) is not a tie we get to break: publish nothing. */
-function tokenDecimalsOf(obj) {
+export function tokenDecimalsOf(obj) {
   const pegged = dollarPeggedDecimalsOf(obj);
   if (pegged == null) return null;
   const declared = declaredDecimalsOf(obj);
