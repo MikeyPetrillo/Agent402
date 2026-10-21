@@ -16,7 +16,7 @@ export const renderPathStore = new AsyncLocalStorage();
 // body HTML to get a complete document with SEO metadata and shared chrome.
 
 export const esc = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 // Safely embeds a JSON-serializable value into a page for a same-origin
 // external script to read (the CSP-hardening replacement for baking

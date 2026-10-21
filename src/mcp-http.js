@@ -44,7 +44,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
-import { routableSellerSummaries } from "./x402-index.js";
+import { routableSellerSummaries, screenSellerNameForServe } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
 import { recordWish } from "./wish.js";
@@ -1063,9 +1063,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           board = board.slice().sort((a, b) => sort === "usd"
             ? ((b.d7?.volumeUsdc || 0) - (a.d7?.volumeUsdc || 0)) || (b.transfers - a.transfers)
             : ((b.d7?.transfers || 0) - (a.d7?.transfers || 0)) || (b.transfers - a.transfers)).slice(0, limit);
-          const rows = board.map((r, i) => ({
+          // Seller-written names are cleaned and capped at serve time, and a
+          // name that trips the listing screen is replaced and marked.
+          const rows = board.map((r, i) => {
+            const named = r.self ? null : (r.sellers || []).map((s) => screenSellerNameForServe(s?.name, String(s?.url || "").replace(/^https?:\/\//, "") || null));
+            return {
             rank: i + 1,
-            name: r.self ? "this host" : (r.sellers || []).map((s) => s.name).join(", ") || "unnamed recipient",
+            name: r.self ? "this host" : named.map((n) => n.name).filter(Boolean).join(", ") || "unnamed recipient",
+            ...(named ? (named.find((n) => n.marker.untrustedContent)?.marker || {}) : {}),
             network: "eip155:4217",
             wallet: r.recipient,
             homepage: r.sellers?.[0]?.url || null,
@@ -1076,7 +1081,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             volumeUsdc7d: Math.round((r.d7?.volumeUsdc || 0) * 10000) / 10000,
             routable: !!r.routable,
             ...(r.self ? {} : { untrustedContent: true }),
-          }));
+            };
+          });
           return mcpJsonResult({
             wire: "mpp",
             measure: "inbound USDC.e transfers on Tempo (chain 4217) to the recipient each seller's live MPP challenge names - a window read plus rolling 7d/30d, a proxy for settlements, not lifetime",
@@ -1113,9 +1119,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // (matching WALLET_ADDRESS) is trusted and unmarked.
           const rows = board.map((r) => {
             const isSelf = self && (r.wallet || "").toLowerCase() === self;
+            // Seller-written name: cleaned and capped at serve time, replaced
+            // and marked when it trips the listing screen.
+            const named = isSelf ? { name: r.name, marker: {} } : screenSellerNameForServe(r.name, String(r.homepage || "").replace(/^https?:\/\//, "") || null);
             return {
               rank: r.rank,
-              name: r.name,
+              name: named.name,
+              ...named.marker,
               network: r.network,
               wallet: r.wallet,
               homepage: r.homepage || null,

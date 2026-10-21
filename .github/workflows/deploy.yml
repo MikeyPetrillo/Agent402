@@ -1173,6 +1173,8 @@ jobs:
           t node scripts/test-no-third-party-names.js
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
+          # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
+          t node scripts/test-listing-text-serve.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -1293,6 +1295,8 @@ jobs:
           t node scripts/test-x402-manifest.js
           # MPP subscription rail-canary gate (canary product is never advertised and is mintable only for a heartbeat-token caller; boots a real server, spends nothing)
           t node scripts/test-mpp-subscription-canary-gate.js
+          # MPP monitor manage routes take the token from X-Manage-Token, a JSON body or ?token=, and answer no-store with no referrer (boots a real server, spends nothing)
+          t node scripts/test-mpp-manage-token.js
           # /api/leaderboard envelope (spec, defaults, per-row shape — MCP top_x402_sellers piggybacks on this)
           t node scripts/test-leaderboard-envelope.js
           # Payer concentration on leaderboard rows (no payer address leaks; both axes trip the flag)
@@ -1864,6 +1868,14 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
+          t node scripts/test-escape-quotes.js
+          # The document CSP's form-action allows only this origin and mailto:, and every form in the tree submits inside it
+          t node scripts/test-csp-form-action.js
+          # The report page's image preview src comes only from an allowlisted image type and a plain base64 payload
+          t node scripts/test-report-view-image.js
+          # The STATUS_PROBE_TOKEN comment names every route that accepts it, and the value is read once
+          t node scripts/test-status-probe-token-scope.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them

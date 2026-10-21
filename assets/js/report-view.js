@@ -13,6 +13,8 @@
   if (!id) { if (app) app.innerHTML = notFound(); return; }
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  // A data: URI for a delivered image, or "" when its type is not a raster image we generate or its payload is not plain base64.
+  function imageDataUri(f) { var t = String((f && f.media_type) || "image/jpeg").toLowerCase(); var b = f && f.b64; if (!/^image\/(?:png|jpeg|webp|gif)$/.test(t) || typeof b !== "string" || !b.length || b.length % 4 !== 0 || !/^[A-Za-z0-9+\/]+={0,2}$/.test(b)) return ""; return "data:" + t + ";base64," + b; }
   function notFound() { return '<div class="status"><h2>Report not found</h2><p><a href="/reports">Start a new report</a></p></div>'; }
 
   // Per-line inline markdown. Input is ALREADY entity-escaped, so a quote can
@@ -319,9 +321,12 @@
     // download per size, as real files at the stated pixel dimensions.
     var imgHtml = images.length ? '<div class="rpt-images"><h2>Images</h2>' + images.map(function (im, i) {
       var first = im.files && im.files[0];
-      var prev = first ? '<img src="data:' + esc(first.media_type || "image/jpeg") + ';base64,' + first.b64 + '" alt="' + esc(im.alt || "") + '" style="max-width:100%;height:auto;border:1px solid var(--hairline);">' : "";
+      // Only an allowlisted image type with a well-formed base64 payload
+      // becomes an img src; anything else gets no preview.
+      var uri = first ? imageDataUri(first) : "";
+      var prev = uri ? '<img src="' + esc(uri) + '" alt="' + esc(im.alt || "") + '" style="max-width:100%;height:auto;border:1px solid var(--hairline);">' : "";
       var files = (im.files || []).map(function (f, j) {
-        return '<button class="btn btn-secondary dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + f.width + "x" + f.height + " (" + Math.round((f.bytes || 0) / 1024) + " KB)</button>";
+        return '<button class="btn btn-secondary dl-img" data-i="' + i + '" data-j="' + j + '">' + esc(f.name) + " " + (Number(f.width) || 0) + "x" + (Number(f.height) || 0) + " (" + Math.round((Number(f.bytes) || 0) / 1024) + " KB)</button>";
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";

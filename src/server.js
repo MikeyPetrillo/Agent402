@@ -41,6 +41,8 @@ import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldes
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters } from "./load-shed.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
+import { posthogProxyPathAllowed, posthogProxyTypeAllowed } from "./posthog-proxy.js";
+import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -356,8 +358,8 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
-import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
@@ -2831,9 +2833,15 @@ if (_subs) {
 }
 
 app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (req, res) => {
+  // Mounted ahead of the security headers, so it sets its own: the browser
+  // never sniffs a relayed body into another type.
+  res.setHeader("X-Content-Type-Options", "nosniff");
   if (!PH_METHODS.has(req.method)) return res.status(405).end();
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (phProxyLimiter.check(ip).limited) return res.status(429).end();
+  // Only the paths the analytics library uses (src/posthog-proxy.js), checked
+  // before any upstream call.
+  if (!posthogProxyPathAllowed(req.params[0] || "")) return res.status(404).end();
   if (phInFlight.live() >= PH_MAX_CONCURRENT) return res.status(503).end(); // F15 global ceiling
   const releaseRelay = phInFlight.enter();
   try {
@@ -2849,6 +2857,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (r
     // Reject an oversized upstream body by its declared length up front.
     const clen = Number(up.headers.get("content-length") || 0);
     if (clen && clen > PH_MAX_RESPONSE_BYTES) return res.status(502).end();
+    // A page is never relayed: this path serves scripts and JSON only.
+    if (!posthogProxyTypeAllowed(up.headers.get("content-type"))) { try { await up.body?.cancel(); } catch { /* */ } return res.status(502).end(); }
     res.status(up.status);
     for (const h of ["content-type", "cache-control"]) { const v = up.headers.get(h); if (v) res.setHeader(h, v); }
     // Perf: fetch() transparently DECOMPRESSES posthog's gzip, and this route
@@ -4429,14 +4439,19 @@ if (_mppSubs) {
   // Self-serve status + cancel. The manage token minted at activation is the
   // bearer: the subscription id alone is deliberately NOT enough, the same rule
   // the Stripe portal link follows (subscribers are told to share report links).
-  app.get("/api/mpp/monitors/:subId", async (req, res) => {
+  // The token is read from an X-Manage-Token header, a JSON body {token} (a
+  // POST to the same path), or ?token= (the form already in emailed links);
+  // every answer is no-store with no referrer (src/manage-token.js).
+  const mppManageTokenOf = manageTokenFrom;
+  const mppManageHeaders = (res) => res.set(MANAGE_RESPONSE_HEADERS);
+  const mppMonitorStatus = async (req, res) => {
+    mppManageHeaders(res);
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    res.set("Cache-Control", "no-store");
     const subId = String(req.params.subId || "");
     // Read fresh: the subscription may have been activated or cancelled on
     // the other container moments ago.
     const rec = _mppSubs.isMine(subId) ? await _mppSubs.getFresh(subId) : null;
-    if (!rec || !_mppSubs.manageTokenOk(subId, req.query.token)) return res.status(404).json({ error: "Unknown subscription" });
+    if (!rec || !_mppSubs.manageTokenOk(subId, mppManageTokenOf(req))) return res.status(404).json({ error: "Unknown subscription" });
     // ?refresh=1 drives refreshStatus - which is also where a due period is
     // PULLED - and is therefore restricted to the rail canary's own
     // subscriptions, read from the stored record. It is the only way to prove
@@ -4449,11 +4464,13 @@ if (_mppSubs) {
     }
     const reports = _monitors ? (_monitors.status().subs.find((r) => r.subId === subId) || null) : null;
     res.json({ ..._mppSubs.publicView(_mppSubs.get(subId) || rec), lastReportId: reports?.lastReportId || null, reportUrl: reports?.lastReportId ? `${BASE_URL}/m/${reports.lastReportId}` : null });
-  });
+  };
+  app.get("/api/mpp/monitors/:subId", mppMonitorStatus);
+  app.post("/api/mpp/monitors/:subId", mppMonitorStatus);
   app.post("/api/mpp/monitors/:subId/cancel", async (req, res) => {
+    mppManageHeaders(res);
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    res.set("Cache-Control", "no-store");
-    try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), req.body?.token || req.query.token)); }
+    try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), mppManageTokenOf(req))); }
     catch (e) {
       if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
       console.warn("[mpp-subs] cancel failed:", String(e?.message || e).slice(0, 200));
@@ -4868,8 +4885,10 @@ function readCookie(req, name) {
 // /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
 // holding a master key to use exactly one door.
 //
-// STATUS_PROBE_TOKEN opens that one door and nothing else: it is read here and
-// nowhere else in the tree. Unset, behaviour is byte-identical to before (the
+// STATUS_PROBE_TOKEN is read only here, through statusProbeAuthed(), which two
+// routes call: POST /api/status/probe (writes the probe record) and GET
+// /api/selfcheck (may ask for a fresh run, still rate-bounded). It reaches no
+// operator surface. Unset, behaviour is byte-identical to before (the
 // operator token still works), which is what lets the two be rotated
 // independently without an observer going dark mid-rotation.
 const STATUS_PROBE_TOKEN = process.env.STATUS_PROBE_TOKEN || "";
@@ -7371,7 +7390,8 @@ app.get("/mpp-marketplace", (_req, res) => {
 app.get("/api/mpp-index", (_req, res) => {
   const snap = mppIndexSnapshot();
   res.set("Cache-Control", "public, max-age=120");
-  res.json({ ...snap, generatedAt: new Date(snap.generatedAt).toISOString() });
+  // Seller text is screened at serve time (screenMppSellerForServe).
+  res.json({ ...snap, sellers: (snap.sellers || []).map(screenMppSellerForServe), generatedAt: new Date(snap.generatedAt).toISOString() });
 });
 // Solana SPL leaderboard: settled USDC per seller payTo (calls, USDC settled,
 // distinct buyers over ?window=24h|7d|30d, default 7d), aggregates only, never
@@ -7457,7 +7477,9 @@ app.get("/api/index", (req, res) => {
     // /api/route publishes for that route.
     const sellerRow = withDispatchFields(detail);
     const tools = Array.isArray(sellerRow.tools) ? sellerToolVerdicts(detail) : sellerRow.tools;
-    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
+    // Seller text is screened at serve time (screenSellerDetailForServe); the
+    // verdicts above read the detail as written.
+    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(screenSellerDetailForServe({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) }));
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,
   // its re-crawl history and its whole tool list. The per-origin HEALTH and
