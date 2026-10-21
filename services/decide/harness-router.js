@@ -145,7 +145,9 @@ export async function routeAfterBase({ input, deps, base, deadline, registry = H
   try {
     alt = await runPlan(new h.Harness(), input, { ...deps, deadline }, state ? { resume: { stage, state } } : {});
   } catch (e) {
-    return keep("specialized planner failed", { ...router, error: String(e?.message || e).slice(0, 120) });
+    // The exception stays in the service log; the answer names the outcome only.
+    console.warn(`[decide] specialized planner ${h.id} failed: ${String(e?.message || e).slice(0, 200)}`);
+    return keep("specialized planner failed", router);
   }
   const altMetrics = planMetrics(alt.out, alt.rows);
   const worse = worseThan(altMetrics, metrics);

@@ -99,6 +99,7 @@ const orderOf = (d) => d.plan.map((p) => [p.purpose, p.tool.id, ...p.fallbacks.m
     t.model.route = { harness: h.id, confidence: 0.95 };
     const d = await buildDecision(input(t), depsFor(t, { harnesses: makeRegistry([h]) }));
     ok(d.harness.id === "base" && re.test(d.harness.reason) && strip(d) === strip(low), `${h.id}: base kept (${d.harness.reason})`);
+    if (h === throws) ok(!JSON.stringify(d).includes("boom"), "a planner's exception text never reaches the answer");
   }
   const m = { steps: 2, gaps: 0, runnableSteps: 2, paramsMisfit: 0, unresolvedRefs: 0, linkableOpen: 0, partial: false, judged: true };
   ok(!worseThan(m, m).length && worseThan({ ...m, gaps: 1 }, m).includes("more gaps") && worseThan({ ...m, runnableSteps: 1 }, m).includes("fewer runnable steps") && worseThan({ ...m, unresolvedRefs: 1 }, m).length && worseThan({ ...m, partial: true }, m).includes("partial"), "worse = more gaps, fewer runnable steps, more misfit or unresolved references, or partial");

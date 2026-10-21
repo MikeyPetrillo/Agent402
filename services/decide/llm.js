@@ -9,6 +9,7 @@
 // every id in it is checked against the ids we offered.
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { OPENROUTER_ATTRIBUTION } from "../../src/openrouter-attribution.js";
 
 const URL_ = "https://openrouter.ai/api/v1/chat/completions";
@@ -121,9 +122,14 @@ export function paramsPrompt(task, picks, { note = "" } = {}) {
  *  params fill) and the model ids that answer them: a decision records it, so
  *  outcomes can be compared across prompt or model changes. Computed once at
  *  boot from the templates themselves, so it changes whenever they do. */
+const PLANNER_SOURCES = ["./base-planner.js", "./harness.js", "./harnesses.js", "./harness-router.js"];
 export function plannerVersion(cfg) {
   const d = decomposePrompt("{task}", cfg?.maxSteps);
   const p = paramsPrompt("{task}", []);
-  const canon = [d.system, d.user, p.system, String(cfg?.model || ""), String(cfg?.modelFallback || "")].join("\n---\n");
+  // The planners' own code (seams, specialized planners, the router prompt)
+  // and the router settings are part of the version, so a change to any of
+  // them starts a new version in the stats.
+  const code = PLANNER_SOURCES.map((f) => { try { return readFileSync(new URL(f, import.meta.url), "utf8"); } catch { return ""; } });
+  const canon = [d.system, d.user, p.system, String(cfg?.model || ""), String(cfg?.modelFallback || ""), JSON.stringify(cfg?.harness || null), ...code].join("\n---\n");
   return `pv_${createHash("sha256").update(canon).digest("hex").slice(0, 12)}`;
 }

@@ -29,6 +29,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   ok(/^pv_[0-9a-f]{12}$/.test(v) && v === plannerVersion({ ...DEFAULTS }), `a short, stable hash (${v})`);
   ok(plannerVersion({ ...DEFAULTS, model: "other/model" }) !== v, "a different model id is a different version");
   ok(plannerVersion({ ...DEFAULTS, maxSteps: DEFAULTS.maxSteps + 1 }) !== v, "a different decompose template (its step bound) is a different version");
+  ok(plannerVersion({ ...DEFAULTS, harness: { ...DEFAULTS.harness, minConfidence: 0.9 } }) !== v, "a different router threshold is a different version");
 }
 
 // ---- 2. plan shape ----

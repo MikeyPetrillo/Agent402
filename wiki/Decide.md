@@ -54,7 +54,7 @@ For `plan` and `full`, a small model call then reads the task and the base plan'
 | `research-sources` | questions answered from sources | steps: search, read, then a cited answer |
 | `media-pipeline` | generated media in a stated format or size | steps: generate, then convert with the format |
 
-Each specialized planner inherits the base and changes that one part only; retrieval, scoring, the primary tool, backups and their order are the same rules for every planner and every seller. Its plan is served only when it is no worse than the base plan on gaps, runnable steps, params that validate and step links. Otherwise, and whenever the pick is unsure, the base plan is served. The decision names the planner that built it in `harness.id`, with `plannerVersion`. Planning never runs a step or pays a seller.
+Each specialized planner inherits the base and changes that one part only; retrieval, scoring, the primary tool, backups and their order are the same rules for every planner and every seller. Its plan is served only when it is no worse than the base plan on gaps, runnable steps, params that validate and step links. Otherwise, and whenever the pick is unsure, the base plan is served. The decision names the planner that built it in `harness.id`. Planning never runs a step or pays a seller.
 
 ## How tools are ranked
 

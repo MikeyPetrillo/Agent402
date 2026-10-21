@@ -185,7 +185,7 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
     // writes the row only when absent, so it cannot unsettle it.
     const id = out.decisionId;
     const row = { decisionId: id, depth, priceUsd, payer, plan: out.plan, costViaUsd: out.estimatedCostViaAgent402Usd || 0, feedbackHash: hashToken(feedbackToken), now: now(),
-      plannerVersion: typeof plannerVersion === "string" ? plannerVersion.slice(0, 40) : null, shapeKey: typeof shape?.shapeKey === "string" ? shape.shapeKey.slice(0, 40) : null, synthetic };
+      plannerVersion: typeof plannerVersion === "string" ? plannerVersion.slice(0, 64) : null, shapeKey: typeof shape?.shapeKey === "string" ? shape.shapeKey.slice(0, 40) : null, synthetic };
     let firstSave = true;
     await ledgerWriteAfterSpend(`save decision ${id}`, () => {
       if (firstSave || typeof ledger.saveDecisionIfAbsent !== "function") { firstSave = false; return ledger.saveDecision(row); }
@@ -213,7 +213,7 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
       feedbackToken,
       feedback: "POST /api/decide/feedback { decisionId, feedbackToken, step, outcome: success|failure, quality?: 1-5, latencyMs? } - free, one verdict per step",
       neutrality: NEUTRALITY_NOTE,
-      ...(depth === "quick" ? { upgrade: 'depth "plan" adds steps and fallbacks; "full" adds params, a compiled prompt and cost/latency estimates' } : {}),
+      ...(depth === "quick" ? { upgrade: 'depth "plan" splits the job into steps, each with fallbacks and params; "full" adds a compiled prompt' } : {}),
     };
   };
 }
