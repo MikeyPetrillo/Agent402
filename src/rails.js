@@ -21,6 +21,7 @@ export const RAILS = [
   { name: "Avalanche", asset: "USDC", caip2: "eip155:43114", chainId: 43114 },
   { name: "Sei", asset: "USDC", caip2: "eip155:1329", chainId: 1329 },
   { name: "Optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
+  { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
   { name: "Stellar", asset: "USDC", caip2: "stellar:pubnet" },
   { name: "Algorand", asset: "USDC", caip2: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" },
   { name: "Robinhood Chain", asset: "USDG", caip2: "eip155:4663", chainId: 4663 },
@@ -43,7 +44,7 @@ export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
  *  the "primary chain first" phrasing used in buyer-facing prose. */
 export const RAILS_PAREN = `USDC on ${usdc[0]} (or ${usdc.slice(1).join(", ")}${othersDash})`;
 
-/** "USDC on Base + 10 more chains, or USDG on Robinhood Chain" — tight UI copy (derives live from RAILS). */
+/** "USDC on Base + N more chains, or USDG on Robinhood Chain" - tight UI copy (derives live from RAILS). */
 export const RAILS_SHORT = `USDC on ${usdc[0]} + ${usdc.length - 1} more chains${others.length ? `, or ${others.map((o) => `${o.asset} on ${o.name}`).join(" / ")}` : ""}`;
 
 /** Chain names for the /.well-known/x402 manifest's ecosystem.chains. */

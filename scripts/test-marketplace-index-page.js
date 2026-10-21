@@ -5,6 +5,7 @@
 // real per-chain computation (marketSellers/marketOperatorCount), never the
 // design source's frozen per-seller lookup tables. No server, no network.
 import { marketPage, CHAIN_PAGES } from "../src/market-page.js";
+import { RAILS } from "../src/rails.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -47,7 +48,7 @@ function chainCard(html, slug) {
   // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
   ok(celoCard && /<span[^>]*color:var\(--ok\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
-  ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === 12, "all 12 chain cards render, one per CHAIN_PAGES entry");
+  ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === RAILS.length && Object.keys(CHAIN_PAGES).length === RAILS.length, "every chain card renders, one per CHAIN_PAGES entry");
 }
 
 // --- grammar: a chain with exactly 1 seller reads "1 seller", not "1 sellers" --
@@ -118,7 +119,7 @@ function chainCard(html, slug) {
   ok(html.includes('"@type":"Dataset"') && html.includes('"@type":"DataDownload"'), "Dataset + DataDownload JSON-LD present");
   const chainListMatch = html.match(/"@id":"https:\/\/agent402\.tools\/marketplace#chains"[\s\S]*?"itemListElement":(\[[\s\S]*?\])\}/);
   const chainListCount = chainListMatch ? (chainListMatch[1].match(/"@type":"ListItem"/g) || []).length : 0;
-  ok(chainListCount === 12, `ItemList JSON-LD carries all 12 chains (got ${chainListCount})`);
+  ok(chainListCount === RAILS.length, `ItemList JSON-LD carries every chain (got ${chainListCount})`);
   ok(html.includes('"@type":"CollectionPage"'), "CollectionPage JSON-LD still present (pre-existing, unchanged)");
   ok(html.includes('"@type":"BreadcrumbList"'), "BreadcrumbList JSON-LD still present (pre-existing, unchanged)");
 }

@@ -7,6 +7,7 @@ import { marketSellers, marketSellersAll, marketPage, marketPanelHtml, CHAIN_PAG
 import { sitemapPages, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";
 import { readFileSync } from "node:fs";
+import { RAILS, railKey } from "../src/rails.js";
 import { fileURLToPath } from "node:url";
 
 const filterBarScript = readFileSync(fileURLToPath(new URL("../assets/js/market-filter-bar.js", import.meta.url)), "utf8");
@@ -37,8 +38,8 @@ const NEW_CHAINS = [
   { key: "robinhood", network: "eip155:4663", offNetwork: "eip155:99999", asset: "USDG", explorer: "robinhoodchain.blockscout.com", wallet: "0x4444444444444444444444444444444444444444" },
 ];
 
-// 1. All 12 chain pages exist in CHAIN_PAGES.
-ok(Object.keys(CHAIN_PAGES).length === 12, `CHAIN_PAGES has 12 entries (got ${Object.keys(CHAIN_PAGES).length})`);
+// 1. Every rail has a chain page in CHAIN_PAGES.
+ok(Object.keys(CHAIN_PAGES).length === RAILS.length && RAILS.every((r) => CHAIN_PAGES[railKey(r)]), `CHAIN_PAGES has one entry per rail (got ${Object.keys(CHAIN_PAGES).length} of ${RAILS.length})`);
 for (const c of NEW_CHAINS) ok(!!CHAIN_PAGES[c.key], `CHAIN_PAGES has a "${c.key}" entry`);
 
 for (const c of NEW_CHAINS) {

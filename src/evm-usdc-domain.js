@@ -62,6 +62,8 @@ export const EVM_TOKEN_DOMAINS = Object.freeze([
   { network: "eip155:43114", chain: "Avalanche", symbol: "USDC", asset: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", name: "USD Coin", version: "2", domainSeparator: "0xbbea200329a938bc3438984a49cb0732e66d66d7bd59c127abacc1710e77f7b3" },
   { network: "eip155:1329", chain: "Sei", symbol: "USDC", asset: "0xe15fc38f6d8c56af07bbcbe3baf5708a2bf42392", name: "USDC", version: "2", domainSeparator: "0x0a19136106ae98d2c245cbbd451f3cb2bbbb1670e1ee191abacb5a5e255c0255" },
   { network: "eip155:10", chain: "Optimism", symbol: "USDC", asset: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", name: "USD Coin", version: "2", domainSeparator: "0x26d9c34bb1a1c312f69c53b2d93b8be20faafba63af2438c6811713c9b1f933f" },
+  // Arc mainnet native USDC, DOMAIN_SEPARATOR() read 2026-10-20 from rpc.mainnet.arc.io.
+  { network: "eip155:5042", chain: "Arc", symbol: "USDC", asset: "0x3600000000000000000000000000000000000000", name: "USDC", version: "2", domainSeparator: "0x940506929bba468048a19b567f4f0d534714bc06604b5c3017e5d16785ccdf84" },
   { network: "eip155:1", chain: "Ethereum", symbol: "USDC", asset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", name: "USD Coin", version: "2", domainSeparator: "0x06c37168a7db5138defc7866392bb87a741f9b3d104deb5094588ce041cae335" },
   { network: "eip155:480", chain: "World Chain", symbol: "USDC", asset: "0x79a02482a880bce3f13e09da970dc34db4cd24d1", name: "USDC", version: "2", domainSeparator: "0x936533d5f85622a8261854e20bb87f4e849dde486f429bc1fb66202b7cde09ec" },
   { network: "eip155:999", chain: "HyperEVM", symbol: "USDC", asset: "0xb88339cb7199b77e23db6e890353e22632ba630f", name: "USDC", version: "2", domainSeparator: "0x70a72998ad787d1a9152a8f88ccfe0766b1cb293b6b4011b34523035da10b0a3" },

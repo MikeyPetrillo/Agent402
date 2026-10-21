@@ -36,6 +36,7 @@ import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onc
 import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
+import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, circleClientFromEnv, circleKeyConfigured } from "./circle-facilitator.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -82,6 +83,13 @@ const EVM_NETWORKS = {
   // OPT-IN only: it settles nothing unless `robinhood` is listed in
   // PAYMENT_NETWORKS, so the working USDC path is untouched by default.
   robinhood: "eip155:4663",
+  // Arc (Circle's EVM L1, chain 5042). Native USDC at 0x3600...0000 with the
+  // "USDC" v2 domain (verified on chain 2026-10-20), priced through
+  // TIER1_USDC. Settled by Circle's facilitator only (src/circle-facilitator.js),
+  // so it is offered only while CIRCLE_FACILITATOR_API_KEY is set and Circle's
+  // /supported lists exact on eip155:5042. With the key set it joins any
+  // multi-chain PAYMENT_NETWORKS list (see enabledNetworks).
+  arc: "eip155:5042",
 };
 const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
@@ -203,6 +211,10 @@ const TIER1_USDC = {
   "eip155:43114": { asset: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", decimals: 6, name: "USD Coin", version: "2" }, // Avalanche C-Chain, native Circle
   "eip155:1329": { asset: "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", decimals: 6, name: "USDC", version: "2" }, // Sei, native Circle (NOT Noble's 0x3894…)
   "eip155:10": { asset: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6, name: "USD Coin", version: "2" }, // Optimism, native Circle (verified 2026-07-28)
+  // Arc: @x402/evm's registry carries the same row; pinned here so a registry
+  // change can never move the asset or domain the Circle preflight checks.
+  // (Same values as ARC_USDC in src/circle-facilitator.js; scripts/test-arc-rail.js pins both.)
+  "eip155:5042": { asset: "0x3600000000000000000000000000000000000000", decimals: 6, name: "USDC", version: "2" }, // Arc, native USDC (verified 2026-10-20)
 };
 function makeTier1UsdcScheme(caip2) {
   const cfg = TIER1_USDC[caip2];
@@ -281,6 +293,11 @@ export function enabledNetworks(network) {
     throw new Error(`Unsupported primary network "${network}". Known: ${Object.keys(NETWORKS).join(", ")}`);
   }
   const names = [network, ...requested.filter((n) => n !== network)];
+  // Arc's switch is the Circle key: set, it joins a multi-chain list without a
+  // PAYMENT_NETWORKS edit; unset, it is never offered (an explicit `arc` entry
+  // is then dropped with a warning in buildPaymentMiddleware). A single-network
+  // server stays single-network.
+  if (names.length > 1 && circleKeyConfigured() && !names.includes("arc")) names.push("arc");
   const seen = new Set();
   const out = [];
   for (const n of names) {
@@ -873,6 +890,28 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }));
     console.log(`Celo: settling USDC (${CELO_USDC.asset}) via facilitator ${CELO_FACILITATOR_URL}`);
   }
+  // Arc (chain 5042 / USDC) settles through Circle's facilitator only. The
+  // client is Arc-only by construction (its getSupported returns just the Arc
+  // exact kind, so it cannot win Base or Polygon, which Circle also lists),
+  // reduces every upstream error to a status and a reason code, and is never
+  // registered with the facilitator diagnostics (it exposes no `url`). Same
+  // drop-don't-break safety as Celo: no key, no Arc. And Arc FAILS CLOSED on
+  // its own probe below: unlike the other rails it is never offered on the
+  // all-probes-failed fail-open path, or when the boot probe is skipped.
+  let circleClient = null;
+  if (evmCaip2.includes(ARC_CAIP2)) {
+    circleClient = circleClientFromEnv();
+    if (!circleClient) {
+      console.warn(
+        "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
+          "dropping Arc from the offered networks (other chains unaffected)."
+      );
+      evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
+    } else {
+      addFacilitator(CIRCLE_LABEL, circleClient);
+      console.log(`Arc: settling USDC (${ARC_USDC.asset}) via Circle's facilitator`);
+    }
+  }
   // Solvador — settle-FALLBACK for existing rails, deliberately NOT in
   // facilitatorClients as a general client: it advertises Base (which must
   // stay on CDP for Bazaar indexing) and most of our other rails, so an
@@ -1143,6 +1182,36 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       avmCaip2 = dropUnadvertised(avmCaip2);
     }
   }
+  // Arc fails CLOSED, on Circle's own answer. The guard above fails open when
+  // every probe fails, and is skipped outright offline or with its escape
+  // hatch; Arc is not offered on either path. It stays only when Circle's
+  // /supported (memoized, so this is the guard's own read when it ran) lists
+  // exact on eip155:5042 for Arc USDC. A malformed or failing /supported, a
+  // timeout, or an answer without that kind drops Arc and nothing else.
+  if (circleClient && evmCaip2.includes(ARC_CAIP2)) {
+    let arcListed = false;
+    let why = "boot probe skipped (X402_SYNC_ON_START=false)";
+    if (syncOnStart) {
+      try {
+        const s = await Promise.race([
+          circleClient.getSupported(),
+          new Promise((_, reject) => {
+            const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { reason: "timeout" })), 8000);
+            if (typeof t.unref === "function") t.unref();
+          }),
+        ]);
+        arcListed = (s?.kinds || []).some((k) => k?.scheme === "exact" && k?.network === ARC_CAIP2);
+        why = arcListed ? "" : "Circle's /supported does not list exact on eip155:5042";
+      } catch (e) {
+        // Only our own reason code is printed (src/circle-facilitator.js).
+        why = `Circle's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
+      }
+    }
+    if (!arcListed) {
+      console.warn(`WARNING: dropping ${ARC_CAIP2} (Arc) from the offered networks - ${why}. Other chains are unaffected.`);
+      evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
+    }
+  }
   // Which networks may offer `upto`. Two gates, both required:
   //   1. Operator opt-in — X402_UPTO_NETWORKS (CSV of CAIP-2 ids, or "all").
   //      Unset means the scheme is never registered and every 402 is
@@ -1264,8 +1333,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // scheme registrations live here, and only for networks that survived it.
   if (stellarEnabled) for (const caip2 of stellarCaip2) server = server.register(caip2, new ExactStellarScheme());
   if (algorandEnabled) for (const caip2 of avmCaip2) server = server.register(caip2, new ExactAvmScheme());
-  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient,
-    solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : null);
+  // Arc names no settle fallback: Circle is the one facilitator that settles
+  // it, so a re-settle elsewhere could only fail, and an Arc payload is never
+  // sent to a facilitator that does not own the chain.
+  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
+    [ARC_CAIP2]: [],
+    ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
+  });
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);

@@ -133,6 +133,7 @@ const CAIP2_BY_SHORT_NAME = {
   base: "eip155:8453", optimism: "eip155:10", polygon: "eip155:137",
   arbitrum: "eip155:42161", celo: "eip155:42220", avalanche: "eip155:43114",
   sei: "eip155:1329", monad: "eip155:143", robinhood: "eip155:4663",
+  arc: "eip155:5042",
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   // MPP on Tempo books its debts under the short name (src/server.js,
   // src/tempo-push-debts.js).

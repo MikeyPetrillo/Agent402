@@ -25,7 +25,7 @@
 
 export const NOMINAL_BLOCK_MS = Object.freeze({
   base: 2000, "base-sepolia": 2000, polygon: 2100, arbitrum: 250, robinhood: 150,
-  monad: 300, celo: 1000, avalanche: 1140, sei: 450, optimism: 2000,
+  monad: 300, celo: 1000, avalanche: 1140, sei: 450, optimism: 2000, arc: 500,
 });
 
 export const DENIM_BLOCK_MS = 200;

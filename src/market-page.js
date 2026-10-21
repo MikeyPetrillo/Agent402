@@ -238,6 +238,24 @@ export const CHAIN_PAGES = {
     honestyNetworkPhrase: "the Optimism network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
+  arc: {
+    chainName: "Arc",
+    // Arc's gas is paid in USDC; there is no separate native token.
+    ticker: "USDC",
+    tickerLabel: "ARC · MAINNET",
+    caip2: "eip155:5042",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.arc.io",
+    explorerWalletUrl: (wallet) => `https://explorer.arc.io/address/${wallet}`,
+    networkParam: "arc",
+    acceptNetwork: "eip155:5042",
+    // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
+    // ("eip155:5042002"), so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:5042",
+    honestyNetworkPhrase: "the Arc network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
   stellar: {
     chainName: "Stellar",
     ticker: "XLM",

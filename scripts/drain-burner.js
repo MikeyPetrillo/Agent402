@@ -47,6 +47,7 @@ const CHAINS = [
   { key: "avalanche", caip2: "eip155:43114" },
   { key: "sei",       caip2: "eip155:1329" },
   { key: "optimism",  caip2: "eip155:10" },
+  { key: "arc",       caip2: "eip155:5042" },
   { key: "robinhood", caip2: "eip155:4663" },
 ];
 const TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "JPM"];
