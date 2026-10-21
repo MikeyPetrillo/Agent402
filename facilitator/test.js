@@ -418,6 +418,11 @@ const sorobanRpc = getRpcClient(NETWORK);
   ok(shouldHedge("getHealth", fbInstance) === false, "hedge: a call already on a fallback url is not hedged again");
   for (const s of [slow, fb, quick, rpcErr]) { s.closeAllConnections?.(); s.close(); }
   console.log("rpc-hedge unit tests ✓");
+  // The unit tests above left the process-wide failover pointed at local
+  // stubs that are closed by now; the live section's own testnet calls get the
+  // production fallback list instead, as the facilitator child does.
+  _resetForTest();
+  installRpcFailover(resolveFallbackUrls("stellar:testnet", undefined), { log: () => {}, hedgeMs: 3_000 });
 }
 
 // ---------------------------------------------------------------------------
