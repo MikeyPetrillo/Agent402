@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
+import { checkServerIdentity } from "../tls-distrust.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -193,7 +194,7 @@ function guardedLookup(hostname, options, callback) {
 // entirely, so every connection (each redirect hop included) is checked here,
 // at connect time, whatever form its host takes.
 function guardedConnector() {
-  const connect = buildConnector({ lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS });
+  const connect = buildConnector({ lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS, checkServerIdentity });
   return (opts, callback) => {
     const host = String(opts?.hostname || "").replace(/^\[|\]$/g, "");
     if (isIP(host) && isPrivateIp(host)) {

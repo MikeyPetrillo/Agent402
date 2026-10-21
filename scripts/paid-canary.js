@@ -18,6 +18,7 @@
 // Exit codes: 0 = buying works (warnings allowed) · 1 = buying broken · 2 = misconfig
 //   · 3 = underfunded (settlement proven; burner empty) · 4 = green but burner low
 //   · 5 = partial-rail (tools settled; one or more chain rail legs failed)
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt } from "../src/avm-sponsorship.js";

@@ -1,4 +1,5 @@
 import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
@@ -23,8 +24,9 @@ function publicNetworks() {
 import dns from "node:dns";
 import { createGzip } from "node:zlib";
 import { setGlobalDispatcher, Agent as UndiciAgent } from "undici";
+import { withDistrust } from "./tls-distrust.js";
 dns.setDefaultResultOrder("ipv4first");
-setGlobalDispatcher(new UndiciAgent({ connect: { family: 4 } }));
+setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // The event loop is watched for the life of the process (started in
 // boot-profile.js, the first import, because ES imports hoist and a monitor
 // started here cannot see the boot it is meant to measure). A CONNECT timeout

@@ -18,12 +18,14 @@
 //   // paid tools: pass an x402-wrapped fetch (your wallet signs)
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
+import { distrustFetch } from "./tls-distrust.js";
+export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.13";
+const VERSION = "0.8.14";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -66,7 +68,9 @@ export class Agent402 {
    * @param {string} [opts.baseUrl="https://agent402.tools"]
    * @param {typeof fetch} [opts.fetch]      an x402-wrapped fetch for wallet-only tools (optional)
    * @param {boolean} [opts.cache=true]      cache results in memory (deterministic tools)
-   * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch)
+   * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch through distrustFetch)
+   * @param {boolean} [opts.tlsDistrust=true] send the default fetch through distrustFetch (refuses a TLS
+   *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
@@ -78,10 +82,14 @@ export class Agent402 {
    *        Optional buyer-owned result validator. `id` namespaces cache entries;
    *        `validate` may return false or throw to reject delivery.
    */
-  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = globalThis.fetch,
+  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null } = {}) {
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
+    if (fetchImpl === undefined) {
+      fetchImpl = globalThis.fetch;
+      if (typeof fetchImpl === "function" && tlsDistrust !== false) fetchImpl = distrustFetch(fetchImpl);
+    }
     if (typeof fetchImpl !== "function") throw new Error("No fetch available - pass { fetchImpl } on Node < 18");
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
@@ -308,10 +316,10 @@ export class Agent402 {
    *
    * @param {string} walletAddress  the caller's wallet address (e.g. "0x...")
    * @param {object} [opts]
-   * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch)
+   * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch through distrustFetch)
    * @returns {Promise<{builderCode:string, walletAddress:string}>}
    */
-  static async registerBuilderCode(walletAddress, { fetchImpl = globalThis.fetch } = {}) {
+  static async registerBuilderCode(walletAddress, { fetchImpl = distrustFetch() } = {}) {
     if (!walletAddress || typeof walletAddress !== "string") throw new Error("walletAddress is required");
     const r = await fetchImpl("https://api.base.dev/v1/agents/builder-codes", {
       method: "POST",

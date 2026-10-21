@@ -44,6 +44,7 @@
 // Usage:
 //   CANARY_DRY=1 node scripts/algorand-rail-canary.js                 # preview, no keys, no spend
 //   ALGORAND_BURNER_MNEMONIC=… node scripts/algorand-rail-canary.js --out report.json
+import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { createHmac } from "node:crypto";

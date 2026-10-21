@@ -351,6 +351,25 @@ const payFetch = wrapFetchWithPayment(fetch, client);
 Pairs with `maxPerCallUsd` / `dailyLimitUsd` (how much) and
 `withNetworkPreference` (which chain).
 
+## Distrusted certificate authorities (`distrustFetch`)
+
+Since 0.8.14 the SDK's own requests refuse a TLS chain that passes through one
+of the intermediate CAs listed in `DISTRUSTED_SPKI_SHA256` (keys reported
+recoverable in Mozilla bug 2083449, which still validate against Node's bundled
+store). The check is keyed on each certificate's SubjectPublicKeyInfo hash and
+runs on a dedicated dispatcher, so nothing changes for the rest of your process.
+Give your payment wrapper the same base fetch so the 402 and the paid retry go
+through it too:
+
+```js
+import { distrustFetch } from "agent402-client";
+const payFetch = wrapFetchWithPayment(distrustFetch(), client);
+```
+
+It applies on Node with the default dispatcher; with a proxy or custom
+dispatcher installed, requests go out through yours unchanged. Pass
+`{ tlsDistrust: false }` to send the default fetch as is.
+
 ## Legal
 
 Use of the hosted instance at agent402.tools is subject to its [Terms of Service](https://agent402.tools/terms) (acceptable-use policy included) and [Privacy Policy](https://agent402.tools/privacy). This package is MIT-licensed; the hosted server is AGPL-3.0. Both are provided as-is without warranty, and self-hosted deployments are their operator's responsibility.
