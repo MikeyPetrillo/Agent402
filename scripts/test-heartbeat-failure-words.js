@@ -2,10 +2,10 @@
 // written against stubbed curl and gh (nothing reaches production or GitHub).
 //
 // Each word must page on its bad words, close on ok and do nothing on
-// unknown; the toolFailures issue lists the failing slugs read with the
-// operator token and never a count or an upstream name; without the token it
-// points at the operator endpoint instead. The status Worker carries the same
-// three titles with the same mapping.
+// unknown. The issues are public: a body carries the word and the operator
+// endpoint only, never a slug, a count, an upstream, a facilitator or a
+// funding reason, and the step never reads the operator endpoint. The status
+// Worker carries the same three titles, mapping and bodies.
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -25,7 +25,7 @@ const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream a
 const TITLES = {
   toolFailures: "toolFailures: a tool is answering 5xx to buyers",
   upstreamHealth: "upstreamHealth: an upstream is timing out or failing",
-  facilitatorFunds: "facilitatorFunds: a facilitator refused settlement for funds",
+  facilitatorFunds: "facilitatorFunds: a facilitator refused settlement",
 };
 
 const dir = await mkdtemp(path.join(tmpdir(), "hb-fail-"));
@@ -64,11 +64,11 @@ const created = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "cre
 const closed = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "close");
 
 try {
-  await check("the step exists, reads the public words and the operator endpoint with the token", () => {
+  await check("the step exists, reads the public words and holds no operator token", () => {
     assert.ok(step, "heartbeat.yml has the step");
     assert.match(step.run, /\/api\/gateway-status/);
-    assert.match(step.run, /\/__operator\/tool-failures\.json/);
-    assert.equal(step.env?.OP_TOKEN, "${{ secrets.AGENT402_OPERATOR_TOKEN }}");
+    assert.doesNotMatch(step.run, /curl[^\n]*\/__operator\//, "the step never reads the operator endpoint");
+    assert.equal(step.env?.OP_TOKEN, undefined, "no operator token in the step");
   });
 
   const OK = { toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" } };
@@ -77,25 +77,24 @@ try {
     assert.deepEqual(created(calls), []);
   });
 
-  await check("toolFailures degraded: one issue titled for the word, listing the slugs and no count or upstream", async () => {
-    const op = { issueSummary: { tools: ["stock-quote (failing)", "render (degraded)", "bad slug; rm -rf (failing)"], upstreams: ["databento (degraded)"] }, tools: [{ slug: "stock-quote", hour: { outside5xx: 7 } }] };
-    const { calls } = await run({ gateway: { ...OK, toolFailures: { status: "degraded" } }, op });
-    const c = created(calls);
-    assert.equal(c.length, 1);
-    assert.equal(c[0].title, TITLES.toolFailures);
-    assert.match(c[0].body, /toolFailures\.status=degraded/);
-    assert.match(c[0].body, /Failing slugs: stock-quote \(failing\), render \(degraded\)\./);
-    assert.doesNotMatch(c[0].body, /rm -rf/, "a value that is not slug-shaped is dropped");
-    assert.doesNotMatch(c[0].body, /databento/, "upstream names stay on the operator endpoint");
-    assert.doesNotMatch(c[0].body, /\b7\b/, "no count");
-  });
-
-  await check("without the operator token the issue points at the operator endpoint", async () => {
-    const { calls } = await run({ gateway: { ...OK, toolFailures: { status: "failing" } }, token: "" });
-    const c = created(calls);
-    assert.equal(c.length, 1);
-    assert.match(c[0].body, /Read \/__operator\/tool-failures\.json/);
-  });
+  // The operator endpoint holds slugs, upstreams and facilitator reasons; a
+  // public body carries none of them even when the token is in the env.
+  const OP = { issueSummary: { tools: ["stock-quote (failing)", "render (degraded)"], upstreams: ["databento (degraded)"], facilitatorNetworks: ["eip155:42220"] },
+    tools: [{ slug: "stock-quote", hour: { outside5xx: 7 } }], facilitatorRefusals: [{ network: "eip155:42220", facilitator: "SomeVendor", reason: "insufficient settlement funds" }] };
+  const PRIVATE = /stock-quote|render \(|databento|SomeVendor|42220|\b7\b|fund|account|free tier|payment method|Failing slugs/i;
+  for (const [field, word] of [["toolFailures", "degraded"], ["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"]]) {
+    await check(`${field} ${word}: one issue, the word and the operator endpoint only`, async () => {
+      const { calls } = await run({ gateway: { ...OK, [field]: { status: word } }, op: OP });
+      const c = created(calls);
+      assert.equal(c.length, 1);
+      assert.equal(c[0].title, TITLES[field]);
+      assert.match(c[0].body, new RegExp(`${field}\\.status=${word}\\.`));
+      assert.match(c[0].body, /\/__operator\/tool-failures\.json/);
+      // The word's own field name is the one place "Funds" may appear.
+      assert.doesNotMatch(c[0].body.replace(/facilitatorFunds/g, ""), PRIVATE, `no slug, count, upstream, facilitator or funding detail: ${c[0].body}`);
+      assert.doesNotMatch(c[0].title.replace(/facilitatorFunds/g, ""), PRIVATE);
+    });
+  }
 
   await check("upstreamHealth failing and facilitatorFunds refused / demoted page under their own titles", async () => {
     for (const [gw, title] of [[{ upstreamHealth: { status: "failing" } }, TITLES.upstreamHealth], [{ upstreamHealth: { status: "degraded" } }, TITLES.upstreamHealth], [{ facilitatorFunds: { status: "refused" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "demoted" } }, TITLES.facilitatorFunds]]) {
@@ -133,6 +132,11 @@ try {
     const body = ALARMS.find((a) => a.title === TITLES.toolFailures).body({ gateway: { toolFailures: { status: "<b>" } } });
     assert.match(body, /toolFailures\.status=degraded/, "the body echoes only a known word");
     assert.match(body, /\/__operator\/tool-failures\.json/);
+    for (const [field, word] of [["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"]]) {
+      const b = ALARMS.find((a) => a.title === TITLES[field]).body({ gateway: { [field]: { status: word } } });
+      assert.match(b, new RegExp(`${field}\\.status=${word}\\.`));
+      assert.doesNotMatch(b.replace(/facilitatorFunds/g, ""), /fund|account|free tier|payment method|slug/i, `the Worker body for ${field} carries no detail: ${b}`);
+    }
   });
 } finally {
   await rm(dir, { recursive: true, force: true });

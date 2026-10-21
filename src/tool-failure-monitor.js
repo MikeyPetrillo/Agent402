@@ -411,7 +411,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         : "Counts are this process's own (no shared store answered); another replica's failures are not in them.",
       bucketMinutes: BUCKET_MS / 60_000,
       ...e,
-      // What the paging issue lists: names and words only.
+      // Names and words, for the operator (public issues carry the word only).
       issueSummary: {
         tools: e.tools.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         upstreams: e.upstreams.filter((r) => r.status !== "ok").map((r) => `${r.upstream.startsWith("facilitator:") ? "facilitator" : r.upstream} (${r.status})`),

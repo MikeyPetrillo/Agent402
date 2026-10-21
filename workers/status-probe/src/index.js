@@ -337,6 +337,10 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // "quiet" is the important one: an unreadable or unconfigured leg must never
 // page AND must never close a real alarm, so anything that is not an explicit
 // verdict leaves the current state exactly as it is.
+// The body of a public failure-word issue: the word and where the detail is.
+const failureWordBody = (field, word) =>
+  `/api/gateway-status reports ${field}.status=${word}. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok.`;
+
 export const ALARMS = [
   {
     title: "Gateway credits LOW (OpenRouter)",
@@ -517,26 +521,23 @@ Auto-closes when the word is ok.`;
   {
     // Tool and upstream failures (src/tool-failure-monitor.js): degraded and
     // failing page, ok clears, unknown does neither. Titles match
-    // heartbeat.yml's; this Worker holds no operator token, so the body points
-    // at the operator endpoint for the slugs.
+    // heartbeat.yml's. The issues are public: a body carries the word and the
+    // operator endpoint only, never a slug, an upstream or a facilitator.
     title: "toolFailures: a tool is answering 5xx to buyers",
     verdict: ({ gateway: b }) => wordVerdict(b.toolFailures?.status, ["degraded", "failing"], ["ok"]),
-    body: ({ gateway: b }) =>
-      `/api/gateway-status reports toolFailures.status=${b.toolFailures?.status === "failing" ? "failing" : "degraded"}. degraded: one tool answered at least TOOL_FAIL_DEGRADED_5XX (default 3) 5xx to outside buyers in the last hour. failing: one tool's 5xx share passed TOOL_FAIL_RATE (default 25%) over at least TOOL_FAIL_MIN_CALLS (default 8) calls in the hour. Our own probes, canaries and wallets are counted apart and never page. Read /__operator/tool-failures.json (operator token) for the slugs, counts by class and the last error message. Auto-closes when the word is ok.`,
+    body: ({ gateway: b }) => failureWordBody("toolFailures", b.toolFailures?.status === "failing" ? "failing" : "degraded"),
   },
   {
     title: "upstreamHealth: an upstream is timing out or failing",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["degraded", "failing"], ["ok"]),
-    body: ({ gateway: b }) =>
-      `/api/gateway-status reports upstreamHealth.status=${b.upstreamHealth?.status === "failing" ? "failing" : "degraded"}. degraded: one named upstream had at least UPSTREAM_FAIL_DEGRADED (default 5) timeouts, 5xx or refused connections in the last hour. failing: its failure share also passed UPSTREAM_FAIL_RATE (default 25%) over at least UPSTREAM_FAIL_MIN_CALLS (default 8) calls. Read /__operator/tool-failures.json (operator token) for the upstream, its outcomes by origin and the last failure. Auto-closes when the word is ok.`,
+    body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
   },
   {
-    // Settle refusals for the facilitator's own funds (refused) and a
-    // facilitator in its settle cool-down (demoted, src/settle-demotion.js).
-    title: "facilitatorFunds: a facilitator refused settlement for funds",
+    // Settle refusals (refused) and a facilitator in its settle cool-down
+    // (demoted, src/settle-demotion.js).
+    title: "facilitatorFunds: a facilitator refused settlement",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["refused", "demoted"], ["ok"]),
-    body: ({ gateway: b }) =>
-      `/api/gateway-status reports facilitatorFunds.status=${b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"}. refused: a facilitator refused a settlement in the last hour because its own account could not pay for it (out of settlement funds, a spent free tier, a missing payment method); the buyer was answered 402 unless a fallback settled. demoted: a facilitator refused SETTLE_DEMOTE_AFTER (default 3) times in a row and its alternates settle first for SETTLE_DEMOTE_COOLDOWN_MS. Read /__operator/tool-failures.json (operator token) for the network, facilitator and reason, then fund that facilitator account. Auto-closes when the word is ok.`,
+    body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,
