@@ -263,7 +263,7 @@ await check("a non-Circle facilitator advertising Arc has Arc stripped from its 
 
 // A settlement still pending after the client's window is booked by paymentId,
 // and the reconcile pass resolves it from Circle's final status.
-await check("a settle still pending after the window is handed to the booking hook with its paymentId", async () => {
+await check("a settle still pending after the window is handed to the booking hook keyed by its authorization", async () => {
   const id = "5b3f6c1e-9d2a-4f08-b1c7-2e9a14d0c3ac";
   const booked = [];
   const f = stubFetch({
@@ -275,39 +275,202 @@ await check("a settle still pending after the window is handed to the booking ho
   p.resource = { url: "https://agent402.tools/api/uuid" };
   const s = await c.settle(p, arcReq());
   assert.equal(s.success, false);
+  assert.equal(s.errorReason, "settlement_pending");
   assert.equal(booked.length, 1);
   assert.equal(booked[0].paymentId, id);
+  assert.equal(booked[0].nonce, p.payload.authorization.nonce);
   assert.equal(booked[0].amount, "1000");
   assert.equal(booked[0].payer.toLowerCase(), acct.address.toLowerCase());
 });
 
+await check("the payer is always the verified signer, never an address Circle names (verify, settle and the pending book)", async () => {
+  const OTHER = "0x00000000000000000000000000000000000bad01";
+  const id = "5b3f6c1e-9d2a-4f08-b1c7-2e9a14d0c3ad";
+  const booked = [];
+  const okF = stubFetch({ "/verify": () => json(200, { isValid: true, payer: OTHER }), "/settle": () => json(200, { success: true, transaction: `0x${"ab".repeat(32)}`, network: ARC_CAIP2, payer: OTHER }) });
+  const c = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: okF });
+  const p = await signed();
+  assert.equal((await c.verify(p, arcReq())).payer.toLowerCase(), acct.address.toLowerCase());
+  assert.equal((await c.settle(p, arcReq())).payer.toLowerCase(), acct.address.toLowerCase());
+  const pf = stubFetch({
+    "/settle": () => json(200, { success: false, errorReason: "settlement_pending", payer: OTHER, transaction: "", network: ARC_CAIP2, extensions: { "settlement-status": { paymentId: id } } }),
+    "/status/:id": () => json(200, { paymentId: id, status: "pending", network: ARC_CAIP2 }),
+  });
+  const c2 = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: pf, pendingPollMs: 5, pendingBudgetMs: 30, onPending: (e) => { booked.push(e); } });
+  await c2.settle(await signed(), arcReq());
+  assert.equal(booked[0].payer.toLowerCase(), acct.address.toLowerCase());
+});
+
+await check("a high-s (malleable) signature is refused locally (low-s rule)", async () => {
+  const p = await signed();
+  const sig = p.payload.signature;
+  const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+  const s = BigInt(`0x${sig.slice(66, 130)}`);
+  const v = parseInt(sig.slice(130), 16);
+  p.payload.signature = sig.slice(0, 66) + (N - s).toString(16).padStart(64, "0") + (v === 27 ? 28 : 27).toString(16);
+  assert.equal((await preflightArcPayment(p, arcReq()))?.reason, "invalid_exact_evm_payload_signature");
+});
+
+// A pending settlement keeps its authorization claimed: the same signed
+// payment resent while the first settlement is unresolved is refused, not served.
+await check("a pending settlement keeps the nonce claimed; the identical payment resent is refused as a duplicate", async () => {
+  const { registerSettlementClaimHooks, registerSettlementClaimRelease, __resetSettlementClaims, DUPLICATE_AUTHORIZATION } = await import("../src/settlement-claims.js");
+  __resetSettlementClaims();
+  const hooks = { beforeVerify: [], beforeSettle: [], afterSettle: [], settleFailure: [] };
+  const fake = {
+    onBeforeVerify: (h) => { hooks.beforeVerify.push(h); return fake; }, onBeforeSettle: (h) => { hooks.beforeSettle.push(h); return fake; },
+    onAfterSettle: (h) => { hooks.afterSettle.push(h); return fake; }, onSettleFailure: (h) => { hooks.settleFailure.push(h); return fake; },
+  };
+  registerSettlementClaimHooks(fake);
+  registerSettlementClaimRelease(fake);
+  const p = await signed();
+  const ctxFor = (req) => ({ requirements: arcReq(), paymentPayload: p, transportContext: { request: { adapter: { req } } } });
+  const first = ctxFor({});
+  for (const h of hooks.beforeVerify) await h(first);
+  for (const h of hooks.beforeSettle) assert.equal(await h(first), undefined, "the first request claims the authorization");
+  const pendingErr = Object.assign(new Error("settlement_pending"), { errorReason: "settlement_pending" });
+  for (const h of hooks.settleFailure) await h({ ...first, error: pendingErr });
+  const resend = ctxFor({});
+  for (const h of hooks.beforeVerify) await h(resend);
+  const r = await hooks.beforeSettle[0](resend);
+  assert.equal(r?.abort, true, "the resend is refused while the first settlement is pending");
+  assert.equal(r.reason, DUPLICATE_AUTHORIZATION);
+  // Control: an ordinary failure still frees the authorization for a retry.
+  __resetSettlementClaims();
+  const q = await signed();
+  const c1 = { requirements: arcReq(), paymentPayload: q, transportContext: { request: { adapter: { req: {} } } } };
+  for (const h of hooks.beforeVerify) await h(c1);
+  await hooks.beforeSettle[0](c1);
+  for (const h of hooks.settleFailure) await h({ ...c1, error: Object.assign(new Error("x"), { errorReason: "insufficient_funds" }) });
+  const c2 = { requirements: arcReq(), paymentPayload: q, transportContext: { request: { adapter: { req: {} } } } };
+  for (const h of hooks.beforeVerify) await h(c2);
+  assert.equal(await hooks.beforeSettle[0](c2), undefined, "a plain failure releases the claim (a retry may settle)");
+  __resetSettlementClaims();
+});
+
+await check("a settlement tx already claimed by the request that served it reads as served", async () => {
+  const { txServedElsewhere, claimSettlementKey, txClaimKey, __resetSettlementClaims } = await import("../src/settlement-claims.js");
+  __resetSettlementClaims();
+  const tx = `0x${"5c".repeat(32)}`;
+  await claimSettlementKey(txClaimKey(ARC_CAIP2, tx), "the-request-that-served-it");
+  assert.equal(await txServedElsewhere(ARC_CAIP2, tx, "circle-pending:x"), true);
+  const fresh = `0x${"5d".repeat(32)}`;
+  assert.equal(await txServedElsewhere(ARC_CAIP2, fresh, "circle-pending:y"), false, "an unclaimed tx is not served");
+  assert.equal(await txServedElsewhere(ARC_CAIP2, fresh, "another-request"), true, "and once checked it is held, so nothing serves it afterwards");
+  __resetSettlementClaims();
+});
+
 {
+  const { createCirclePendingBook, MAX_PASS_MS, RECONCILE_LEASE_MS, UNREADABLE_LIMIT } = await import("../src/circle-pending.js");
   const pendingDir = mkdtempSync(join(tmpdir(), "a402-circle-pending-"));
-  const { createCirclePendingBook } = await import("../src/circle-pending.js");
-  const ids = { done: "11111111-2222-4333-8444-555555555555", fail: "11111111-2222-4333-8444-666666666666", wait: "11111111-2222-4333-8444-777777777777" };
-  const owed = [];
-  const book = createCirclePendingBook({ file: join(pendingDir, "circle-pending.json"), recordOwed: async (row) => { owed.push(row); return true; }, log: () => {} });
-  for (const id of Object.values(ids)) await book.book({ paymentId: id, payer: acct.address, network: ARC_CAIP2, amount: "2500", resource: "https://agent402.tools/api/uuid" });
-  await book.book({ paymentId: "../../not-a-uuid", payer: acct.address, network: ARC_CAIP2, amount: "1" });
+  let clock = 1_000_000;
+  const now = () => clock;
+  const nonce = (i) => `0x${i.toString(16).padStart(64, "0")}`;
+  const uuid = (i) => `11111111-2222-4333-8444-${i.toString(16).padStart(12, "0")}`;
+  const bookFile = (name) => join(pendingDir, `${name}.json`);
   const finalTx = `0x${"9a".repeat(32)}`;
-  const statusOf = { [ids.done]: { status: "completed", transaction: finalTx }, [ids.fail]: { status: "failed", transaction: null }, [ids.wait]: { status: "pending", transaction: null } };
-  const r = await book.reconcile({ status: async (id) => statusOf[id] || null });
-  await check("reconcile: a late completion becomes an owed refund keyed by its settlement tx", () => {
+
+  {
+    const owed = [];
+    const recorded = new Set();
+    const book = createCirclePendingBook({ file: bookFile("a"), now, log: () => {},
+      recordOwed: async (row) => { owed.push(row); recorded.add(row.tx); return true; },
+      owedRecorded: async (tx) => recorded.has(tx) });
+    const ids = { done: 1, fail: 2, wait: 3 };
+    for (const [, i] of Object.entries(ids)) await book.book({ paymentId: uuid(i), payer: acct.address, network: ARC_CAIP2, nonce: nonce(i), amount: "2500", resource: "https://agent402.tools/api/uuid" });
+    await book.book({ paymentId: uuid(1), payer: acct.address, network: ARC_CAIP2, nonce: nonce(1), amount: "2500" });
+    await book.book({ paymentId: "../../not-a-uuid", payer: acct.address, network: ARC_CAIP2, nonce: nonce(9), amount: "1" });
+    await book.book({ paymentId: uuid(8), payer: acct.address, network: ARC_CAIP2, amount: "1" });
+    clock += 2 * 60_000;
+    const statusOf = { [uuid(1)]: { status: "completed", transaction: finalTx }, [uuid(2)]: { status: "failed", transaction: null }, [uuid(3)]: { status: "pending", transaction: null } };
+    const r = await book.reconcile({ status: async (id) => statusOf[id] || null });
+    await check("pending book: keyed by authorization (one entry per nonce), a bad id or a missing nonce is never booked", () => {
+      assert.equal(r.checked, 3);
+    });
+    await check("reconcile: a late completion becomes an owed refund keyed by its settlement tx, dropped once the ledger holds it", () => {
+      assert.equal(r.owed, 1);
+      assert.equal(owed.length, 1);
+      assert.equal(owed[0].tx, finalTx);
+      assert.equal(owed[0].payer.toLowerCase(), acct.address.toLowerCase());
+      assert.equal(owed[0].priceUsd, 0.0025);
+      assert.equal(owed[0].slug, "uuid");
+    });
+    await check("reconcile: failed owes nothing and is dropped; pending is kept; the book survives a reload", () => {
+      assert.equal(r.failed, 1);
+      assert.equal(r.pending, 1);
+      assert.deepEqual(book.list().map((e) => e.paymentId), [uuid(3)]);
+      const again = createCirclePendingBook({ file: bookFile("a"), now, log: () => {} });
+      assert.deepEqual(again.list().map((e) => e.paymentId), [uuid(3)]);
+    });
+  }
+
+  await check("reconcile: a completion whose tx was served after all is NOT booked owed (served and refunded never both)", async () => {
+    const owed = [];
+    const book = createCirclePendingBook({ file: bookFile("b"), now, log: () => {}, recordOwed: async (row) => { owed.push(row); return true; }, owedRecorded: async () => true,
+      wasServed: async ({ tx }) => tx === finalTx });
+    await book.book({ paymentId: uuid(20), payer: acct.address, network: ARC_CAIP2, nonce: nonce(20), amount: "1000" });
+    clock += 2 * 60_000;
+    const r = await book.reconcile({ status: async () => ({ status: "completed", transaction: finalTx }) });
+    assert.equal(r.served, 1);
+    assert.equal(owed.length, 0);
+    assert.equal(book.list().length, 0);
+  });
+
+  await check("reconcile: an owed write that did not land keeps the entry for the next pass", async () => {
+    let landed = false;
+    const book = createCirclePendingBook({ file: bookFile("c"), now, log: () => {}, recordOwed: async () => false, owedRecorded: async () => landed });
+    await book.book({ paymentId: uuid(30), payer: acct.address, network: ARC_CAIP2, nonce: nonce(30), amount: "1000" });
+    clock += 2 * 60_000;
+    await book.reconcile({ status: async () => ({ status: "completed", transaction: finalTx }) });
+    assert.equal(book.list().length, 1, "not dropped on an unconfirmed write");
+    landed = true;
+    clock += 2 * 60_000;
+    const r = await book.reconcile({ status: async () => ({ status: "completed", transaction: finalTx }) });
     assert.equal(r.owed, 1);
-    assert.equal(owed.length, 1);
-    assert.equal(owed[0].tx, finalTx);
-    assert.equal(owed[0].network, ARC_CAIP2);
-    assert.equal(owed[0].priceUsd, 0.0025);
-    assert.equal(owed[0].slug, "uuid");
+    assert.equal(book.list().length, 0);
   });
-  await check("reconcile: a failed payment owes nothing and is dropped; a pending one is kept; a bad id is never booked", () => {
-    assert.equal(r.failed, 1);
-    assert.equal(r.pending, 1);
-    assert.deepEqual(book.list().map((e) => e.paymentId), [ids.wait]);
+
+  await check("reconcile: oldest-due first with a per-entry next check, so a stuck entry never starves newer ones", async () => {
+    const book = createCirclePendingBook({ file: bookFile("d"), now, log: () => {}, recordOwed: async () => true, owedRecorded: async () => true });
+    for (let i = 0; i < 60; i++) { await book.book({ paymentId: uuid(100 + i), payer: acct.address, network: ARC_CAIP2, nonce: nonce(100 + i), amount: "1" }); clock += 1; }
+    clock += 2 * 60_000;
+    const seen = new Set();
+    const status = async (id) => { seen.add(id); return null; }; // all unreadable
+    await book.reconcile({ status, maxChecks: 25 });
+    await book.reconcile({ status, maxChecks: 25 });
+    await book.reconcile({ status, maxChecks: 25 });
+    assert.equal(seen.size, 60, `every entry got a turn across passes (${seen.size}/60)`);
   });
-  await check("reconcile: the booking survives a reload from its store", async () => {
-    const again = createCirclePendingBook({ file: join(pendingDir, "circle-pending.json"), recordOwed: async () => true, log: () => {} });
-    assert.deepEqual(again.list().map((e) => e.paymentId), [ids.wait]);
+
+  await check("reconcile: repeated unreadable answers move an entry to unresolved (kept, never dropped) and the alarm word says so", async () => {
+    const book = createCirclePendingBook({ file: bookFile("e"), now, log: () => {} });
+    await book.book({ paymentId: uuid(200), payer: acct.address, network: ARC_CAIP2, nonce: nonce(200), amount: "1" });
+    assert.equal(book.alarmStatus(), "ok");
+    for (let i = 0; i < UNREADABLE_LIMIT + 2; i++) { clock += 7 * 3600_000; await book.reconcile({ status: async () => null }); }
+    assert.equal(book.list().length, 1, "never silently dropped");
+    assert.equal(book.list()[0].state, "unresolved");
+    assert.equal(book.alarmStatus(), "unresolved");
+  });
+
+  await check("pending book: bounded, near_capacity before the bound and full at it (a refusal is logged, not a silent replacement)", async () => {
+    const logs = [];
+    const book = createCirclePendingBook({ file: bookFile("f"), now, log: (m) => logs.push(m), maxEntries: 5 });
+    for (let i = 0; i < 4; i++) await book.book({ paymentId: uuid(300 + i), payer: acct.address, network: ARC_CAIP2, nonce: nonce(300 + i), amount: "1" });
+    assert.equal(book.alarmStatus(), "near_capacity");
+    await book.book({ paymentId: uuid(304), payer: acct.address, network: ARC_CAIP2, nonce: nonce(304), amount: "1" });
+    assert.equal(await book.book({ paymentId: uuid(305), payer: acct.address, network: ARC_CAIP2, nonce: nonce(305), amount: "1" }), false);
+    assert.equal(book.list().length, 5);
+    assert.equal(book.alarmStatus(), "full");
+    assert.ok(logs.some((l) => /full/.test(l)));
+  });
+
+  await check("reconcile: a pass is bounded by time, and the lease outlasts the worst pass", async () => {
+    const book = createCirclePendingBook({ file: bookFile("g"), now, log: () => {} });
+    for (let i = 0; i < 10; i++) await book.book({ paymentId: uuid(400 + i), payer: acct.address, network: ARC_CAIP2, nonce: nonce(400 + i), amount: "1" });
+    clock += 2 * 60_000;
+    const r = await book.reconcile({ status: async () => { clock += 60_000; return null; }, maxPassMs: 3 * 60_000 });
+    assert.ok(r.checked <= 4, `stopped at the time budget (${r.checked} checked)`);
+    assert.ok(RECONCILE_LEASE_MS >= MAX_PASS_MS + 15_000 + 30_000, "the lease covers the pass budget plus one status call and margin");
   });
   rmSync(pendingDir, { recursive: true, force: true });
 }
@@ -407,11 +570,156 @@ await check("paid canary: the Arc leg is gated (absent from the 402 = skipped, n
   assert.deepEqual(r.low.map((x) => x.key).sort(), ["arc", "sei"], "a low Arc balance pages exactly like a low Sei balance");
 });
 
+// ------------------------------------------------ contract wallets (switch)
+{
+  const { createContractVerifier, arcContractWalletsEnabled, circleClientFromEnv } = await import("../src/circle-facilitator.js");
+  const { registerArcContractWalletRouteGate, ARC_CONTRACT_WALLET_ROUTE_REASON } = await import("../src/payments.js");
+  const SCW = "0x00000000000000000000000000000000000c0de1";
+  const contractSigned = async (signature) => {
+    const p = await signed();
+    p.payload.authorization.from = SCW;
+    p.payload.signature = signature;
+    return p;
+  };
+  const SIG_1271 = `0x${"ab".repeat(96)}`;
+  const MAGIC_6492 = "6492649264926492649264926492649264926492649264926492649264926492";
+  const SIG_6492 = `0x${"cd".repeat(160)}${MAGIC_6492}`;
+  // A stubbed public client: records every verifyTypedData call and answers per mode.
+  const stubClient = (mode) => {
+    const calls = [];
+    return {
+      calls,
+      async verifyTypedData(args) {
+        calls.push(args);
+        if (mode === "valid") return true;
+        if (mode === "invalid") return false;
+        if (mode === "error") throw new Error(`rpc says no ${MARKER}`);
+        return new Promise(() => {}); // "hang": never answers
+      },
+    };
+  };
+
+  await check("switch: only ARC_CONTRACT_WALLETS=on turns contract wallets on", () => {
+    assert.equal(arcContractWalletsEnabled({}), false);
+    assert.equal(arcContractWalletsEnabled({ ARC_CONTRACT_WALLETS: "true" }), false);
+    assert.equal(arcContractWalletsEnabled({ ARC_CONTRACT_WALLETS: "1" }), false);
+    assert.equal(arcContractWalletsEnabled({ ARC_CONTRACT_WALLETS: "on" }), true);
+  });
+
+  await check("switch off: a contract-wallet signature is refused as before, with no RPC call", async () => {
+    const pc = stubClient("valid");
+    const c = circleClientFromEnv({ CIRCLE_FACILITATOR_API_KEY: KEY }, { contractVerifier: createContractVerifier({ publicClient: pc }) });
+    const v = await c.verify(await contractSigned(SIG_1271), arcReq());
+    assert.equal(v.isValid, false);
+    assert.equal(v.invalidReason, "invalid_exact_evm_payload_signature");
+    assert.equal(pc.calls.length, 0, "the verifier is not even wired with the switch off");
+  });
+
+  const onClient = (pc, fetchImpl, timeoutMs) => circleClientFromEnv(
+    { CIRCLE_FACILITATOR_API_KEY: KEY, ARC_CONTRACT_WALLETS: "on" },
+    { contractVerifier: createContractVerifier({ publicClient: pc, ...(timeoutMs ? { timeoutMs } : {}) }), fetchImpl },
+  );
+  const okFetch = () => stubFetch({ "/verify": () => json(200, { isValid: true, payer: SCW }), "/settle": () => json(200, { success: true, transaction: `0x${"ab".repeat(32)}`, network: ARC_CAIP2, payer: SCW }) });
+
+  await check("switch on + ERC-1271 valid: passes the local gate and reaches Circle; settle reuses the verdict (one RPC call)", async () => {
+    const pc = stubClient("valid");
+    const f = okFetch();
+    const c = onClient(pc, f);
+    const p = await contractSigned(SIG_1271);
+    assert.equal((await c.verify(p, arcReq())).isValid, true);
+    assert.equal((await c.settle(p, arcReq())).success, true);
+    assert.equal(pc.calls.length, 1, "verify and settle share one on-chain check");
+    assert.equal(pc.calls[0].address, SCW);
+    assert.equal(pc.calls[0].domain.chainId, 5042, "verified under Arc's own domain");
+    assert.equal(pc.calls[0].domain.verifyingContract, ARC_USDC.asset);
+    assert.equal(f.calls.filter((x) => x.url.endsWith("/verify")).length, 1);
+  });
+
+  await check("switch on + ERC-1271 invalid: refused before Circle", async () => {
+    const pc = stubClient("invalid");
+    const f = okFetch();
+    const v = await onClient(pc, f).verify(await contractSigned(SIG_1271), arcReq());
+    assert.equal(v.isValid, false);
+    assert.equal(v.invalidReason, "invalid_exact_evm_payload_signature");
+    assert.equal(f.calls.length, 0);
+  });
+
+  for (const mode of ["error", "hang"]) {
+    await check(`switch on + RPC ${mode === "hang" ? "timeout" : "error"}: refused with a clean reason (a 402, never a 500 or a pass), not cached`, async () => {
+      const pc = stubClient(mode);
+      const f = okFetch();
+      const c = onClient(pc, f, 60);
+      const p = await contractSigned(SIG_1271);
+      const v = await c.verify(p, arcReq());
+      assert.equal(v.isValid, false);
+      assert.equal(v.invalidReason, "contract_signature_unverifiable");
+      assert.ok(!leaks(JSON.stringify(v)));
+      const s = await c.settle(p, arcReq());
+      assert.equal(s.success, false);
+      assert.equal(pc.calls.length, 2, "a failed check is retried, never remembered as a pass");
+      assert.equal(f.calls.length, 0);
+    });
+  }
+
+  await check("switch on + ERC-6492 wrapped signature: handed to the universal validator unchanged", async () => {
+    const pc = stubClient("valid");
+    const c = onClient(pc, okFetch());
+    const v = await c.verify(await contractSigned(SIG_6492), arcReq());
+    assert.equal(v.isValid, true);
+    assert.equal(pc.calls.length, 1);
+    assert.equal(pc.calls[0].signature, SIG_6492, "the wrapped signature (factory data + magic suffix) goes to the validator as signed");
+  });
+
+  await check("switch on + EOA signature: verified locally, zero RPC calls", async () => {
+    const pc = stubClient("valid");
+    const c = onClient(pc, okFetch());
+    assert.equal((await c.verify(await signed(), arcReq())).isValid, true);
+    assert.equal(pc.calls.length, 0);
+    // A Base-domain EOA signature is not an EOA signature for Arc: with the
+    // switch on it goes to the on-chain check, which an EOA cannot pass.
+    const refuse = onClient(stubClient("invalid"), okFetch());
+    assert.equal((await refuse.verify(await signed({ chainId: 8453 }), arcReq())).isValid, false);
+  });
+
+  await check("the default verifier calls the Arc RPC constant (no request input names it)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/circle-facilitator.js", import.meta.url), "utf8");
+    assert.match(src, /createContractVerifier\(\{ rpcUrl: EVM_RPCS\[ARC_CAIP2\] \}\)/);
+  });
+
+  // Identity-bound routes: a contract wallet's authorization.from is the
+  // contract's address, and who may sign for it is whatever its
+  // isValidSignature says at that moment. Those routes take EOAs only.
+  const gate = () => {
+    const hooks = [];
+    registerArcContractWalletRouteGate({ onBeforeVerify: (h) => hooks.push(h) }, new Set(["GET /api/uuid", "GET /api/demand-radar"]));
+    return hooks[0];
+  };
+  const ctxFor = async (method, path, payload) => ({ requirements: arcReq(), paymentPayload: payload, transportContext: path ? { request: { adapter: { req: { method, path } } } } : undefined });
+  await check("identity-bound routes refuse a contract-wallet payment before verification", async () => {
+    const h = gate();
+    for (const [m, p] of [["POST", "/api/memory"], ["POST", "/api/attest"], ["POST", "/api/feedback"], ["GET", "/api/my-usage"]]) {
+      const r = await h(await ctxFor(m, p, await contractSigned(SIG_1271)));
+      assert.equal(r?.abort, true, `${m} ${p} refuses`);
+      assert.equal(r.reason, ARC_CONTRACT_WALLET_ROUTE_REASON);
+    }
+    const unknown = await h(await ctxFor(null, null, await contractSigned(SIG_1271)));
+    assert.equal(unknown?.abort, true, "a request the gate cannot place is refused too");
+  });
+  await check("the route gate passes a contract wallet on a non-identity route, and every EOA everywhere", async () => {
+    const h = gate();
+    assert.equal(await h(await ctxFor("GET", "/api/uuid", await contractSigned(SIG_1271))), undefined);
+    assert.equal(await h(await ctxFor("POST", "/api/memory", await signed())), undefined);
+    const base = await h({ requirements: { ...arcReq(), network: "eip155:8453" }, paymentPayload: await contractSigned(SIG_1271) });
+    assert.equal(base, undefined, "other chains are untouched by the Arc gate");
+  });
+}
+
 // ---------------------------------------------------------------- part 2
 console.log("part 2: the paid server");
 
-const [P_PAYAI, P_CIRCLE, ...SERVER_PORTS] = await getFreePorts(10);
-const st = { payai: "ok", circle: "full", circleHits: [], payaiHits: [] };
+const [P_PAYAI, P_CIRCLE, ...SERVER_PORTS] = await getFreePorts(14);
+const st = { payai: "ok", circle: "full", circleHits: [], payaiHits: [], rpcHits: [] };
 const rawJson = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json", Connection: "close" }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { r(JSON.parse(b || "{}")); } catch { r({}); } }); });
 const payaiStub = createServer(async (req, res) => {
@@ -432,6 +740,7 @@ const payaiStub = createServer(async (req, res) => {
 });
 const circleStub = createServer(async (req, res) => {
   const body = await readBody(req);
+  if (req.url === "/rpc") { st.rpcHits.push(body); return rawJson(res, 200, { jsonrpc: "2.0", id: body?.id ?? 1, error: { code: -32000, message: "stub rpc refuses" } }); }
   st.circleHits.push({ url: req.url, auth: req.headers.authorization || "", body });
   if (req.url === "/supported") {
     if (st.circle === "die") { res.writeHead(500, { "Content-Type": "text/html", Connection: "close" }); return res.end(`<html>${MARKER} key=${KEY}</html>`); }
@@ -457,6 +766,8 @@ const real = globalThis.fetch;
 globalThis.fetch = function (input, init) {
   const u = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
   if (STUB && typeof u === "string" && u.startsWith(BASE)) return real(STUB + u.slice(BASE.length), init);
+  // The Arc RPC (contract-wallet checks) goes to the same stub, counted there.
+  if (STUB && typeof u === "string" && u.startsWith("https://rpc.mainnet.arc.io")) return real(STUB + "/rpc", init);
   return real(input, init);
 };
 `);
@@ -476,7 +787,7 @@ async function boot(extraEnv) {
       PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
       ARC_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
       SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`),
+      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-history-${port}.json`),
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       ...extraEnv,
     },
@@ -658,6 +969,57 @@ await check("key set: Arc joins a multi-chain list without an `arc` entry in PAY
   } finally { proc.kill("SIGKILL"); }
 });
 
+await check("an Arc that WAS offered on an earlier boot and is now not listed by Circle still reads degraded on /api/rails", async () => {
+  st.circle = "noarc";
+  const hist = join(tmp, "gated-history-seeded.json");
+  writeFileSync(hist, JSON.stringify({ offered: { [ARC_CAIP2]: Date.now() - 86_400_000 } }));
+  const { base, proc } = await boot({ CIRCLE_FACILITATOR_API_KEY: KEY, GATED_RAIL_HISTORY_FILE: hist });
+  try {
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    const row = (rails.rails || []).find((r) => r.network === "arc");
+    assert.ok(row && row.offered === false, `the dropped rail is listed as not offered (${JSON.stringify(rails.rails)})`);
+    assert.ok(rails.degraded >= 1, "and counts as degraded, so the heartbeat alarms");
+  } finally { proc.kill("SIGKILL"); st.circle = "full"; }
+});
+
+// Contract wallets switched on: an identity-bound route refuses a contract
+// wallet before verification (no RPC call); another route asks the Arc RPC,
+// and an RPC failure is a clean 402, never a pass and never reaching Circle.
+await check("switch on, booted: identity-bound routes refuse a contract wallet with no RPC call; an RPC failure elsewhere is a 402", async () => {
+  st.circle = "full"; st.circleHits = []; st.rpcHits = [];
+  const { base, log, proc } = await boot({ CIRCLE_FACILITATOR_API_KEY: KEY, ARC_CONTRACT_WALLETS: "on" });
+  try {
+    assert.match(log.text, /contract-wallet signatures accepted \(ARC_CONTRACT_WALLETS=on\), except on identity-bound routes/);
+    const SCW = "0x00000000000000000000000000000000000c0de1";
+    const payWith = async (method, path, body) => {
+      const bare = await fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body });
+      const env = decode(bare.headers.get("payment-required"));
+      await bare.text();
+      const arc = env.accepts.find((a) => a.network === ARC_CAIP2 && a.scheme === "exact");
+      assert.ok(arc, `${path} offers Arc`);
+      const p = await signed({ req: arc, value: arc.amount });
+      p.payload.authorization.from = SCW;
+      p.payload.signature = `0x${"ab".repeat(96)}`;
+      const r = await fetch(`${base}${path}`, { method, headers: { "content-type": "application/json", "payment-signature": Buffer.from(JSON.stringify({ ...p, resource: env.resource })).toString("base64") }, body });
+      const text = await r.text();
+      return { status: r.status, text, headers: Object.fromEntries(r.headers) };
+    };
+    const mem = await payWith("POST", "/api/memory", JSON.stringify({ key: "k", value: "v" }));
+    assert.equal(mem.status, 402, `identity-bound route refuses a contract wallet (got ${mem.status})`);
+    const memPr = mem.headers["payment-required"] ? Buffer.from(mem.headers["payment-required"], "base64").toString("utf8") : "";
+    assert.ok(`${mem.text} ${memPr}`.includes("contract_wallet_not_accepted_on_this_route"), `the refusal names its reason (${mem.text.slice(0, 200)} ${memPr.slice(0, 200)})`);
+    // Only the signature check counts: a contract-wallet check is an eth_call
+    // with no `to` (the deployless universal validator); the live revenue read
+    // of the treasury balance also uses the Arc RPC once Arc is offered.
+    const validatorCalls = () => st.rpcHits.flatMap((b) => (Array.isArray(b) ? b : [b])).filter((b) => b?.method === "eth_call" && !b?.params?.[0]?.to).length;
+    assert.equal(validatorCalls(), 0, "no signature RPC call for a payment the route refuses anyway");
+    const other = await payWith("GET", PATH);
+    assert.equal(other.status, 402, `an RPC failure refuses the payment (got ${other.status})`);
+    assert.ok(validatorCalls() >= 1, `the contract-wallet check asked the Arc RPC (${JSON.stringify(st.rpcHits).slice(0, 300)})`);
+    assert.ok(!st.circleHits.some((h) => h.url === "/verify" || h.url === "/settle"), "nothing reached Circle");
+  } finally { proc.kill("SIGKILL"); }
+});
+
 for (const [label, circleMode, payaiMode] of [
   ["Circle's /supported lacks Arc", "noarc", "ok"],
   ["Circle's /supported fails with the key echoed in HTML", "die", "ok"],
@@ -672,6 +1034,11 @@ for (const [label, circleMode, payaiMode] of [
         const { nets } = await offeredNets(base);
         assert.ok(nets.has("eip155:8453") && !nets.has(ARC_CAIP2), `accepts: ${[...nets]}`);
         assertArcHidden(await arcSurfaces(base), label);
+        if (circleMode === "noarc") {
+          const rails = await (await fetch(`${base}/api/rails`)).json();
+          assert.ok(!JSON.stringify(rails.rails || []).includes("arc"), `a never-offered Arc that Circle does not list is absent from /api/rails, not degraded (${JSON.stringify(rails.rails)})`);
+          assert.equal(rails.degraded, 0, "no degraded rail for it");
+        }
       } else {
         // Fail-open shape for the other rails: the paywall answers as before
         // (a 500 until a facilitator is reachable), and the offer never names Arc.
