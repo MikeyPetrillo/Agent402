@@ -130,6 +130,14 @@ const PAYTO = "0x00000000000000000000000000000000000000aa";
   // A row's own dollar field wins over the manifest context.
   const own = normaliseManifestTools({ ...manifest, services: [{ method: "POST", path: "/check", name: "check", amount: "100000", price: "$0.25" }] }, "https://seller.example");
   ok(own[0]?.price === "$0.25", `a row's own price field is kept (got ${own[0]?.price})`);
+  // A small whole figure stays dollars: 1 and "5" read as $1 and $5, never
+  // $0.000001; a row with a unit or currency label is left to its own reading.
+  for (const [amount, want] of [[1, "$1"], ["5", "$5"], [1000, "$1000"], ["5000", "$0.005"]]) {
+    const r = normaliseManifestTools({ ...manifest, services: [{ method: "POST", path: "/check", name: "check", amount }] }, "https://seller.example");
+    ok(r[0]?.price === want, `bare amount ${JSON.stringify(amount)} under base-unit accepts reads ${want} (got ${r[0]?.price})`);
+  }
+  const labelled = normaliseManifestTools({ ...manifest, services: [{ method: "POST", path: "/check", name: "check", amount: 100000, unit: "usd" }] }, "https://seller.example");
+  ok(labelled[0]?.price !== "$0.1", `a row with a unit label is not reread as base units (got ${labelled[0]?.price})`);
   // A ticker in the manifest accepts is not payment context.
   const ticker = normaliseManifestTools({ accepts: [{ network: "base", asset: "USDC", amount: "2" }], services: [{ method: "POST", path: "/check", name: "check", amount: "2" }] }, "https://seller.example");
   ok(ticker[0]?.price === "$2", `a ticker-only manifest accept leaves a bare amount as dollars (got ${ticker[0]?.price})`);
