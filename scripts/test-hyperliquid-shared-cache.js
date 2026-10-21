@@ -10,7 +10,7 @@
 // never stored; reads with buyer parameters (candles, books) are never shared;
 // and the TTLs stay short enough to be honest about live prices.
 import { createTtlCache } from "../src/tools/ttl-dedupe.js";
-import { HL_LIVE_TTL_MS, HL_LISTING_TTL_MS, sharedTtlFor, __hlShared } from "../src/tools/hyperliquid-shared.js";
+import { HL_LIVE_TTL_MS, HL_LISTING_TTL_MS, HL_HISTORY_TTL_MS, HL_STALE_MAX_MS, sharedTtlFor, __hlShared } from "../src/tools/hyperliquid-shared.js";
 import { CRYPTO_SIGNALS_TOOLS, __test as sig } from "../src/tools/crypto-signals-kit.js";
 import { DERIVATIVES_TOOLS, __test as der } from "../src/tools/derivatives-kit.js";
 
@@ -77,7 +77,11 @@ globalThis.fetch = async (url, opts = {}) => {
   sent.push(body.type);
   await new Promise((r) => setTimeout(r, 5));
   if (mode === "http500") return res(500, "Internal Error");
+  if (mode === "429") return res(429, "rate limited");
+  if (mode === "429once") { mode = "ok"; return res(429, "rate limited"); }
   switch (body.type) {
+    case "predictedFundings": return res(200, [["BTC", [["HlPerp", { fundingRate: "0.0000125", nextFundingTime: NOW + 3_600_000, fundingIntervalHours: 1 }]]]]);
+    case "fundingHistory": return res(200, Array.from({ length: 30 }, (_, k) => ({ coin: body.coin, fundingRate: "0.0000125", premium: "0.0001", time: NOW - (30 - k) * 3_600_000 })));
     case "meta": return res(200, META);
     case "metaAndAssetCtxs": return res(200, [META, CTXS]);
     case "candleSnapshot": return res(200, CANDLES);
@@ -120,6 +124,65 @@ ok(refused === 1 && after.source === "hyperliquid" && count("metaAndAssetCtxs") 
   await hd("perp-markets")({});
   Date.now = realNow;
   ok(count("metaAndAssetCtxs") === 1, "past the live TTL the document is read again");
+}
+
+// --- bursts, rate-limit refusals and stale copies ----------------------------
+__hlShared.setClock({ pause: async () => {} });
+{
+  __hlShared.clear(); sent.length = 0;
+  await Promise.all([
+    hd("perp-funding")({ coin: "BTC", limit: 24 }), hd("perp-funding")({ coin: "BTC", limit: 24 }), hd("perp-funding")({ coin: "btc", limit: 24 }),
+    hd("perp-basis")({ coin: "BTC" }), hd("perp-basis")({ coin: "BTC" }), hd("perp-basis")({ coin: "ETH" }).catch(() => null),
+  ]);
+  ok(count("metaAndAssetCtxs") === 1, `a burst of six perp-funding/perp-basis calls spends one metaAndAssetCtxs read (${count("metaAndAssetCtxs")})`);
+  ok(count("predictedFundings") === 1, `the burst spends one predictedFundings read (${count("predictedFundings")})`);
+  ok(count("fundingHistory") === 1, `three perp-funding calls for one coin and window share one fundingHistory read (${count("fundingHistory")})`);
+  await hd("perp-funding")({ coin: "BTC", limit: 24 });
+  ok(count("fundingHistory") === 1, "funding history is served from the shared copy inside its TTL");
+  ok(HL_HISTORY_TTL_MS > 0 && HL_HISTORY_TTL_MS <= 60_000, `funding history TTL is short (${HL_HISTORY_TTL_MS} ms)`);
+}
+{
+  // One refusal, then the retry answers: a live answer, not labeled stale.
+  __hlShared.clear(); sent.length = 0; mode = "429once";
+  const r = await hd("perp-basis")({ coin: "BTC" });
+  ok(r.source === "hyperliquid" && r.stale === undefined, "a single rate-limit refusal is retried once and the live answer is unlabeled");
+  ok(count("metaAndAssetCtxs") === 2, `the retry is one more read (${count("metaAndAssetCtxs")})`);
+}
+{
+  // Warm, then past the live TTL every read is refused for rate.
+  __hlShared.clear(); mode = "ok";
+  await hd("perp-basis")({ coin: "BTC" });
+  await hd("perp-funding")({ coin: "BTC", limit: 24 });
+  const realNow = Date.now; const t0 = realNow();
+  Date.now = () => t0 + HL_HISTORY_TTL_MS + 5_000;
+  mode = "429"; sent.length = 0;
+  const basis = await hd("perp-basis")({ coin: "BTC" });
+  const funding = await hd("perp-funding")({ coin: "BTC", limit: 24 });
+  ok(basis.stale === true && funding.stale === true, "on a rate-limit refusal perp-basis and perp-funding answer from the last good read");
+  ok(typeof basis.dataAsOf === "string" && Date.parse(basis.dataAsOf) <= t0 && basis.staleAgeSeconds >= 30, `the stale answer names when its data was read (${basis.dataAsOf}, ${basis.staleAgeSeconds} s)`);
+  ok(basis.markPx === 77267 && funding.history.length === 24, "the stale answer carries the last good values");
+  ok(count("metaAndAssetCtxs") === 2, `a refused document is tried twice, then held on its stale copy (${count("metaAndAssetCtxs")})`);
+  Date.now = () => t0 + HL_STALE_MAX_MS + 1_000;
+  let err = null;
+  try { await hd("perp-basis")({ coin: "BTC" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 503 && /rate limit/.test(err.message), "past the stale limit the refusal stands as a 503");
+  __hlShared.clear();
+  err = null;
+  try { await hd("perp-funding")({ coin: "BTC" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 503, "with nothing cached a rate-limit refusal is a 503");
+  Date.now = realNow; mode = "ok";
+}
+{
+  // A 5xx is not a rate-limit refusal: never served stale.
+  __hlShared.clear(); mode = "ok";
+  await hd("perp-basis")({ coin: "BTC" });
+  const realNow = Date.now; const t0 = realNow();
+  Date.now = () => t0 + HL_LIVE_TTL_MS + 1;
+  mode = "http500";
+  let err = null;
+  try { await hd("perp-basis")({ coin: "BTC" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 502, "an upstream 5xx is never answered from a stale copy");
+  Date.now = realNow; mode = "ok";
 }
 
 globalThis.fetch = realFetch;
