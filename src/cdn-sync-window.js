@@ -1,5 +1,7 @@
 // How long a synchronous answer may take when the request came through the
-// CDN proxy (req.viaCdn, src/cdn-client-ip.js).
+// CDN proxy (req.viaCdn, src/cdn-client-ip.js). req.viaCdn is set only while
+// CDN_PROXY is on and the request carried the origin secret, so with the
+// switch off nothing here converts, refuses or bounds any request.
 //
 // The CDN proxy ends a request that has sent no response byte for 100 seconds.
 // A request reached straight through the hosting edge has no such limit, so

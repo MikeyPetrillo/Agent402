@@ -7,7 +7,12 @@
 //
 // The bound is set low (CDN_SYNC_MAX_SECONDS=8) so the premium image route
 // (run budget 75 s) counts as longer than the proxy waits. A CDN request is one
-// whose edge-reported peer (the last X-Forwarded-For hop) is a CDN address.
+// whose edge-reported peer (the last X-Forwarded-For hop) is a CDN address and
+// that carries the origin secret (X-Origin-Auth), with CDN_PROXY on.
+//   - CDN_PROXY off (the default): a paid call from a CDN-range peer, even
+//     with the secret, is served synchronously and settled, never refused;
+//   CDN_PROXY on, CDN_ORIGIN_SECRET set:
+//   - a CDN-range peer without the secret is served like a direct call;
 //   - CDN + paid + no Prefer + a client that follows a 202 (agent402-client
 //     0.8.16 or later): served as a job, settled once on the delivered result;
 //   - CDN + paid + no Prefer + any other client: 504 before any gate, nothing
@@ -28,6 +33,7 @@ import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { followsJobAnswer, cdnSyncLeftMs, cdnSyncMaxSeconds, cdnSyncWindowMiddleware } from "../src/cdn-sync-window.js";
+import { ORIGIN_AUTH_HEADER } from "../src/cdn-client-ip.js";
 import express from "express";
 import { requiredCacheControl, paidNoStoreMiddleware } from "../src/paid-no-store.js";
 import { paymentWindowTimeoutMs } from "../src/tools/llm-gateway-kit.js";
@@ -158,20 +164,26 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };
 `);
-proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", preload, "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
-    OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "",
-    OPENROUTER_STUB_URL: `http://127.0.0.1:${UP_PORT}`, OPENROUTER_FLEX: "off",
-    CDN_SYNC_MAX_SECONDS: "8", CF_IP_RANGES_EXTRA: "", AGENT402_OPERATOR_TOKEN: OP,
-    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"), AGENT402_MCP_TASK_TTL_MS: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 150_000).unref();
+const SECRET = "origin-secret-for-tests-" + "w".repeat(16);
+const bootPaid = async (extraEnv) => {
+  proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", preload, "src/server.js"], {
+    env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
+      OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "",
+      OPENROUTER_STUB_URL: `http://127.0.0.1:${UP_PORT}`, OPENROUTER_FLEX: "off",
+      CDN_SYNC_MAX_SECONDS: "8", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", AGENT402_OPERATOR_TOKEN: OP,
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+      REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"), AGENT402_MCP_TASK_TTL_MS: "", ...extraEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  let booted = false;
+  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) { booted = true; break; } } catch { /* booting */ } await sleep(500); }
+  ok(booted, `paid server booted with stub upstreams (${JSON.stringify(extraEnv)})`);
+};
+setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 300_000).unref();
 
 const IMG = { path: "/api/image-gen-premium", body: JSON.stringify({ prompt: "a red fox in the snow" }) };
 const CHAT = { path: "/v1/nano/chat/completions", body: JSON.stringify({ messages: [{ role: "user", content: "say ok" }], max_tokens: 16 }) };
@@ -190,13 +202,31 @@ const credential = (accepted, payer) => Buffer.from(JSON.stringify({
   payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (0xc000 + ++nonce).toString(16).padStart(64, "0") } },
 })).toString("base64");
 // A CDN request: the edge-reported peer (last XFF hop) is a CDN address.
-const CDN = (client) => ({ "x-forwarded-for": "104.16.0.9", "cf-connecting-ip": client });
+const CDN = (client) => ({ "x-forwarded-for": "104.16.0.9", "cf-connecting-ip": client, [ORIGIN_AUTH_HEADER]: SECRET });
 const post = async (t, headers, payer) => fetch(`${B}${t.path}`, { method: "POST", headers: { "content-type": "application/json", ...headers, ...(payer ? { "payment-signature": credential(await acceptFor(t), payer) } : {}) }, body: t.body });
 
 try {
-  let up_ = false;
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) { up_ = true; break; } } catch { /* booting */ } await sleep(500); }
-  ok(up_, "paid server booted with stub upstreams");
+  // ---- CDN_PROXY off (the default): no request is converted or refused ----
+  await bootPaid({});
+  {
+    const s = fac.settle;
+    const r = await post(IMG, { ...CDN("198.51.100.30"), "user-agent": "curl/8.4.0" }, wallet(30));
+    ok(r.status === 200 && fac.settle === s + 1, `off: a paid long-route call from a CDN-range peer (with the secret) is served synchronously and settled once (${r.status})`);
+    ok(r.headers.get("preference-applied") === null, "off: it was not converted to a job");
+  }
+  { const dead = new Promise((r) => proc.once("exit", r)); proc.kill("SIGKILL"); await dead; proc = null; }
+  for (const k of Object.keys(accepts)) delete accepts[k];
+
+  // ---- CDN_PROXY on, with the origin secret ----
+  await bootPaid({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET });
+
+  // A CDN-range peer without the secret is not a CDN request.
+  {
+    const s = fac.settle;
+    const { [ORIGIN_AUTH_HEADER]: _drop, ...noSecret } = CDN("198.51.100.31");
+    const r = await post(IMG, { ...noSecret, "user-agent": "curl/8.4.0" }, wallet(31));
+    ok(r.status === 200 && fac.settle === s + 1, `on, no secret: a paid long-route call from a CDN-range peer is served synchronously (${r.status})`);
+  }
 
   // 402s: no-store, through the CDN or not.
   const r402 = await post(IMG, CDN("198.51.100.1"));

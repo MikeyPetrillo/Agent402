@@ -285,7 +285,7 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
-import { cdnClientIpMiddleware } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware } from "./cdn-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
@@ -2351,8 +2351,13 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 // redefined here, before any reader, so every limiter and attribution keys on
 // the resolved client (src/cdn-client-ip.js). A CDN request also carries the
 // deadline its synchronous answer must meet (src/cdn-sync-window.js).
-app.use(cdnClientIpMiddleware());
-app.use(cdnSyncDeadlineMiddleware());
+// Inert unless CDN_PROXY is on; then the peer must also carry the origin
+// secret (CDN_ORIGIN_SECRET) for its CF-Connecting-IP to count.
+const CDN_PROXY_ON = cdnProxyEnabled();
+if (CDN_PROXY_ON) {
+  app.use(cdnClientIpMiddleware());
+  app.use(cdnSyncDeadlineMiddleware());
+}
 // Paid answers, every 402 and operator surfaces are never kept by a shared
 // cache (src/paid-no-store.js).
 app.use(paidNoStoreMiddleware());
@@ -8986,7 +8991,7 @@ app.use(progressMiddleware());
 // Through the CDN proxy, a paid call to a route that can outlast the proxy's
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
-app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
+if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
