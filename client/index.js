@@ -20,12 +20,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
+import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
+export { AsyncJobPendingError } from "./async-job.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.15";
+const VERSION = "0.8.16";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -81,10 +83,23 @@ export class Agent402 {
    * @param {{id:string, validate:function}} [opts.outputValidator]
    *        Optional buyer-owned result validator. `id` namespaces cache entries;
    *        `validate` may return false or throw to reject delivery.
+   * @param {"auto"|boolean} [opts.respondAsync="auto"]
+   *        Slow paid routes (the catalog's `async.recommended`): "auto" sends the
+   *        paid call with Prefer: respond-async and polls the job link until the
+   *        answer is ready; true does it on every route that runs as a job; false
+   *        never (wait on the connection).
+   * @param {number} [opts.asyncTimeoutMs=900000] overall wait for a job; past it,
+   *        AsyncJobPendingError carries the job link to collect later
+   * @param {function} [opts.onProgress] called with each job document
+   *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null,
-    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null } = {}) {
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
+    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null } = {}) {
+    this.respondAsync = respondAsync;
+    this.asyncTimeoutMs = numOrNull(asyncTimeoutMs) ?? DEFAULT_ASYNC_TIMEOUT_MS;
+    this.onProgress = typeof onProgress === "function" ? onProgress : null;
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
     if (fetchImpl === undefined) {
       fetchImpl = globalThis.fetch;
@@ -215,7 +230,7 @@ export class Agent402 {
     const r = await this._discoveryGet("could not load catalog", "/api/pricing");
     const j = await r.json();
     const m = new Map();
-    for (const e of j.endpoints || []) m.set(e.slug, { method: e.method, path: e.path, computePayable: e.computePayable, price: e.price });
+    for (const e of j.endpoints || []) m.set(e.slug, { method: e.method, path: e.path, computePayable: e.computePayable, price: e.price, async: e.async && typeof e.async === "object" ? e.async : null });
     this._catalog = m;
     return m;
   }
@@ -341,7 +356,7 @@ export class Agent402 {
    * Call a tool by slug; pays automatically (PoW for free tools, x402 for
    * wallet-only) and returns the parsed JSON result.
    */
-  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator } = {}) {
+  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress } = {}) {
     // Resolve and validate the buyer-owned contract before catalog fetch,
     // credential access, payment preflight, or any other network action.
     const validator = outputValidator == null
@@ -391,6 +406,15 @@ export class Agent402 {
       }
       return useFetch(url, init);
     };
+    // A slow route runs as a job: the paid call carries Prefer: respond-async,
+    // answers 202 with a job link, and the answer is collected from it (free)
+    // when ready. Payment still settles only on the delivered answer.
+    const asyncHeaders = shouldRequestAsync(tool.async, respondAsync ?? this.respondAsync) ? { Prefer: "respond-async" } : {};
+    const collect = (r) => awaitJob(r, {
+      baseUrl: this.baseUrl, fetchImpl: this.f, slug, sleep: this._sleep,
+      timeoutMs: numOrNull(asyncTimeoutMs) ?? this.asyncTimeoutMs,
+      onProgress: typeof onProgress === "function" ? onProgress : this.onProgress,
+    });
 
     // Wallet-only tool → settle in USDC via the provided x402 fetch.
     if (!tool.computePayable) {
@@ -414,15 +438,17 @@ export class Agent402 {
         const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
-          const r = await send({}, this.payFetch);
+          const r = await collect(await send(asyncHeaders, this.payFetch));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation); // confirm the reservation as settled spend
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // An invalid or oversized paid HTTP-success body is failed delivery,
-          // not a rollback of money that already moved.
-          if (!settled) this._spendRelease(reservation);
+          // not a rollback of money that already moved. A job still running
+          // past the wait may yet settle, so its reservation stands.
+          if (e instanceof AsyncJobPendingError) this._spendSettle(reservation);
+          else if (!settled) this._spendRelease(reservation);
           throw e;
         }
       }
@@ -440,7 +466,7 @@ export class Agent402 {
         const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
-          const r = await send({ Authorization: `Bearer ${this.creditsKey}` });
+          const r = await collect(await send({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
           if (r.status === 402) {
             const body = await r.json().catch(() => ({}));
             throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} ${body.topup ? ` - top up at ${body.topup}` : body.topupNote ? ` - ${body.topupNote}` : ""}`);
@@ -449,7 +475,11 @@ export class Agent402 {
           this._spendSettle(reservation);
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
-        } catch (e) { if (!settled) this._spendRelease(reservation); throw e; }
+        } catch (e) {
+          if (e instanceof AsyncJobPendingError) this._spendSettle(reservation);
+          else if (!settled) this._spendRelease(reservation);
+          throw e;
+        }
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
@@ -466,6 +496,22 @@ export class Agent402 {
     }
     if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
     return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+  }
+
+  /**
+   * Collect a job link (AsyncJobPendingError.jobUrl, or a 202's Location) until
+   * it has the answer, and return the parsed answer. The link is free to poll
+   * and must be on this client's baseUrl origin.
+   */
+  async collectJob(jobUrl, { timeoutMs, onProgress, maxResponseBytes } = {}) {
+    const start = new Response(JSON.stringify({ statusUrl: String(jobUrl), pollIntervalSeconds: 1 }), { status: 202, headers: { "content-type": "application/json" } });
+    const r = await awaitJob(start, {
+      baseUrl: this.baseUrl, fetchImpl: this.f, slug: "job", sleep: this._sleep,
+      timeoutMs: numOrNull(timeoutMs) ?? this.asyncTimeoutMs,
+      onProgress: typeof onProgress === "function" ? onProgress : this.onProgress,
+    });
+    if (!r.ok) throw this._fail("job", r, await this._failureDetail("job", r));
+    return this._readJson(r, { maxBytes: maxResponseBytes, slug: "job", paid: true });
   }
 
   async _assertOutput(slug, body, validator, { paid = false, cacheHit = false } = {}) {

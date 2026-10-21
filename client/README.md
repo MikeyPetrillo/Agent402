@@ -182,17 +182,45 @@ const { window, asOf, results, totalSellers } = await a.topSellers({ limit: 10 }
 await a.topSellers({ sort: "calls", include: "all" });
 ```
 
+## Slow routes run as jobs
+
+Reports, video and the premium image take from about 40 seconds to a few
+minutes, longer than many HTTP clients wait. Their `/api/pricing` row carries
+`async.recommended` with `expectedSeconds` and `maxSeconds`. For those routes
+`call()` sends the paid request with `Prefer: respond-async`: the server answers
+`202` with a job link at once, and the SDK polls `GET /api/jobs/{id}` (free),
+waiting `Retry-After` seconds between polls, until the job has succeeded or
+failed. Payment settles only on the delivered answer, so a failed job is a
+failed call and its spend is released.
+
+```js
+const a = new Agent402({
+  fetch: payFetch,
+  onProgress: (job) => console.log(job.status, job.stage, job.progress, job.etaSeconds),
+  asyncTimeoutMs: 10 * 60_000,
+});
+const report = await a.call("research", { query: "x402 adoption" });
+```
+
+A job still running when `asyncTimeoutMs` ends throws `AsyncJobPendingError`
+with `jobUrl`; collect it later with `await a.collectJob(err.jobUrl)`. Its price
+stays counted against your spending caps, because the answer may still be
+delivered and settled. Pass `respondAsync: false` (constructor or call) to wait
+on the connection instead, or `respondAsync: true` to use a job on every route
+that runs as one.
+
 ## API
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes?, outputValidator? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check |
+| `new Agent402({ baseUrl?, fetch?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above) |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); returns the JSON result |
+| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result |
+| `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
 | `a.clearCache()` | Drop the in-memory result cache |

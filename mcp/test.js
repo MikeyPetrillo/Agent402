@@ -118,6 +118,63 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("discovery.js shed-503 retry \u2713 (bounded, capped, 503-only; catalog loads through a shed, catalog.find names the surface)");
 }
 
+// 0c) Slow routes run as a job (./async-job.js): the catalog's
+// async.recommended sends the paid call with Prefer: respond-async, the job
+// link is polled honoring Retry-After, the route's 200 is the tool result,
+// and a caller that asked for progress gets notifications/progress from the
+// job's stage. Driven end to end through the real server process on the
+// card-credits path (no wallet needed) against a stub host.
+{
+  const { awaitJob, shouldRequestAsync, retryAfterMs, AsyncJobPendingError } = await import("./async-job.js");
+  if (!shouldRequestAsync({ recommended: true }) || shouldRequestAsync({ recommended: false }) || !shouldRequestAsync({ recommended: false }, true) || shouldRequestAsync({ recommended: true }, false) || shouldRequestAsync(null, true)) fail("shouldRequestAsync modes");
+  if (retryAfterMs(new Headers({ "retry-after": "2" }), {}) !== 2000 || retryAfterMs(new Headers(), { pollIntervalSeconds: 600 }) !== 30000 || retryAfterMs(new Headers(), {}) !== 5000) fail("retryAfterMs: header, body, cap, default");
+  const plain = new Response("{}", { status: 200 });
+  if ((await awaitJob(plain, { baseUrl: "http://x" })) !== plain) fail("a non-202 answer is returned unchanged");
+  let err = null;
+  try { await awaitJob(new Response(JSON.stringify({ statusUrl: "https://evil.example/j" }), { status: 202 }), { baseUrl: "http://127.0.0.1:1", fetchImpl: async () => { throw new Error("must not fetch"); } }); } catch (e) { err = e; }
+  if (!(err instanceof AsyncJobPendingError) || !/another origin/.test(err.message)) fail("a job link on another origin is never followed");
+
+  const { createServer } = await import("node:http");
+  const KEY = `a402_${"k".repeat(40)}`;
+  const seen = { prefer: null, auth: null, polls: 0 };
+  const stub = createServer((req, res) => {
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "slow-report", method: "POST", path: "/v1/slow-report", price: "$0.60", description: "A slow report", category: "Research", computePayable: false, async: { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", statusUrl: "/api/jobs/{id}" } }] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: { "/v1/slow-report": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { query: { type: "string" } } } } } } } } } });
+    if (u.pathname === "/v1/slow-report") {
+      seen.prefer = req.headers.prefer || null; seen.auth = req.headers.authorization || null; seen.polls = 0;
+      return send(202, { jobId: "cd".repeat(24), status: "queued", statusUrl: `/api/jobs/${"cd".repeat(24)}`, pollIntervalSeconds: 1 }, { location: `/api/jobs/${"cd".repeat(24)}`, "retry-after": "1" });
+    }
+    if (u.pathname.startsWith("/api/jobs/")) {
+      seen.polls++;
+      if (seen.polls === 1) return send(200, { status: "running", stage: "searching", steps: { done: 1, total: 5 }, progress: 0.2, etaSeconds: 60 }, { "retry-after": "1" });
+      if (seen.polls === 2) return send(200, { status: "running", stage: "writing report", steps: { done: 4, total: 5 }, progress: 0.8, etaSeconds: 10 }, { "retry-after": "1" });
+      return send(200, { status: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "x-credits-balance": "9.40" }, body: { report: "the answer" } } });
+    }
+    return send(404, { error: "not found" });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_CREDITS_KEY: KEY };
+  delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_BUDGET; delete stubEnv.AGENT402_MAX_PER_CALL; delete stubEnv.AGENT402_ASYNC;
+  const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
+  await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  try {
+    const notes = [];
+    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, CallToolResultSchema, { onprogress: (p) => notes.push(p), timeout: 30_000 });
+    if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
+    if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
+    if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);
+    const pcts = notes.map((n) => n.progress);
+    if (pcts.join(",") !== "0,20,80,100" || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`progress notifications follow the job stage and only rise (${JSON.stringify(notes)})`);
+  } finally {
+    await jobClient.close().catch(() => {});
+    stub.close();
+  }
+  console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
