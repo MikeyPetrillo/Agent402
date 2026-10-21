@@ -356,8 +356,8 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
-import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
@@ -7346,7 +7346,8 @@ app.get("/mpp-marketplace", (_req, res) => {
 app.get("/api/mpp-index", (_req, res) => {
   const snap = mppIndexSnapshot();
   res.set("Cache-Control", "public, max-age=120");
-  res.json({ ...snap, generatedAt: new Date(snap.generatedAt).toISOString() });
+  // Seller text is screened at serve time (screenMppSellerForServe).
+  res.json({ ...snap, sellers: (snap.sellers || []).map(screenMppSellerForServe), generatedAt: new Date(snap.generatedAt).toISOString() });
 });
 // Solana SPL leaderboard: settled USDC per seller payTo (calls, USDC settled,
 // distinct buyers over ?window=24h|7d|30d, default 7d), aggregates only, never
@@ -7432,7 +7433,9 @@ app.get("/api/index", (req, res) => {
     // /api/route publishes for that route.
     const sellerRow = withDispatchFields(detail);
     const tools = Array.isArray(sellerRow.tools) ? sellerToolVerdicts(detail) : sellerRow.tools;
-    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
+    // Seller text is screened at serve time (screenSellerDetailForServe); the
+    // verdicts above read the detail as written.
+    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(screenSellerDetailForServe({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) }));
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,
   // its re-crawl history and its whole tool list. The per-origin HEALTH and

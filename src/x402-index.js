@@ -278,7 +278,7 @@ const INDEX_ROW_CAP = 100;
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
-import { decodeTagCharacters, hasHiddenCharacters } from "./hidden-chars.js";
+import { decodeTagCharacters, hasHiddenCharacters, stripHiddenCharacters } from "./hidden-chars.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -6030,6 +6030,78 @@ export function matchesInjectionPhrase(text) {
   for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
   return false;
 }
+/** Which rule of looksLikeListingInjection the text trips, by name, or null:
+ *  the same three rules in the same order, so this is non-null exactly when
+ *  that screen says true. */
+export function listingInjectionFinding(text) {
+  const t = String(text || "");
+  if (t.length > 8000) return "oversized";
+  if (hasHiddenCharacters(t)) return "hidden-characters";
+  return matchesInjectionPhrase(t) ? "instruction-phrase" : null;
+}
+
+// Serve-time hygiene for seller-written text on the JSON surfaces an agent
+// reads (/api/index/tools, /api/index?seller=, /api/mpp-index, sellers.list).
+// The stored row is unchanged, so the router's screen and ranking read the
+// text exactly as the seller wrote it.
+export const LISTING_NAME_MAX = 120;
+const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+/** Seller text with every hidden character and control character removed,
+ *  trimmed, and capped at `max` code points (never splitting a pair). */
+export function cleanListingText(text, max = 0) {
+  if (text == null) return text;
+  let s = stripHiddenCharacters(String(text)).replace(CONTROL_CHARS, "").trim();
+  if (max > 0 && s.length > max) {
+    const cps = Array.from(s);
+    if (cps.length > max) s = cps.slice(0, max).join("").trimEnd();
+  }
+  return s;
+}
+/** A seller-written name, cleaned and capped. */
+export const cleanListingName = (name) => cleanListingText(name, LISTING_NAME_MAX);
+/** One listing's served text. `fields` are the seller's own name, description,
+ *  category and tags; the screen reads them joined, the way the router's does.
+ *  A flagged listing keeps its fields but serves no description and no tags,
+ *  and a name that itself trips the screen falls back to `fallbackName`. */
+export function screenListingForServe({ name, description, category, tags } = {}, { fallbackName = null } = {}) {
+  const tagList = Array.isArray(tags) ? tags : [];
+  const finding = listingInjectionFinding(`${name ?? ""} ${description ?? ""} ${category ?? ""} ${tagList.join(" ")}`);
+  if (!finding) {
+    return {
+      name: cleanListingName(name),
+      description: cleanListingText(description),
+      tags: tagList.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x)),
+      finding: null,
+    };
+  }
+  const nameFlagged = name != null && matchesInjectionPhrase(String(name));
+  return {
+    name: nameFlagged ? fallbackName : cleanListingName(name),
+    description: description == null ? description : "",
+    tags: [],
+    finding,
+  };
+}
+/** A seller's display name for serving: cleaned and capped, or the bare host
+ *  when it is empty or itself trips the phrase screen. */
+export function servedSellerName(name, origin) {
+  const host = String(origin || "").replace(/^https?:\/\//, "");
+  if (name == null || name === "" || matchesInjectionPhrase(String(name))) return host;
+  return cleanListingName(name) || host;
+}
+/** The fields a flagged listing carries in place of its withheld text. */
+export const untrustedMarker = (finding, withheld = "description and tags withheld: the listing text tripped the listing screen") => (finding
+  ? { untrustedContent: true, contentFinding: finding, contentWithheld: withheld }
+  : {});
+/** A leaderboard row's seller-written name for serving, with the marker when
+ *  the name itself trips the screen (then the name is replaced by `fallback`). */
+export function screenSellerNameForServe(name, fallback = null) {
+  if (name == null || name === "") return { name: name ?? null, marker: {} };
+  const finding = listingInjectionFinding(String(name));
+  if (!finding) return { name: cleanListingName(name), marker: {} };
+  const kept = finding === "instruction-phrase" ? fallback : (cleanListingName(name) || fallback);
+  return { name: kept, marker: untrustedMarker(finding, "the seller-written name tripped the listing screen; it is shown cleaned, or replaced") };
+}
 
 let crawlerTimer = null;
 let firstCrawlTimer = null;
@@ -7657,6 +7729,30 @@ export function sellerDetail(originOrHost) {
     };
   }
   return null;
+}
+
+/** The served form of a sellerDetail() answer (or anything built on one, such
+ *  as the ?seller= row with its verdicts): seller text cleaned and capped, and
+ *  a tool row whose listing trips the screen served without its description
+ *  and tags, marked with the finding. sellerDetail() itself stays as written,
+ *  since the dossier and trust tools screen its raw text. The screen reads
+ *  the crawled row's category too, as the router's does. */
+export function screenSellerDetailForServe(d) {
+  if (!d || typeof d !== "object") return d;
+  const out = { ...d };
+  if ("displayName" in d) out.displayName = servedSellerName(d.displayName, d.origin);
+  if (Array.isArray(d.tools)) {
+    const raw = new Map((cache.get(d.origin)?.tools || []).map((t) => [`${t?.method || ""} ${t?.route || ""}`, t]));
+    out.tools = d.tools.map((t) => {
+      if (!t || typeof t !== "object") return t;
+      const category = raw.get(`${t.method || ""} ${t.route || ""}`)?.category ?? t.category;
+      const s = screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags }, { fallbackName: t.route || null });
+      const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
+      if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
+      return { ...row, ...untrustedMarker(s.finding) };
+    });
+  }
+  return out;
 }
 
 /**
@@ -9291,25 +9387,30 @@ function flatRowsForEntry(origin, v, self, seen, out) {
   if (normOrigin === "https://agent402.tools") return;
   if (v?.error) return;
   if (healthScore(v) <= 0) return;
-  const sellerName = v?.manifest?.name || origin.replace(/^https?:\/\//, "");
+  const sellerName = servedSellerName(v?.manifest?.name, origin);
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const description = String(t?.description || "").trim();
+    // Seller text is cleaned here, at serve time, and a listing the screen
+    // flags serves no description or tags (screenListingForServe); the crawled
+    // row itself is unchanged.
+    const served = screenListingForServe({ name: t?.name, description: t?.description, category: t?.category, tags: t?.tags }, { fallbackName: route });
+    const description = String(served.description || "").trim();
     out.push({
       ours: false,
       seller: origin,
       sellerName,
-      name: String(t?.name || route),
+      name: String(served.name || route),
       route,
       method: t?.method || "POST",
       url: origin + route,
       description,
       described: description.length >= 12,
       category: t?.category || "other",
-      tags: Array.isArray(t?.tags) ? t.tags.slice(0, 6) : [],
+      tags: served.tags.slice(0, 6),
+      ...untrustedMarker(served.finding),
       // Was `typeof t.price === "number" ? t.price : null`, which silently
       // nulled every price stored as a string - and manifest and llms.txt
       // catalogues store them as "$0.002". parsePrice is what every other

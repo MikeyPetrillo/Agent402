@@ -32,7 +32,7 @@ const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
-import { validateOriginInput, isMppChallenge, mppDualStackOrigins } from "./x402-index.js";
+import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX } from "./x402-index.js";
 
 export { validateOriginInput };
 
@@ -764,6 +764,35 @@ export function __testReset() {
  *  a real MPP challenge). Discovered-but-unverified origins are surfaced
  *  separately so the gap is visible, never silently dropped or silently
  *  counted. */
+/** One verified seller as /api/mpp-index serves it: its name capped and every
+ *  seller-written string cleaned (src/x402-index.js cleanListingText), and a
+ *  seller whose text trips the listing screen served without its description,
+ *  tags or endpoint descriptions, marked with the finding. The cache entry and
+ *  the snapshot the router and leaderboard read are unchanged. */
+export function screenMppSellerForServe(s) {
+  if (!s || typeof s !== "object") return s;
+  const endpoints = Array.isArray(s.endpoints) ? s.endpoints : [];
+  const tags = Array.isArray(s.tags) ? s.tags : [];
+  const categories = Array.isArray(s.categories) ? s.categories : [];
+  const text = [s.name, s.description, ...categories, ...tags, ...endpoints.map((e) => (typeof e?.description === "string" ? e.description : ""))]
+    .filter((x) => typeof x === "string").join(" ");
+  const finding = listingInjectionFinding(text);
+  const fallback = String(s.origin || "").replace(/^https?:\/\//, "");
+  const out = { ...s, name: servedSellerName(s.name, s.origin) || fallback };
+  if (!finding) {
+    if (typeof s.description === "string") out.description = cleanListingText(s.description);
+    out.tags = tags.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x));
+    out.categories = categories.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x));
+    out.endpoints = endpoints.map((e) => (e && typeof e.description === "string" ? { ...e, description: cleanListingText(e.description) } : e));
+    return out;
+  }
+  if (s.description != null) out.description = null;
+  out.tags = [];
+  out.categories = [];
+  out.endpoints = endpoints.map((e) => (e && "description" in e ? { ...e, description: null } : e));
+  return { ...out, ...untrustedMarker(finding) };
+}
+
 export function mppIndexSnapshot() {
   const all = [...cache.values()];
   const verified = all.filter((v) => v.verified);
