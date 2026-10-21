@@ -1,4 +1,5 @@
 import { Resolver } from "node:dns/promises";
+import { internalNameReason } from "./dns-name-filter.js";
 
 const SUPPORTED = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"];
 const resolver = new Resolver({ timeout: 5000, tries: 2 });
@@ -10,11 +11,14 @@ export async function dnsLookup(name, type = "A") {
     err.statusCode = 400;
     throw err;
   }
-  if (/(^|\.)(internal|local|localhost|localdomain)$/i.test(String(name))) {
-    const err = new Error("Private or link-local zones are not resolvable here");
+  // The shared internal-name filter (trailing dot stripped first).
+  const refused = internalNameReason(name);
+  if (refused) {
+    const err = new Error(refused);
     err.statusCode = 400;
     throw err;
   }
+  name = String(name).trim().replace(/\.$/, "");
   if (!/^[a-zA-Z0-9._-]{1,253}$/.test(name)) {
     const err = new Error("Invalid domain name");
     err.statusCode = 400;

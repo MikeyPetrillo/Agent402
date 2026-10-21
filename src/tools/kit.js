@@ -8,6 +8,7 @@ import { resolveMx, reverse } from "node:dns/promises";
 import { isIP } from "node:net";
 import tls from "node:tls";
 import { lookup } from "node:dns/promises";
+import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import { loadJsdom } from "./lazy-deps.js";
@@ -20,7 +21,7 @@ import { runHtml } from "./html-pool.js";
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA as YAML_JSON_SCHEMA } from "js-yaml";
 import { marked } from "marked";
 import QRCode from "qrcode";
-import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock } from "./fetch-guard.js";
+import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
@@ -1622,6 +1623,7 @@ const validationTools = [
       const syntaxValid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 254;
       const domain = syntaxValid ? email.split("@")[1].toLowerCase() : null;
       let mxRecords = [];
+      if (domain) assertQueryableName(domain);
       if (domain) {
         try {
           // RFC 7505 null MX ("0 .") declares the domain accepts NO mail; Node
@@ -2155,8 +2157,9 @@ const networkTools = [
       // cannot point the socket at an internal address after the check passes.
       let ip = host;
       if (!isIP(host)) {
+        assertQueryableName(host);
         const resolved = await lookup(host).catch(() => {
-          throw bad(`Could not resolve host: ${host}`);
+          throw bad(UNRESOLVED_OR_PRIVATE);
         });
         ip = resolved.address;
       }
