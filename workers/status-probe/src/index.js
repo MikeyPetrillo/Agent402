@@ -957,7 +957,7 @@ export async function run(env, timing = {}) {
   if (!token) {
     // Fail loudly in the log rather than posting unauthenticated: a silent skip
     // is exactly what let a different alarm sit dead for months.
-    console.error("status-probe: STATUS_PROBE_TOKEN is not set — refusing to probe");
+    console.error("status-probe: STATUS_PROBE_TOKEN is not set, refusing to probe");
     return { ok: false, error: "no probe token" };
   }
   // The paid-call challenge takes the same narrow token; the server honors
