@@ -117,7 +117,9 @@ export const FINANCE_TOOLS = [
       // it is a separate, larger query, so the fields are gone rather than
       // sold at a loss or silently narrowed. stock-history serves a range.
       const { start, end } = quoteWindow(range.end);
-      const read = await dailyBarsRead({ symbol, start, end });
+      // A read the upstream does not answer may be served from the last good
+      // read (labeled stale), except for the self-check, which must see it.
+      const read = await dailyBarsRead({ symbol, start, end, lastGoodOk: !ctx?.selfcheck });
       // The self-check's own call (/api/selfcheck) is not a buyer's demand.
       if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
       const bars = read.bars;
@@ -143,6 +145,9 @@ export const FINANCE_TOOLS = [
         cached: read.cached,
         fetchedAt: read.fetchedAt,
         rangeCheckedAt: range.checkedAt,
+        // The upstream did not answer this read: the bars are the newest this
+        // server holds for the symbol (databento.js, last good quote).
+        ...(read.stale ? { stale: true, staleReason: "The market data upstream did not answer in time; this quote is the last end-of-day read this server holds for the symbol (see asOf and fetchedAt)." } : {}),
         note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${where.note}`,
       };
     },
