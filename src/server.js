@@ -2310,22 +2310,23 @@ const app = express();
 app.disable("x-powered-by");
 // Catalog paths are matched exactly by every gate here ("METHOD /path"),
 // while Express routes ignore case and a trailing slash. A request whose path
-// differs from a catalog path only by case or trailing slashes is rewritten
-// to the catalog spelling first, query kept, so every gate and the handler
-// see the same path.
+// resolves to a catalog path the way the load-shed gate and the unpaid-quote
+// budget resolve it (normalizeCatalogPath: case, repeated or trailing slashes,
+// percent-encoding) is rewritten to the catalog spelling first, query kept,
+// so every gate and the handler see the same path.
 let catalogPathByFold = null;
-const foldPath = (p) => p.replace(/\/+$/, "").toLowerCase();
 app.use((req, _res, next) => {
   if (!catalogPathByFold) {
     catalogPathByFold = new Map();
     for (const key of Object.keys(CATALOG)) {
       const path = key.slice(key.indexOf(" ") + 1);
-      if (!catalogPathByFold.has(foldPath(path))) catalogPathByFold.set(foldPath(path), path);
+      const folded = normalizeCatalogPath(path);
+      if (!catalogPathByFold.has(folded)) catalogPathByFold.set(folded, path);
     }
   }
   const path = req.path;
-  if (path.length > 1 && !path.startsWith("//")) {
-    const canonical = catalogPathByFold.get(foldPath(path));
+  if (path.length > 1) {
+    const canonical = catalogPathByFold.get(normalizeCatalogPath(path));
     if (canonical && canonical !== path) {
       const q = req.url.indexOf("?");
       req.url = canonical + (q >= 0 ? req.url.slice(q) : "");
