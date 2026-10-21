@@ -225,9 +225,14 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
   const from = resume ? STAGES.indexOf(resume.stage) : 0;
   if (from < 0) throw new Error(`unknown stage ${resume.stage}`);
   const S = resume ? structuredClone(resume.state) : { notes: [], partial: false };
+  // Past ranking, the retrieved candidates are no longer read (only the step
+  // count is), so a later snapshot leaves them out.
+  const slim = (stage) => (STAGES.indexOf(stage) > STAGES.indexOf("rank")
+    ? { ...S, whole: [], steps: S.steps.map(({ candidates, ...s }) => s) }
+    : S);
   const reach = (stage) => {
     const i = STAGES.indexOf(stage);
-    if (i >= from && snapshotAt.includes(stage)) snapshots[stage] = structuredClone(S);
+    if (i >= from && snapshotAt.includes(stage)) snapshots[stage] = structuredClone(slim(stage));
     return i >= from;
   };
 
