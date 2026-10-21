@@ -347,6 +347,10 @@ for (const [id, r] of Object.entries(RETIRING_MODELS)) {
   // A scheduled entry rests on the vendor's own shutdown notice, which the
   // upstream catalog may not carry yet.
   if (r.asItselfUntil && !expiryOf(m)) warn(`RETIRING_MODELS: ${id} is scheduled for ${r.until} from the vendor's notice; the upstream lists no expiration date yet`);
+  // The upstream clears expiration_date once the date passes and lists the id
+  // until its endpoints are removed, so past `until` a missing date is the
+  // retirement in progress, not a withdrawn one.
+  else if (!expiryOf(m) && Date.now() >= Date.parse(`${r.until}T00:00:00Z`)) warn(`RETIRING_MODELS: ${id} is past its ${r.until} retirement and still listed upstream with no date - its entry stays, mapping callers to ${r.use}`);
   else ok(!!expiryOf(m), `RETIRING_MODELS: ${id} carries an upstream expiration date (${expiryOf(m) || "none - a refusal with no retirement behind it"})`);
   ok(ids.has(r.use) && !!tierFor(r.use), `RETIRING_MODELS: ${id}'s named successor ${r.use} is live and admitted`);
 }
