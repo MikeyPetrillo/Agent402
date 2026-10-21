@@ -132,7 +132,7 @@ const PAYTO = "0x00000000000000000000000000000000000000aa";
   ok(own[0]?.price === "$0.25", `a row's own price field is kept (got ${own[0]?.price})`);
   // A small whole figure stays dollars: 1 and "5" read as $1 and $5, never
   // $0.000001; a row with a unit or currency label is left to its own reading.
-  for (const [amount, want] of [[1, "$1"], ["5", "$5"], [1000, "$1000"], ["5000", "$0.005"]]) {
+  for (const [amount, want] of [[1, "$1"], ["5", "$5"], [999, "$999"], [1000, "$0.001"], ["1000", "$0.001"], ["5000", "$0.005"]]) {
     const r = normaliseManifestTools({ ...manifest, services: [{ method: "POST", path: "/check", name: "check", amount }] }, "https://seller.example");
     ok(r[0]?.price === want, `bare amount ${JSON.stringify(amount)} under base-unit accepts reads ${want} (got ${r[0]?.price})`);
   }

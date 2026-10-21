@@ -2675,12 +2675,12 @@ function bareAmountEntry(raw) {
 }
 
 /** A whole `amount` is read as base units only where the dollar reading is
- *  not a per-call price (over $1,000) and the base-unit reading is one (at
+ *  not a per-call price ($1,000 or more) and the base-unit reading is one (at
  *  least $0.000001); a small whole figure such as 1 or 5 stays dollars. */
 const BARE_AMOUNT_DOLLAR_CEILING = 1000;
 function baseUnitReading(ctx, amount) {
   const text = String(amount).trim();
-  if (!/^\d+$/.test(text) || Number(text) <= BARE_AMOUNT_DOLLAR_CEILING) return null;
+  if (!/^\d+$/.test(text) || Number(text) < BARE_AMOUNT_DOLLAR_CEILING) return null;
   const usd = atomicAmountToDollars(ctx, text);
   return typeof usd === "number" && usd >= 0.000001 ? usd : null;
 }
