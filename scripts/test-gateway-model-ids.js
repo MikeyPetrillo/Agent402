@@ -2,8 +2,11 @@
 // Live guard for the gateway's model tables. Network test (public OpenRouter
 // catalog, no key): fails the model-drift workflow (every 6 hours) when a model id we ADVERTISE or FAIL OVER TO no
 // longer exists upstream, when MODEL_COST underestimates a live price
-// inside a tier's max_price bound, or when a MODEL_COST row sits more than 15%
-// above the dearest live endpoint of every servable model it owns (stale high).
+// inside a tier's max_price bound, when a MODEL_COST row sits more than 15%
+// above the dearest live endpoint of every servable model it owns (stale high),
+// or when an endpoint bills a higher long-context price (pricing.overrides,
+// from a prompt size on) that the row's `tiers` do not cover for a prompt the
+// tier can admit.
 //
 // Why: the stale-id class has bitten three times - gemini-2.0-flash(-lite)
 // vanished while leading every auto band (2026-08-04, a failed round-trip per
@@ -17,8 +20,9 @@
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
-  IMAGES_MODEL, AVAILABILITY_SUCCESSORS,
+  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN,
 } from "../src/tools/llm-gateway-kit.js";
+import { meterMarkup } from "../src/gateway-meter.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
 import { LLM_GATEWAY_TOOLS } from "../src/tools/llm-gateway-kit.js";
 import { LLM_MESSAGES_TOOLS } from "../src/tools/llm-messages-kit.js";
@@ -40,7 +44,7 @@ import { TICKER_PACK_MODELS } from "../src/tools/ticker-pack-kit.js";
 import { TOKEN_BRIEF_MODELS } from "../src/tools/token-brief-kit.js";
 import { TOKEN_RISK_MODELS } from "../src/tools/token-risk-kit.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-import { noteOwnedPrice, staleHighRows, describeStaleHigh, STALE_HIGH_TOLERANCE } from "./lib/cost-row-drift.js";
+import { noteOwnedPrice, staleHighRows, describeStaleHigh, STALE_HIGH_TOLERANCE, overridesOf, longContextGaps, describeLongContext } from "./lib/cost-row-drift.js";
 import { modelCostRows } from "../src/tools/llm-gateway-kit.js";
 requireUpstreamCosts("test-gateway-model-ids");
 
@@ -259,7 +263,7 @@ async function endpointPrices(id) {
     if (!r.ok) return null;
     const eps = (await r.json())?.data?.endpoints;
     if (!Array.isArray(eps)) return null;
-    return eps.map((e) => ({ tag: String(e?.tag || ""), p: Number(e?.pricing?.prompt) * 1e6, c: Number(e?.pricing?.completion) * 1e6 })).filter((e) => Number.isFinite(e.p) && Number.isFinite(e.c));
+    return eps.map((e) => ({ tag: String(e?.tag || ""), p: Number(e?.pricing?.prompt) * 1e6, c: Number(e?.pricing?.completion) * 1e6, o: overridesOf(e?.pricing), ctx: Number(e?.context_length) })).filter((e) => Number.isFinite(e.p) && Number.isFinite(e.c));
   } catch { return null; }
 }
 const admitted = models.filter((m) => {
@@ -281,6 +285,22 @@ const under = [];
 const owned = new Map();
 const rowKeyOf = (cost) => { for (const [prefix, c] of modelCostRows()) if (c === cost) return prefix; return null; };
 let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked = 0;
+// Long-context findings, one per row key and unit, at the smallest prompt size
+// it starts (rule 4c below), and how many endpoint overrides were graded.
+const longGaps = new Map();
+let overridesGraded = 0;
+// The largest prompt (upstream tokens) a tier can admit for a model: the
+// model's context window, and the input that alone fits the tier's budget at
+// the row's base prompt rate (flat: MARGIN x price, at the rate min'd with the
+// bound; metered: the per-call cap over the markup). Taken at the base rate,
+// so it is never under what a long-context tier's dearer rate admits.
+const admittedTokensFor = (tier, row, m, eps) => {
+  const ctxs = [Number(m.context_length), ...(eps || []).map((e) => e.ctx)].filter((n) => Number.isFinite(n) && n > 0);
+  const ctx = ctxs.length ? Math.max(...ctxs) : Infinity;
+  const usd = tier.metered ? tier.maxQuoteUsd / (meterMarkup() || 1) : tier.price * MARGIN;
+  const rate = tier.metered || !tier.maxPrice ? row.prompt : Math.min(row.prompt, tier.maxPrice.prompt);
+  return Math.min(ctx, rate > 0 && Number.isFinite(usd) ? (usd / rate) * 1e6 : Infinity);
+};
 {
   const queue = [...admitted];
   const worker = async () => {
@@ -306,7 +326,7 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
         prices = eps.filter((e) => !PRIORITY_TAG.test(e.tag));
       }
       const hp = Number(m.pricing?.prompt) * 1e6, hc = Number(m.pricing?.completion) * 1e6;
-      if (Number.isFinite(hp) && Number.isFinite(hc)) prices.push({ tag: "headline", p: hp, c: hc });
+      if (Number.isFinite(hp) && Number.isFinite(hc)) prices.push({ tag: "headline", p: hp, c: hc, o: overridesOf(m.pricing) });
       // An endpoint above the tier bound on EITHER unit is refused by provider.max_price.
       if (tier.maxPrice) {
         prices = prices.filter((e) => e.p <= tier.maxPrice.prompt && e.c <= tier.maxPrice.completion);
@@ -327,6 +347,22 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
         if (p > table.prompt + 1e-9 || c > table.completion + 1e-9) {
           const dearP = prices.find((e) => e.p === p)?.tag, dearC = prices.find((e) => e.c === c)?.tag;
           under.push(brief(`${m.id} (${slug})`, `${m.id} dearest routable endpoint $${p} (${dearP}) / $${c} (${dearC}) vs table $${table.prompt}/$${table.completion} (${slug}; ${prices.length} endpoint price(s) read)`));
+        }
+      }
+      // 4c. Long-context prices on the endpoints this tier can route to (a
+      //     priority endpoint's at the factor the priority tiers price it at),
+      //     against the row's tiers, for prompts the tier can admit.
+      {
+        const overrides = [
+          ...prices.flatMap((e) => e.o || []),
+          ...priorityPrices.flatMap((e) => (e.o || []).map((o) => ({ ...o, prompt: o.prompt / PRIORITY_PRICE_FACTOR, completion: o.completion / PRIORITY_PRICE_FACTOR }))),
+        ];
+        overridesGraded += overrides.length;
+        const key = rowKeyOf(table);
+        for (const f of longContextGaps(table, overrides, admittedTokensFor(tier, table, m, eps))) {
+          const k = `${key}|${f.unit}`;
+          const seen = longGaps.get(k);
+          if (!seen || f.aboveTokens < seen.f.aboveTokens) longGaps.set(k, { key, f });
         }
       }
       for (const e of priorityPrices) {
@@ -355,6 +391,14 @@ ok(under.length === 0, `MODEL_COST never underestimates a live admitted model's 
   console.log(`rule 4b: ${owned.size} cost row(s) graded against the servable models they own`);
   ok(owned.size > 0, "rule 4b graded at least one cost row (zero would mean the read is blind)");
   ok(high.length === 0, `no MODEL_COST row sits more than ${Math.round(STALE_HIGH_TOLERANCE * 100)}% above the dearest live endpoint of every servable model it owns${high.length ? `:\n    ${high.map(describeStaleHigh).join("\n    ")}` : ""}`);
+}
+// 4c (graded in the loop above). Row key, unit, direction and the prompt size
+//     only: never a rate, in CI or locally.
+{
+  const lines = [...longGaps.values()].sort((a, b) => a.key.localeCompare(b.key) || a.f.unit.localeCompare(b.f.unit)).map(({ key, f }) => describeLongContext(key, f));
+  console.log(`rule 4c: ${overridesGraded} long-context endpoint override(s) graded against the rows' tiers`);
+  ok(overridesGraded > 0, "rule 4c graded at least one long-context override (zero would mean the read is blind)");
+  ok(lines.length === 0, `every MODEL_COST row covers the long-context prices its servable models bill at the prompt sizes their tiers admit${lines.length ? `:\n    ${lines.join("\n    ")}` : ""}`);
 }
 // 5. Expiring models: OpenRouter stamps expiration_date; anything we rank or
 //    fail over to that expires within 14 days fails now, not on the day.

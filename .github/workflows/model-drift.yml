@@ -2,7 +2,8 @@
 # advertised, ranked, fallback, image and speech id still exists upstream, every
 # private cost row covers its dearest live endpoint, no cost row sits more than
 # 15% above the dearest live endpoint of every servable model it owns (stale
-# high), and no ranked model expires inside the warning window
+# high), every row's long-context tiers cover the higher price an endpoint bills
+# past a prompt size, and no ranked model expires inside the warning window
 # (scripts/test-gateway-model-ids.js, public catalog, no key).
 #
 # This is the single owner of that check. It runs on a schedule, never on a push:
@@ -98,7 +99,7 @@ jobs:
             if [ -z "$FAILS" ]; then FAILS="(no FAIL lines: the guard itself did not complete; log tail follows)
           $(tail -25 guard.log 2>/dev/null)"; fi
             FAILS=$(printf '%s\n' "$FAILS" | perl -pe "$REDACT_RATES")
-            BODY="The live-catalog guard (every 6 hours) failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is UNDER its dearest live endpoint (the clamp lets too many tokens through), a private cost row is more than 15% ABOVE the dearest live endpoint of every servable model it owns (stale high: metered quotes are inflated and the model can be kept off a tier), or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
+            BODY="The live-catalog guard (every 6 hours) failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is UNDER its dearest live endpoint (the clamp lets too many tokens through), a private cost row is more than 15% ABOVE the dearest live endpoint of every servable model it owns (stale high: metered quotes are inflated and the model can be kept off a tier), a private cost row has no long-context tier, or one under the upstream price, where an endpoint bills more past a prompt size the tier admits, or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
 
           \`\`\`
           $FAILS
