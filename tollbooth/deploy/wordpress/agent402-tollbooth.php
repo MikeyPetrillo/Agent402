@@ -78,6 +78,7 @@ class Agent402_Tollbooth {
         add_action('admin_menu',  [__CLASS__, 'admin_menu']);
         add_action('admin_init',  [__CLASS__, 'admin_init']);
         add_action('admin_post_agent402_tollbooth_reset', [__CLASS__, 'admin_reset_stats']);
+        add_action('admin_notices', [__CLASS__, 'admin_notice_verifier_secret']);
     }
 
     public static function on_activate() {
@@ -218,6 +219,37 @@ class Agent402_Tollbooth {
     }
 
     /**
+     * A Verifier URL with no usable secret: both rails fail closed (every
+     * X-Pow-Solution and X-Payment request gets a 402). A site that set the
+     * URL before the secret existed lands here on upgrade.
+     */
+    public static function verifier_secret_missing($opts) {
+        return !empty($opts['verifier_url']) && !self::verifier_ready($opts);
+    }
+
+    /**
+     * Shown on every admin page, to administrators only, while the Verifier
+     * URL is set and the secret is missing, so the refusal is never silent.
+     */
+    public static function admin_notice_verifier_secret() {
+        if (!current_user_can('manage_options')) return;
+        $opts = self::opts();
+        if (!self::verifier_secret_missing($opts)) return;
+        $settings = admin_url('options-general.php?page=' . self::ADMIN_SLUG);
+        printf(
+            '<div class="notice notice-error"><p><strong>%1$s</strong> %2$s <a href="%3$s">%4$s</a></p></div>',
+            esc_html__('Agent402 Tollbooth:', 'agent402-tollbooth'),
+            esc_html(sprintf(
+                /* translators: %d: minimum secret length */
+                __('a Verifier URL is set but the Verifier secret is missing or shorter than %d characters. The verifier now needs this secret: every answer it gives must carry an HMAC made with it. Until it is set, paid (x402) and proof-of-work crawlers are refused with a 402.', 'agent402-tollbooth'),
+                self::MIN_SECRET_LEN
+            )),
+            esc_url($settings),
+            esc_html__('Set the Verifier secret', 'agent402-tollbooth')
+        );
+    }
+
+    /**
      * The string a verifier signs to pass one request. Binds the answer to
      * the rail, the exact resource, the credential presented and a fresh
      * per-call nonce, so a stored or generic answer passes nothing else.
@@ -287,7 +319,7 @@ class Agent402_Tollbooth {
                 'payTo'              => $opts['pay_to'],
                 'resource'           => $resource,
             ]],
-            'note'    => empty($opts['verifier_url'])
+            'note'    => !self::verifier_ready($opts)
                 ? 'Proof-of-work and x402 verification require a configured verifier URL and verifier secret. See plugin settings.'
                 : 'Send an X-Pow-Solution or X-Payment header; the gate will verify it.',
         ];

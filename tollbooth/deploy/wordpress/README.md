@@ -61,6 +61,17 @@ no plugin setting can mitigate it.
 | Verifier secret | Shared HMAC key; every verifier pass must be signed with it. Required for the Verifier URL to be used. |
 | Site ID | A label for this site, kept with the plugin settings. The plugin does not send it anywhere yet (see Roadmap). Default: your domain. |
 
+## Upgrading
+
+Version 0.1.1 adds the **Verifier secret**: every verifier answer must now
+carry an HMAC made with it (see "Wire the rails"). A site that set a
+Verifier URL on an earlier version and has no secret fails closed after the
+upgrade: paid (x402) and proof-of-work crawlers are refused with a 402, and
+an error notice on every admin page says so until the secret is set. To
+restore both rails, update your verifier to sign its answers, then enter the
+same secret (32 characters or more) under **Settings → Agent402 Tollbooth →
+Verifier secret**. Humans and the observe-or-block gate are unaffected.
+
 ## Stats
 
 The plugin keeps a small set of counters in `wp_options` (key

@@ -10,6 +10,9 @@
 //   4. The README documents that contract (same domain string) and does not
 //      promise a /verify route on the Cloudflare Worker.
 //   5. The plugin header version and the VERSION constant agree.
+//   6. A Verifier URL with no usable secret (an upgrade from before the
+//      secret) keeps failing closed and raises an escaped, administrators-only
+//      notice on every admin page; the README carries an Upgrading note.
 import { readFileSync } from "node:fs";
 import { createHmac, createHash } from "node:crypto";
 
@@ -80,6 +83,41 @@ const header = (php.match(/\*\s*Version:\s*([0-9.]+)/) || [])[1];
 const constant = (php.match(/const VERSION\s*=\s*'([0-9.]+)'/) || [])[1];
 ok(header && header === constant, `plugin header version (${header}) matches VERSION (${constant})`);
 ok(header !== "0.1.0", "plugin version bumped past 0.1.0");
+
+// 6. upgrade notice for a Verifier URL without a secret
+ok(/add_action\('admin_notices',\s*\[__CLASS__,\s*'admin_notice_verifier_secret'\]\)/.test(code(methodBody("init"))), "init() registers the verifier-secret admin notice");
+const missing = code(methodBody("verifier_secret_missing"));
+ok(/!empty\(\$opts\['verifier_url'\]\)\s*&&\s*!self::verifier_ready\(\$opts\)/.test(missing), "the notice condition is a Verifier URL set and the verifier not ready (no secret, or too short)");
+const notice = code(methodBody("admin_notice_verifier_secret"));
+const firstLine = notice.split("\n").map((l) => l.trim()).find(Boolean) || "";
+ok(/^if \(!current_user_can\('manage_options'\)\) return;$/.test(firstLine), "the notice is for administrators only (manage_options checked first)");
+ok(/if \(!self::verifier_secret_missing\(\$opts\)\) return;/.test(notice), "the notice shows only while the secret is missing");
+ok(!/get_current_screen|\$hook|\$_GET\['page'\]|pagenow/.test(notice), "the notice is not limited to the plugin's own screen (shows on every admin page)");
+ok(!/\becho\b/.test(notice) && /printf\(/.test(notice), "the notice prints through one printf");
+// The printf call's top-level arguments (commas inside nested calls and
+// quoted strings do not split).
+function topLevelArgs(src, at) {
+  const args = []; let depth = 0, cur = "", quote = null;
+  for (let i = src.indexOf("(", at) + 1; i < src.length; i++) {
+    const c = src[i];
+    if (quote) { cur += c; if (c === "\\") { cur += src[++i]; } else if (c === quote) quote = null; continue; }
+    if (c === "'" || c === '"') { quote = c; cur += c; continue; }
+    if (c === "(") depth++;
+    if (c === ")") { if (depth === 0) { args.push(cur.trim()); return args; } depth--; }
+    if (c === "," && depth === 0) { args.push(cur.trim()); cur = ""; continue; }
+    cur += c;
+  }
+  return args;
+}
+const printfArgs = topLevelArgs(notice, notice.indexOf("printf(")).slice(1);
+ok(printfArgs.length === 4 && printfArgs.every((a) => /^esc_(html|url|attr)(__)?\(/.test(a)), `every printed value is escaped (${printfArgs.map((a) => a.slice(0, 12)).join(" | ")})`);
+ok(/Verifier secret/.test(notice) && /paid \(x402\) and proof-of-work crawlers are refused/.test(notice) && /needs this secret/.test(notice), "the notice says the verifier needs the new secret and that paid and proof-of-work crawlers are refused until it is set");
+ok(/notice notice-error/.test(notice), "the notice is an error notice");
+ok(/'note'\s*=>\s*!self::verifier_ready\(\$opts\)/.test(code(methodBody("send_402"))), "the 402 note reads the same readiness as the rails, so a URL without a secret is not advertised as verifying");
+ok((gate.match(/self::verifier_ready\(\$opts\)/g) || []).length === 2, "the gate still fails closed without the secret (both rails require verifier_ready())");
+const upgrading = readme.slice(readme.indexOf("## Upgrading"), readme.indexOf("\n## ", readme.indexOf("## Upgrading") + 5));
+ok(upgrading.length > 40 && /0\.1\.1/.test(upgrading) && /fails closed/.test(upgrading) && /notice/.test(upgrading) && /Verifier secret/.test(upgrading), "the README has an Upgrading note for sites with a Verifier URL and no secret");
+ok(!/\u2014/.test(upgrading) && !/\u2014/.test(notice), "no em dash in the notice or the Upgrading note");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
