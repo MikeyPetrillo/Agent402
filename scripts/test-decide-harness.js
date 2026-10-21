@@ -234,9 +234,9 @@ const orderOf = (d) => d.plan.map((p) => [p.purpose, p.tool.id, ...p.fallbacks.m
   ok(shape.signals.unlinkedValues === 1 && shape.steps[1].params.ip === "missing", `the router sees the base plan's shape and failure signals (${JSON.stringify(shape.signals)})`);
   ok(/When unsure, answer "base"/.test(rp.system) && HARNESSES.every((h) => rp.user.includes(h.routingLesson)), "the router reads every offered cluster's routing lesson and defaults to base");
   ok(!/description|seller/.test(JSON.stringify(shape.steps)), "the router never sees seller-written text");
-  const fake = { models: [["acme/small", { prompt: 1, completion: 2 }], ["acme/large", { prompt: 5, completion: 9 }]] };
-  ok(routerModel({ model: "acme/large", modelFallback: "acme/small", harness: {} }, fake) === "acme/small" && routerModel({ model: "acme/large", modelFallback: "acme/small", harness: {} }, { models: [] }) === "acme/large", "the router asks the cheaper admitted model by the cost table, else the primary");
-  ok(routerModel({ model: "acme/large", modelFallback: "acme/small", harness: { routerModel: "other/model" } }, fake) === "acme/small", "a pinned router model must be one of the admitted pair");
+  const fake = { models: [["fake/small", { prompt: 1, completion: 2 }], ["fake/large", { prompt: 5, completion: 9 }]] };
+  ok(routerModel({ model: "fake/large", modelFallback: "fake/small", harness: {} }, fake) === "fake/small" && routerModel({ model: "fake/large", modelFallback: "fake/small", harness: {} }, { models: [] }) === "fake/large", "the router asks the cheaper admitted model by the cost table, else the primary");
+  ok(routerModel({ model: "fake/large", modelFallback: "fake/small", harness: { routerModel: "other/model" } }, fake) === "fake/small", "a pinned router model must be one of the admitted pair");
 }
 
 // ---- the synthetic suite, plan-only ----
