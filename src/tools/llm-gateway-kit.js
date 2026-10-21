@@ -26,7 +26,7 @@
 // cache hooks res.json only).
 
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
-import { upstreamCosts, upstreamCostsLoaded } from "../upstream-costs.js";
+import { upstreamCosts, upstreamCostsLoaded, rowRateAt } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
 import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
@@ -1054,14 +1054,17 @@ function requireFee(v) {
 }
 
 /** Upstream list price for a model (longest matching prefix), or null when
- *  the family is unknown - callers fall back to the tier's max_price bound. */
-export function costFor(model) {
+ *  the family is unknown - callers fall back to the tier's max_price bound.
+ *  With `promptTokens`, the price at that prompt size: a row with long-context
+ *  tiers answers the tier the prompt reaches (src/upstream-costs.js rowRateAt),
+ *  and without it, or below every tier, the base row itself. */
+export function costFor(model, promptTokens) {
   const id = canonicalModel(model).toLowerCase();
   let best = null;
   for (const [prefix, cost] of modelCostRows()) {
     if (id.startsWith(prefix) && (!best || prefix.length > best.prefix.length)) best = { prefix, cost };
   }
-  return best ? best.cost : null;
+  return best ? rowRateAt(best.cost, promptTokens) : null;
 }
 
 /** Worst-case input multiplier when prompt caching is on: an Anthropic cache
@@ -1389,6 +1392,27 @@ function estimateInputTokens(body, imageCount) {
   return Math.ceil(countTokensBounded(text) * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
 }
 
+/** The prompt size, in the upstream's own tokens, that picks a long-context
+ *  tier for this body: the estimated input (exact BPE with headroom, see
+ *  estimateInputTokens), the tier's own injected input and every server-tool
+ *  result, as one turn (the last turn of a loop carries all of it), scaled by
+ *  the model's tokenizer correction. Every turn is priced at the tier this
+ *  largest turn reaches, so the selection can only err dear. */
+export function promptTokensFor(body, tier, imageCount = 0) {
+  const st = serverToolWorstCase(body, tier);
+  return promptTokensOf(estimateInputTokens(body, imageCount), body, tier, st);
+}
+function promptTokensOf(estimated, body, tier, st) {
+  return Math.ceil((estimated + (tier.extraInputTokens || 0) + st.injectedTokens) * tokenizerFactor(body.model));
+}
+
+/** The provider.max_price bound a metered call sends: the model's row at this
+ *  body's prompt size, the same row its quote priced (null when the model has
+ *  no row; the metered tier refuses before then). */
+export function meteredBoundFor(body, tier, imageCount = 0) {
+  return costFor(body.model, promptTokensFor(body, tier, imageCount));
+}
+
 /** Worst-case upstream bill (USD) for an outbound body at this tier:
  *  exact-BPE input pricing plus the full output cap × n, against the model's
  *  list cost elementwise-min'd with the tier's provider max_price bound.
@@ -1396,7 +1420,16 @@ function estimateInputTokens(body, imageCount) {
  *  CI test (scripts/test-pricing-margin.js) imports it so the test and the
  *  runtime can never disagree on the math. */
 export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
-  const row = costFor(body.model) || tier.maxPrice;
+  const st = serverToolWorstCase(body, tier);
+  const estimated = estimateInputTokens(body, imageCount);
+  const promptTokens = promptTokensOf(estimated, body, tier, st);
+  // A long-context tier (a row's `tiers`) prices the whole call once the
+  // prompt reaches it: upstream bills every token of such a prompt, prompt
+  // and completion alike, at the higher rate.
+  const base = costFor(body.model);
+  const atSize = costFor(body.model, promptTokens);
+  const longContext = !!base && atSize !== base;
+  const row = atSize || tier.maxPrice;
   // A priority-tier request (service_tier "priority", pro/premium only) can be
   // served by the model's "*/fast" or "*/priority" endpoint, which bills a
   // multiple of the default row (PRIORITY_PRICE_FACTOR, measured live); the
@@ -1409,7 +1442,10 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   // own row and sends THAT row as its bound (`costFor` in the handlers), so
   // its quote must not be min'd with a ceiling the request never carries
   // (review 2026-08-27: a pricier model quoted under its own row).
-  const cost = tier.metered ? { prompt: listed.prompt, completion: listed.completion } : {
+  // A long-context tier is not min'd with the flat bound either: max_price is
+  // documented against an endpoint's listed price, and nothing states it
+  // bounds the long-context price an admitted endpoint bills above it.
+  const cost = tier.metered || longContext ? { prompt: listed.prompt, completion: listed.completion } : {
     prompt: Math.min(listed.prompt, tier.maxPrice.prompt),
     completion: Math.min(listed.completion, tier.maxPrice.completion),
   };
@@ -1423,8 +1459,7 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   // transcript, plus a per-use execution fee. `st` is all-zero / turns:1 for
   // every request that carries none, so the numbers below are byte-identical
   // to the pre-server-tools arithmetic on those.
-  const st = serverToolWorstCase(body, tier);
-  const inTokens = (estimateInputTokens(body, imageCount) + (tier.extraInputTokens || 0) + st.injectedTokens) * st.turns;
+  const inTokens = (estimated + (tier.extraInputTokens || 0) + st.injectedTokens) * st.turns;
   // Prompt caching rides by default (top-level cache_control, see
   // cacheControlPref): on Anthropic a cache WRITE bills above list input
   // (see cacheWriteFactor), so the worst case for a first-seen long prompt is
@@ -1446,7 +1481,7 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const outFactor = reasoningOutsideMaxTokens(body.model) ? UNCAPPED_REASONING_OUT_FACTOR : 1;
   const outTokens = (Number(body.max_tokens) || 0) * outFactor;
   const outUsd = (outTokens / 1e6) * cost.completion * n * st.turns;
-  return { inTokens, inUsd, fixedUsd, outUsd, outTokens, outFactor, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st };
+  return { inTokens, inUsd, fixedUsd, outUsd, outTokens, outFactor, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st, promptTokens, longContext };
 }
 
 /** Output tokens priced per token of max_tokens for a model whose reasoning
@@ -3271,7 +3306,8 @@ function makeHandler(routeTier) {
     // upstream bound is that row, not the tier-wide 20/100 - a pricier
     // provider of the same model is refused upstream instead of served at a
     // loss the quote never covered (audit 2026-08-26).
-    const meteredBound = TIERS[tierSlug].metered ? costFor(body.model) : null;
+    // A row with long-context tiers bounds at the tier this prompt reaches.
+    const meteredBound = TIERS[tierSlug].metered ? meteredBoundFor(body, TIERS[tierSlug], countImages(body.messages)) : null;
     const providerPrefs = {
       ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }
         : TIERS[tierSlug].maxPrice ? { max_price: TIERS[tierSlug].maxPrice } : {}),

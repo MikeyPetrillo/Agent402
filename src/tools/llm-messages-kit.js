@@ -37,7 +37,7 @@ import {
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
-  refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
+  refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, smallBudgetEffort,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
@@ -382,7 +382,8 @@ export function makeMessagesHandler(routeTier) {
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the
     // upstream bound is that row, never the tier-wide cap (audit 2026-08-26).
-    const meteredBound = tier.metered ? costFor(body.model) : null;
+    // Priced at this prompt's size: a long-context tier bounds a long prompt.
+    const meteredBound = tier.metered ? meteredBoundFor(probe, tier, imageCount) : null;
     const quotedUsd = tier.metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : null;
     const providerPrefs = {
       ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }

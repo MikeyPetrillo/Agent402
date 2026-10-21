@@ -24,7 +24,7 @@
 // code_interpreter, image_generation) are refused: their spend is bounded by
 // neither max_output_tokens nor provider.max_price. Function tools only.
 import {
-  substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, costFor,
+  substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
@@ -295,7 +295,8 @@ export function makeResponsesHandler(routeTier) {
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the
     // upstream bound is that row, never the tier-wide cap.
-    const meteredBound = tier.metered ? costFor(body.model) : null;
+    // Priced at this prompt's size: a long-context tier bounds a long prompt.
+    const meteredBound = tier.metered ? meteredBoundFor(probe, tier, imageCount) : null;
     const quotedUsd = tier.metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : null;
     const providerPrefs = {
       ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }
