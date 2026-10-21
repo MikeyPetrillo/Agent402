@@ -11,6 +11,7 @@
 // Settlement-safe (throws >=400 on failure), WALLET_ONLY, not cached. Gated on
 // OPENROUTER_API_KEY for the synthesis (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { stepProgress } from "../job-progress.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
@@ -175,9 +176,9 @@ export function dnsHostFor(nameservers) {
   };
 }
 export async function probeDnsPosture(domain) {
-  const nsR = await (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })();
-  const dnsHost = nsR.ok ? dnsHostFor(nsR.records) : null;
-  const [caaR, sts, rpt, bimi, sec] = await Promise.all([
+  // The NS lookup runs beside the other lookups: none of them reads it.
+  const [nsR, caaR, sts, rpt, bimi, sec] = await Promise.all([
+    (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })(),
     (async () => { try { const r = await Promise.race([dnsPromises.resolveCaa(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r || [] }; } catch (e) { return { ok: dnsErrOk(e), records: [], error: e.code || e.message }; } })(),
     txtAt(`_mta-sts.${domain}`), txtAt(`_smtp._tls.${domain}`), txtAt(`default._bimi.${domain}`),
     (async () => {
@@ -188,6 +189,7 @@ export async function probeDnsPosture(domain) {
       } catch (e) { return { ok: false, error: String(e?.message || e) }; }
     })(),
   ]);
+  const dnsHost = nsR.ok ? dnsHostFor(nsR.records) : null;
   const pick = (r, re) => (r.ok ? (r.records.find((x) => re.test(x)) || null) : null);
   return {
     caa: caaR.ok ? caaR.records.map((c) => ({ tag: c.issue ? "issue" : c.issuewild ? "issuewild" : c.iodef ? "iodef" : "other", value: c.issue || c.issuewild || c.iodef || JSON.stringify(c), critical: c.critical || 0 })) : null,
@@ -239,22 +241,27 @@ function letterFor(n) { return n >= 90 ? "A" : n >= 80 ? "B" : n >= 70 ? "C" : n
 // handler below uses the SAME function, so the two can never grade differently.
 export async function probeDomain(domain, { pro = false } = {}) {
   const emailH = H("email-deliverability"), tlsH = H("tls-cert"), hdrH = H("http-headers");
-  const core = await Promise.all([
-    settle(emailH({ domain }), PROBE_TIMEOUT_MS),
-    settle(tlsH({ host: domain }), PROBE_TIMEOUT_MS),
-    settle(hdrH({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
-    settle(probeDnsPosture(domain), PROBE_TIMEOUT_MS),
-  ]);
-  const [emailR, tlsR, hdrR, dnsR] = core;
-  const dnsx = dnsR.ok ? dnsR.data : null;
-  const www = await probeWwwPair(domain, hdrH);
-  let ct = null, tech = null, whois = null;
-  if (pro) {
-    const proTools = await Promise.all([
+  // One round: the core probes, the www twin and the pro probes read nothing
+  // from each other (all free, no model), so the stage takes as long as its
+  // slowest probe instead of the sum of three rounds.
+  const [core, www, proTools] = await Promise.all([
+    Promise.all([
+      settle(emailH({ domain }), PROBE_TIMEOUT_MS),
+      settle(tlsH({ host: domain }), PROBE_TIMEOUT_MS),
+      settle(hdrH({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
+      settle(probeDnsPosture(domain), PROBE_TIMEOUT_MS),
+    ]),
+    probeWwwPair(domain, hdrH),
+    pro ? Promise.all([
       settle(H("cert-transparency")({ domain, limit: 200 }), PROBE_TIMEOUT_MS),
       settle(H("tech-stack")({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
       settle(H("whois")({ domain }), PROBE_TIMEOUT_MS),
-    ]);
+    ]) : null,
+  ]);
+  const [emailR, tlsR, hdrR, dnsR] = core;
+  const dnsx = dnsR.ok ? dnsR.data : null;
+  let ct = null, tech = null, whois = null;
+  if (proTools) {
     ct = proTools[0].ok ? proTools[0].data : null;
     tech = proTools[1].ok ? proTools[1].data : null;
     whois = proTools[2].ok ? proTools[2].data : null;
@@ -318,6 +325,9 @@ function makeDomainAuditHandlerInner(tierSlug) {
     const domain = normDomain(input);
     const user = safeUser(req);
 
+    // Job progress (src/job-progress.js): probe, then write; a no-op outside a job.
+    const steps = stepProgress(2, req);
+    steps.next("probing the domain");
     // 1) LIVE PROBES + GRADE (shared with the monitor scheduler's free re-probe).
     const { emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, composite, grade, assessed, gradeCaveat } = await probeDomain(domain, { pro: t.pro });
 
@@ -387,6 +397,7 @@ Do NOT write a sources section. Ground every claim in the probe data; where a pr
 NOTE: a gap in this material is never a finding about the domain - a probe marked FAILED or unknown was not checked here; say so instead of "not configured".${t.pro ? `\n=== ATTACK SURFACE / STACK / REGISTRATION ===\n${proBlock}` : ""}`;
 
     let spent = 0;
+    steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);

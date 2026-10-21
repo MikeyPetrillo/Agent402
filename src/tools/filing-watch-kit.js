@@ -23,6 +23,7 @@
 //     one's form type.
 //   describeFilingChanges(prev, next) human-readable lines for the filings in
 //     `next` that were not in `prev` - the body of the alert email.
+import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
@@ -605,6 +606,9 @@ export function selectDocuments(filings, { max = 3, focus = [] } = {}) {
 function makeFilingHandlerInner(tierSlug) {
   const t = FILING_TIERS[tierSlug];
   return async (input, req, deps = {}) => {
+    // Job progress (src/job-progress.js): a no-op outside an async job or task.
+    const steps = stepProgress(2, req);
+    steps.next("reading filings");
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"ticker": "AAPL"}');
     const ticker = typeof input.ticker === "string" ? input.ticker.trim().toUpperCase() : "";
     const cikIn = input.cik != null ? String(input.cik).trim() : "";
@@ -741,6 +745,7 @@ ${docBlocks || "(no primary document was read for this window)"}`;
 
     // 5) SYNTHESIZE.
     let spent = 0;
+    steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);
