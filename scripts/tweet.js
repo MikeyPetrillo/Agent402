@@ -24,10 +24,12 @@
 //   DRY_RUN=1 node scripts/tweet.js --text "dry run, nothing leaves the box"
 //   node scripts/tweet.js --text "over 280 on purpose…" --force   # skip length guard
 //   node scripts/tweet.js --verify   # read-only credential check (GET /2/users/me); posts nothing
+//   node scripts/tweet.js --media clip.mp4 --upload-only   # upload (chunked for .mp4/.mov), print the media id, post nothing
 //
 // Exit codes: 0 posted (or dry-run/verify OK), 1 usage/credential/length error, 2 API error.
 
 import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { X_TWEETS_URL, pct, oauthHeader, xCredentialsFromEnv } from "../src/x-oauth.js";
 
 const API_URL = X_TWEETS_URL;
@@ -41,7 +43,7 @@ const DRY = process.env.DRY_RUN === "1";
 
 // ---- args -----------------------------------------------------------------
 function parseArgs(argv) {
-  const out = { force: false, replyTo: null, quote: null, media: null, text: null, file: null, dryRun: false, verify: false, delete: null };
+  const out = { force: false, replyTo: null, quote: null, media: null, text: null, file: null, dryRun: false, verify: false, delete: null, uploadOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--text" || a === "-t") out.text = argv[++i];
@@ -53,6 +55,7 @@ function parseArgs(argv) {
     else if (a === "--force") out.force = true;
     else if (a === "--dry-run") out.dryRun = true;
     else if (a === "--verify") out.verify = true;
+    else if (a === "--upload-only") out.uploadOnly = true;
     else if (!a.startsWith("-") && out.text == null) out.text = a; // positional
   }
   return out;
@@ -95,6 +98,47 @@ async function uploadMedia(path) {
     process.exit(2);
   }
   return json.media_id_string;
+}
+
+// A video goes up in chunks (INIT, APPEND per 4 MB segment, FINALIZE), then
+// STATUS is read until X finishes processing it. The APPEND body is multipart,
+// so only its query parameters are signed; INIT and FINALIZE are form-encoded
+// and sign their body like the image upload above.
+const VIDEO_TYPES = { ".mp4": "video/mp4", ".mov": "video/quicktime" };
+async function uploadVideo(path, mediaType) {
+  const MEDIA_URL = "https://upload.twitter.com/1.1/media/upload.json";
+  const bytes = readFileSync(path);
+  const form = async (params) => {
+    const res = await fetch(MEDIA_URL, {
+      method: "POST",
+      headers: { Authorization: authHeader("POST", MEDIA_URL, params), "Content-Type": "application/x-www-form-urlencoded" },
+      body: Object.entries(params).map(([k, v]) => `${pct(k)}=${pct(v)}`).join("&"),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { console.error(`media ${params.command} ${res.status}:`, JSON.stringify(json).slice(0, 300)); process.exit(2); }
+    return json;
+  };
+  const init = await form({ command: "INIT", total_bytes: String(bytes.length), media_type: mediaType, media_category: "tweet_video" });
+  const mediaId = init.media_id_string;
+  if (!mediaId) { console.error("media INIT returned no media_id"); process.exit(2); }
+  const SEGMENT = 4 * 1024 * 1024;
+  for (let i = 0, off = 0; off < bytes.length; i++, off += SEGMENT) {
+    const q = { command: "APPEND", media_id: mediaId, segment_index: String(i) };
+    const body = new FormData();
+    body.append("media", new Blob([bytes.subarray(off, off + SEGMENT)]), "chunk");
+    const res = await fetch(`${MEDIA_URL}?${new URLSearchParams(q)}`, { method: "POST", headers: { Authorization: authHeader("POST", MEDIA_URL, q) }, body });
+    if (!res.ok) { console.error(`media APPEND ${i} ${res.status}:`, (await res.text().catch(() => "")).slice(0, 300)); process.exit(2); }
+  }
+  let state = (await form({ command: "FINALIZE", media_id: mediaId })).processing_info;
+  for (let n = 0; state && state.state !== "succeeded" && n < 60; n++) {
+    if (state.state === "failed") { console.error("media processing failed:", JSON.stringify(state.error || state).slice(0, 300)); process.exit(2); }
+    await new Promise((r) => setTimeout(r, Math.max(1, Number(state.check_after_secs) || 2) * 1000));
+    const q = { command: "STATUS", media_id: mediaId };
+    const res = await fetch(`${MEDIA_URL}?${new URLSearchParams(q)}`, { headers: { Authorization: authHeader("GET", MEDIA_URL, q) } });
+    state = (await res.json().catch(() => ({}))).processing_info;
+  }
+  if (state && state.state !== "succeeded") { console.error("media processing did not finish"); process.exit(2); }
+  return mediaId;
 }
 
 function requireCredentials() {
@@ -160,6 +204,16 @@ async function main() {
 
   if (args.verify) return verifyCredentials();
   if (args.delete) return deleteTweet(args.delete);
+  // Uploads the --media file and prints its media id without posting: a check
+  // that an upload (a video's chunks and processing included) goes through.
+  if (args.uploadOnly) {
+    if (!args.media) { console.error("--upload-only needs --media <path>"); process.exit(1); }
+    requireCredentials();
+    const videoType = VIDEO_TYPES[extname(args.media).toLowerCase()];
+    const id = videoType ? await uploadVideo(args.media, videoType) : await uploadMedia(args.media);
+    console.log(`uploaded, media id ${id} (nothing posted)`);
+    return;
+  }
 
   const text = resolveText(args).replace(/\s+$/, "");
 
@@ -190,7 +244,10 @@ async function main() {
 
   requireCredentials();
 
-  if (args.media) body.media = { media_ids: [await uploadMedia(args.media)] };
+  if (args.media) {
+    const videoType = VIDEO_TYPES[extname(args.media).toLowerCase()];
+    body.media = { media_ids: [videoType ? await uploadVideo(args.media, videoType) : await uploadMedia(args.media)] };
+  }
 
   let res, json;
   try {
