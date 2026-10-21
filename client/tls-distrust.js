@@ -12,10 +12,10 @@
 //
 // distrustFetch(baseFetch) returns a fetch that sends each request through a
 // dedicated undici Agent whose connect.checkServerIdentity refuses such a
-// chain, then runs Node's own hostname check. It applies only when the
-// platform fetch is Node's and the process-wide dispatcher is a plain Agent
-// (never replaced by a proxy or custom dispatcher, whose settings would
-// otherwise be bypassed); in any other case the request goes out unchanged.
+// chain, then runs Node's own hostname check. It applies only while the
+// process-wide dispatcher is still Node's own default; once the caller has
+// installed one (setGlobalDispatcher: a proxy, a custom CA, timeouts), the
+// request goes out through theirs unchanged and their TLS choices win.
 import tls from "node:tls";
 import { createHash, X509Certificate } from "node:crypto";
 
@@ -55,24 +55,46 @@ export function distrustCheckServerIdentity(extraSpki = []) {
 
 const GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
 
-/** A dedicated undici Agent carrying the refusal, or null when this platform
- *  or process setup cannot take one (see the header). */
-export async function distrustDispatcher({ extraSpki = [] } = {}) {
+// Node's own default dispatcher, observed when this module loads. Node fills
+// the slot when fetch is first called (synchronously, before any connection),
+// so when the slot is still empty here a data: URL fetch fills it with Node's
+// instance and nothing else can have put it there. When the slot is already
+// filled at load, whoever filled it is unknown and it is treated as the
+// caller's (no dedicated dispatcher), unless another copy of this code (the
+// client and the MCP server share it) observed that same instance as Node's.
+const OBSERVED = Symbol.for("agent402.tlsDistrust.nodeDefaultDispatcher");
+function observeNodeDefault() {
   if (typeof process !== "object" || !process?.versions?.node || process.versions.bun) return null;
-  if (!globalThis[GLOBAL_DISPATCHER] && typeof globalThis.fetch === "function") {
-    // Node creates its default Agent on the first fetch; a data: URL makes no
-    // connection.
-    try { await globalThis.fetch("data:,"); } catch { /* not Node's fetch */ }
-  }
   const current = globalThis[GLOBAL_DISPATCHER];
-  const AgentClass = current?.constructor;
-  if (typeof AgentClass !== "function" || AgentClass.name !== "Agent") return null;
+  if (current) return globalThis[OBSERVED] === current ? current : null;
+  if (typeof globalThis.fetch !== "function") return null;
+  try { globalThis.fetch("data:,").catch(() => {}); } catch { return null; }
+  const observed = globalThis[GLOBAL_DISPATCHER] || null;
+  if (observed) Object.defineProperty(globalThis, OBSERVED, { value: observed, configurable: false, enumerable: false, writable: false });
+  return observed;
+}
+const NODE_DEFAULT_DISPATCHER = observeNodeDefault();
+
+/** True when the process-wide dispatcher is not Node's own default: the
+ *  caller installed one, or its origin is unknown. */
+export function callerDispatcherInstalled() {
+  return !NODE_DEFAULT_DISPATCHER || globalThis[GLOBAL_DISPATCHER] !== NODE_DEFAULT_DISPATCHER;
+}
+
+/** A dedicated undici Agent carrying the refusal, or null when this platform
+ *  cannot take one or the caller installed their own global dispatcher (see
+ *  the header). */
+export async function distrustDispatcher({ extraSpki = [] } = {}) {
+  if (callerDispatcherInstalled()) return null;
+  const AgentClass = NODE_DEFAULT_DISPATCHER.constructor;
+  if (typeof AgentClass !== "function") return null;
   return new AgentClass({ connect: { checkServerIdentity: distrustCheckServerIdentity(extraSpki) } });
 }
 
 /** Wrap a fetch so every request it makes goes through distrustDispatcher().
  *  With no baseFetch it calls globalThis.fetch as it is at request time. A
- *  caller's own init.dispatcher is left alone. Pass the result as the base
+ *  caller's own init.dispatcher, or a global dispatcher the caller installed
+ *  (checked on every request), is left alone. Pass the result as the base
  *  fetch of a payment wrapper (wrapFetchWithPayment(distrustFetch(), client))
  *  so the 402 and the paid retry both go through it. */
 export function distrustFetch(baseFetch, opts = {}) {
@@ -80,8 +102,9 @@ export function distrustFetch(baseFetch, opts = {}) {
   let pending = null;
   return async (input, init = {}) => {
     const f = baseFetch || globalThis.fetch;
+    if (callerDispatcherInstalled() || init?.dispatcher !== undefined) return f(input, init);
     pending ||= distrustDispatcher(opts).catch(() => null);
     const dispatcher = await pending;
-    return f(input, dispatcher && init?.dispatcher === undefined ? { ...init, dispatcher } : init);
+    return f(input, dispatcher ? { ...init, dispatcher } : init);
   };
 }
