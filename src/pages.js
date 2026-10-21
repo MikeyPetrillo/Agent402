@@ -1,6 +1,7 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
 import { openapiRequestBody } from "./openapi-request.js";
+import { asyncAdvice } from "./slow-routes.js";
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
@@ -413,7 +414,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
   }
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
-  if (tool.runSeconds) facts.push(`Takes up to ${e(String(tool.runSeconds))} seconds. Keep the connection open that long, or send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then collect the answer from <code>GET /api/jobs/{id}</code>; payment still settles only when the answer is ready.`);
+  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Keep the connection open that long, or send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.`);
+  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
   if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
@@ -742,10 +744,16 @@ const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 const ASYNC_JOB_SCHEMA = {
   type: "object",
   properties: {
-    jobId: { type: "string" }, status: { type: "string", enum: ["working", "completed", "failed"] },
-    statusUrl: { type: "string" }, message: { type: "string" }, pollIntervalSeconds: { type: "integer" },
+    jobId: { type: "string" }, status: { type: "string", enum: ["queued", "running", "succeeded", "failed"], description: "queued until the paid handler starts (payment verified), running while it works, then succeeded or failed." },
+    stage: { type: "string", description: "What the run is doing: queued, started, a route-specific stage (video: submitted, generating, downloading; reports: their named steps), running, done or failed." },
+    progress: { type: ["number", "null"], minimum: 0, maximum: 1, description: "Fraction done, when known." },
+    progressEstimated: { type: "boolean", description: "true when progress is elapsed time against the route's typical run rather than reported by the run itself." },
+    steps: { type: "object", properties: { done: { type: "integer" }, total: { type: "integer" } }, description: "Steps done out of the total, on routes that report steps." },
+    etaSeconds: { type: ["integer", "null"], description: "Estimated seconds until the answer, when known." },
+    elapsedSeconds: { type: "integer" }, expectedSeconds: { type: "integer", description: "The route's typical run, measured." }, maxSeconds: { type: "integer", description: "The route's run budget." },
+    statusUrl: { type: "string" }, message: { type: "string" }, pollIntervalSeconds: { type: "integer", description: "Seconds to wait before the next poll (also sent as Retry-After)." },
     createdAt: { type: "string" }, updatedAt: { type: "string" }, expiresAt: { type: "string" },
-    result: { type: "object", description: "On completed: { httpStatus, headers (payment receipt), body }." },
+    result: { type: "object", description: "On succeeded: { httpStatus, headers (payment receipt), body }." },
     error: { type: "object", description: "On failed: { httpStatus, body or message }." },
   },
 };
@@ -855,11 +863,11 @@ export function openapiSpec(baseUrl, catalog) {
         description: "Same key + same credential + same body replays the paid result without charging again. A copy sent while the first is still running gets 409 with Retry-After and does not run.",
         schema: { type: "string" },
       },
-      ...(tool.runSeconds ? [{
+      ...(tool.asyncProfile ? [{
         name: "Prefer",
         in: "header",
         required: false,
-        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting up to ${tool.runSeconds} s; collect the answer from GET /api/jobs/{id}. Payment settles only when the answer is ready.`,
+        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; poll GET /api/jobs/{id} (free, honor Retry-After) until status is succeeded or failed.${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready.`,
         schema: { type: "string", enum: ["respond-async"] },
       }] : []),
       ...(isComputePayable(tool) ? [{
@@ -887,7 +895,10 @@ export function openapiSpec(baseUrl, catalog) {
       op.requestBody = openapiRequestBody(discovery);
       op.parameters = headerParams;
     }
-    if (tool.runSeconds && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): the job is running; poll its statusUrl. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
+    if (tool.asyncProfile && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): the job is queued or running; poll its statusUrl, waiting Retry-After seconds between polls. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
+    // Machine-readable duration and async advice (src/slow-routes.js): the
+    // same block /api/pricing rows and a slow route's 402 body carry.
+    if (tool.asyncProfile) op["x-agent402-async"] = asyncAdvice(tool);
     paths[path] = paths[path] ?? {};
     paths[path][method.toLowerCase()] = op;
   }
@@ -896,7 +907,7 @@ export function openapiSpec(baseUrl, catalog) {
       operationId: "getAsyncJob",
       security: [],
       summary: "Collect a job started with Prefer: respond-async",
-      description: "Free. Returns the job's status (working, completed, failed); a completed job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (on x402 a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
+      description: "Free. Returns the job's status (queued, running, succeeded, failed) with its stage, progress (0 to 1 when known, labeled progressEstimated when it is elapsed time against the route's typical run) and etaSeconds; a state that is not final sets Retry-After. A succeeded job carries the route's answer in result.body with its payment receipt in result.headers, and a failed job says why in error (on x402 a failed run is not charged). The id is the link the 202 returned; it expires after one hour.",
       tags: ["jobs"],
       parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^[0-9a-f]{48}$" } }],
       responses: {

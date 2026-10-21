@@ -28,8 +28,16 @@
 // the longest run budget), so the hang-up rules never apply to it.
 //
 // The job id is a bearer capability (48 hex chars, short TTL), as on /mcp.
+//
+// PROGRESS (src/job-progress.js): the job is `queued` until the paid handler
+// starts (the payment gate has passed), then `running` with a stage, a 0-1
+// progress and an ETA. Handlers that know their steps report them through a
+// sink registered for this job and keyed on the loopback request; any other
+// route reports elapsed time against its typical run, labeled estimated.
+// GET /api/jobs/:id sets Retry-After on every state that is not final.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
+import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 
 export const LOOPBACK_HEADER = "x-agent402-async-loopback";
 const PREFER_ASYNC = /(^|[\s,;])respond-async(?=$|[\s,;=])/i;
@@ -50,17 +58,25 @@ const sameToken = (a, b) => {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 };
 
-/** What GET /api/jobs/:id returns: no owner, pid or boot id. */
-export function publicJob(rec, { basePath = "/api/jobs" } = {}) {
+/** What GET /api/jobs/:id returns: no owner, pid or boot id.
+ *  status is queued | running | succeeded | failed. `profile` is the route's
+ *  async profile (src/slow-routes.js) with its estimate basis, or null. */
+export function publicJob(rec, { basePath = "/api/jobs", profile = null, now = Date.now() } = {}) {
   const expiresAt = rec.ttlMs != null ? new Date((rec.createdAtMs || 0) + rec.ttlMs).toISOString() : null;
+  const pollSeconds = Math.max(1, Math.round((rec.pollIntervalMs || 5000) / 1000));
+  const { retryAfterSeconds, ...progress } = progressView(rec, {
+    now, pollSeconds,
+    basisSeconds: profile?.basisSeconds ?? null, expectedSeconds: profile?.expectedSeconds ?? null, maxSeconds: profile?.maxSeconds ?? null,
+  });
+  const final = progress.status === "succeeded" || progress.status === "failed";
   return {
-    jobId: rec.taskId, status: rec.status, slug: rec.slug,
+    jobId: rec.taskId, ...progress, slug: rec.slug,
     ...(rec.statusMessage ? { message: rec.statusMessage } : {}),
     createdAt: rec.createdAt, updatedAt: rec.lastUpdatedAt, expiresAt,
     statusUrl: `${basePath}/${rec.taskId}`,
-    ...(rec.status === "working" ? { pollIntervalSeconds: Math.max(1, Math.round((rec.pollIntervalMs || 5000) / 1000)) } : {}),
+    ...(!final ? { pollIntervalSeconds: retryAfterSeconds } : {}),
     ...(rec.status === "completed" ? { result: rec.result } : {}),
-    ...(rec.status === "failed" ? { error: rec.error } : {}),
+    ...(final && rec.status !== "completed" ? { error: rec.error } : {}),
   };
 }
 
@@ -70,7 +86,7 @@ export function publicJob(rec, { basePath = "/api/jobs" } = {}) {
  * @param {(req) => object|null} o.asyncRouteOf  the catalog def when this POST may run async
  * @param {object} o.store           createTaskStore() instance for these jobs
  */
-export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null }) {
+export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
   const perIp = new Map();
@@ -90,6 +106,10 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     if (req.method !== "POST" || !wantsAsync(req)) return next();
     const def = asyncRouteOf(req);
     if (!def) return next();
+    // The replay sends the parsed JSON body; any other body (a multipart
+    // upload) is served synchronously rather than replayed without its bytes.
+    const ct = String(req.headers["content-type"] || "");
+    if (ct && !/^application\/(?:[\w.+-]*\+)?json\b/i.test(ct)) return next();
     // Unpaid: the ordinary 402 (the route's description names this mode).
     // Async is for a call that is ready to pay, so a job is never created for
     // a request that could not settle anything.
@@ -109,11 +129,20 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     headers["content-type"] = "application/json";
     headers["x-forwarded-for"] = ip || "127.0.0.1";
     headers[LOOPBACK_HEADER] = loopbackToken;
+    // The handler's progress reaches this job's record through a sink keyed
+    // on the loopback (src/job-progress.js); writes are throttled and never
+    // reopen a terminal record.
+    const progressWriter = throttledProgressWriter((patch) => store.update?.(rec.taskId, patch));
+    const progressSink = registerProgressSink(progressWriter);
+    headers[PROGRESS_HEADER] = progressSink.key;
     const body = JSON.stringify(req.body ?? {});
     const url = `http://${host}:${port}${req.originalUrl}`;
 
     (async () => {
       let r = null;
+      // Progress stops before the terminal write, so a late update is never
+      // queued behind it (and the store refuses one that is).
+      const endProgress = () => { progressWriter.cancel(); progressSink.release(); };
       try {
         r = await fetchImpl(url, { method: "POST", headers, body, redirect: "manual", signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(store.RUN_TIMEOUT_MS)]) });
         const ct = r.headers.get("content-type") || "";
@@ -123,6 +152,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
         else payload = { text: await r.text() };
         const kept = {};
         for (const h of KEEP) { const v = r.headers.get(h); if (v) kept[h] = v; }
+        endProgress();
         if (r.status === 200) {
           await store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt: decodeReceipt(kept["payment-response"]), priceUsd: def.priceUsd ?? null });
         } else {
@@ -130,6 +160,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
             r.status === 402 ? "The payment was not accepted, so the call did not run and nothing was charged. The 402 is in error.body." : `The call ended with HTTP ${r.status} and nothing was charged.`);
         }
       } catch (e) {
+        endProgress();
         const aborted = e?.name === "AbortError" || e?.name === "TimeoutError";
         // A 200 whose headers arrived has settled (settlement comes before
         // the answer is written); its body was then lost. Book it here, on
@@ -148,12 +179,13 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
             : "The call answered, but its answer could not be read. Quote this job id when asking about the charge.";
         await store.fail(rec.taskId, { httpStatus: 504, message: aborted ? "The run did not finish in time." : "The run could not be completed." }, message);
         log(`[async-jobs] ${def.slug} job ended without an answer (${aborted ? "timeout" : "error"}${r ? `, loopback ${r.status}` : ""}${booked ? ", recorded as owed" : ""})`);
-      } finally { dec(ip); }
+      } finally { endProgress(); dec(ip); }
     })();
 
     const statusUrl = `${basePath}/${rec.taskId}`;
-    res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
-      .json({ ...publicJob(rec, { basePath }), message: `Running ${def.slug}. Poll ${statusUrl} (free) until status is completed or failed. Payment settles only when the result is ready; on x402 a failed run is not charged.` });
+    const doc = publicJob(rec, { basePath, profile: profileOfSlug(def.slug) });
+    res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(doc.pollIntervalSeconds || Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
+      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is succeeded or failed. Payment settles only when the result is ready; on x402 a failed run is not charged.` });
   }
 
   /** GET /api/jobs/:id - free. */
@@ -164,7 +196,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     res.set("Cache-Control", "no-store");
     if (!rec) return res.status(404).json({ error: "job_not_found", hint: "Unknown job id. Job links are valid for one hour." });
     if (rec === "expired") return res.status(410).json({ error: "job_expired", hint: "This job link has expired. Job links are valid for one hour." });
-    return res.json(publicJob(rec, { basePath }));
+    const doc = publicJob(rec, { basePath, profile: profileOfSlug(rec.slug) });
+    if (doc.pollIntervalSeconds) res.set("Retry-After", String(doc.pollIntervalSeconds));
+    return res.json(doc);
   }
 
   return { middleware, statusHandler, loopbackToken, activeFor: (ip) => perIp.get(ip) || 0 };

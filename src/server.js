@@ -282,6 +282,8 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs } from "./async-jobs.js";
+import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
+import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
 import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
@@ -2184,6 +2186,11 @@ for (const def of Object.values(CATALOG)) {
     def.runSeconds = runS;
     def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
   }
+  // The route's async profile (src/slow-routes.js): which routes run as a job
+  // on "Prefer: respond-async", which are advertised as slow, and the numbers
+  // every surface (402, /api/pricing, /openapi.json, /llms.txt) states.
+  const asyncProfile = asyncProfileOf(def);
+  if (asyncProfile) def.asyncProfile = Object.freeze({ ...asyncProfile, basisSeconds: estimateBasisSeconds(asyncProfile) });
 }
 // Captured output examples (src/tool-output-examples.js): a real paid answer
 // from the weekly catalog buy fills in a tool's published output example ONLY
@@ -8715,6 +8722,9 @@ app.get("/api/pricing", (_req, res) => {
         // 402 itself is unchanged). Absent on routes every rail can pay.
         ...(x402EvmOnly(def) ? { networks: pricingNetworksFor(def) } : {}),
         ...(def.identityBound ? { identityBound: true } : {}),
+        // A route that runs as a job on "Prefer: respond-async"; recommended
+        // (with its expected and maximum seconds) on the slow ones.
+        ...(def.asyncProfile ? { async: asyncAdvice(def) } : {}),
       };
     }),
   });
@@ -8789,10 +8799,19 @@ const asyncJobStore = createTaskStore({
   dir: taskDataDir("async-jobs"), label: "async-jobs",
   onChargedFailure: bookAsyncChargedFailure,
 });
+let asyncProfilesBySlug = null;
+const asyncProfileBySlug = (slug) => {
+  asyncProfilesBySlug ??= new Map(Object.values(CATALOG).filter((d) => d.asyncProfile).map((d) => [d.slug, d.asyncProfile]));
+  return asyncProfilesBySlug.get(slug) || null;
+};
 const asyncJobs = createAsyncJobs({
   port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
-  asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.runSeconds ? def : null; },
+  asyncRouteOf: (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.asyncProfile ? def : null; },
+  profileOfSlug: (slug) => asyncProfileBySlug(slug),
 });
+// A job's loopback (HTTP job or MCP task) carries a progress key; the handler
+// reports its stages to that job through the request scope (src/job-progress.js).
+app.use(progressMiddleware());
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
@@ -8884,6 +8903,10 @@ if (!FREE_MODE) {
   // be outer and its merge replaced. It is inner to every res.json wrapper
   // regardless, because res.json always ends in this.send.
   if (process.env.PAYMENT_REQUIRED_BODY !== "off") app.use(paymentRequiredBodyMiddleware());
+  // A slow route's 402 recommends Prefer: respond-async (X-Async-Recommended
+  // header, `async` block in the JSON body). Mounted after the mirror so its
+  // send wrapper runs first and the mirror's protocol keys still win.
+  app.use(asyncAdviceMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
   app.use(verifyHintMiddleware());
 
   const mppShim = createMppShim({
@@ -10274,6 +10297,8 @@ for (const tool of ALL_KIT) {
       // nothing is charged - a 499 cancels settlement on every rail.
       if (clientGoneBeforeFirstByte(req)) throw clientGoneError("The connection closed before the call started; nothing ran and nothing was charged.");
       req.__a402HandlerStarted = Date.now();
+      // A job's loopback moves from queued to running here (no-op otherwise).
+      reportHandlerStarted(req);
 
       // A composite runs in an abortable scope: on SIGTERM every upstream call
       // it is waiting on is cut off (503, never charged) instead of running to

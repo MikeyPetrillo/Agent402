@@ -24,6 +24,7 @@
 // wire. The buyer's IP rides X-Forwarded-For so per-IP limits see the buyer,
 // not 127.0.0.1 (trust proxy is 1 hop).
 import { Challenge, Credential, Receipt } from "mppx";
+import { PROGRESS_HEADER } from "./job-progress.js";
 
 export const MCP_PAYMENT_REQUIRED_CODE = -32042;
 // mppx 0.9.1+ ("Fixed MCP payment errors to use the specification-defined
@@ -101,7 +102,7 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
   // `timeoutMs` may be overridden PER CALL: a task-shaped composite run outlives
   // the default 60s bound (30s to 4 min), and the loopback is the paid request,
   // so cutting it short would abort work the buyer is waiting for.
-  return async function payCall({ def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken } = {}) {
+  return async function payCall({ def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken, progressKey } = {}) {
     const [method, path] = String(def.route || "POST /").split(" ");
     const m = (method || "POST").toUpperCase();
     let url = base + path;
@@ -113,6 +114,9 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
     if (typeof heartbeatToken === "string" && heartbeatToken && heartbeatToken.length <= 64) headers["X-Heartbeat-Token"] = heartbeatToken;
     if (credentialHeader) headers.Authorization = credentialHeader;
     if (idempotencyKey) headers["Idempotency-Key"] = String(idempotencyKey);
+    // An MCP task's progress key (src/job-progress.js): this process's own
+    // in-memory sink for the task, never a value a buyer sent.
+    if (typeof progressKey === "string" && progressKey) headers[PROGRESS_HEADER] = progressKey;
     let body;
     if (m === "GET" || m === "HEAD") {
       const qp = new URLSearchParams();
