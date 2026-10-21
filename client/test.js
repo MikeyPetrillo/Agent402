@@ -316,7 +316,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
     ok(seen.preflights === 1 && seen.unpaid === 1, "the preflight read $0.01 and the paid request drew its own 402");
     ok(seen.signed.length === 0, "with the guard, the $5 the paid request asked for was never signed");
-    ok(e?.name === "SpendingLimitError" && e.atSigning === true && e.limit === "maxPerCallUsd" && e.priceUsd === 5, `the refusal is a SpendingLimitError at signing naming the cap (${e?.message})`);
+    ok(e?.name === "SpendingLimitError" && e.atSigning === true && e.limit === "maxPerCallUsd" && e.priceUsd === 5 && /\$5\b/.test(e.message) && /\$0\.1\b/.test(e.message), `the refusal is a SpendingLimitError at signing naming the cap (${e?.message})`);
     ok(c.spendingSummary().calls === 0, "nothing was booked as spent");
   }
   // A mixed offer pays the option that fits.

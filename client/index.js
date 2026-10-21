@@ -516,7 +516,7 @@ export class Agent402 {
             const d = ctx.refusal;
             throw new SpendingLimitError(d.reason === "unknown-asset"
               ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
-              : `refusing to pay ${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} (${d.allowanceUsd} left to sign)`,
+              : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
             { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e });
           }
           throw e;
