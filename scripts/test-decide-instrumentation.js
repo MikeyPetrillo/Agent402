@@ -81,7 +81,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
     return { ok: true, status: 200, json: async () => ({ data: input.map((_, i) => ({ index: i, embedding: Array.from({ length: 512 }, (_, k) => ((k + i) % 7) / 7) })), usage: { total_tokens: 5 * input.length } }) };
   };
   const res = await decide({ task: "hash the secret words with sha256", depth: "plan", synthetic: true });
-  ok(res.plannerVersion === state.plannerVersion && /^pv_/.test(res.plannerVersion), "the service stamps every decision with its boot-time planner version");
+  ok(res.plannerVersion === `${state.plannerVersion}:${res.harness?.id || "base"}` && /^pv_[0-9a-f]{12}:[a-z-]+$/.test(res.plannerVersion), `the service stamps every decision with its boot-time planner version and the harness that built it (${res.plannerVersion})`);
   ok(res.shape?.shapeKey && res.shape.stepCount === res.plan.length && res.shape.categories.includes("crypto"), "the service returns the plan's shape to the main app");
   ok(!("_shapeMeta" in res) && !("_rankingLog" in res), "the planner's internal fields stay internal");
   const kept = await state.decisions.getShape(res.decisionId);
