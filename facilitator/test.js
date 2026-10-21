@@ -329,6 +329,27 @@ const sorobanRpc = getRpcClient(NETWORK);
   ok(err && /timeout/i.test(String(err.message)) && Array.isArray(err.fallbackErrors) && err.fallbackErrors.length === 1 && took < 8_000, `failover: all nodes down -> the primary's timeout error, fallbackErrors attached (${took}ms)`);
   for (const s of [good, fb2, rpcErr, blackhole, fbDown]) { s.closeAllConnections?.(); s.close(); }
   console.log("rpc-failover.js unit tests ✓");
+
+  // signer-reread.js: only the signer's not-found is reread, bounded.
+  {
+    const { installSignerReread } = await import("./signer-reread.js");
+    const SIGNER = "GSIGNER", OTHER = "GOTHER";
+    let calls = 0, missesLeft = 0;
+    const proto = { async getAccount(address) { calls++; if (address === SIGNER && missesLeft-- > 0) throw new Error(`Account not found: ${address}`); if (address === OTHER) throw new Error(`Account not found: ${address}`); return { address }; } };
+    ok(installSignerReread(SIGNER, { proto, pauseMs: 1, log: () => {} }) === true, "signer-reread: installs");
+    ok(installSignerReread(SIGNER, { proto, pauseMs: 1, log: () => {} }) === false, "signer-reread: idempotent");
+    missesLeft = 2; calls = 0;
+    ok((await proto.getAccount(SIGNER)).address === SIGNER && calls === 3, `signer-reread: two not-found answers for the signer, then served (${calls} reads)`);
+    missesLeft = 5; calls = 0;
+    let err = null; try { await proto.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 3, `signer-reread: bounded at 3 reads, then the not-found surfaces (${calls})`);
+    calls = 0; err = null; try { await proto.getAccount(OTHER); } catch (e) { err = e; }
+    ok(/Account not found/.test(err?.message) && calls === 1, "signer-reread: another address's not-found is an answer, read once");
+    const failing = { async getAccount() { calls++; throw new Error("timeout of 10000ms exceeded"); } };
+    installSignerReread(SIGNER, { proto: failing, pauseMs: 1, log: () => {} });
+    calls = 0; err = null; try { await failing.getAccount(SIGNER); } catch (e) { err = e; }
+    ok(/timeout/.test(err?.message) && calls === 1, "signer-reread: any other error is not reread here");
+  }
 }
 
 // ---------------------------------------------------------------------------
