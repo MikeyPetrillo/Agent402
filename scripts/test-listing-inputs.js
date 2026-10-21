@@ -61,7 +61,7 @@ for (const k of ["POST /api/route/execute-max", "POST /api/route/execute-pro"]) 
   ok(JSON.stringify(inputs.get(k)) === JSON.stringify(EXTERNAL_EXAMPLE_INPUT), `${k}: the input is the tier's published external example`);
 }
 const text = readFileSync(path.join(HERE, "listing-inputs.json"), "utf8");
-ok(!/—/.test(text), "no em dash in the inputs");
+ok(!/\u2014/.test(text), "no em dash in the inputs");
 ok(!/(sk-|Bearer |0x[0-9a-fA-F]{64}|PRIVATE|SECRET|api[_-]?key\s*[:=])/.test(text), "no key, token or secret-shaped string in the inputs");
 
 const { base, child } = await bootServer();

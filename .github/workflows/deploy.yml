@@ -3066,7 +3066,7 @@ jobs:
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
           t node scripts/test-refund-monitor.js
-          # Model-drift redaction (no dollar figure, bare decimal or exponent reaches the log or issue; stale-high grader on stub rows — offline)
+          # Model-drift redaction (no dollar figure, bare decimal or exponent reaches the log or issue; stale-high grader on stub rows; offline)
           t node scripts/test-model-drift-redaction.js
           # Bazaar register verdict (harvester lag is not a failure; a failed or unpaid route is — offline)
           t node scripts/test-bazaar-verdict.js
