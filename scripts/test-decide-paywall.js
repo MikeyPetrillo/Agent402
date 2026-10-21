@@ -83,7 +83,7 @@ async function checks(s, prices, label) {
   const rows = pricing.endpoints || [];
   const row = (path) => rows.find((r) => r.path === path);
   const priceOf = (slug) => Number(String(rows.find((r) => r.slug === slug)?.price ?? "").replace(/[^0-9.]/g, ""));
-  ok(row("/api/decide") && Number(String(row("/api/decide").price).replace(/[^0-9.]/g, "")) === prices.quick, `${label}: /api/pricing lists decide at the quick price from the config (${row("/api/decide")?.price})`);
+  ok(row("/api/decide") && Number(String(row("/api/decide").price).replace(/[^0-9.]/g, "")) === prices.plan, `${label}: /api/pricing lists decide at the default depth's (plan) price from the config (${row("/api/decide")?.price})`);
 
   // ---- the decide 402 ----
   const openapi = await (await fetch(`${s.base}/openapi.json`)).json();

@@ -525,7 +525,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const req = mkReq();
   const out = await makeDecideHandler({ ledger: fakeLedger, now })({ task: "do it", depth: "full" }, req);
   globalThis.fetch = realFetch;
-  ok(out.executionCredit?.amountUsd === 0.05 && out.executionCredit.activeAfterPaymentSettles, "decide returns a credit worth the fee (config: 100%)");
+  ok(out.executionCredit?.amountUsd === decideConfig().prices.full && out.executionCredit.activeAfterPaymentSettles, "decide returns a credit worth the fee (config: 100%)");
   ok(ledger.creditState(out.executionCredit.token).state === "pending", "...pending until the decision's payment settles");
   settle(req, 402);
   ok(ledger.creditState(out.executionCredit.token).state === "pending", "a failed settlement never activates it");
@@ -599,7 +599,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(tools.length >= 2 && tools.every((t) => WALLET_ONLY_SLUGS.has(t.slug)), `every decide tool is wallet-only (${tools.map((t) => t.slug).join(", ")})`);
   ok(tools.find((t) => t.slug === "decide-execute")?.spendsOwnWallet === true, "execute is marked as spending our wallet before settlement");
   const dq = tools.find((t) => t.slug === "decide"), ex = tools.find((t) => t.slug === "decide-execute");
-  ok(dq.quoteMaxUsd === decideConfig().prices.full && dq.quote({ task: "x", depth: "full" }) <= dq.quoteMaxUsd && dq.quote({ task: "x", depth: "plan" }) > Number(dq.price.replace("$", "")), `decide publishes its own range: from the quick price to full's (${dq.price} to $${dq.quoteMaxUsd}), and the default depth quotes above the floor`);
+  ok(dq.quoteMaxUsd === decideConfig().prices.full && dq.quote({ task: "x", depth: "full" }) <= dq.quoteMaxUsd && dq.quote({ task: "x" }) === Number(dq.price.replace("$", "")), `decide lists its default depth's price and quotes up to full's (${dq.price} to $${dq.quoteMaxUsd}); a request that names no depth pays exactly the listed price`);
   ok(ex.quoteMaxUsd === decideConfig().execute.perCallMaxUsd, "execute's ceiling is its per-call budget cap, not the model gateway's");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/def\.quoteRange = \{ minUsd: floor, maxUsd: Number\.isFinite\(def\.quoteMaxUsd\)/.test(src), "the published range reads a tool's own quoteMaxUsd");

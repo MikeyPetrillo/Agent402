@@ -7,7 +7,9 @@
 // agree by construction.
 
 export const DEFAULTS = Object.freeze({
-  prices: { quick: 0.005, plan: 0.02, full: 0.05 },
+  // The catalog lists the default depth (plan), so a request that names no
+  // depth pays exactly the listed price.
+  prices: { quick: 0.003, plan: 0.005, full: 0.02 },
   // Score weights. There is deliberately NO first-party term.
   weights: { fit: 0.45, reliability: 0.2, price: 0.15, schema: 0.1, freshness: 0.1 },
   // A third-party row is recommendable only with a live 402 seen this recently.

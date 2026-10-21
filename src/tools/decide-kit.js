@@ -989,9 +989,9 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       name: "Decide: tool plan for a task",
       slug: "decide",
       category: "agent",
-      price: `$${priceForDepth("quick").toFixed(3)}`,
+      price: `$${priceForDepth("plan").toFixed(3)}`,
       quote: (body) => decideQuoteUsd(body),
-      // Quoted by depth: the listed price is quick's, the ceiling is full's.
+      // Quoted by depth: the listed price is the default depth (plan), the ceiling is full.
       quoteMaxUsd: priceForDepth("full"),
       description: decideDescription(),
       tags: ["agents", "routing", "planning", "discovery", "x402"],
