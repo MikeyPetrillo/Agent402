@@ -152,7 +152,7 @@ async function dispatch(slug, input, { signal, timeoutMs = WORKER_TIMEOUT_MS, mi
   const started = Date.now();
   const ac = new AbortController();
   // The timer's abort carries a TimeoutError, so the failure monitor counts
-  // it as the worker timing out rather than the caller cancelling.
+  // it as the worker timing out rather than the caller canceling.
   const timer = setTimeout(() => ac.abort(new DOMException("render worker timed out", "TimeoutError")), timeoutMs);
   const onAbort = () => ac.abort();
   if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener("abort", onAbort, { once: true }); }

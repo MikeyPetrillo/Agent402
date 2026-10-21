@@ -12,7 +12,7 @@
 //   upstreams  per named upstream host, every outbound fetch the egress
 //              meter sees, by outcome: ok, s5xx, timeout, network (refused or
 //              reset before an answer), throttled (429), aborted (the caller
-//              cancelled: a buyer who left, a drain). Split by origin:
+//              canceled: a buyer who left, a drain). Split by origin:
 //              outside (inside a buyer's request), synthetic, background (no
 //              request: warmers, crawlers, timers).
 //   facilitator refusals  a settle refused for an out-of-funds or billing
