@@ -85,9 +85,10 @@ const ALWAYS_BUY = new Set(["/api/memory/remember"]);
 
 // Routes on the OpenAI transcription wire take a multipart `file` part, and
 // their published example is a placeholder that says so. They are paid with a
-// short public-domain clip as that part (the clip /api/transcribe's own example
-// uses); every other route keeps the challenge's JSON example.
-const MULTIPART_AUDIO = { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg", filename: "example.ogg", type: "audio/ogg" };
+// short speech clip as that part, read from the target's own /fixtures/ (the
+// clip /api/transcribe's own example uses); every other route keeps the
+// challenge's JSON example.
+const MULTIPART_AUDIO = { url: `${TARGET}/fixtures/sample-speech.wav`, filename: "sample-speech.wav", type: "audio/wav" };
 let audioClip = null;
 async function multipartAudioBody(fields) {
   if (!audioClip) {

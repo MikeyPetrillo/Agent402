@@ -28,7 +28,7 @@ ok(!/Process PDF invoices|clean CSV/.test(html), "the retired invoice chain (no 
 const base = process.env.TARGET_URL;
 if (base) {
   const post = async (p, body) => { const r = await fetch(`${base}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; };
-  const PDF = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
+  const PDF = "https://agent402.tools/fixtures/sample-report.pdf";
   const info = await post("/api/pdf-info", { url: PDF });
   ok(info.status === 200 && info.json.pages >= 1, `pdf-info reads the page count (${info.json.pages})`);
   const md = await post("/api/pdf-to-markdown", { url: PDF });
