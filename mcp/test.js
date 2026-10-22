@@ -428,9 +428,34 @@ try {
       "/api/plain-400": [400, '{"error": "bad input", "expected": {"text": "string"}}'],
       "/api/plain-502": [502, '{"error": "upstream failed", "status": 502, "hint": "retry later"}'],
     };
+    // A second origin a redirect points at. Every request it gets is counted:
+    // a paid call must never reach it, unpaid or signed.
+    const elsewhereSeen = { unpaid: 0, signed: 0 };
+    const elsewhere = createServer((req, res) => {
+      req.resume();
+      if (req.headers["payment-signature"] || req.headers["x-payment"]) { elsewhereSeen.signed++; res.writeHead(200, { "Content-Type": "application/json" }); return res.end('{"from":"elsewhere"}'); }
+      elsewhereSeen.unpaid++;
+      res.writeHead(402, { "Content-Type": "application/json", "PAYMENT-REQUIRED": signable(req.url.split("?")[0], 1000) });
+      res.end("{}");
+    });
+    await new Promise((r) => elsewhere.listen(0, "127.0.0.1", r));
+    const ELSEWHERE = `http://127.0.0.1:${elsewhere.address().port}`;
+    // /api/redir-first redirects before any 402; /api/redir-paid quotes an
+    // honest 402 and redirects the signed retry.
+    const redirRows = [
+      { slug: "redir-first", method: "POST", path: "/api/redir-first", price: "$0.001", description: "redirect first", category: "util", computePayable: false },
+      { slug: "redir-paid", method: "POST", path: "/api/redir-paid", price: "$0.001", description: "redirect paid", category: "util", computePayable: false },
+    ];
+    seen.redirPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/redir-first")) { req.resume(); res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
+      if (req.url.startsWith("/api/redir-paid")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.redirPaidSigned++; res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
+        return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/redir-paid", 1000) });
+      }
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
       if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted") || req.url.startsWith("/api/fixed")) {
@@ -550,7 +575,17 @@ try {
       const hinted = await wallet.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
       if (seen.signed !== 0 || !hinted.isError || !/Refused without paying/.test(text(hinted))) fail(`a $5 quote declared at 18 decimals must be refused: ${text(hinted).slice(0, 300)}`);
       console.log("a quote is priced from the known asset, not the seller's decimals hint ✓");
-    } finally { await wallet.close().catch(() => {}); }
+
+      // A paid call never follows a redirect: not to another origin's 402,
+      // and not with a signature already made.
+      const first = await wallet.callTool({ name: "catalog.call", arguments: { slug: "redir-first", params: { text: "x" } } });
+      if (!first.isError || !/never follow redirects/.test(text(first)) || !text(first).includes(ELSEWHERE)) fail(`a redirect before the 402 must be refused, naming where it pointed: ${text(first).slice(0, 300)}`);
+      const paidRedirect = await wallet.callTool({ name: "catalog.call", arguments: { slug: "redir-paid", params: { text: "x" } } });
+      if (seen.redirPaidSigned !== 1) fail(`control: the redirecting route must have received its signed retry (saw ${seen.redirPaidSigned})`);
+      if (!paidRedirect.isError || !/never follow redirects/.test(text(paidRedirect))) fail(`a redirect of the signed retry must be refused: ${text(paidRedirect).slice(0, 300)}`);
+      if (elsewhereSeen.unpaid !== 0 || elsewhereSeen.signed !== 0) fail(`the other origin must get no request at all (saw ${elsewhereSeen.unpaid} unpaid, ${elsewhereSeen.signed} signed)`);
+      console.log("a paid call refuses a redirect, before the 402 and after signing; the other origin sees nothing ✓");
+    } finally { await wallet.close().catch(() => {}); elsewhere.close(); }
 
     // The session budget is checked at signing too: $0.03 left, and the paid
     // request's 402 asks $5 for a route listed at $0.01.

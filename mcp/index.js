@@ -349,6 +349,10 @@ function progressNotifier(req, extra) {
   };
 }
 
+function isRedirect(r) {
+  return r?.type === "opaqueredirect" || (r?.status >= 300 && r?.status < 400);
+}
+
 async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   const url = new URL(`${BASE}${tool.path}`);
   const init = { method: tool.method, headers: { Accept: "application/json" } };
@@ -366,20 +370,34 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     init.body = JSON.stringify(args);
   }
 
+  // A request that can carry a payment never follows a redirect: followed, it
+  // would pay another origin's 402, or forward a signature already made to
+  // another host, and return that host's answer as this tool's.
+  const paidInit = { ...init, redirect: "manual" };
+  const redirectRefusal = (r) => {
+    const loc = r.headers.get("location");
+    const to = loc ? new URL(loc, url).href : null;
+    return { content: [{ type: "text", text: `Refused: ${url.href} answered a paid call to "${tool.slug}" with HTTP ${r.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set AGENT402_URL to ${new URL(to).origin}` : ""}.` }], isError: true };
+  };
+
   let res;
   if (!HAS_WALLET && HAS_CREDITS) {
     // Card credits: same budget guards as the wallet path, against the same
     // number - the credits gate holds and debits what the 402 quotes for THIS
     // body, not the route's list price.
     const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
-    const { usd: price } = await quotedUsd(url, init, listUsd);
+    const { usd: price } = await quotedUsd(url, paidInit, listUsd);
     if (price > MAX_PER_CALL) {
       return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
     }
     if (spentUsd + price > BUDGET) {
       return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request).` }], isError: true };
     }
-    try { res = await collect(await ownFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders, Authorization: `Bearer ${CREDITS_KEY}` } })); }
+    try {
+      const first = await ownFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, Authorization: `Bearer ${CREDITS_KEY}` } });
+      if (isRedirect(first)) return redirectRefusal(first);
+      res = await collect(first);
+    }
     catch (e) { if (e instanceof AsyncJobPendingError) { spentUsd += price; return pendingJobResult(tool, e); } throw e; }
     if (res.ok) spentUsd += price;
     if (res.status === 402) {
@@ -412,7 +430,17 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     // amount it lets the wallet sign.
     const entry = { usd: price, signed: false, refusal: null };
     pendingSpend.add(entry);
-    try { res = await collect(await signCtx.run(entry, () => payFetch(url, { ...init, headers: { ...init.headers, ...asyncHeaders } }))); }
+    try {
+      const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders } }));
+      if (isRedirect(first)) {
+        pendingSpend.delete(entry);
+        // A signature already sent leaves that payment's outcome unknown, so
+        // it counts against the session budget.
+        if (entry.signed) spentUsd += entry.usd;
+        return redirectRefusal(first);
+      }
+      res = await collect(first);
+    }
     catch (e) {
       pendingSpend.delete(entry);
       // Still running past the wait: it may yet settle, so it counts as spent.

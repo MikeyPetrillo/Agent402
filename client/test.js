@@ -363,6 +363,79 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   }
 }
 
+// Offline: a paid call never follows a redirect. Two real loopback servers, a
+// real @x402/fetch wrapper and a throwaway key, nothing on chain. Followed, a
+// redirect before the 402 would pay the other origin's payee, and a redirect
+// of the signed retry would hand the signature to the other origin; either way
+// the other origin's answer would come back as this route's. The control: the
+// same client pays a route that does not redirect.
+{
+  const { createServer } = await import("node:http");
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { PaymentRedirectError } = await import("./index.js");
+  const account = privateKeyToAccount("0x" + "22".repeat(32));
+  const listen = (handler) => new Promise((res) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => res(srv)); });
+  const offerFor = (url, payTo) => Buffer.from(JSON.stringify({ x402Version: 2,
+    resource: { url, description: "chat", mimeType: "application/json" },
+    accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
+  const elsewhereSeen = { unpaid: 0, signed: 0 };
+  const elsewhere = await listen((req, res) => {
+    req.resume();
+    if (req.headers["payment-signature"]) { elsewhereSeen.signed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"elsewhere"}'); }
+    elsewhereSeen.unpaid++;
+    res.writeHead(402, { "content-type": "application/json", "payment-required": offerFor(`http://127.0.0.1:${elsewhere.address().port}${req.url}`, "0x000000000000000000000000000000000000bEEF") });
+    res.end("{}");
+  });
+  const OTHER = `http://127.0.0.1:${elsewhere.address().port}`;
+  const sellerSeen = { signedRedirected: 0, signedServed: 0 };
+  const seller = await listen((req, res) => {
+    req.resume();
+    const signed = Boolean(req.headers["payment-signature"]);
+    const here = `http://127.0.0.1:${seller.address().port}${req.url}`;
+    if (req.url === "/first") { res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/paid" && signed) { sellerSeen.signedRedirected++; res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/plain" && signed) { sellerSeen.signedServed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"seller"}'); }
+    res.writeHead(402, { "content-type": "application/json", "payment-required": offerFor(here, "0x000000000000000000000000000000000000dEaD") });
+    res.end("{}");
+  });
+  const SELLER = `http://127.0.0.1:${seller.address().port}`;
+  const build = (caps = {}) => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    const c = new Agent402({ baseUrl: SELLER, cache: false, tlsDistrust: false, fetch: wrapFetchWithPayment(fetch, xc), x402Client: xc, ...caps });
+    c._catalog = new Map([
+      ["first", { method: "POST", path: "/first", computePayable: false, price: "$0.001" }],
+      ["paid", { method: "POST", path: "/paid", computePayable: false, price: "$0.001" }],
+      ["plain", { method: "POST", path: "/plain", computePayable: false, price: "$0.001" }],
+    ]);
+    return c;
+  };
+  try {
+    for (const caps of [{}, { maxPerCallUsd: 0.01, dailyLimitUsd: 1 }]) {
+      const label = Object.keys(caps).length ? "capped" : "uncapped";
+      const c = build(caps);
+      const plain = await c.call("plain", { q: 1 });
+      ok(plain?.from === "seller" && sellerSeen.signedServed > 0, `${label}: control, a route that does not redirect is paid and answers`);
+      let e = null; try { await c.call("first", { q: 1 }); } catch (err) { e = err; }
+      ok(e instanceof PaymentRedirectError && e.location === `${OTHER}/first` && e.message.includes(`set baseUrl to ${OTHER}`),
+        `${label}: a redirect before the 402 is refused, naming where it pointed (${e?.message})`);
+      const before = sellerSeen.signedRedirected;
+      e = null; try { await c.call("paid", { q: 1 }); } catch (err) { e = err; }
+      ok(sellerSeen.signedRedirected === before + 1, `${label}: control, the route received the signed retry it redirected`);
+      ok(e instanceof PaymentRedirectError, `${label}: a redirect of the signed retry is refused (${e?.message})`);
+      ok(elsewhereSeen.unpaid === 0 && elsewhereSeen.signed === 0, `${label}: the other origin got no request (${elsewhereSeen.unpaid} unpaid, ${elsewhereSeen.signed} signed)`);
+      if (caps.dailyLimitUsd) {
+        const spent = c._spend.log.reduce((t, x) => t + x.usd, 0);
+        ok(Math.abs(spent - 0.002) < 1e-9, `${label}: the signed-then-redirected payment counts against the caps beside the paid control ($${spent})`);
+      }
+    }
+  } finally { seller.close(); elsewhere.close(); }
+}
+
 // Offline: caller-supplied output validators bind buyer intent without a peer
 // dependency. Validation happens before cache admission, contracted cache hits
 // are revalidated, and settled spend survives invalid delivery.

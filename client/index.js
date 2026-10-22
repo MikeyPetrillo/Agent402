@@ -458,12 +458,17 @@ export class Agent402 {
     const idem = idempotencyKey || (cache
       ? `a402-${createHash("sha256").update(`${this._idemSalt}:${cacheKey}`).digest("hex").slice(0, 24)}`
       : `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`);
-    const send = (extraHeaders = {}, useFetch = this.f) => {
+    const send = async (extraHeaders = {}, useFetch = this.f, { paid = false } = {}) => {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
       const headers = { "User-Agent": USER_AGENT, "Idempotency-Key": idem, ...extraHeaders };
       let url = `${this.baseUrl}${tool.path}`;
-      const init = { method: tool.method, headers };
+      // A request that can carry a payment never follows a redirect: followed,
+      // it would answer a 402 from another origin with a signature to that
+      // origin's payee, or forward a signature already made to another host,
+      // and deliver that host's answer as this route's. The redirect is
+      // refused with where it pointed, so an alias baseUrl is easy to fix.
+      const init = paid ? { method: tool.method, headers, redirect: "manual" } : { method: tool.method, headers };
       if (tool.method === "GET") {
         const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
         if (qs) url += `?${qs}`;
@@ -471,8 +476,11 @@ export class Agent402 {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(params);
       }
-      return useFetch(url, init);
+      const r = await useFetch(url, init);
+      if (paid && (r?.type === "opaqueredirect" || (r?.status >= 300 && r?.status < 400))) throw new PaymentRedirectError(slug, url, r);
+      return r;
     };
+    const paidSend = (extraHeaders = {}, useFetch = this.f) => send(extraHeaders, useFetch, { paid: true });
     // A slow route runs as a job: the paid call carries Prefer: respond-async,
     // answers 202 with a job link, and the answer is collected from it (free)
     // when ready. Payment still settles only on the delivered answer.
@@ -500,7 +508,7 @@ export class Agent402 {
         // price - never block a legitimate payment on a parse miss.
         const guarded = this._guarded;
         if (!guarded && this._spendCapsConfigured()) warnAdvisoryCaps();
-        const usd = await this._quotedUsd(send, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
         // cap; release the reservation if the call doesn't settle. With the
@@ -511,7 +519,7 @@ export class Agent402 {
         const signedNothing = () => guarded && ctx.signedUsd == null;
         let settled = false;
         try {
-          const r = await collect(await this._signCtx.run(ctx, () => send(asyncHeaders, this.payFetch)));
+          const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           if (signedNothing()) this._spendRelease(reservation);
           else this._spendSettle(reservation); // confirm the reservation as settled spend
@@ -521,7 +529,9 @@ export class Agent402 {
           // An invalid or oversized paid HTTP-success body is failed delivery,
           // not a rollback of money that already moved. A job still running
           // past the wait may yet settle, so its reservation stands.
-          if (e instanceof AsyncJobPendingError && !signedNothing()) this._spendSettle(reservation);
+          // A redirect after a signature was sent leaves that payment's outcome
+          // unknown, so it counts against the caps, like a job still running.
+          if ((e instanceof AsyncJobPendingError || e instanceof PaymentRedirectError) && !signedNothing()) this._spendSettle(reservation);
           else if (!settled) this._spendRelease(reservation);
           if (ctx.refusal) {
             const d = ctx.refusal;
@@ -543,11 +553,11 @@ export class Agent402 {
         // debit.
         const host = hostOf(this.baseUrl);
         const listUsd = parseUsd(tool.price);
-        const usd = await this._quotedUsd(send, listUsd, { slug, mode: "credits" });
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: "credits" });
         const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
-          const r = await collect(await send({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
+          const r = await collect(await paidSend({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
           if (r.status === 402) {
             const body = await r.json().catch(() => ({}));
             throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} ${body.topup ? ` - top up at ${body.topup}` : body.topupNote ? ` - ${body.topupNote}` : ""}`);
@@ -777,6 +787,22 @@ export class Agent402 {
  *  time the body arrives, so a caller must be able to tell "I was charged and
  *  the seller sent something unusable" from "nothing happened". Losing that
  *  distinction would turn a refused response into a silently forgotten spend. */
+/** A request that could carry a payment was answered with a redirect, which
+ *  is never followed. `location` is where it pointed (null when the runtime
+ *  hides it, as a browser does for a manual redirect). */
+export class PaymentRedirectError extends Error {
+  constructor(slug, url, r) {
+    const location = r?.headers?.get?.("location") || null;
+    const to = location ? new URL(location, url).href : null;
+    super(`refusing to follow a redirect on a paid call to "${slug}": ${url} answered HTTP ${r?.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set baseUrl to ${new URL(to).origin}` : ""}.`);
+    this.name = "PaymentRedirectError";
+    this.slug = slug;
+    this.status = r?.status ?? null;
+    this.location = to;
+    this.paid = false;
+  }
+}
+
 export class ResponseTooLargeError extends Error {
   constructor(size, cap, { slug, paid, source } = {}) {
     super(`response for "${slug}" is ${size} bytes, over the ${cap}-byte ceiling (${source}) - refused before parsing${paid ? "; this call WAS paid" : ""}`);
