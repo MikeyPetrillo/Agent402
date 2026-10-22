@@ -216,6 +216,8 @@ names first); `WRAP_ALL=1` runs all of them.
   repeated more than a dozen times on a page. It replaced the outlined "402" watermark.
 
 ## Voice (from CLAUDE.md)
+- No taglines, helper text or secondary labels. A screen that needs one to make sense gets a
+  better layout instead.
 - First-party and affirmative; no competitor names; no em dashes.
 - Say **"500+ tools"** on marketing and static surfaces; exact counts only where derived at
   runtime.

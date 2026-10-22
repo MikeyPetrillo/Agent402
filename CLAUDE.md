@@ -51,6 +51,9 @@ LLC: credit the entity, never a personal name.
   `docs/`: ecosystem-listing copy.
 
 ## Conventions
+- **Every change raises user, developer and agent experience together** (UX, DX, AX) and
+  breaks none of them: a page, an API answer and an agent-facing surface (MCP, llms.txt,
+  openapi, 402 bodies) are judged as one product.
 - **UI work reads `DESIGN.md` first** (tokens, type scale, components, voice); page modules use
   its `var(--token)` and `var(--fs-*)` values, never raw hex or literal sizes
   (`scripts/test-design-tokens.js`).
