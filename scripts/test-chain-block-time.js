@@ -242,6 +242,29 @@ delete process.env.REVENUE_LEDGER_FROM_BASE;
 delete process.env.EVM_LOGS_ALCHEMY_FIRST;
 delete process.env.BASE_DENIM_ACTIVATION_TIMESTAMP;
 
+// ---- 5b. the leaderboard log cache keeps ten minutes of reorg margin ----------
+{
+  delete process.env.STATE_DATABASE_URL;
+  const C = await import("../src/leaderboard-log-cache.js");
+  eq(C.LOG_CACHE_DEFAULTS.reorgMarginSeconds, 600, "the cache's reorg margin is written in seconds");
+  const latest = 40_000_000;
+  const cursorAfterColdScan = async (extra = {}) => {
+    const cache = C.createLogWindowCache({ store: C.createLogCacheStore({ prefix: "bt-test" }), token: "0xusdc", segmentBlocks: 18_000, ...extra });
+    await cache.scan({ wallets: ["0xa"], start: latest - 50_000, latest, chunkBlocks: 9000, walletChunk: 10, pad: (w) => w, readLogs: async () => [] });
+    return latest - cache.stats().lastCursor;
+  };
+  const nowMs = Date.now();
+  const nowSec = Math.floor(nowMs / 1000);
+  T.resetBlockMsMeasurements();
+  eq(await cursorAfterColdScan(), 300, "2 s blocks: the cursor stops 300 blocks (600 s) short of the head");
+  // A fresh measurement of the chain at 200 ms (whole-second timestamps, five blocks each).
+  T.noteBlockSample("base", { number: 0, timestamp: nowSec - 200 }, { number: 1000, timestamp: nowSec }, { now: nowMs });
+  eq(T.blockMs("base", { now: nowMs, env: {} }), 200, "the measured 200 ms rate is in force");
+  eq(await cursorAfterColdScan(), 3000, "200 ms blocks: the cursor stops 3,000 blocks (still 600 s) short of the head");
+  eq(await cursorAfterColdScan({ reorgMarginBlocks: 5 }), 5, "a pinned block count is kept as written");
+  T.resetBlockMsMeasurements();
+}
+
 // ---- 6. optional: live Base Sepolia block times (never in CI) ------------------
 if (process.env.CI || /^(off|0|false)$/i.test(process.env.BLOCK_TIME_LIVE || "")) {
   console.log("  live Base Sepolia read: not run under CI (no coverage claimed)");
