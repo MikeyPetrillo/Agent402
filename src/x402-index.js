@@ -6825,7 +6825,12 @@ export const entryRev = (e) => { const u = Number(e?.updatedAt); return Math.max
 const nextRev = (e, now = Date.now()) => Math.max(now, entryRev(e) + 1);
 /** The persisted hash of an origin's entry as a save would write it. */
 const persistedHashOf = (origin, v) => { const e = persistedEntryOf(v); return e ? lineHash(JSON.stringify([origin, e])) : null; };
+// The pull's cursor is (stamp, id), not the stamp alone: one save writes up
+// to PG_ROWS_PER_BATCH rows in one statement, and they share its timestamp, so
+// a page that ended inside such a batch and resumed at `updated_at > stamp`
+// skipped the rest of the batch.
 let pullWatermark = null;
+let pullWatermarkId = "";
 let pullInFlight = null;
 export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) {
   if (!stateDbEnabled()) return 0;
@@ -6841,16 +6846,18 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
       // the warm start already read everything older.
       const r = await stateQuery("SELECT (now() - interval '10 minutes')::text AS t");
       pullWatermark = r.rows[0].t;
+      pullWatermarkId = "";
     }
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
         // The stamp travels as text: a JS Date drops the microseconds, and the
         // last row of every pull would then be read again forever.
-        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND updated_at > $2::timestamptz ORDER BY updated_at, id LIMIT $3`,
-        [INDEX_RECORDS, pullWatermark, pageSize],
+        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
+        [INDEX_RECORDS, pullWatermark, pullWatermarkId, pageSize],
       );
       for (const { id, body, stamp } of r.rows) {
         pullWatermark = stamp;
+        pullWatermarkId = String(id);
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
         if (held && entryRev(held) >= entryRev(body)) continue;
