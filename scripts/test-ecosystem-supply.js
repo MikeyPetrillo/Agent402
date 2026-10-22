@@ -89,5 +89,8 @@ assert.deepStrictEqual(
   (({ sellers, tools, categories }) => ({ sellers, tools, categories }))(aggregateEcosystemSupply([...entries, giant], { limit: 12 })),
   "the sliced build matches the pure one-pass aggregate",
 );
+__setMarketMemoTtl(60_000);
+const [l12, l3] = await Promise.all([ecosystemMarket({ limit: 12 }), ecosystemMarket({ limit: 3 })]);
+assert.ok(l12.categories.length > 3 && l3.categories.length <= 3, `concurrent builds for different limits each get their own picture (${l12.categories.length}, ${l3.categories.length})`);
 __setMarketMemoTtl();
 console.log("ecosystem market memo: ok");

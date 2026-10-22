@@ -7477,10 +7477,10 @@ const MARKET_MEMO_TTL_MS = 15 * 60_000;
 const MARKET_SLICE_MS = 20;
 export const MARKET_DEFAULT_LIMIT = 12;
 let marketMemo = { at: 0, limit: null, value: null, version: -1 };
-let marketRefresh = null;
+const marketRefresh = new Map(); // limit -> the build running for it
 let marketTtlMs = MARKET_MEMO_TTL_MS;
 /** Test hook: shorten (or reset) the memo TTL; clears the memo. */
-export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms >= 0 ? ms : MARKET_MEMO_TTL_MS; marketMemo = { at: 0, limit: null, value: null, version: -1 }; marketRefresh = null; }
+export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms >= 0 ? ms : MARKET_MEMO_TTL_MS; marketMemo = { at: 0, limit: null, value: null, version: -1 }; marketRefresh.clear(); }
 async function refreshEcosystemMarket(limit) {
   const entries = [...cache.values()];
   const version = cacheVersion;
@@ -7503,8 +7503,9 @@ async function refreshEcosystemMarket(limit) {
   return value;
 }
 function startMarketRefresh(limit) {
-  if (!marketRefresh) marketRefresh = refreshEcosystemMarket(limit).finally(() => { marketRefresh = null; });
-  return marketRefresh;
+  let build = marketRefresh.get(limit);
+  if (!build) { build = refreshEcosystemMarket(limit).finally(() => { marketRefresh.delete(limit); }); marketRefresh.set(limit, build); }
+  return build;
 }
 export async function ecosystemMarket({ limit = MARKET_DEFAULT_LIMIT } = {}) {
   const held = marketMemo.value && marketMemo.limit === limit;
