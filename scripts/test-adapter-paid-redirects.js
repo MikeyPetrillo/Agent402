@@ -62,6 +62,12 @@ try {
       const body = await moved.json();
       ok(moved.status === 502 && body.error?.type === "upstream_redirect_refused" && body.error.message.includes(OTHER), `openclaw ${mode}: a redirected paid call is refused with where it pointed (${moved.status} ${JSON.stringify(body).slice(0, 200)})`);
       ok(elsewhereSeen.requests === before, `openclaw ${mode}: the other origin got no request`);
+      // The Anthropic wire refuses the same redirect in its own error shape.
+      const msg = await fetch(`${p.baseUrl}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }) });
+      const mb = await msg.json();
+      ok(msg.status === 502 && mb.type === "error" && mb.error?.type === "upstream_redirect_refused" && mb.error.message.includes(OTHER) && Object.keys(mb).sort().join() === "error,type",
+        `openclaw ${mode}: a redirected Messages call is refused in the Anthropic error shape (${msg.status} ${JSON.stringify(mb).slice(0, 200)})`);
+      ok(elsewhereSeen.requests === before, `openclaw ${mode}: the other origin got no Messages request`);
     } finally { await p.close(); }
   }
 } finally { seller.close(); elsewhere.close(); }
