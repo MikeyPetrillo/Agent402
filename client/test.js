@@ -451,6 +451,65 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   } finally { seller.close(); elsewhere.close(); }
 }
 
+// Offline: the same refusal on the MPP wire. A real mppx `Fetch.from` client
+// (evm charge, throwaway key) is the SDK's `fetch`; the seller answers a real
+// HMAC-bound MPP challenge (WWW-Authenticate: Payment) and redirects either
+// the unpaid request or the credentialed retry to another origin. The other
+// origin must receive nothing and the SDK must refuse with
+// PaymentRedirectError. Control: a route that does not redirect is paid.
+{
+  const { createServer } = await import("node:http");
+  const { Challenge } = await import("mppx");
+  const { Fetch: MppFetch, evm } = await import("mppx/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { PaymentRedirectError } = await import("./index.js");
+  const account = privateKeyToAccount("0x" + "33".repeat(32));
+  const listen = (handler) => new Promise((res) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => res(srv)); });
+  const challengeFor = (realm, recipient) => Challenge.serialize(Challenge.from({
+    realm, method: "evm", intent: "charge", expires: new Date(Date.now() + 300_000),
+    request: { amount: "1000", currency: BASE_USDC, recipient, methodDetails: { chainId: 8453, credentialTypes: ["authorization"], decimals: 6 } },
+    secretKey: "client-test-mpp-redirect",
+  }));
+  const credentialed = (req) => /^Payment\s/i.test(String(req.headers.authorization || ""));
+  const elsewhereSeen = { unpaid: 0, credentialed: 0 };
+  const elsewhere = await listen((req, res) => {
+    req.resume();
+    if (credentialed(req)) { elsewhereSeen.credentialed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"elsewhere"}'); }
+    elsewhereSeen.unpaid++;
+    res.writeHead(402, { "content-type": "application/json", "www-authenticate": challengeFor("elsewhere.test", "0x000000000000000000000000000000000000bEEF") });
+    res.end("{}");
+  });
+  const OTHER = `http://127.0.0.1:${elsewhere.address().port}`;
+  const sellerSeen = { credentialedRedirected: 0, credentialedServed: 0 };
+  const seller = await listen((req, res) => {
+    req.resume();
+    const paidReq = credentialed(req);
+    if (req.url === "/first") { res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/paid" && paidReq) { sellerSeen.credentialedRedirected++; res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/plain" && paidReq) { sellerSeen.credentialedServed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"seller"}'); }
+    res.writeHead(402, { "content-type": "application/json", "www-authenticate": challengeFor("seller.test", "0x000000000000000000000000000000000000dEaD") });
+    res.end("{}");
+  });
+  const SELLER = `http://127.0.0.1:${seller.address().port}`;
+  try {
+    const mppFetch = MppFetch.from({ fetch, methods: [evm.charge({ account, currencies: [evm.assets.base.USDC], maxAmount: "1.00" })] });
+    const c = new Agent402({ baseUrl: SELLER, cache: false, tlsDistrust: false, fetch: mppFetch });
+    c._catalog = new Map([
+      ["first", { method: "POST", path: "/first", computePayable: false, price: "$0.001" }],
+      ["paid", { method: "POST", path: "/paid", computePayable: false, price: "$0.001" }],
+      ["plain", { method: "POST", path: "/plain", computePayable: false, price: "$0.001" }],
+    ]);
+    const plain = await c.call("plain", { q: 1 });
+    ok(plain?.from === "seller" && sellerSeen.credentialedServed === 1, "mpp: control, a route that does not redirect is paid with an MPP credential and answers");
+    let e = null; try { await c.call("first", { q: 1 }); } catch (err) { e = err; }
+    ok(e instanceof PaymentRedirectError && e.location === `${OTHER}/first`, `mpp: a redirect before the 402 is refused, naming where it pointed (${e?.name}: ${e?.message})`);
+    e = null; try { await c.call("paid", { q: 1 }); } catch (err) { e = err; }
+    ok(sellerSeen.credentialedRedirected === 1, "mpp: control, the route received the credentialed retry it redirected");
+    ok(e instanceof PaymentRedirectError && e.location === `${OTHER}/paid`, `mpp: a redirect of the credentialed retry is refused (${e?.name}: ${e?.message})`);
+    ok(elsewhereSeen.unpaid === 0 && elsewhereSeen.credentialed === 0, `mpp: the other origin got no request (${elsewhereSeen.unpaid} unpaid, ${elsewhereSeen.credentialed} credentialed)`);
+  } finally { seller.close(); elsewhere.close(); }
+}
+
 // Offline: caller-supplied output validators bind buyer intent without a peer
 // dependency. Validation happens before cache admission, contracted cache hits
 // are revalidated, and settled spend survives invalid delivery.
