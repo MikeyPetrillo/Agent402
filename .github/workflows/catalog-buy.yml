@@ -56,7 +56,7 @@ on:
         required: false
         default: "daily"
       only:
-        description: "Slug substring: buy only the matching tools (a narrowed run never closes the issue)"
+        description: "Slug substring, or comma-separated exact slugs: buy only the matching tools (a narrowed run never closes the issue)"
         required: false
         default: ""
 

@@ -70,7 +70,7 @@
 //        were cap-deferred (unchecked) 2  misconfigured (no key, no catalog)
 //
 // Usage:
-//   node scripts/catalog-buy.js [--tier daily|weekly|cheap|all] [--only <slug substring>]
+//   node scripts/catalog-buy.js [--tier daily|weekly|cheap|all] [--only <slug substring | slug,slug,...>]
 //                               [--dry] [--out report.json] [--outputs outputs.json]
 //   --outputs writes every graded paid answer, redacted and bounded
 //   (scripts/catalog-buy-capture.js), for scripts/catalog-buy-examples.js.
@@ -258,8 +258,12 @@ export function planRun(catalog, { tier = "daily", only = "", skip = [], now = n
   const skipSet = new Set(skip.map((s) => String(s).trim()).filter(Boolean));
   const skipped = picked.filter((r) => skipSet.has(r.slug));
   picked = picked.filter((r) => !skipSet.has(r.slug));
+  // One term is a slug or path substring; a comma-separated list names exact slugs.
   const needle = String(only || "").trim().toLowerCase();
-  if (needle) picked = picked.filter((r) => r.slug.toLowerCase().includes(needle) || r.path.toLowerCase().includes(needle));
+  if (needle.includes(",")) {
+    const exact = new Set(needle.split(",").map((s) => s.trim()).filter(Boolean));
+    picked = picked.filter((r) => exact.has(r.slug.toLowerCase()));
+  } else if (needle) picked = picked.filter((r) => r.slug.toLowerCase().includes(needle) || r.path.toLowerCase().includes(needle));
   // Cheapest first, so the cap cuts the dearest products and names each one.
   const ordered = [...picked].sort((a, b) => micro(a.usd) - micro(b.usd) || a.slug.localeCompare(b.slug));
   const buy = [], deferred = [], noExample = [];
