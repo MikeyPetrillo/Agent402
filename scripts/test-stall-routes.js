@@ -5,7 +5,10 @@
 //      return (sales summaries, the revenue ledger's summary, daily series
 //      and buyer events, the index snapshot, the tool directory) and never
 //      hold the loop past GAP_MS on production-sized data; a seller summary
-//      rebuild projects only the sellers that changed.
+//      rebuild projects only the sellers that changed. The all-chains
+//      /marketplace page (both views) renders the same bytes in slices as in
+//      one turn, and while a warm start folds entries in, the readers of one
+//      turn share one index snapshot instead of each building its own.
 //   2. Booted on a production-sized index (5,800 sellers, ~198k tools) and
 //      sales ledger: the first request to each route after boot holds the
 //      loop under ROUTE_BOUND_MS, and the shared ledger figures the routes
@@ -25,6 +28,9 @@ let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
 const GAP_MS = Number(process.env.STALL_GAP_MS || 120);
 const ROUTE_BOUND_MS = Number(process.env.STALL_ROUTE_BOUND_MS || 150);
+// One step of a sliced page: measured at 3.4 ms on a laptop for the longest
+// (?all=1, 5,800 sellers); the bound allows a runner several times slower.
+const STEP_BOUND_MS = Number(process.env.STALL_STEP_BOUND_MS || 25);
 const SALES_ROWS = Number(process.env.STALL_SALES_ROWS || 60_000);
 const TRANSFER_ROWS = Number(process.env.STALL_TRANSFER_ROWS || 200_000);
 
@@ -130,6 +136,9 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   // The build time and the host's own row stamp read the clock; all else must match.
   const stripAsOf = ({ asOf: _a, sellers, ...rest }) => ({ ...rest, sellers: sellers.map((s) => (s.local ? { ...s, fetchedAt: 0 } : s)) });
   const whole = x.indexSnapshot(ctx);
+  // A version bump (one entry set again, unchanged) leaves the alias walk
+  // cold, so the sliced build below walks it in its own steps.
+  { const [o, v] = cache.entries().next().value; cache.set(o, v); }
   const sliced = await blockOf(() => x.indexSnapshotAsync(ctx));
   ok(whole.sellers.length >= 5800 && isDeepStrictEqual(stripAsOf(sliced.value), stripAsOf(whole)), `indexSnapshotAsync equals indexSnapshot (${whole.sellers.length} sellers)`);
   ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms)`);
@@ -162,6 +171,87 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   ok(rebuilt.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${rebuilt.ms} ms)`);
   cache.delete("https://stall-routes-new.example");
 }
+
+// --- 1d. /marketplace: the all-chains page in slices, byte for byte.
+const mp = await import("../src/market-page.js");
+{
+  // The production shape the page joins on: sellers on several chains, a
+  // leaderboard naming some of their wallets (grouped hosts collapse), and the
+  // dispatch labels the server adds (every badge variant).
+  const snap = x.indexSnapshot(ctx);
+  const nets = [["eip155:8453"], ["eip155:8453", "eip155:137"], ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"], ["eip155:42161", "eip155:8453"], ["stellar:pubnet"], ["eip155:143"]];
+  const reasons = ["eligible", "settlement_required", "crawl_failed", "no_supported_route"];
+  const sellersLabelled = snap.sellers.map((s, i) => (s.local ? s : {
+    ...s,
+    networks: nets[i % nets.length],
+    payToByNetwork: Object.fromEntries(nets[i % nets.length].map((n) => [n, "0x" + String(i % 4000).padStart(40, "0")])),
+    routerDispatchEligible: i % 4 === 0,
+    routerDispatchReason: reasons[i % 4],
+    routerDispatchByChain: i % 4 === 0 ? { base: { eligible: true, reason: "eligible" } } : {},
+    ...(i % 9 === 0 ? { mpp: true } : {}),
+    ...(i % 13 === 0 ? { paidToolCount: 1 } : {}),
+  }));
+  const labelled = { ...snap, sellers: sellersLabelled };
+  const leaderboard = Array.from({ length: 900 }, (_, i) => ({ wallet: "0x" + String(i * 3).padStart(40, "0"), wallets: i % 10 === 0 ? ["0x" + String(i * 3).padStart(40, "0"), "0x" + String(i * 3 + 1).padStart(40, "0")] : undefined, callsSettled: 5000 - i * 5, totalUsd: 900 - i, uniqueBuyers: 1 + (i % 40) }));
+  const leaderboardSnap = { leaderboard, windowLabel: "24h" };
+  const economySnap = null;
+  for (const all of [false, true]) {
+    const opts = { snapshot: labelled, leaderboardSnap, economySnap, all, wallet: "0x" + "9".repeat(40), host: null, routerChains: ["base", "solana"], chainsOffered: 12, tempo: true };
+    const t0 = performance.now();
+    const whole = mp.marketPage(null, "https://agent402.tools", opts);
+    const oneTurnMs = Math.round(performance.now() - t0);
+    const sliced = await blockOf(() => mp.marketPageAsync(null, "https://agent402.tools", opts));
+    ok(sliced.value === whole && whole.length > 100_000, `/marketplace${all ? "?all=1" : ""}: the sliced page is the one-turn page, byte for byte (${whole.length} chars, ${labelled.sellers.length} sellers)`);
+    ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms, which includes the collector's work between turns; the page in one turn: ${oneTurnMs} ms)`);
+    // The page's own work per step, timed step by step: no step is more than
+    // a fraction of the whole page (the loop-lag figure above also carries
+    // the garbage collector's tasks, which run between turns either way).
+    const steps = mp._marketPageAllStepsForTest("https://agent402.tools", opts);
+    let longest = 0, count = 0, r;
+    do { const t = performance.now(); r = steps.next(); longest = Math.max(longest, performance.now() - t); count++; } while (!r.done);
+    ok(r.value === whole && count > 20 && longest < STEP_BOUND_MS, `...in ${count} steps, the longest ${longest.toFixed(1)} ms (bound ${STEP_BOUND_MS} ms)`);
+  }
+  ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
+}
+
+// --- 1e. the warm start: page readers share one snapshot.
+{
+  const ndjson = join(dir, "warm-share.ndjson");
+  const rows = [...cache.entries()].map(([o, v]) => JSON.stringify([o, v]));
+  writeFileSync(ndjson, [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: rows.length }), ...rows].join("\n") + "\n");
+  rows.length = 0;
+  cache.clear();
+  const builds0 = x._indexSnapshotBuildsForTest();
+  let turns = 0, shared = true, readerWorst = 0, inLine = 0;
+  worst = 0; last = performance.now();
+  const warming = x.loadPersistedIndexCacheAsync(ndjson);
+  // Each turn of the warm start: the nav strip, the page and a second page
+  // read the snapshot, as three HTML requests landing in one turn would.
+  while (x.indexWarmStartInProgress()) {
+    const t = performance.now();
+    const before = x._indexSnapshotBuildsForTest();
+    const a = x.warmStartSnapshot(ctx), b = x.warmStartSnapshot(ctx), c = x.warmStartSnapshot(ctx);
+    if (!(a === b && b === c)) shared = false;
+    // A build that finishes inside the readers' turn is an in-line build; the
+    // sliced rebuild only starts here and finishes over later turns.
+    if (x._indexSnapshotBuildsForTest() - before > 1) inLine++;
+    readerWorst = Math.max(readerWorst, performance.now() - t);
+    turns++;
+    await new Promise((r) => setImmediate(r));
+  }
+  const loaded = await warming;
+  await new Promise((r) => setTimeout(r, 5));
+  const warmWorst = Math.round(worst);
+  const builds = x._indexSnapshotBuildsForTest() - builds0;
+  ok(loaded >= 5800 && turns >= 10, `a warm start of ${loaded} sellers ran over ${turns} turns with readers in each`);
+  ok(shared && inLine === 0, "every reader in one turn got the same snapshot, and no turn built more than one");
+  ok(builds < turns, `the readers of ${turns} turns shared ${builds} snapshot builds (each reader used to build its own: ${turns * 3})`);
+  // The loop's own worst block over the warm start is printed, not bounded:
+  // it is mostly the loader's batches, which this file does not pin.
+  ok(readerWorst < GAP_MS, `...and the readers' longest turn was ${Math.round(readerWorst)} ms (bound ${GAP_MS} ms; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
+  ok(isDeepStrictEqual(x.warmStartSnapshot(ctx).sellers.length, x.indexSnapshot(ctx).sellers.length), "after the warm start a reader builds from the whole cache");
+}
+
 clearInterval(lagTimer);
 
 // --- 2. booted at production scale.
@@ -207,7 +297,7 @@ try {
   // in its own turn (measured here before the change: 200-370 ms on a chain
   // page, 800 ms on the directory, 220 ms on /leaderboard). The rest are read
   // once for their status: their figures are pinned in section 1.
-  const routes = ["/base", "/polygon", "/solana", "/monad", "/marketplace/tools", "/marketplace/tools?q=json", "/leaderboard", "/api/sales"];
+  const routes = ["/base", "/polygon", "/solana", "/monad", "/marketplace", "/marketplace?all=1", "/marketplace/tools", "/marketplace/tools?q=json", "/leaderboard", "/api/sales"];
   for (const r of routes) {
     await fetch(`${base}/__operator/perf.json?reset=1`, op);
     const resp = await fetch(base + r);
@@ -215,6 +305,14 @@ try {
     await sleep(300);
     const ms = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop.worstMs;
     ok(resp.status === 200 && ms < ROUTE_BOUND_MS, `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (bound ${ROUTE_BOUND_MS} ms)`);
+  }
+  {
+    // The shared labelled snapshot reaches the page: every external row of the
+    // full roster carries its dispatch badge, the host's row none.
+    const html = await (await fetch(`${base}/marketplace?all=1`)).text();
+    const rows = (html.match(/data-mfb-row data-local="0"/g) || []).length;
+    const badges = (html.match(/class="mlr-dispatch/g) || []).length;
+    ok(rows >= 5700 && badges === rows, `/marketplace?all=1 labels every external seller row (${badges} badges on ${rows} rows)`);
   }
   for (const r of ["/", "/api/stats", "/revenue", "/api/revenue", "/api/index/tools?q=weather"]) {
     ok((await fetch(base + r)).status === 200, `GET ${r} answers 200 on the production-sized boot`);

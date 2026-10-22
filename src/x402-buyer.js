@@ -582,6 +582,17 @@ export function sellerDeliveryFailingRecently(origin, chain, now = Date.now()) {
   return hit;
 }
 
+/** Which "chain|origin" keys read as failing right now, as one string: two
+ *  equal stamps mean every sellerDeliveryFailingRecently verdict is the same,
+ *  so a memoized set of dispatch labels is still the one a fresh pass gives. */
+export function sellerDeliveryFailingStamp(now = Date.now()) {
+  const ttl = deliveryFailTtlMs();
+  if (ttl <= 0) return "";
+  const keys = [];
+  for (const [k, v] of deliveryFailures) if (now - v.at <= ttl && (v.strikes || 0) >= DELIVERY_FAIL_MIN_STRIKES) keys.push(k);
+  return keys.join("\n");
+}
+
 /** Counts only, for the operator surface. Never a routing input. */
 export function sellerDeliveryMemoEntries(now = Date.now()) {
   const ttl = deliveryFailTtlMs();

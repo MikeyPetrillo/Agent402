@@ -178,7 +178,7 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(crossChain.chains.base.reason === "settlement_required" && crossChain.chains.solana.reason === "settlement_checked_at_pay_time", "an origin with only Solana evidence stays settlement_required on Base while Solana is read at pay time");
   ok(/executeViaWhenEligible: executeVia, executeViaCallableNow: false/.test(server) && /\{ executeVia, executeViaCallableNow: true \}/.test(server) && /executeViaCallableNow: true, executeViaLane: "unproven"/.test(server) && /unprovenTier === true/.test(server.slice(server.indexOf("function withDispatchFields"), server.indexOf("function withDispatchFields") + 4000)), "withDispatchFields moves executeVia to executeViaWhenEligible on a non-eligible row, keeps it callable on a Base unproven-tier row (executeViaLane unproven), and stamps executeViaCallableNow either way");
   ok(/routerDispatchByChain: v\.routerDispatchByChain/.test(server), "?seller= tool rows carry their own Base verdict (the seller row has no price, so it cannot show the unproven tier)");
-  ok(/withDispatchSnapshot\(snapshot\)/.test(server) && (server.match(/withDispatchSnapshot\(snapshot\)/g) || []).length >= 2, "the marketplace and chain pages render the labelled snapshot");
+  ok((server.match(/labelledSnapshotAsync\(snapshot\)/g) || []).length >= 2 && /sellers\.push\(labelSeller\(sel\)\)/.test(server), "the marketplace and chain pages render the labelled snapshot");
 }
 // --- Base unproven tier label (2026-09-30) -------------------------------------
 {
