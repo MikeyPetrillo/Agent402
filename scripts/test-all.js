@@ -129,8 +129,9 @@ const NETWORK = new Set([
   "/api/federal-awards", "/api/geo-lookup", "/api/fema-disasters",
   "/api/geocode", "/api/reverse-geocode", "/api/place-search",
   "/api/image-ocr",
-  // Image-kit URL tools: the examples fetch a small stable sample image from
-  // raw.githubusercontent.com — live egress, tolerate transient upstream flaps.
+  // Image-kit URL tools: the examples fetch sample-photo.jpg from our own
+  // /fixtures/ on production over live egress, so a network failure on the
+  // runner (or a fixture not yet deployed) is tolerated like the routes above.
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",

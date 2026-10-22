@@ -56,7 +56,7 @@ export const GOLDEN = [
   { task: "Resolve brantly.eth to an address, then check whether that address is on the OFAC sanctions list", budget: 0.1, data: true, chain: true },
   { task: "Resolve the ENS name brantly.eth, then get that address's transaction count on Ethereum", budget: 0.1, data: true, chain: true },
   { task: "Find the IP address github.com resolves to, then look up that IP's ASN and country", budget: 0.1, data: true },
-  { task: "Extract the text from the PDF at https://bitcoin.org/bitcoin.pdf and count the words", budget: 0.1, data: true },
+  { task: "Extract the text from the PDF at https://agent402.tools/fixtures/sample-report.pdf and count the words", budget: 0.1, data: true },
   // held out: added after the 2026-10-01 fixes and never used while making them,
   // so a pass here says the fixes generalize rather than fit the set above
   { task: "What is the current price of Solana in USD and its change over the last 24 hours", budget: 0.05, data: true, heldOut: true },
