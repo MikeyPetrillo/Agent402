@@ -15,6 +15,7 @@
 // property is "two callers share one counter", and a fake proves that exactly
 // while a skipped test proves nothing.
 import { spend, peek, refund, windowKey, sharedLimitEnabled, __setTestClient } from "../src/shared-limit.js";
+import { childJson } from "./lib/child-json.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -131,7 +132,7 @@ const makeStore = () => {
       env: { ...process.env, REDIS_URL: "redis://127.0.0.1:6390" }, // nothing listening
       encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"],
     });
-    out = JSON.parse(raw.trim().split("\n").pop());
+    out = childJson(raw);
   } catch (e) { console.error("probe failed:", e.message); }
 
   ok(out.enabled === true,

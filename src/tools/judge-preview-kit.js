@@ -24,6 +24,13 @@ import { deflateSync } from "node:zlib";
 import { upstreamCosts } from "../upstream-costs.js";
 import { buildQuestions, post, upstreamJevModel, LIMITS } from "./judge-kit.js";
 
+// Only the two token counts leave, as judge-kit.js does: the upstream usage
+// object can carry fields about the upstream account that are not the
+// caller's business.
+const usageOf = (u) => (u && typeof u === "object"
+  ? { input_tokens: Number.isFinite(u.input_tokens) ? u.input_tokens : 0, output_tokens: Number.isFinite(u.output_tokens) ? u.output_tokens : 0 }
+  : undefined);
+
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const judgePreviewEnabled = () => !!keyOf();
@@ -192,7 +199,7 @@ export async function judgeVision(input, { fetchImpl = fetch } = {}) {
     model: j.model || body.model,
     preview: true,
     answers: checkAnswers(j.answers, body.questions),
-    usage: j.usage,
+    usage: usageOf(j.usage),
     ...(hasBox ? { note: "A box answer always returns a box, even when the thing is not in the image; pair it with a noul that asks whether it is there." } : {}),
   };
 }
@@ -233,7 +240,7 @@ export async function locate(input, { fetchImpl = fetch } = {}) {
       const box = a[`t${i}_box`], present = a[`t${i}_present`].noul;
       return { target, present, found: present >= 0.5, box: box.box, boxConfidence: box.confidence };
     }),
-    usage: j.usage,
+    usage: usageOf(j.usage),
     note: "box edges are fractions of the image (top and bottom of its height, left and right of its width). found is present >= 0.5; when it is false the box is the model's best guess and should not be used.",
   };
 }
@@ -257,7 +264,7 @@ export async function judgeLong(input, { fetchImpl = fetch } = {}) {
   const { body, worstTokens } = validateLongRequest(input);
   priceGuard(worstTokens, LONG_PRICE_USD);
   const j = await post(ENDPOINT, keyOf(), body, fetchImpl, hasAnswers, LONG_HEADER);
-  return { model: j.model || body.model, preview: true, answers: checkAnswers(j.answers, body.questions), usage: j.usage };
+  return { model: j.model || body.model, preview: true, answers: checkAnswers(j.answers, body.questions), usage: usageOf(j.usage) };
 }
 
 // The published examples carry a real image: a 300x300 white PNG with a red

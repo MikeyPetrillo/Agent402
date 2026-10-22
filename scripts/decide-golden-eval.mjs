@@ -97,13 +97,13 @@ async function main() {
         const open = Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^<[^>]+>$/.test(x));
         if (open && g.data) problems.push(`step ${p.step}: unfilled placeholder`);
         for (const x of Object.values(p.tool.exampleParams || {})) {
-          const m = typeof x === "string" ? /^\{\{step (\d+)\}\}$/.exec(x) : null;
+          const m = typeof x === "string" ? /^\{\{step (\d+)(?:\.\w+)?\}\}$/.exec(x) : null;
           if (m && !(p.dependsOn || []).includes(Number(m[1]))) problems.push(`step ${p.step}: references step ${m[1]} without depending on it`);
         }
         if (p.tool.priceUsd > g.budget) problems.push(`step ${p.step}: over budget`);
       }
       if (d.estimatedCostUsd > g.budget) problems.push("plan over budget");
-      const linked = (d.plan || []).some((p) => Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^\{\{step \d+\}\}$/.test(x)));
+      const linked = (d.plan || []).some((p) => Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^\{\{step \d+(?:\.\w+)?\}\}$/.test(x)));
       if (g.chain && !linked) problems.push("no step uses an earlier step's output");
       if (g.data === false && !(d.plan || []).some((p) => (p.tool.exampleParamsNeedInput || []).length || Object.values(p.tool.exampleParams || {}).some((x) => typeof x === "string" && /^<[^>]+>$/.test(x)))) problems.push("names no input the caller must supply");
     }

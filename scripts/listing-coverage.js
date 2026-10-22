@@ -27,6 +27,7 @@
 // BAZAAR_REGISTRY_URL, LISTING_WALKS (Bazaar walks to union, default 2).
 // Keyless: both registries are public reads, and nothing here pays.
 import { pathToFileURL } from "node:url";
+import { requestExampleOf, isMultipartOperation } from "../src/openapi-request.js";
 import { walkRegistry, routeKey, originKey, DEFAULT_REGISTRY_URL as PAYAI_REGISTRY_URL } from "./payai-solana-sweep.js";
 
 export const BAZAAR_REGISTRY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
@@ -146,18 +147,28 @@ export function missingIn(coverage, registry, chainName) {
   return coverage.routes.filter((r) => r.sells[chainName] && r[registry][chainName] === false);
 }
 
-/** `${METHOD} ${path}` -> example input, from an OpenAPI document (body example, else parameter examples, else {}). */
+/** `${METHOD} ${path}` -> example input, from an OpenAPI document (body example, JSON or
+ *  multipart, else parameter examples, else {}). */
 export function examplesFromOpenapi(spec) {
   const out = new Map();
   for (const [p, methods] of Object.entries(spec?.paths || {})) {
     for (const [m, op] of Object.entries(methods || {})) {
       const key = `${m.toUpperCase()} ${p}`;
-      const body = op?.requestBody?.content?.["application/json"]?.example;
+      const body = requestExampleOf(op)?.example;
       if (body && typeof body === "object") { out.set(key, body); continue; }
       const params = (op?.parameters || []).filter((x) => x && x.example !== undefined);
       if (params.length) { out.set(key, Object.fromEntries(params.map((x) => [x.name, x.example]))); continue; }
       out.set(key, {});
     }
+  }
+  return out;
+}
+
+/** The `${METHOD} ${path}` keys whose published body is multipart/form-data. */
+export function multipartKeysFromOpenapi(spec) {
+  const out = new Set();
+  for (const [p, methods] of Object.entries(spec?.paths || {})) {
+    for (const [m, op] of Object.entries(methods || {})) if (isMultipartOperation(op)) out.add(`${m.toUpperCase()} ${p}`);
   }
   return out;
 }

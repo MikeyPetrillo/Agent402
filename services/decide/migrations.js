@@ -79,6 +79,34 @@ export const MIGRATIONS = [
       ALTER TABLE decide_decisions ADD COLUMN IF NOT EXISTS cost JSONB;
     `,
   },
+  {
+    id: 4,
+    name: "planner version, own-traffic flag, text-free plan shapes",
+    // decide_plan_shapes holds no task text, payer or parameter value, and no
+    // foreign key to decide_decisions: the 30-day prune of decisions leaves
+    // it, so outcomes by shape outlive the text that produced them.
+    sql: `
+      ALTER TABLE decide_decisions ADD COLUMN IF NOT EXISTS planner_version TEXT;
+      ALTER TABLE decide_decisions ADD COLUMN IF NOT EXISTS synthetic BOOLEAN NOT NULL DEFAULT false;
+      CREATE TABLE IF NOT EXISTS decide_plan_shapes (
+        decision_id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        depth TEXT NOT NULL,
+        planner_version TEXT,
+        step_count INT NOT NULL,
+        slugs JSONB NOT NULL,
+        categories JSONB NOT NULL,
+        edges JSONB NOT NULL,
+        gap_count INT NOT NULL DEFAULT 0,
+        collapsed_to_one_step BOOLEAN NOT NULL DEFAULT false,
+        judge_failed BOOLEAN NOT NULL DEFAULT false,
+        shape_key TEXT NOT NULL,
+        synthetic BOOLEAN NOT NULL DEFAULT false
+      );
+      CREATE INDEX IF NOT EXISTS decide_plan_shapes_key ON decide_plan_shapes (shape_key, created_at DESC);
+      CREATE INDEX IF NOT EXISTS decide_plan_shapes_created ON decide_plan_shapes (created_at);
+    `,
+  },
 ];
 
 // Two deploys of this service can overlap (it has no volume), and both run

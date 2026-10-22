@@ -1,0 +1,133 @@
+{
+  "POST /v1/research/pro": {
+    "query": "How do AI agents discover and pay for tools over x402 and MPP in 2026? Cover the discovery surfaces agents and their builders use (directories, registries, settlement-driven indexes, MCP marketplaces), how a tool gets listed in each, and what buyers look for when choosing a paid tool (price clarity, reliability evidence, schemas, refunds on failure). Cite sources for every claim.",
+    "focus": [
+      "discovery directories and registries",
+      "MCP marketplaces",
+      "how listings are created",
+      "what buyers look for"
+    ],
+    "recency": "year"
+  },
+  "POST /v1/research/max": {
+    "query": "How do AI agents discover and pay for tools over x402 and MPP in 2026? Cover the discovery surfaces agents and their builders use (directories, registries, settlement-driven indexes, MCP marketplaces), how a tool gets listed in each, and what buyers look for when choosing a paid tool (price clarity, reliability evidence, schemas, refunds on failure). Cite sources for every claim.",
+    "focus": [
+      "discovery directories and registries",
+      "MCP marketplaces",
+      "how listings are created",
+      "what buyers look for"
+    ],
+    "recency": "year"
+  },
+  "POST /v1/linkedin-article": {
+    "topic": "Pay-per-call tools for agents, now on Arc: Agent402 now settles x402 payments on Arc mainnet, so an AI agent holding USDC on Arc can pay per call for any of 500+ tools (web search, browser rendering, market data, reports) over x402 or MPP, with no signup and no API key.",
+    "angle": "Agents need tools they can buy on their own, per call, on the chain they already hold. A failed x402 call is not settled, so an agent pays only for answers it receives.",
+    "audience": "builders of AI agents and agent platforms",
+    "length": "standard",
+    "cta": "Browse the catalog at https://agent402.tools"
+  },
+  "POST /v1/token-risk": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "chain": "base"
+  },
+  "POST /v1/token-risk/pro": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "chain": "base"
+  },
+  "POST /v1/token-brief": {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+  },
+  "POST /v1/ticker-pack": {
+    "ticker": "CRCL",
+    "days": 90
+  },
+  "POST /v1/recall-report": {
+    "query": "infant formula",
+    "scope": "food"
+  },
+  "POST /api/x-users-lookup": {
+    "usernames": [
+      "Agent402Tools",
+      "circle"
+    ]
+  },
+  "POST /v1/premium/chat/completions": {
+    "model": "anthropic/claude-opus-5",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a technical editor who reviews API documentation written for autonomous AI agents. Be specific and concrete."
+      },
+      {
+        "role": "user",
+        "content": "Below is an excerpt from Agent402's agent-facing instructions (https://agent402.tools/llms.txt). Review it for clarity from the point of view of a first-time AI agent that has never paid for a tool before: what would it misread, where would it get stuck, and what is missing for it to make a first paid or proof-of-work call? Then list the three biggest improvements, most important first, each with a one-sentence rewrite.\n\n---\n# Agent402.Tools\n\n> Pay-per-call web tools for AI agents, payable over **x402 or MPP**. First job: search the web and answer questions (`/api/search`, `/api/answer`, `/api/search-news`), then the long catalog of 500+ tools via `/api/find`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet. No human, no signup, no API key: the payment is the identity.\n\n**No wallet? Pay with compute (proof-of-work).** Get a challenge at `https://agent402.tools/api/pow/challenge?slug=hash`, find an integer nonce so that `sha256(challenge + \":\" + nonce)` has at least 16 leading zero bits, then resend the request with header `X-Pow-Solution: <token>:<nonce>`. The response has two different fields and you use both: hash the `challenge` (32 hex chars), submit the `token` (the longer signed string).\n\n**Pay with USDC (x402).** Wrap fetch with `@x402/fetch`, register the exact EVM scheme with your signer, and call normally. Send an `Idempotency-Key` header for safe retries: replaying the same key with the same payment credential returns the original result without paying again.\n---"
+      }
+    ],
+    "max_tokens": 1200
+  },
+  "POST /v1/premium/messages": {
+    "model": "anthropic/claude-opus-5",
+    "max_tokens": 1200,
+    "system": "You are a technical editor who reviews API documentation written for autonomous AI agents. Be specific and concrete.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Below is an excerpt from Agent402's agent-facing instructions (https://agent402.tools/llms.txt). Review it for clarity from the point of view of a first-time AI agent that has never paid for a tool before: what would it misread, where would it get stuck, and what is missing for it to make a first paid or proof-of-work call? Then list the three biggest improvements, most important first, each with a one-sentence rewrite.\n\n---\n# Agent402.Tools\n\n> Pay-per-call web tools for AI agents, payable over **x402 or MPP**. First job: search the web and answer questions (`/api/search`, `/api/answer`, `/api/search-news`), then the long catalog of 500+ tools via `/api/find`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet. No human, no signup, no API key: the payment is the identity.\n\n**No wallet? Pay with compute (proof-of-work).** Get a challenge at `https://agent402.tools/api/pow/challenge?slug=hash`, find an integer nonce so that `sha256(challenge + \":\" + nonce)` has at least 16 leading zero bits, then resend the request with header `X-Pow-Solution: <token>:<nonce>`. The response has two different fields and you use both: hash the `challenge` (32 hex chars), submit the `token` (the longer signed string).\n\n**Pay with USDC (x402).** Wrap fetch with `@x402/fetch`, register the exact EVM scheme with your signer, and call normally. Send an `Idempotency-Key` header for safe retries: replaying the same key with the same payment credential returns the original result without paying again.\n---"
+      }
+    ]
+  },
+  "POST /v1/premium/gemini": {
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are a technical editor who reviews API documentation written for autonomous AI agents. Be specific and concrete."
+        }
+      ]
+    },
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Below is an excerpt from Agent402's agent-facing instructions (https://agent402.tools/llms.txt). Review it for clarity from the point of view of a first-time AI agent that has never paid for a tool before: what would it misread, where would it get stuck, and what is missing for it to make a first paid or proof-of-work call? Then list the three biggest improvements, most important first, each with a one-sentence rewrite.\n\n---\n# Agent402.Tools\n\n> Pay-per-call web tools for AI agents, payable over **x402 or MPP**. First job: search the web and answer questions (`/api/search`, `/api/answer`, `/api/search-news`), then the long catalog of 500+ tools via `/api/find`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet. No human, no signup, no API key: the payment is the identity.\n\n**No wallet? Pay with compute (proof-of-work).** Get a challenge at `https://agent402.tools/api/pow/challenge?slug=hash`, find an integer nonce so that `sha256(challenge + \":\" + nonce)` has at least 16 leading zero bits, then resend the request with header `X-Pow-Solution: <token>:<nonce>`. The response has two different fields and you use both: hash the `challenge` (32 hex chars), submit the `token` (the longer signed string).\n\n**Pay with USDC (x402).** Wrap fetch with `@x402/fetch`, register the exact EVM scheme with your signer, and call normally. Send an `Idempotency-Key` header for safe retries: replaying the same key with the same payment credential returns the original result without paying again.\n---"
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1200
+    }
+  },
+  "POST /v1/premium/responses": {
+    "model": "anthropic/claude-opus-5",
+    "instructions": "You are a technical editor who reviews API documentation written for autonomous AI agents. Be specific and concrete.",
+    "input": "Below is an excerpt from Agent402's agent-facing instructions (https://agent402.tools/llms.txt). Review it for clarity from the point of view of a first-time AI agent that has never paid for a tool before: what would it misread, where would it get stuck, and what is missing for it to make a first paid or proof-of-work call? Then list the three biggest improvements, most important first, each with a one-sentence rewrite.\n\n---\n# Agent402.Tools\n\n> Pay-per-call web tools for AI agents, payable over **x402 or MPP**. First job: search the web and answer questions (`/api/search`, `/api/answer`, `/api/search-news`), then the long catalog of 500+ tools via `/api/find`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet. No human, no signup, no API key: the payment is the identity.\n\n**No wallet? Pay with compute (proof-of-work).** Get a challenge at `https://agent402.tools/api/pow/challenge?slug=hash`, find an integer nonce so that `sha256(challenge + \":\" + nonce)` has at least 16 leading zero bits, then resend the request with header `X-Pow-Solution: <token>:<nonce>`. The response has two different fields and you use both: hash the `challenge` (32 hex chars), submit the `token` (the longer signed string).\n\n**Pay with USDC (x402).** Wrap fetch with `@x402/fetch`, register the exact EVM scheme with your signer, and call normally. Send an `Idempotency-Key` header for safe retries: replaying the same key with the same payment credential returns the original result without paying again.\n---",
+    "max_output_tokens": 1200
+  },
+  "POST /api/llm-premium": {
+    "model": "o3-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "You are a technical editor who reviews API documentation written for autonomous AI agents. Be specific and concrete.\n\nBelow is an excerpt from Agent402's agent-facing instructions (https://agent402.tools/llms.txt). Review it for clarity from the point of view of a first-time AI agent that has never paid for a tool before: what would it misread, where would it get stuck, and what is missing for it to make a first paid or proof-of-work call? Then list the three biggest improvements, most important first, each with a one-sentence rewrite.\n\n---\n# Agent402.Tools\n\n> Pay-per-call web tools for AI agents, payable over **x402 or MPP**. First job: search the web and answer questions (`/api/search`, `/api/answer`, `/api/search-news`), then the long catalog of 500+ tools via `/api/find`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet. No human, no signup, no API key: the payment is the identity.\n\n**No wallet? Pay with compute (proof-of-work).** Get a challenge at `https://agent402.tools/api/pow/challenge?slug=hash`, find an integer nonce so that `sha256(challenge + \":\" + nonce)` has at least 16 leading zero bits, then resend the request with header `X-Pow-Solution: <token>:<nonce>`. The response has two different fields and you use both: hash the `challenge` (32 hex chars), submit the `token` (the longer signed string).\n\n**Pay with USDC (x402).** Wrap fetch with `@x402/fetch`, register the exact EVM scheme with your signer, and call normally. Send an `Idempotency-Key` header for safe retries: replaying the same key with the same payment credential returns the original result without paying again.\n---"
+      }
+    ],
+    "max_tokens": 1200
+  },
+  "POST /api/route/execute-max": {
+    "task": "weather forecast",
+    "include": "external",
+    "params": {
+      "lat": 40.7128,
+      "lon": -74.006
+    }
+  },
+  "POST /api/route/execute-pro": {
+    "task": "weather forecast",
+    "include": "external",
+    "params": {
+      "lat": 40.7128,
+      "lon": -74.006
+    }
+  }
+}

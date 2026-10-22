@@ -42,6 +42,8 @@ import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-histor
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
+import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
+import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -442,19 +444,60 @@ export function priceWithPremium(price, network, premiums = NETWORK_PREMIUMS) {
   return "$" + (micro / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-export function acceptsForItem(item, rails) {
-  const { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet } = rails;
+/**
+ * The payTo a route's accept names on one network: the ONE place the payee is
+ * decided, read by the 402 builder (acceptsForItem) and by the discovery
+ * surfaces that publish it (the service manifest's payToByRoute), so the two
+ * cannot disagree. `rails` carries the receiving wallets (walletAddress for
+ * every EVM chain, solanaWallet, stellarWallet, algorandWallet) and, for
+ * tests, upstreamBuyerAddress / avmUpstreamBuyerAddress overrides of the env.
+ *
+ * The router tiers settle their Base leg to the Base spending wallet and
+ * their Algorand leg to the AVM spending wallet (see SELF_FUNDING_SLUGS and
+ * AVM_SELF_FUNDING_SLUGS above); with those addresses unset every route
+ * settles to the receiving wallet of its rail.
+ */
+export function payToForRoute(slug, caip2, rails = {}) {
+  const net = String(caip2 || "");
   const burner = rails.upstreamBuyerAddress ?? UPSTREAM_BUYER_ADDRESS;
   const avmBuyer = rails.avmUpstreamBuyerAddress ?? AVM_UPSTREAM_BUYER_ADDRESS;
-  const payToFor = (caip2) =>
-    burner && caip2 === "eip155:8453" && SELF_FUNDING_SLUGS.has(item.slug) ? burner : walletAddress;
+  if (net.startsWith("eip155:")) {
+    return burner && net === "eip155:8453" && SELF_FUNDING_SLUGS.has(slug) ? burner : rails.walletAddress;
+  }
+  if (net.startsWith("solana:")) return rails.solanaWallet;
+  if (net.startsWith("stellar:")) return rails.stellarWallet;
   // Chain-matched self-funding for Algorand (2026-07-29, same rule as Base):
   // an Algorand buyer's route-execute payment funds the AVM spending wallet
   // that buys from Algorand sellers to resell. ROUTER TIERS ONLY: a tool
   // whose upstream spend is pinned to Base must not route its Algorand
   // revenue to the AVM wallet, which would fund the wrong wallet.
-  const avmPayToFor = () =>
-    avmBuyer && AVM_SELF_FUNDING_SLUGS.has(item.slug) ? avmBuyer : algorandWallet;
+  if (net.startsWith("algorand:")) return avmBuyer && AVM_SELF_FUNDING_SLUGS.has(slug) ? avmBuyer : rails.algorandWallet;
+  return rails.walletAddress;
+}
+
+/**
+ * The networks on which a route's 402 names a payee other than its rail's
+ * receiving wallet, as { caip2: address }; empty for every route when the
+ * spending-wallet addresses are unset. Read off the route's own accepts, so a
+ * network the route does not offer is never listed.
+ */
+export function payToOverridesForItem(item, rails) {
+  const out = {};
+  for (const a of acceptsForItem(item, rails)) {
+    const fallback = payToForRoute("", a.network, rails);
+    if (a.payTo && a.payTo !== fallback && !out[a.network]) out[a.network] = a.payTo;
+  }
+  return out;
+}
+
+// The rails the paywall builds its accepts from, set by buildPaymentMiddleware
+// (null before it runs and in FREE_MODE, where no route answers 402).
+let liveRails = null;
+export function paymentRailsLive() { return liveRails ? liveRails() : null; }
+
+export function acceptsForItem(item, rails) {
+  const { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, solanaWallet, stellarWallet, algorandWallet } = rails;
+  const payToFor = (caip2) => payToForRoute(item.slug, caip2, rails);
   // A tool with a `quote` (the metered gateway tier) is priced PER REQUEST:
   // @x402/core resolves a `price` function against the request context on
   // every call, including the paid retry, so the amount a buyer authorized is
@@ -527,14 +570,14 @@ export function acceptsForItem(item, rails) {
   return [
     ...evm,
     ...upto,
-    ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: solanaWallet, price: priceOf(caip2), network: caip2 })) : []),
-    ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: stellarWallet, price: priceOf(caip2), network: caip2 })) : []),
+    ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
+    ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     // The Algorand accepts carry the x402 Global Challenge tag (Algorand
     // Foundation's entry marker, per their 2026-07-21 checklist): GoPlausible's
     // Bazaar + leaderboard attribute challenge entries by `extra.tag`, and the
     // challenge-filtered views hide untagged merchants entirely. Scheme-level
     // fields (decimals/feePayer) are merged in by the facilitator downstream.
-    ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: avmPayToFor(), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
+    ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
   ];
 }
 
@@ -755,7 +798,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Clients expose their base URL as `url`; a subclass that does not is
     // simply not diagnosed rather than a boot failure.
     const u = client?.url || client?.config?.url || client?.options?.url;
-    if (u) facilitatorUrls.push(u);
+    if (u) { facilitatorUrls.push(u); registerFacilitatorUpstream(u); }
     installFacilitatorDiagnostics(facilitatorUrls);
     return client;
   };
@@ -892,9 +935,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // pair it with a NETWORK_PRICE_PREMIUMS entry for eip155:42220.
   const solvadorCeloPrimary = /^(1|true|yes|on)$/i.test((process.env.SOLVADOR_CELO_PRIMARY || "").trim())
     && evmCaip2.includes(CELO_CAIP2) && !!process.env.SOLVADOR_KEY;
+  let solvadorCeloClient = null;
   if (solvadorCeloPrimary) {
     const solvadorAuth = { "X-API-Key": process.env.SOLVADOR_KEY };
-    addFacilitator("Solvador (Celo primary)", new NetworkFilteredFacilitatorClient({
+    solvadorCeloClient = addFacilitator("Solvador (Celo primary)", new NetworkFilteredFacilitatorClient({
       url: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
       createAuthHeaders: async () => ({ verify: solvadorAuth, settle: solvadorAuth, supported: solvadorAuth }),
     }, [CELO_CAIP2]));
@@ -1001,6 +1045,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       url: process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com",
       createAuthHeaders: async () => ({ verify: solvadorAuth, settle: solvadorAuth, supported: solvadorAuth }),
     });
+    // Counted per host by the failure monitor like every facilitator.
+    registerFacilitatorUpstream(process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com");
   }
   // Solvador as PRIMARY, network-filtered. For chains where Solvador is our
   // ONLY facilitator (Optimism today; Unichain/World Chain/Linea are the
@@ -1415,6 +1461,25 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // Arc names no settle fallback: Circle is the one facilitator that settles
   // it, so a re-settle elsewhere could only fail, and an Arc payload is never
   // sent to a facilitator that does not own the chain.
+  // Celo's settle order follows the facilitator that is settling: after
+  // consecutive out-of-funds refusals the first-tried facilitator is demoted
+  // for a cool-down and its alternates settle first (src/settle-demotion.js).
+  const celoPrimary = solvadorCeloClient || celoClient;
+  if (celoPrimary) {
+    const label = solvadorCeloClient ? "Solvador (Celo primary)" : "Celo";
+    // Alternates only under the same opt-in as the fallback chain
+    // (PAYMENT_SETTLE_FALLBACK); without it a demotion is recorded and paged
+    // on (facilitatorFunds) but the order stays.
+    const fallbackOn = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
+    const alternates = () => (!fallbackOn ? [] : solvadorCeloClient
+      ? (celoClient ? [{ name: "Celo", client: celoClient }] : [])
+      : fallbackCandidatesFor(CELO_CAIP2, payAiClient, solvadorClient));
+    withSettleDemotion(celoPrimary, {
+      network: CELO_CAIP2, label, alternates, isPreBroadcast: isPreBroadcastSettleRejection,
+      onRefusal: (r) => toolFailureMonitor().noteFacilitatorRefusal(r),
+    });
+    DEMOTION_NETWORKS.add(CELO_CAIP2);
+  }
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
@@ -1507,8 +1572,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     if (clean.length <= 32) return clean;
     return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
   };
-  const acceptsFor = (item) =>
-    acceptsForItem(item, { evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2 });
+  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2 });
+  const acceptsFor = (item) => acceptsForItem(item, railsNow());
+  // Read at call time, like acceptsFor: a rail dropped or joined after boot
+  // is reflected in what discovery publishes as well as in the 402.
+  liveRails = railsNow;
 
   // The payment-required header is one base64-encoded JSON blob carrying
   // description + discovery extensions.  Skill packs and tools with rich
@@ -2100,6 +2168,14 @@ async function recordVerifyFailure(ctx, reason) {
   })).catch(() => {});
 }
 
+// Networks whose first-tried facilitator is wrapped by the settle demotion.
+const DEMOTION_NETWORKS = new Set();
+setDemotedReader(() => demotedList());
+/** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
+function registerFacilitatorUpstream(url) {
+  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
+}
+
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null) {
   server.onVerifyFailure(async (ctx) => {
     const reason = summarizeFacilitatorError(ctx?.error);
@@ -2192,6 +2268,15 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // (src/payment-reject.js): an errorReason that is a verdict about the
     // payment (insufficient_funds, transaction_failed, ...) is never
     // relabelled billing by words in its message.
+    // An out-of-funds or billing refusal feeds facilitatorFunds on
+    // /api/gateway-status; a network whose primary is wrapped by the settle
+    // demotion has already recorded its own.
+    // The wrapper's note (settleAttemptOf) covers a graceful {success:false}
+    // too, which @x402/core hands this hook as a new SettleError.
+    const demotionAttempt = DEMOTION_NETWORKS.has(ctx?.requirements?.network) ? settleAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network) : null;
+    if (isFundsRefusal(`${ctx?.error?.errorReason || ""} ${failure}`) && !demotionAttempt && !(DEMOTION_NETWORKS.has(ctx?.requirements?.network) && ctx?.error?.__a402RefusalRecorded)) {
+      try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: ctx?.error?.__a402Facilitator || facilitatorFirstTriedByNetwork.get(ctx?.requirements?.network) || "primary", reason: failure }); } catch { /* bookkeeping only */ }
+    }
     if (isBillingRefusalReceipt({ success: false, errorReason: ctx?.error?.errorReason, errorMessage: failure })) {
       console.warn(
         `[payments] facilitator QUOTA exhausted on ${ctx?.requirements?.network} ` +
@@ -2225,7 +2310,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     }
     if (!fallbackEnabled) return;
     if (!isPreBroadcastSettleRejection(ctx?.error)) return;
-    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides);
+    // A facilitator the demotion wrapper already asked for this payment is
+    // not asked again.
+    const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
+      .filter(({ name }) => !demotionAttempt?.asked.has(name));
     for (const { name, client } of candidates) {
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);
@@ -2234,6 +2322,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // lets the chain continue; any other failed result ends the chain and
         // the primary's refusal stands (never "recovered" with a failure).
         if (result?.success !== true) {
+          if (isFundsRefusal(result)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: String(result?.errorReason || result?.errorMessage || "") }); } catch { /* bookkeeping only */ } }
           console.warn(
             `[payments] ${name} settle fallback REJECTED on ${ctx?.requirements?.network}: ` +
               `${result?.errorReason || result?.errorMessage || "no reason given"}`
@@ -2253,6 +2342,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         );
         return { recovered: true, result };
       } catch (err) {
+        if (isFundsRefusal(`${err?.errorReason || ""} ${summarizeFacilitatorError(err)}`)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: summarizeFacilitatorError(err) }); } catch { /* bookkeeping only */ } }
         console.warn(
           `[payments] ${name} settle fallback ALSO failed on ${ctx?.requirements?.network}: ` +
             summarizeFacilitatorError(err)

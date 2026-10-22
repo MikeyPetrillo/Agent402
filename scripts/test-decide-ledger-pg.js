@@ -54,10 +54,28 @@ try {
   ok(!!(await sdb.imports.done("ledger.db")), "the import is marked under the file's basename");
   ok((await L.feedbackTokenOk("d_old", "fb_old", { now })) === true, "an imported feedback hash still verifies");
   // A row added to the file after the import must not appear at the next open.
-  { const db = new Database(FILE); db.prepare("INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?)").run("d_late", now, "plan", 1, null, "[]", 1, 1, null); db.close(); }
+  { const db = new Database(FILE); db.prepare("INSERT INTO decisions (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES (?,?,?,?,?,?,?,?,?)").run("d_late", now, "plan", 1, null, "[]", 1, 1, null); db.close(); }
   const L2 = openDecideLedger(FILE);
   await L2.ready;
   ok((await L2.getDecision("d_late")) === null && (await L2.getDecision("d_old"))?.id === "d_old", "a second open does not import again");
+
+  // ---- the stats join on the database: version, shape and flag on decisions and runs ----
+  {
+    await L.saveDecision({ decisionId: "d_shape", depth: "plan", priceUsd: 0.02, payer: "0xs", plan: [], costViaUsd: 0.01, now, plannerVersion: "pv_pg", shapeKey: "shape_pg", synthetic: true });
+    const ds = await L2.getDecision("d_shape");
+    ok(ds?.plannerVersion === "pv_pg" && ds.shapeKey === "shape_pg" && ds.synthetic === true, "a decision's planner version, shapeKey and own-traffic flag land in the table");
+    const b = await L.bookRun({ runId: "run_shape", decisionId: "d_shape", payer: "0xs", budgetUsd: 0.01, creditUsd: 0, now, plannerVersion: "pv_pg", shapeKey: "shape_pg", synthetic: true });
+    const rr = (await sdb.stateQuery(`SELECT planner_version, shape_key, synthetic FROM ${T("runs")} WHERE id = $1`, ["run_shape"])).rows[0];
+    ok(b.ok && rr?.planner_version === "pv_pg" && rr.shape_key === "shape_pg" && Number(rr.synthetic) === 1, "a booked run carries them too");
+    await L.saveDecisionIfAbsent({ decisionId: "d_shape_j", depth: "plan", priceUsd: 0.02, payer: "0xs", plan: [], costViaUsd: 0.01, now, plannerVersion: "pv_pg", shapeKey: "shape_j", synthetic: false });
+    ok((await L.getDecision("d_shape_j"))?.shapeKey === "shape_j", "a journaled decision write keeps the shapeKey");
+    const st = await L.statsRows(now - 60_000);
+    ok(st.decisions.some((x) => x.id === "d_shape" && x.shapeKey === "shape_pg" && x.synthetic === true) && st.runs.some((x) => x.id === "run_shape" && x.shapeKey === "shape_pg"), "statsRows reads both tables");
+    const fdb = new Database(FILE);
+    const fileRow = fdb.prepare("SELECT shape_key, planner_version FROM runs WHERE id = ?").get("run_shape");
+    fdb.close();
+    ok(fileRow?.shape_key === "shape_pg" && fileRow.planner_version === "pv_pg", "the write-through file gets the same columns");
+  }
 
   // ---- (2) writes go to the database; a second instance sees them -----------
   await L.saveDecision({ decisionId: "d1", depth: "plan", priceUsd: 0.03, payer: "0xb", plan: [{ step: 1, tool: { id: "t1" } }], costViaUsd: 0.031, feedbackHash: hashToken("fb1"), now });

@@ -3,6 +3,7 @@
 // outcome reports that outcome on its first status read, not "unknown".
 // Two child processes stand in for the two containers (one records, one boots).
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ try {
     await s.closeStateDb();
   `);
   let st = null;
-  try { st = JSON.parse(r.stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+  try { st = childJson(r.stdout); } catch { /* reported below */ }
   ok(st && st.status === "exhausted" && st.lastCode === "LE_102", `a container that boots later reports it on its first read (got ${r.stdout.trim().slice(0, 200)} ${(r.stderr || "").trim().slice(0, 200)})`);
 } finally {
   rmSync(DIR, { recursive: true, force: true });

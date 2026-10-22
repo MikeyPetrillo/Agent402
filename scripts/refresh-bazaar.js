@@ -36,8 +36,11 @@
 //   MODE              "stale" (default), "missing", or "sweep" (pay EVERY route
 //                     priced <= MAX_PRICE_USD once — for settlement-driven
 //                     registration on PAY_NETWORK, e.g. PayAI's Solana index)
-//   PAY_NETWORK       "base" (default, BURNER_KEY via CDP) or "solana"
-//                     (SOLANA_BURNER_KEY via PayAI)
+//   PAY_NETWORK       "base" (default, BURNER_KEY) or "solana"
+//                     (SOLANA_BURNER_KEY); both settle at the boot order's
+//                     first facilitator, CDP on both chains (an untagged buy
+//                     never reaches PayAI: scripts/payai-listing-pass.js
+//                     settles there on purpose)
 //   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05 — skips the
 //                     LLM/image/audio proxies that bill real upstream credit)
 //   SLUGS             comma-separated slug filter for missing-mode (register only these)
@@ -80,11 +83,11 @@ const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 const MODE = (process.env.MODE || "stale").toLowerCase();
 const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
 // Which chain the paid requests settle on. "base" (default) pays via the EVM
-// BURNER_KEY through CDP — what the Bazaar harvester observes. "solana" pays
-// via SOLANA_BURNER_KEY through PayAI — what SETTLEMENT-DRIVEN Solana indexes
-// (PayAI's merchant listing, x402scan's facilitator view) observe, and every
-// payment also makes harvesters re-observe the live 402 with the full
-// multi-chain accepts.
+// BURNER_KEY, "solana" via SOLANA_BURNER_KEY. Both settle at CDP, first on
+// every chain its /supported lists (src/payments.js), which is what the Bazaar
+// harvester observes; every payment also makes harvesters re-observe the live
+// 402 with the full multi-chain accepts. PayAI's registry sees only what PayAI
+// settles, which scripts/payai-listing-pass.js asks for per request.
 const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
 // Sweep-mode price ceiling per tool: skip anything above it. The LLM / image /
 // audio / code-run proxies bill real upstream credit per call — registering

@@ -19,11 +19,13 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
+import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { findTools } from "../find.js";
 import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
 
@@ -43,7 +45,7 @@ export const EXEC_TIERS = [
   // so a mid-priced external tool could only ride the max tier. This tier
   // keeps the fee proportional and unlocks mid-priced external inventory.
   { slug: "route-execute-plus", execPriceUsd: 0.05, underlyingMaxUsd: 0.04 },
-  { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+  { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5, externalExample: true },
   // 2026-08-07: the $0.50 underlying ceiling excluded every indexed tool priced
   // above it, so the router could only answer those with a 409 pointing at the
   // seller's own direct route. The fee curve stays proportional rather than
@@ -54,8 +56,16 @@ export const EXEC_TIERS = [
   // cap raises exactly one exposure: what a buyer whose payment verifies and
   // then fails to settle can make us spend before we stop them. Keep
   // EXTERNAL_MAX_UNSETTLED_USD sized against THIS tier's underlying cap.
-  { slug: "route-execute-pro", execPriceUsd: 3.3, underlyingMaxUsd: 3.0 },
+  { slug: "route-execute-pro", execPriceUsd: 3.3, underlyingMaxUsd: 3.0, externalExample: true },
 ];
+// The published example of a tier marked externalExample: a task the router
+// buys from a proven outside seller (include:"external"), which is what those
+// tiers exist for. Their old example resolved to one of this host's own
+// tools, so a registry showed the tier's flat price for a lookup the catalog
+// sells directly, and buying the example never exercised the external leg.
+// The params match the request contract the top-ranked outside weather
+// sellers publish (lat and lon); the coordinates are a public city center.
+export const EXTERNAL_EXAMPLE_INPUT = Object.freeze({ task: "weather forecast", include: "external", params: Object.freeze({ lat: 40.7128, lon: -74.006 }) });
 const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
 /** Which execution tier (if any) can run a tool at `underlyingUsd`, and the
  *  price to pay it. Used by /api/route to quote the buyer the exact tier. */
@@ -236,7 +246,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       // A wallet-only tool resolved from a task: the router's use. A pure-CPU
       // tool such as hash runs free with proof-of-work, so it would teach the
       // dearest way to run a free tool.
-      input: { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
+      input: tier.externalExample
+        ? { task: EXTERNAL_EXAMPLE_INPUT.task, include: EXTERNAL_EXAMPLE_INPUT.include, params: { ...EXTERNAL_EXAMPLE_INPUT.params } }
+        : { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
@@ -247,7 +259,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         },
       },
       output: {
-        example: {
+        example: tier.externalExample ? {
+          receipt: { slug: "weather", route: "POST https://seller.example/weather", underlyingPriceUsd: 0.002, paidUsd: EXEC_PRICE_USD, routingFeeUsd: Number((EXEC_PRICE_USD - 0.002).toFixed(6)), seller: "https://seller.example", external: true, settleTx: "0x…", settleNetwork: "eip155:8453", wire: "x402", resolvedBy: "task-external", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          result: { forecast: ["…"], untrustedContent: true },
+        } : {
           receipt: { slug: "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { name: "example.com", type: "A", records: ["…"] },
         },
@@ -355,7 +370,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // end in a second seller paid for a payment that cannot settle.
           const defaultDeadlineMs = Math.max(30_000, Number(process.env.SOR_EXTERNAL_DEADLINE_MS) || 240_000);
           const credentialMs = windowBudgetMs == null ? evmCredentialBudgetMs(req) : null;
-          const externalDeadlineMs = windowBudgetMs ?? (credentialMs != null && credentialMs < defaultDeadlineMs ? Math.max(0, credentialMs) : defaultDeadlineMs);
+          const ownDeadlineMs = windowBudgetMs ?? (credentialMs != null && credentialMs < defaultDeadlineMs ? Math.max(0, credentialMs) : defaultDeadlineMs);
+          // Through the CDN proxy the answer must also start inside the
+          // proxy's wait (src/cdn-sync-window.js); a shorter wait keeps the
+          // hold, as above, so the nearer bound is money-safe.
+          const cdnLeftMs = cdnSyncLeftMs(req);
+          const externalDeadlineMs = cdnLeftMs != null ? Math.max(0, Math.min(ownDeadlineMs, cdnLeftMs - 5_000)) : ownDeadlineMs;
           const refusalBudgetMs = () => Math.max(0, externalDeadlineMs - (Date.now() - startedAt));
           // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
           // sellers (ranked, settled-desc) for the first chain that has any, so
@@ -498,8 +518,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // request would get a fresh ceiling each time. A Tempo pull
           // credential reaches this handler only with a verified sender (the
           // gate refuses it otherwise; see spendsBeforeSettlement).
+          // A Solana, Algorand or Stellar x402 buyer is keyed on the signer
+          // its verified payload names (src/non-evm-payer.js), so a buyer on
+          // those rails keeps one ceiling across IPs. The global ceiling in
+          // external-spend-guard.js bounds every payer key together.
           const spendPayer = payerFromRequest(req)
             || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
+            || (req ? await nonEvmPayerFromRequest(req) : null)
             || (req?.ip ? `ip:${req.ip}` : null);
           // Book the WORST CASE this call could cost, not the seller's declared
           // price. `cap` is what payExternal will refuse to exceed, so it is the
@@ -514,6 +539,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // cannot both pass a ceiling that has room for one.
           const allowed = await reserveSpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
+            if (allowed.code === "global_unsettled_ceiling") throw bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
             throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
           }

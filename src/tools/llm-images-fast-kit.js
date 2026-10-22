@@ -51,6 +51,8 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { createHash } from "node:crypto";
 import { shared } from "../shared-limits.js";
 import { payerFromRequest } from "../payer.js";
+import { reportProgress } from "../job-progress.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -159,12 +161,36 @@ export function videosWorstCaseUsd() {
   return Number.isFinite(v) ? v : null;
 }
 const VIDEOS_POLL_MS = () => Math.max(100, parseInt(process.env.VIDEOS_POLL_MS || "5000", 10) || 5000);
+// The wait before each status poll. A clip takes about 40 s, so nothing is
+// lost by polling every 5 s for the first VIDEOS_POLL_FAST_AFTER_MS; after
+// that the clip is due, and a 2 s poll answers on average about 1.5 s sooner
+// than a 5 s one (half the interval). A 429 or 5xx poll is already tolerated
+// (VIDEOS_MAX_POLL_FAILURES). VIDEOS_POLL_MS set explicitly keeps one fixed interval.
+const VIDEOS_POLL_FAST_MS = 2_000;
+const VIDEOS_POLL_FAST_AFTER_MS = 20_000;
+export function videosPollWaitMs(elapsedMs) {
+  if (process.env.VIDEOS_POLL_MS) return VIDEOS_POLL_MS();
+  return elapsedMs < VIDEOS_POLL_FAST_AFTER_MS ? VIDEOS_POLL_MS() : VIDEOS_POLL_FAST_MS;
+}
 const VIDEOS_MAX_WAIT_MS = () => Math.max(1_000, parseInt(process.env.VIDEOS_MAX_WAIT_MS || "180000", 10) || 180_000);
 // Per-link generation timeout. Deliberately short: a timeout AFTER the image was
 // generated is billed upstream while the chain walks on to the next link, so the
 // chain sum can exceed the tier price. 45 s sits past every measured generation
 // (klein 2 s, flux.2-pro 9 s, qwen 66 s is the exception and is the LAST link).
 const IMAGE_LINK_TIMEOUT_MS = Math.max(5_000, parseInt(process.env.IMAGE_LINK_TIMEOUT_MS || "45000", 10) || 45_000);
+// A link starts only with this much of the CDN wait left, and ends this long
+// before it, so settlement and the write fit.
+const CDN_LINK_MIN_START_MS = 15_000;
+const CDN_LINK_TAIL_MS = 5_000;
+/** The per-link timeout under the CDN wait; `defaultMs` off the CDN; null
+ *  when a further link could not finish in time. The first link always starts. */
+export function cdnLinkTimeoutMs(req, defaultMs, startedLinks, now = Date.now()) {
+  const left = cdnSyncLeftMs(req, now);
+  if (left == null) return defaultMs;
+  const usable = left - CDN_LINK_TAIL_MS;
+  if (startedLinks > 0 && usable < CDN_LINK_MIN_START_MS) return null;
+  return Math.max(1_000, Math.min(defaultMs, usable));
+}
 
 /** Margin table for the pricing-margin CI test: every link's bound against
  *  its tier price, plus the video tier. Integer micro-dollars, so an exact
@@ -320,7 +346,13 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
   const tier = IMAGE_TIERS[tierSlug];
   const { prompt, refs } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
+  let started = 0;
   for (const link of tier.chain) {
+    // Through the CDN proxy the answer must start inside the proxy's wait
+    // (src/cdn-sync-window.js): a fallback link that cannot finish in what is
+    // left is not started, and the call ends with a 504 (not charged).
+    const linkTimeoutMs = cdnLinkTimeoutMs(req, IMAGE_LINK_TIMEOUT_MS, started);
+    if (linkTimeoutMs == null) throw bad("The image did not finish within the time this connection waits for an answer - not charged; retry, or send Prefer: respond-async for a job link", 504);
     if (!linkBounds(link)) {
       lastErr = bad("Image tier temporarily unavailable", 503);
       continue;
@@ -333,7 +365,8 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
     const body = { model: link.model, prompt, n: 1, ...link.params,
       ...(refs ? { input_references: refs.map((url) => ({ type: "image_url", image_url: { url } })) } : {}), provider: { only: [link.provider], ...(zdr ? { zdr: true } : {}) }, ...(user ? { user } : {}) };
     try {
-      const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: IMAGE_LINK_TIMEOUT_MS });
+      started++;
+      const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: linkTimeoutMs });
       if (!res.ok) await throwUpstreamError(res);
       const text = await res.text();
       let parsed;
@@ -481,6 +514,8 @@ async function videosHandler(input, req) {
   }
   const id = typeof job?.id === "string" ? job.id : "";
   if (!id) throw bad("Upstream accepted no video job", 502);
+  // Job progress (src/job-progress.js): a no-op outside an async job or task.
+  reportProgress({ stage: "submitted" }, req);
   // Only ever poll OUR upstream with our key - never a URL the response named
   // on some other host.
   const pollUrl = typeof job.polling_url === "string" && job.polling_url.startsWith(`${OPENROUTER_VIDEOS_URL}/`) ? job.polling_url : `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}`;
@@ -498,7 +533,7 @@ async function videosHandler(input, req) {
       await parkVideoJob(parkKey, id);
       throw Object.assign(bad(`${waited}; send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip`, 504), { videoParked: true });
     }
-    await sleep(VIDEOS_POLL_MS());
+    await sleep(videosPollWaitMs(Date.now() - started));
     // A transient poll failure (5xx, 429, network, timeout, garbled body)
     // keeps polling until the deadline; a run of them, or any other status,
     // ends the request.
@@ -523,7 +558,9 @@ async function videosHandler(input, req) {
     pollFailures = 0;
     st = next;
     status = st?.status || status;
+    if (status !== "completed" && status !== "failed") reportProgress({ stage: "generating" }, req);
   }
+  reportProgress({ stage: "downloading" }, req);
 
   const contentUrl = `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}/content?index=0`;
   for (let attempt = 0; ; attempt++) {
@@ -546,6 +583,7 @@ async function videosHandler(input, req) {
   }
   const bytes = Buffer.from(await c.arrayBuffer());
   if (!bytes.length) throw bad("Upstream returned an empty clip - retry", 502);
+  reportProgress({ stage: "encoding" }, req);
   const mediaType = (c.headers?.get?.("content-type") || "video/mp4").split(";")[0].trim() || "video/mp4";
 
   const rawUsage = st?.usage && typeof st.usage === "object" ? st.usage : null;

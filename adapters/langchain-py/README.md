@@ -39,6 +39,10 @@ Pass `x402_fetch` - a callable with the `requests`-style signature
 toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signed_fetch)
 ```
 
+The callable is passed `allow_redirects=False`: a paid call never follows a
+redirect, and one is refused with the origin it pointed to, so point `base_url`
+at the address that serves the routes directly.
+
 Without it, calling a wallet-only tool raises a clear error naming what's needed;
 the free proof-of-work tier keeps working regardless.
 

@@ -8,6 +8,7 @@
 // and publish - so the next lane split fails here instead of in production.
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { load } from "js-yaml";
+import { spawnSync } from "node:child_process";
 
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
 let pass = 0, fail = 0;
@@ -165,8 +166,8 @@ for (const [name, j] of Object.entries(jobs)) {
 // --- every marker the parser knows has an output, and the pass that spends
 // --- with the operator token never runs from a push ------------------------
 // The MARKERS list and the outputs block are two lists of the same names and
-// cannot drift apart. The PayAI listing pass (scripts/payai-listing-pass.js)
-// pays with the Solana burner AND the operator token (the settle-via gate). A
+// cannot drift apart. The listing pass (scripts/payai-listing-pass.js) pays
+// with the Base and Solana burners AND the operator token (the settle-via gate). A
 // job a commit subject can start is a job a branch push can start with a
 // modified script, so it is not a deploy.yml job at all: it lives in its own
 // workflow with a schedule and a dispatch, no push trigger, and sits in the
@@ -182,27 +183,56 @@ for (const [name, j] of Object.entries(jobs)) {
   }
   ok(!/node scripts\/payai-listing-pass\.js/.test(wfText), "deploy.yml never runs the listing pass: a push could carry a modified script to the operator token");
 
-  const listing = load(readFileSync(new URL("../.github/workflows/payai-listing.yml", import.meta.url), "utf8"));
+  const listing = load(readFileSync(new URL("../.github/workflows/listing-pass.yml", import.meta.url), "utf8"));
   const on = listing.on || listing[true] || {};
   const crons = [].concat(on.schedule || []).map((s) => String(s.cron || ""));
   ok(crons.length === 1 && /^\d{1,2} \d{1,2} \* \* [0-6]$/.test(crons[0]), `the listing pass runs on one weekly cron (${crons.join(", ")})`);
   ok(!("push" in on) && !("pull_request" in on), "the listing pass has no push or pull_request trigger");
   const inputs = on.workflow_dispatch?.inputs || {};
-  ok("max_spend_usd" in inputs && "max_price_usd" in inputs, "its dispatch takes the run ceiling and the per-route cap");
-  ok(JSON.stringify(listing.permissions) === JSON.stringify({ contents: "read", issues: "write" }), "its token can read the tree and write issues, nothing else");
+  ok("max_spend_usd" in inputs && "max_price_usd" in inputs, "its dispatch takes the run ceiling and the optional per-route cap");
+  ok(String(inputs.max_price_usd?.default ?? "") === "" && Number(inputs.max_spend_usd?.default) >= 20, "no per-route cap by default; a per-run ceiling by default");
+  ok(/bazaar-base/.test(String(inputs.legs?.default || "")) && /bazaar-solana/.test(String(inputs.legs?.default || "")) && /payai-solana/.test(String(inputs.legs?.default || "")) && /payai-base/.test(String(inputs.legs?.default || "")), "its default legs cover both registries on both chains");
+  ok(JSON.stringify(listing.permissions) === JSON.stringify({ contents: "read", issues: "write", actions: "read" }), "its token can read the tree and artifacts and write issues, nothing else");
   ok(!!listing.concurrency?.group && listing.concurrency?.["cancel-in-progress"] === false, "one run at a time: a second run queues behind the first instead of racing the burner's nonces");
   const ljobs = listing.jobs || {};
   const spender = Object.values(ljobs).find((j) => (j.steps || []).some((st) => /payai-listing-pass\.js/.test(String(st.run || ""))));
   ok(!!spender, "a job in the listing workflow runs the pass");
   ok(String(spender?.environment || "") === "spending", "that job carries the spending environment");
   const run = (spender?.steps || []).map((st) => String(st.run || "")).join("\n");
-  ok(/scripts\/payai-listing-pass\.js --live --include-upstream --max-price "\$MAX_PRICE_USD" --max-spend "\$MAX_SPEND_USD"/.test(run), "it runs the pass live, vendor-calling routes included, under both ceilings");
+  ok(/scripts\/payai-listing-pass\.js --registry "\$REGISTRY" --chain "\$CHAIN" --live --include-upstream --max-spend "\$MAX_SPEND_USD" \$\{MAX_PRICE_USD:\+--max-price "\$MAX_PRICE_USD"\}/.test(run), "it runs each leg live, vendor-calling routes included, under the run ceiling, with the per-route cap only when one is given");
+  // The purchase memory: downloaded before the buy step, with the workflow
+  // token only, and handed to every leg with the 14-day window.
+  const steps = spender?.steps || [];
+  const memAt = steps.findIndex((st) => /node scripts\/listing-pass-memory\.js --out bought --days 14\b/.test(String(st.run || "")));
+  const buyAt = steps.findIndex((st) => /payai-listing-pass\.js/.test(String(st.run || "")));
+  ok(memAt >= 0 && memAt < buyAt, "the purchase memory is downloaded before the step that spends");
+  ok(memAt >= 0 && JSON.stringify(steps[memAt].env || {}) === JSON.stringify({ GH_TOKEN: "${{ github.token }}" }) && !steps[memAt].if && steps[memAt]["continue-on-error"] !== true, "the download carries the workflow token and no wallet secret, and a failed download stops the job");
+  ok(/--bought bought --rebuy-after-days 14 /.test(run), "every leg reads the memory with the 14-day window");
+  ok(/--inputs scripts\/listing-inputs\.json /.test(run) && existsSync(new URL("./listing-inputs.json", import.meta.url)), "every leg buys with the committed purposeful inputs");
+  const uploads = (wf) => Object.values(wf.jobs || {}).flatMap((j) => j.steps || []).filter((st) => /actions\/upload-artifact@/.test(String(st.uses || "")));
+  const lUp = uploads(listing);
+  ok(lUp.length === 1 && lUp[0].with?.name === "listing-pass" && lUp[0].if === "always()" && Number(lUp[0].with?.["retention-days"]) >= 14 && /pass-\*\.json/.test(String(lUp[0].with?.path)), "the pass records upload as listing-pass on every outcome, kept at least 14 days");
+  // The dispatch input checks, run as written: the ceiling is above 0 and at
+  // most 100, a per-route cap is above 0 or empty.
+  const checks = String(steps[buyAt]?.run || "").split('FAILED=""')[0];
+  const inputCheck = (envs) => spawnSync("bash", ["-ec", checks], { env: { PATH: process.env.PATH, BURNER_KEY: "k", SOLANA_BURNER_KEY: "k", AGENT402_OPERATOR_TOKEN: "k", POW_SECRET: "", LEGS: "bazaar-base", ONLY: "", MAX_PRICE_USD: "", MAX_SPEND_USD: "40", ...envs }, encoding: "utf8" }).status;
+  ok(checks.length > 100 && inputCheck({}) === 0 && inputCheck({ MAX_SPEND_USD: "100" }) === 0 && inputCheck({ MAX_PRICE_USD: "0.5" }) === 0, "the default inputs, a $100 ceiling and a positive cap pass the input check");
+  ok(inputCheck({ MAX_PRICE_USD: "0" }) === 1 && inputCheck({ MAX_PRICE_USD: "0.00" }) === 1, "max_price_usd 0 is refused (empty is the way to say no cap; the pass refuses 0 too)");
+  ok(inputCheck({ MAX_SPEND_USD: "100.01" }) === 1 && inputCheck({ MAX_SPEND_USD: "5000" }) === 1 && inputCheck({ MAX_SPEND_USD: "0" }) === 1 && inputCheck({ MAX_SPEND_USD: "abc" }) === 1, "max_spend_usd above 100, zero or unreadable is refused");
+  const legsEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {})).LEGS;
+  ok(/inputs\.legs/.test(String(legsEnv || "")) && !/\$\{\{\s*inputs\./.test(run), "the legs list reaches the step through its environment, never interpolated into the script");
   ok("only" in inputs && String(inputs.only?.default ?? "") === "" && inputs.only?.required !== true, "its dispatch takes an optional only list, empty by default (unchanged behavior)");
   const onlyEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {})).ONLY;
   ok(/inputs\.only/.test(String(onlyEnv || "")) && !/\$\{\{\s*inputs\.only/.test(run) && /\$\{ONLY:\+--only "\$ONLY"\}/.test(run), "the only list reaches the pass through the step environment as --only, never interpolated into the script");
-  ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run) && /add-mask::\$POW_SECRET/.test(run), "all three secrets are masked in its log");
+  ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run) && /add-mask::\$BURNER_KEY/.test(run) && /add-mask::\$POW_SECRET/.test(run), "all four secrets are masked in its log");
   const stepEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {}));
-  ok(!spender?.env?.SOLANA_BURNER_KEY && !spender?.env?.AGENT402_OPERATOR_TOKEN && !spender?.env?.POW_SECRET, "no secret sits at job scope, where the dependency install could read it");
+  ok(!spender?.env?.SOLANA_BURNER_KEY && !spender?.env?.BURNER_KEY && !spender?.env?.AGENT402_OPERATOR_TOKEN && !spender?.env?.POW_SECRET, "no secret sits at job scope, where the dependency install could read it");
+  const mint = load(readFileSync(new URL("../.github/workflows/mint-bazaar-rows.yml", import.meta.url), "utf8"));
+  const mintEnv = Object.assign({}, ...Object.values(mint.jobs || {}).flatMap((j) => (j.steps || []).map((st) => st.env || {})));
+  const mUp = uploads(mint);
+  const mintRun = Object.values(mint.jobs || {}).flatMap((j) => j.steps || []).map((st) => String(st.run || "")).join("\n");
+  ok(/--live --out \/tmp\/mint\/pass-mint\.json/.test(mintRun) && mUp.length === 1 && mUp[0].with?.name === "mint-bazaar-rows" && mUp[0].if === "always()" && Number(mUp[0].with?.["retention-days"]) >= 14 && mUp[0].with?.path === "/tmp/mint/pass-*.json", "a live mint records its buys and keeps them as mint-bazaar-rows for at least 14 days");
+  ok(/secrets\.BURNER_KEY\b/.test(String(stepEnv.BURNER_KEY || "")) && /secrets\.BURNER_KEY\b/.test(String(mintEnv.BURNER_KEY || "")), "the Base legs pay from the same EVM burner the Bazaar mint uses");
   ok(/secrets\.AGENT402_OPERATOR_TOKEN/.test(String(stepEnv.AGENT402_OPERATOR_TOKEN || "")) && /secrets\.POW_SECRET/.test(String(stepEnv.POW_SECRET || "")), "the operator token and pow secret come from the same secrets the heartbeat uses");
   const sibling = jobs["bazaar-solana"];
   const siblingEnv = Object.assign({}, ...(sibling?.steps || []).map((st) => st.env || {}));
@@ -212,7 +242,7 @@ for (const [name, j] of Object.entries(jobs)) {
   const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
   const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
   ok(!!reporter && String(reporter.if || "") === "always()" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result");
-  ok(/TITLE="PayAI listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
+  ok(/TITLE="Listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
 
   // The weekly slot collides with no other schedule in the repository: same
   // minute and hour on a day the other cron also fires.
@@ -225,7 +255,7 @@ for (const [name, j] of Object.entries(jobs)) {
   const [min, hour, , , dow] = crons[0].split(" ").map((x, i) => (i === 2 || i === 3 ? x : Number(x)));
   const dir = new URL("../.github/workflows/", import.meta.url);
   const clashes = [];
-  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x) && x !== "payai-listing.yml")) {
+  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x) && x !== "listing-pass.yml")) {
     for (const c of readFileSync(new URL(f, dir), "utf8").matchAll(/cron:\s*"([^"]+)"/g)) {
       const [m2, h2, , , d2] = c[1].trim().split(/\s+/);
       if (field(m2, min) && field(h2, hour) && field(d2, dow)) clashes.push(`${f} (${c[1]})`);

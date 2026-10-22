@@ -18,6 +18,7 @@
 //
 //   node scripts/test-posthog-funnel.js
 import { spawn } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { getFreePorts } from "./lib/free-port.js";
@@ -378,7 +379,7 @@ try {
       { env: { PATH: process.env.PATH, ...env }, cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     p.stdout.on("data", (d) => { out += d; });
-    p.on("close", () => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { resolve({ ok: null, raw: out }); } });
+    p.on("close", () => { try { resolve(childJson(out)); } catch { resolve({ ok: null, raw: out }); } });
   });
   const FAKE = { POSTHOG_API_KEY: "phc_test_not_a_real_key" };
   const dev = await initWith({ ...FAKE });

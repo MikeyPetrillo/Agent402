@@ -337,6 +337,10 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // "quiet" is the important one: an unreadable or unconfigured leg must never
 // page AND must never close a real alarm, so anything that is not an explicit
 // verdict leaves the current state exactly as it is.
+// The body of a public failure-word issue: the word and where the detail is.
+const failureWordBody = (field, word) =>
+  `/api/gateway-status reports ${field}.status=${word}. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok.`;
+
 export const ALARMS = [
   {
     title: "Gateway credits LOW (OpenRouter)",
@@ -464,18 +468,20 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund
     // job is dispatched by hand, so a debt can sit unpaid with nothing else
     // noticing (2026-10-06: 44 debts to one buyer, found by reading the
-    // ledger). aging and stuck page; ok clears; unknown or absent does neither.
+    // ledger). owed (any buyer's debt past a short grace), aging and stuck
+    // page; ok clears; unknown or absent does neither.
     title: "Refunds owed to a buyer are waiting",
     verdict: ({ gateway: b }) => {
       const w = b.refundsOwed?.status;
-      if (w === "aging" || w === "stuck") return "bad";
+      if (w === "owed" || w === "aging" || w === "stuck") return "bad";
       return w === "ok" ? "good" : "quiet";
     },
     body: ({ gateway: b }) => {
-      const w = b.refundsOwed?.status === "stuck" ? "stuck" : "aging";
+      const w = b.refundsOwed?.status === "stuck" ? "stuck" : b.refundsOwed?.status === "aging" ? "aging" : "owed";
       return `/api/gateway-status reports refundsOwed.status=${w}.
 
-- aging: a debt in the refund ledger has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). Read /__operator/refunds.json, then dispatch refund.yml (dry run first; include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
 - stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
 
 Auto-closes when the word is ok.`;
@@ -513,6 +519,27 @@ Auto-closes when the word is ok.`;
     },
     body: () =>
       "/api/gateway-status reports outboundDestinations.status=burst: inside the last OUTBOUND_NEW_DEST_WINDOW_H hours (default 24) our spending wallets paid more recipients for the first time than OUTBOUND_NEW_DEST_BURST (default 10). A normal day reaches a few at most (a seller the router has just proven, a payability probe, the unproven lane). Read /__operator/outbound-destinations.json for the chain, recipient, origin and time of each first sighting, and match them against the proven-seller pool and the route-execute receipts of the same hours; a run of recipients no seller in the pool names is a wallet or a router being steered. The operator read of /api/gateway-status has the counts. Auto-closes when the word is ok or new.",
+  },
+  {
+    // Tool and upstream failures (src/tool-failure-monitor.js): degraded and
+    // failing page, ok clears, unknown does neither. Titles match
+    // heartbeat.yml's. The issues are public: a body carries the word and the
+    // operator endpoint only, never a slug, an upstream or a facilitator.
+    title: "toolFailures: a tool is answering 5xx to buyers",
+    verdict: ({ gateway: b }) => wordVerdict(b.toolFailures?.status, ["degraded", "failing"], ["ok"]),
+    body: ({ gateway: b }) => failureWordBody("toolFailures", b.toolFailures?.status === "failing" ? "failing" : "degraded"),
+  },
+  {
+    title: "upstreamHealth: an upstream is timing out or failing",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["degraded", "failing"], ["ok"]),
+    body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
+  },
+  {
+    // Settle refusals (refused) and a facilitator in its settle cool-down
+    // (demoted, src/settle-demotion.js).
+    title: "facilitatorFunds: a facilitator refused settlement",
+    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["refused", "demoted"], ["ok"]),
+    body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,
@@ -731,14 +758,37 @@ export function judge(ctx) {
   return out;
 }
 
-async function openIssues(token) {
+// Who may author an alarm issue this Worker treats as its own: the account
+// GITHUB_ISSUES_TOKEN belongs to (the Worker posts as it), and the Actions
+// bot, because heartbeat.yml opens issues under the same titles with the
+// workflow token. An issue anyone else opens under an alarm title is neither
+// taken as an open alarm nor closed by a recovery.
+export const WORKFLOW_BOT_LOGIN = "github-actions[bot]";
+let cachedSelf = null; // { token, login }, per isolate
+export async function issuesLogin(token, env = {}) {
+  const set = typeof env.GITHUB_ISSUES_LOGIN === "string" ? env.GITHUB_ISSUES_LOGIN.trim() : "";
+  if (set) return set;
+  if (cachedSelf && cachedSelf.token === token) return cachedSelf.login;
+  const r = await gh("/user", token);
+  if (!r.ok) throw new Error(`token identity read failed (${r.status})`);
+  const j = await r.json().catch(() => null);
+  const login = typeof j?.login === "string" ? j.login.trim() : "";
+  if (!login) throw new Error("token identity has no login");
+  cachedSelf = { token, login };
+  return login;
+}
+
+export async function openIssues(token, env = {}) {
+  const self = (await issuesLogin(token, env)).toLowerCase();
   const r = await gh(`/repos/${ISSUES_REPO}/issues?state=open&per_page=100`, token);
   if (!r.ok) throw new Error(`issue list failed (${r.status})`);
   const rows = await r.json();
   const byTitle = new Map();
-  // Pull requests come back on this endpoint too; they are not alarms.
   for (const x of Array.isArray(rows) ? rows : []) {
+    // Pull requests come back on this endpoint too; they are not alarms.
     if (!x || x.pull_request) continue;
+    const author = String(x.user?.login || "").toLowerCase();
+    if (author !== self && author !== WORKFLOW_BOT_LOGIN) continue;
     if (!byTitle.has(x.title)) byTitle.set(x.title, x.number);
   }
   return byTitle;
@@ -798,7 +848,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
 
   let open = openList;
   if (!open) {
-    try { open = await openIssues(token); } catch (e) {
+    try { open = await openIssues(token, env); } catch (e) {
       return { opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) };
     }
   }
@@ -866,7 +916,7 @@ export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => 
     for (let i = 0; i < 2 && down; i++) { await sleep(confirmDelayMs); if (await read()) down = false; }
   }
   let open = openList;
-  if (!open) { try { open = await openIssues(token); } catch (e) { return { action: "none", error: String(e?.message || e).slice(0, 100) }; } }
+  if (!open) { try { open = await openIssues(token, env); } catch (e) { return { action: "none", error: String(e?.message || e).slice(0, 100) }; } }
   const existing = open.get(DOWN_TITLE);
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   if (down && !existing) {
@@ -883,14 +933,21 @@ export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => 
   return { action: "none", down };
 }
 
-// The credential this Worker presents to /api/status/probe. STATUS_PROBE_TOKEN
-// is the narrow one and opens that endpoint and nothing else; OPERATOR_TOKEN is
-// the root credential that also reaches /__operator/refunds/update,
-// /credits/disable, /well-known, /leads and the rest, and is only still
-// accepted here so the two can be rotated without the observer going dark.
-// Once STATUS_PROBE_TOKEN is set, DELETE the OPERATOR_TOKEN secret:
-//   wrangler secret delete OPERATOR_TOKEN
-export const probeToken = (env) => env.STATUS_PROBE_TOKEN || env.OPERATOR_TOKEN || "";
+// The credential this Worker presents to /api/status/probe, and the one /run
+// and /verify accept. STATUS_PROBE_TOKEN is the narrow token that opens that
+// endpoint and nothing else; the root operator token is never read here.
+export const probeToken = (env) => env.STATUS_PROBE_TOKEN || "";
+
+// Constant-time compare for the manual-trigger token (Workers have no
+// node:crypto timingSafeEqual by default): XOR every character, no early exit.
+export function tokenEquals(got, want) {
+  const a = String(got || "");
+  const b = String(want || "");
+  if (!b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < b.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 // `timing` exists for the tests (no real 20 s / 30 s pauses); the scheduler and
 // /run pass nothing.
@@ -900,12 +957,11 @@ export async function run(env, timing = {}) {
   if (!token) {
     // Fail loudly in the log rather than posting unauthenticated: a silent skip
     // is exactly what let a different alarm sit dead for months.
-    console.error("status-probe: neither STATUS_PROBE_TOKEN nor OPERATOR_TOKEN is set — refusing to probe");
+    console.error("status-probe: STATUS_PROBE_TOKEN is not set, refusing to probe");
     return { ok: false, error: "no probe token" };
   }
-  // The paid-call challenge takes the NARROW token only, never OPERATOR_TOKEN:
-  // the root credential has no business on a public route, and the server
-  // honours only STATUS_PROBE_TOKEN there anyway.
+  // The paid-call challenge takes the same narrow token; the server honors
+  // only STATUS_PROBE_TOKEN there.
   const { components, fails, paidCall } = await observe(prod, {
     paidCallToken: env.STATUS_PROBE_TOKEN || "",
     ...(timing.sleep ? { sleep: timing.sleep, retryDelayMs: 0 } : {}),
@@ -917,7 +973,7 @@ export async function run(env, timing = {}) {
     .catch(() => false);
   // One open-issues read serves both the outage and the alarm reconcile.
   let openList = null;
-  if (env.GITHUB_ISSUES_TOKEN) { try { openList = await openIssues(env.GITHUB_ISSUES_TOKEN); } catch { openList = null; } }
+  if (env.GITHUB_ISSUES_TOKEN) { try { openList = await openIssues(env.GITHUB_ISSUES_TOKEN, env); } catch { openList = null; } }
   const apiFailed = fails.some((f) => f.startsWith("api("));
   const outage = await syncOutage(env, { apiFailed, detail: fails.join(" "), openList, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
     .catch((e) => ({ action: "none", error: String(e?.message || e).slice(0, 100) }));
@@ -967,7 +1023,7 @@ export default {
     }
     if (url.pathname === "/verify") {
       const want = probeToken(env);
-      if (!want || request.headers.get("X-Operator-Token") !== want) return new Response("unauthorized\n", { status: 401 });
+      if (!want || !tokenEquals(request.headers.get("X-Operator-Token"), want)) return new Response("unauthorized\n", { status: 401 });
       const token = env.GITHUB_ISSUES_TOKEN;
       if (!token) return Response.json({ ok: false, error: "no GITHUB_ISSUES_TOKEN" });
       const out = { canRead: false, canWrite: false, openIssues: null, note: null };
@@ -991,7 +1047,7 @@ export default {
     }
     if (url.pathname !== "/run") return new Response("status-probe: POST /run with X-Operator-Token to trigger manually\n", { status: 200 });
     const want = probeToken(env);
-    if (!want || request.headers.get("X-Operator-Token") !== want) {
+    if (!want || !tokenEquals(request.headers.get("X-Operator-Token"), want)) {
       return new Response("unauthorized\n", { status: 401 });
     }
     const out = await run(env);

@@ -122,7 +122,9 @@ Generic MCP host config:
 \`\`\`
 
 \`AGENT402_MAX_PER_CALL\` refuses any single call above that price and
-\`AGENT402_BUDGET\` caps total spend for the session - set both.
+\`AGENT402_BUDGET\` caps total spend for the session. The per-call cap is on
+by default ($4; \`off\` disables it) and the session budget is opt-in; both
+are held on the payment that is signed, so set them to your own ceilings.
 
 **Option B - Node SDK (any agent written in JS/TS).**
 
@@ -200,9 +202,12 @@ header instead of a payment.
 3. **Call:** resend with payment (your client does this) and the same JSON body.
 4. **Retry safely:** send an \`Idempotency-Key\` header; a retry of an
    already-served paid call replays the result instead of charging again.
-5. **Slow routes:** reports and media take minutes. Send the paid call with
-   \`Prefer: respond-async\` to get \`202\` and a job link, then collect the
-   answer from \`GET /api/jobs/{id}\` (free); payment settles only on the answer.
+5. **Slow routes:** reports and media take minutes; their 402 carries
+   \`X-Async-Recommended\` and their /api/pricing row an \`async\` block. Send the
+   paid call with \`Prefer: respond-async\` to get \`202\` and a job link, then poll
+   \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is
+   \`completed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` show where it
+   is. Payment settles only on the answer.
 
 ### Request Templates
 

@@ -16,6 +16,7 @@
 //      processes and requires the streaming path to hold materially less.
 // Offline: the discovery fetcher is replaced through its test seam.
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -302,7 +303,7 @@ ok(_cacheForTests().get("https://s13.stubreg.xyz")?.source === "bazaar-fallback"
   const TOTAL = 70_000;
   const run = (m) => {
     const r = spawnSync(process.execPath, ["--expose-gc", fileURLToPath(import.meta.url), m, String(TOTAL)], { encoding: "utf8", maxBuffer: 1 << 20, env: process.env });
-    try { return JSON.parse(r.stdout.trim().split("\n").pop()); } catch { console.log(r.stdout, r.stderr); return null; }
+    try { return childJson(r.stdout); } catch { console.log(r.stdout, r.stderr); return null; }
   };
   const o = run("heap-old"), n = run("heap-new");
   const mb = (x) => (x / 1048576).toFixed(1);

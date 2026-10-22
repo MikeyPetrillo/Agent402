@@ -35,7 +35,7 @@ function assertBodyWithinCap(res, capBytes, label) {
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
-import { hlSharedInfo, __hlShared } from "./hyperliquid-shared.js";
+import { hlSharedInfo, labelHlStaleness, __hlShared } from "./hyperliquid-shared.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
@@ -132,7 +132,7 @@ async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept, s
   let text = "";
   assertBodyWithinCap(res, FEED_MAX_BYTES, "Feed");
   try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
-  if (res.status === 429) throw bad(`${label} rate limit reached upstream - retry shortly`, 503);
+  if (res.status === 429) throw Object.assign(bad(`${label} rate limit reached upstream - retry shortly`, 503), { rateLimited: true, retryAfter: 5 });
   return { status: res.status, text };
 }
 
@@ -492,7 +492,7 @@ const last = (arr) => (arr.length ? arr[arr.length - 1] : null);
 const tail = (arr, n) => arr.slice(Math.max(0, arr.length - n));
 
 // --- Tools ----------------------------------------------------------------
-export const CRYPTO_SIGNALS_TOOLS = [
+const CRYPTO_SIGNALS_TOOLS_RAW = [
   // ===========================================================================
   // crypto-news - aggregated headlines from public outlet feeds.
   // ===========================================================================
@@ -717,6 +717,8 @@ export const CRYPTO_SIGNALS_TOOLS = [
     },
   },
 ];
+// An answer built from a stale shared read says so in fields.
+export const CRYPTO_SIGNALS_TOOLS = labelHlStaleness(CRYPTO_SIGNALS_TOOLS_RAW);
 
 // --- pure assembly (exported for the offline test) -------------------------
 export function computeIndicators(candles, want, points) {

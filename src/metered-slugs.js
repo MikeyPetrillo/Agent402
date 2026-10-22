@@ -50,7 +50,7 @@ export const METERED_SLUGS = new Set([
   // E2B
   "code-run", "code-run-pro",
   // Route-and-execute can buy external sellers
-  "route-execute", "seller-payability", "route-execute-max", "route-execute-plus",
+  "route-execute", "seller-payability", "route-execute-max", "route-execute-plus", "route-execute-pro",
   // Flights buy from outside sellers (flights-kit.js).
   "flight-search", "flight-status",
   // Identity-bound (payment = identity)

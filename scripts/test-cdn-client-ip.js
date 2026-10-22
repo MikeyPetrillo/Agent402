@@ -1,0 +1,174 @@
+// The client address behind the hosting edge, with or without the CDN proxy in
+// front of it (src/cdn-client-ip.js).
+//
+// Unit: CDN_PROXY off, the middleware only calls next(). On, the resolver reads
+// CF-Connecting-IP only from a peer inside the CDN's published ranges (IPv4 and
+// IPv6, plus CF_IP_RANGES_EXTRA) that also carries the origin secret in
+// X-Origin-Auth, only when it parses as an address, and never otherwise.
+//
+// End to end through booted servers: the hosting edge is simulated by
+// X-Forwarded-For (trust proxy reads its last hop), and the checkout limiter
+// (6 a minute per client address, keyed before the body parser) and the
+// proof-of-work challenge limiter (120 a minute per address) show which
+// address a limiter sees.
+//   CDN_PROXY off (the default):
+//   - a CDN-range peer with a rotating CF-Connecting-IP keeps its own bucket,
+//     on both limiters;
+//   CDN_PROXY on, CDN_ORIGIN_SECRET set:
+//   - a direct request with a forged CF-Connecting-IP keeps its own bucket;
+//   - a CDN peer carrying the secret is keyed on CF-Connecting-IP, so two
+//     clients behind one CDN address do not share;
+//   - a CDN peer without the secret, or with a wrong one, keeps its own bucket;
+//   - a malformed CF-Connecting-IP from a CDN peer falls back to the peer;
+//   - the same holds for an IPv6 CDN peer.
+import { spawn } from "node:child_process";
+import { getFreePort } from "./lib/free-port.js";
+import { buildCdnRanges, resolveClientIp, inCdnRanges, normalizeIp, cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginSecret, originAuthOk, ORIGIN_AUTH_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "../src/cdn-client-ip.js";
+
+let pass = 0;
+let proc = null;
+const SECRET = "origin-secret-for-tests-" + "q".repeat(16);
+const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); process.exit(1); };
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- unit ----
+{
+  const R = buildCdnRanges("");
+  ok(CLOUDFLARE_IPV4.length >= 10 && CLOUDFLARE_IPV6.length >= 5, "the published ranges are embedded");
+  ok(inCdnRanges("104.16.0.5", R) && inCdnRanges("172.71.1.1", R) && inCdnRanges("162.159.200.1", R), "IPv4 CDN addresses are inside the ranges");
+  ok(inCdnRanges("2606:4700::6810:1", R) && inCdnRanges("2a06:98c0:3600::103", R), "IPv6 CDN addresses are inside the ranges");
+  ok(!inCdnRanges("203.0.113.7", R) && !inCdnRanges("2001:db8::1", R) && !inCdnRanges("10.0.0.1", R) && !inCdnRanges("127.0.0.1", R), "other addresses are outside");
+  ok(inCdnRanges("::ffff:104.16.0.5", R) && normalizeIp("::ffff:1.2.3.4") === "1.2.3.4", "an IPv4-mapped IPv6 peer is normalized");
+  ok(!inCdnRanges("not-an-ip", R) && !inCdnRanges("", R) && !inCdnRanges(undefined, R), "a non-address is never inside");
+
+  const direct = resolveClientIp("203.0.113.7", "198.51.100.9", R, true);
+  ok(direct.ip === "203.0.113.7" && direct.viaCdn === false, `a forged CF-Connecting-IP from a non-CDN peer is ignored (${JSON.stringify(direct)})`);
+  const via = resolveClientIp("104.16.0.5", "198.51.100.9", R, true);
+  ok(via.ip === "198.51.100.9" && via.viaCdn === true, `a CDN peer's CF-Connecting-IP is the client (${JSON.stringify(via)})`);
+  const via6 = resolveClientIp("2606:4700::1", "2001:db8::42", R, true);
+  ok(via6.ip === "2001:db8::42" && via6.viaCdn === true, "IPv6 peer and IPv6 client work");
+  for (const bad of ["not-an-ip", "198.51.100.9, 1.2.3.4", "", "999.1.1.1", "x".repeat(80), undefined]) {
+    const r = resolveClientIp("104.16.0.5", bad, R, true);
+    ok(r.ip === "104.16.0.5" && r.viaCdn === true, `a malformed CF-Connecting-IP (${JSON.stringify(String(bad).slice(0, 20))}) falls back to the peer`);
+  }
+  ok(resolveClientIp("104.16.0.5", ["198.51.100.1", "198.51.100.2"], R, true).ip === "198.51.100.1", "a repeated header uses its first value only when valid");
+  const X = buildCdnRanges("10.250.0.0/16, fd00:cd::/32 bogus/99");
+  ok(inCdnRanges("10.250.3.4", X) && inCdnRanges("fd00:cd::1", X) && !inCdnRanges("10.251.0.1", X), "CF_IP_RANGES_EXTRA adds IPv4 and IPv6 ranges and skips a bad entry");
+
+  const noAuth = resolveClientIp("104.16.0.5", "198.51.100.9", R);
+  ok(noAuth.ip === "104.16.0.5" && noAuth.viaCdn === false, `a CDN peer without the origin secret keeps its own address (${JSON.stringify(noAuth)})`);
+
+  // The switch and the secret.
+  ok(!cdnProxyEnabled({}) && !cdnProxyEnabled({ CDN_PROXY: "off" }) && !cdnProxyEnabled({ CDN_PROXY: "1" }) && cdnProxyEnabled({ CDN_PROXY: "cloudflare" }) && cdnProxyEnabled({ CDN_PROXY: " On " }), "CDN_PROXY is off unless it is cloudflare or on");
+  ok(cdnOriginSecret({}) === "" && cdnOriginSecret({ CDN_ORIGIN_SECRET: "short" }) === "" && cdnOriginSecret({ CDN_ORIGIN_SECRET: SECRET }) === SECRET, "a short or unset CDN_ORIGIN_SECRET counts as unset");
+  ok(originAuthOk(SECRET, SECRET) && !originAuthOk(SECRET + "x", SECRET) && !originAuthOk("", SECRET) && !originAuthOk(undefined, SECRET) && !originAuthOk([SECRET, SECRET], SECRET) && !originAuthOk(SECRET, ""), "the origin secret must match exactly, once, and be configured");
+
+  // The middleware.
+  const run = (edgeIp, headers, opts) => {
+    const proto = { get ip() { return edgeIp; } };
+    const req = Object.create(proto);
+    req.headers = { ...headers };
+    let called = false;
+    cdnClientIpMiddleware({ ranges: R, log: () => {}, ...opts })(req, {}, () => { called = true; });
+    return { req, called };
+  };
+  const off = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: SECRET }, { enabled: false, secret: SECRET });
+  ok(off.called && off.req.ip === "104.16.0.5" && !Object.hasOwn(off.req, "ip") && off.req.viaCdn === undefined && off.req.headers[ORIGIN_AUTH_HEADER] === SECRET, "middleware off: a CDN peer's request is untouched (req.ip, viaCdn and headers as they came)");
+  const ON = { enabled: true, secret: SECRET };
+  const a = run("203.0.113.7", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: SECRET }, ON);
+  ok(a.called && a.req.ip === "203.0.113.7" && a.req.viaCdn === false && !Object.hasOwn(a.req, "ip"), "middleware on: a direct request keeps req.ip untouched, even carrying the secret");
+  const b = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: SECRET }, ON);
+  ok(b.called && b.req.ip === "198.51.100.9" && b.req.viaCdn === true && b.req.cdnPeerIp === "104.16.0.5", "middleware on: a CDN request with the secret has the client as req.ip");
+  ok(!(ORIGIN_AUTH_HEADER in b.req.headers), "middleware on: the origin secret is removed from the headers");
+  const c = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9" }, ON);
+  ok(c.req.ip === "104.16.0.5" && c.req.viaCdn === false && !Object.hasOwn(c.req, "ip"), "middleware on: a CDN peer without the secret keeps its own address");
+  const d = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "wrong-secret-value-0000" }, ON);
+  ok(d.req.ip === "104.16.0.5" && d.req.viaCdn === false && !(ORIGIN_AUTH_HEADER in d.req.headers), "middleware on: a wrong secret is ignored and removed");
+  const e = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "" }, { enabled: true, secret: "" });
+  ok(e.req.ip === "104.16.0.5" && e.req.viaCdn === false, "middleware on with no secret configured: the header is never trusted");
+}
+
+// ---- end to end ----
+
+const boot = async (extraEnv) => {
+  const PORT = await getFreePort();
+  const B = `http://127.0.0.1:${PORT}`;
+  proc = spawn(process.execPath, ["src/server.js"], {
+    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", POW_CHALLENGE_PER_MIN: "", ...extraEnv },
+    stdio: "ignore",
+  });
+  let up = false;
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
+  ok(up, `server booted (${JSON.stringify(extraEnv)})`);
+  const buy = (headers) => fetch(`${B}/api/buy`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: "{" })
+    .then((r) => r.status).catch(() => 0);
+  const burst = async (n, headersOf) => { const out = []; for (let i = 0; i < n; i++) out.push(await buy(headersOf(i))); return out; };
+  const challenges = async (n, headersOf) => { const out = []; for (let i = 0; i < n; i++) out.push(await fetch(`${B}/api/pow/challenge?slug=hash`, { headers: headersOf(i) }).then((r) => r.status).catch(() => 0)); return out; };
+  return { buy, burst, challenges };
+};
+const limited7 = (s) => s.slice(0, 6).every((x) => x !== 429) && s[6] === 429;
+const auth = { [ORIGIN_AUTH_HEADER]: SECRET };
+
+try {
+  // ---- CDN_PROXY off (the default): main's behavior ----
+  {
+    const { burst, challenges } = await boot({});
+    const s0 = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.5", "cf-connecting-ip": `198.51.100.${i + 1}`, ...auth }));
+    ok(limited7(s0), `off: a CDN-range peer with a rotating CF-Connecting-IP keeps its own checkout bucket (${s0.join(",")})`);
+    const p0 = await challenges(140, (i) => ({ "x-forwarded-for": "104.16.0.7", "cf-connecting-ip": `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}`, ...auth }));
+    const p429 = p0.filter((x) => x === 429).length;
+    ok(p0.slice(0, 120).every((x) => x !== 429) && p429 === 20, `off: 140 challenge calls from one CDN-range peer with rotating CF-Connecting-IP are limited on the peer (${p429} of 140 got 429)`);
+    proc.kill("SIGKILL"); proc = null;
+  }
+
+  // ---- CDN_PROXY on, with the origin secret ----
+  const { buy, burst, challenges } = await boot({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET });
+
+  // 1. Direct (peer 203.0.113.7), a different forged CF-Connecting-IP on every
+  //    call (and the secret): one bucket, the 7th is limited.
+  const s1 = await burst(7, (i) => ({ "x-forwarded-for": "203.0.113.7", "cf-connecting-ip": `198.51.100.${i + 1}`, ...auth }));
+  ok(limited7(s1), `a forged CF-Connecting-IP from a direct peer never mints a fresh bucket (${s1.join(",")})`);
+
+  // 2. Through a CDN peer with the secret, distinct clients: each its own bucket.
+  const s2 = await burst(8, (i) => ({ "x-forwarded-for": "104.16.0.5", "cf-connecting-ip": `198.51.100.${100 + i}`, ...auth }));
+  ok(s2.every((s) => s !== 429), `distinct clients behind one CDN address are keyed apart (${s2.join(",")})`);
+  // ... and one client behind it is limited on its own address.
+  const s2b = await burst(7, () => ({ "x-forwarded-for": "104.16.0.5", "cf-connecting-ip": "198.51.100.200", ...auth }));
+  ok(limited7(s2b), `one client behind the CDN is limited on its own address (${s2b.join(",")})`);
+  // The resolved address is the client's, not the CDN peer's: the same client
+  // reached directly shares that bucket.
+  const s2c = await buy({ "x-forwarded-for": "198.51.100.200" });
+  ok(s2c === 429, `the resolved client address is the bucket (direct call from it: ${s2c})`);
+
+  // 2b. A CDN-range peer without the secret, or with a wrong one, is not
+  //     trusted: it keeps its own bucket.
+  const s2d = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.8", "cf-connecting-ip": `198.51.100.${150 + i}` }));
+  ok(limited7(s2d), `on, no secret: a CDN-range peer's CF-Connecting-IP is ignored (${s2d.join(",")})`);
+  const s2e = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.9", "cf-connecting-ip": `198.51.100.${160 + i}`, [ORIGIN_AUTH_HEADER]: SECRET.slice(0, -1) + "x" }));
+  ok(limited7(s2e), `on, wrong secret: a CDN-range peer's CF-Connecting-IP is ignored (${s2e.join(",")})`);
+  const p1 = await challenges(140, (i) => ({ "x-forwarded-for": "104.16.0.10", "cf-connecting-ip": `198.52.${Math.floor(i / 250)}.${(i % 250) + 1}` }));
+  ok(p1.filter((x) => x === 429).length === 20, `on, no secret: 140 challenge calls with rotating CF-Connecting-IP are limited on the peer (${p1.filter((x) => x === 429).length} got 429)`);
+  const p2 = await challenges(140, (i) => ({ "x-forwarded-for": "104.16.0.11", "cf-connecting-ip": `198.53.${Math.floor(i / 250)}.${(i % 250) + 1}`, ...auth }));
+  ok(p2.every((x) => x !== 429), `on, with the secret: each client behind the CDN has its own challenge budget (${p2.filter((x) => x === 429).length} got 429)`);
+
+  // 3. A malformed header from a CDN peer falls back to the peer.
+  const s3 = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.6", "cf-connecting-ip": i % 2 ? "not-an-ip" : "300.1.1.1", ...auth }));
+  ok(limited7(s3), `a malformed CF-Connecting-IP keys on the CDN peer (${s3.join(",")})`);
+
+  // 4. IPv6 CDN peer, IPv6 clients.
+  const s4 = await burst(8, (i) => ({ "x-forwarded-for": "2606:4700::10", "cf-connecting-ip": `2001:db8:${(i + 1).toString(16)}::1`, ...auth }));
+  ok(s4.every((s) => s !== 429), `IPv6 clients (distinct /64s) behind an IPv6 CDN peer are keyed apart (${s4.join(",")})`);
+  const s4b = await burst(7, () => ({ "x-forwarded-for": "2606:4700::10", "cf-connecting-ip": "2001:db8::ff", ...auth }));
+  ok(s4b[6] === 429, `one IPv6 client behind the CDN is limited on its own address (${s4b.join(",")})`);
+
+  // 5. A forged CF-Connecting-IP naming an exhausted client, from a direct
+  //    peer, is not that client.
+  const s5 = await buy({ "x-forwarded-for": "203.0.113.99", "cf-connecting-ip": "198.51.100.200", ...auth });
+  ok(s5 !== 429, `a forged CF-Connecting-IP cannot borrow another client's address (got ${s5})`);
+
+  console.log(`\n${pass} passed`);
+} finally {
+  proc?.kill("SIGKILL");
+}
+process.exit(0);

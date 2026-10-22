@@ -22,6 +22,7 @@ import { listPublicReports } from "./human-checkout.js";
 import { pageLastmod, dayOf } from "./page-dates.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 // The registration id the registration file publishes (same setting), or null.
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
@@ -478,11 +479,11 @@ export function llmsTxt(baseUrl, catalog) {
       // listed at roughly a tenth of the bytes; the pointer below still leads
       // to the full schemas.
       if (inCat.length > 40) {
-        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call`).join("\n");
+        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}`).join("\n");
         return `## Tools - ${label}\n\n${compact}\n\n- [Full input schemas for all ${inCat.length} ${label} endpoints](${baseUrl}/api/pricing)`;
       }
       const items = inCat.map(
-        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call. ${t.description}`
+        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}. ${t.description}`
       );
       return `## Tools - ${label}\n\n${items.join("\n")}`;
     })
@@ -516,7 +517,7 @@ Base URL: ${baseUrl}
 
 **Why pay here (seven first-party differences, each proven on a live surface - full section: /#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
-**This is machine-to-machine commerce, and you can verify it.** Run the full loop with no human and no funds - \`node scripts/demo-payment.js\` discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. Every stablecoin call settles on-chain on the rail the buyer chose, to the payTo its 402 named (on Base that is agent402.base.eth, verifiable on Basescan); live economy stats are at ${baseUrl}/api/stats and a machine-readable reliability report (each claim with a verification URL) at ${baseUrl}/api/reliability.
+**This is machine-to-machine commerce, and you can verify it.** Run the full loop with no human and no funds - \`node scripts/demo-payment.js\` discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. Every stablecoin call settles on-chain on the rail the buyer chose, to the payTo its 402 named (on Base that is agent402.base.eth, verifiable on Basescan, except for any route that /.well-known/x402 lists under payToByRoute); live economy stats are at ${baseUrl}/api/stats and a machine-readable reliability report (each claim with a verification URL) at ${baseUrl}/api/reliability.
 
 **Why agents use this instead of building it themselves.** You cannot sign up for anything: the useful web hides behind signups, captchas, API keys, and credit cards, none of which an autonomous agent can obtain - every capability here needs only the credential an agent already holds (its wallet, or its CPU). Capabilities your sandbox lacks (a headless browser, network egress, durable disk) are here because agents cannot self-host them mid-task. State survives the session and even crosses owners via wallet-keyed \`/api/memory\`. One x402-wrapped fetch (or the MCP server) covers the whole catalog - published schemas, per-call prices quoted before payment, the tools CI can run without third-party keys tested before every deploy, billed verifiably on-chain.
 
@@ -541,7 +542,7 @@ Determine it from the response you already hold, without asking us:
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
 
-Every x402 authorization is single-use, so any retry needs a fresh signature. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
+Every x402 authorization is single-use, so any retry needs a fresh signature. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, and agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself.
 

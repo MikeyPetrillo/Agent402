@@ -51,6 +51,25 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   }
 }
 
+// --- FRED's scheduled-maintenance page (HTML, HTTP 200) is an upstream
+// outage: a 503 with a retry hint, never a generic 502 (stubbed fetch) ---
+{
+  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  process.env.FRED_API_KEY = "fred-test-not-a-key";
+  const page = '<!doctype html>\n<html lang="en">\n<head>\n    <title>Site Maintenance | St. Louis Fed</title>';
+  try {
+    globalThis.fetch = async () => new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+    for (const slug of ["fred-series", "treasury-yield-curve"]) {
+      let e = null;
+      try { await h(slug)(slug === "fred-series" ? { seriesId: "UNRATE" } : {}); } catch (x) { e = x; }
+      ok(e?.statusCode === 503 && /scheduled maintenance/.test(e.message) && e.retryAfter === 900 && e.attribution === "upstream", `${slug}: FRED maintenance page -> 503 with retryAfter (got ${e?.statusCode} ${e?.message})`);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
+  }
+}
+
 // --- stale fallback (offline, deterministic) — locks the fix for the
 // 2026-07-16 FRED /releases/dates outage: a transient upstream failure serves
 // the last-good snapshot (marked stale), a deterministic 4xx never does, and

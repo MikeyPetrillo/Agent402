@@ -49,6 +49,13 @@ ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"]
 ok(["ok", "new", "burst", "unknown"].includes(pubBody?.outboundDestinations?.status) && Object.keys(pubBody.outboundDestinations).join(",") === "status", `outboundDestinations publishes its word only (${JSON.stringify(pubBody?.outboundDestinations)})`);
 ok(typeof opBody?.outboundDestinations?.windowHours === "number" && typeof opBody?.outboundDestinations?.burstOver === "number" && !JSON.stringify(opBody.outboundDestinations).match(/0x[0-9a-f]{40}/i), `the operator view of outboundDestinations carries the window and the threshold and no address (${JSON.stringify(opBody?.outboundDestinations)})`);
 
+// --- tool and upstream failure words: one word each publicly, rows for the operator ---
+for (const k of ["toolFailures", "upstreamHealth"]) {
+  ok(["ok", "degraded", "failing"].includes(pubBody?.[k]?.status) && Object.keys(pubBody[k]).join(",") === "status", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
+}
+ok(["ok", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status", `facilitatorFunds publishes its word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
+ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
+
 // --- the Tempo direct-mode screen word appears only while direct mode is mounted ---
 ok(!("sanctionsScreen" in pubBody) && !("sanctionsScreen" in opBody), "no sanctionsScreen field without Tempo direct mode (scripts/test-sanctions-screen.js covers the direct-mode words)");
 
@@ -80,6 +87,7 @@ ok(typeof pubBody?.upstreamBudgets?.status === "string", "upstreamBudgets keeps 
 // The per-upstream rows name the upstreams and carry their daily ceilings;
 // together they are a map of where to push, so they stay on the operator view.
 ok(Object.keys(pubBody?.upstreamHardCaps || {}).join(",") === "status", `upstreamHardCaps publishes its word only (${JSON.stringify(pubBody?.upstreamHardCaps)})`);
+ok(Object.keys(pubBody?.externalSpendGlobal || {}).join(",") === "status" && ["ok", "near", "refusing", "off", "unknown"].includes(pubBody.externalSpendGlobal.status), `externalSpendGlobal publishes one word only (${JSON.stringify(pubBody?.externalSpendGlobal)})`);
 ok(Object.keys(opBody?.upstreamHardCaps?.upstreams || {}).length > 0, "the OPERATOR view keeps the hard-ceiling rows");
 ok(Object.keys(pubBody?.upstreamBudgets || {}).join(",") === "status", `upstreamBudgets publishes its word only (${JSON.stringify(pubBody?.upstreamBudgets)})`);
 ok(Object.keys(opBody?.upstreamBudgets?.upstreams || {}).length > 0 && Object.values(opBody.upstreamBudgets.upstreams).every((v) => typeof v.callsToday === "number"),

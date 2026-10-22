@@ -9,6 +9,7 @@
 //      integers in micro-dollars;
 //   4. the schema is dropped and the pool closed at the end.
 import { mkdtempSync, rmSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -133,7 +134,7 @@ try {
       await sdb.closeStateDb();
     `;
     const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: process.env, encoding: "utf8", timeout: 60_000 });
-    let out = null; try { out = JSON.parse(r.stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+    let out = null; try { out = childJson(r.stdout); } catch { /* reported below */ }
     ok(r.status === 0 && out, `a second boot runs (status ${r.status}) ${r.status === 0 ? "" : r.stderr.slice(0, 300)}`);
     ok(out?.mark === true, "the second boot finds the import mark");
     ok(out?.total === 15 && !out?.tools.includes("sneaky"), `the second boot reads the rows, not the file again (total ${out?.total}, tools ${out?.tools?.join(",")})`);

@@ -37,19 +37,21 @@ import {
   mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
 } from "./mcp-tasks.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
+import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
-import { routableSellerSummaries } from "./x402-index.js";
+import { routableSellerSummaries, screenSellerNameOn } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
 import { recordWish } from "./wish.js";
 import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
+import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -158,6 +160,8 @@ export function connectorCutoffText({ label, seconds, paid, route = null, error 
 // synchronous answer always fits, and well over the time a paywall needs to
 // decide a 402 (which is settled before the handler runs).
 const TASK_GATE_MS = Number(process.env.AGENT402_MCP_TASK_GATE_MS) || 8_000;
+/** tasks/get _meta key for a task's progress view (src/job-progress.js). */
+export const TASK_PROGRESS_META = "org.agent402/progress";
 let mcpInFlight = 0;
 
 /**
@@ -628,7 +632,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const startedAt = Date.now();
       const idempotencyKey = meta?.["org.agent402/idempotency-key"];
 
-      const taskEligible = Boolean(tasks) && EXPENSIVE_COMPOSITE_SLUGS.has(entry.def.slug) && clientDeclaresTasks(reqParams);
+      // The composites, plus every route that runs as a job over HTTP
+      // (src/slow-routes.js: the slow ones and the async-capable ones).
+      const taskEligible = Boolean(tasks) && (EXPENSIVE_COMPOSITE_SLUGS.has(entry.def.slug) || Boolean(entry.def.asyncProfile)) && clientDeclaresTasks(reqParams);
       if (taskEligible) {
         const handle = await runAsTask(entry, meta, params, credentialHeader, ip, isNamed, startedAt, idempotencyKey);
         if (handle) return handle;
@@ -753,10 +759,25 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // what returning the handle causes) - and that controller is what
       // tasks/cancel aborts.
       const controller = new AbortController();
+      // The handler's stages reach the task record through a progress sink
+      // keyed on the loopback (src/job-progress.js). The task does not exist
+      // until the gate window passes, so the newest stage waits until then.
+      let progressTaskId = null, progressHeld = null;
+      const slug = entry.def.slug;
+      const withMessage = (patch) => ({
+        ...patch,
+        ...(patch.stage ? { statusMessage: `Running ${slug}: ${patch.stage}${patch.total ? ` (${patch.done} of ${patch.total} steps done)` : ""}.` } : {}),
+      });
+      const progressWriter = throttledProgressWriter((patch) => {
+        if (!progressTaskId) { progressHeld = patch; return undefined; }
+        return tasks.update?.(progressTaskId, withMessage(patch));
+      });
+      const progressSink = registerProgressSink(progressWriter);
+      const endProgress = () => { progressWriter.cancel(); progressSink.release(); };
       const run = mppLoopback({
         def: entry.def, params, credentialHeader, ip,
         signal: controller.signal, idempotencyKey, heartbeatToken,
-        timeoutMs: tasks.RUN_TIMEOUT_MS,
+        timeoutMs: tasks.RUN_TIMEOUT_MS, progressKey: progressSink.key,
       });
       // Never leave an unhandled rejection while the gate window races.
       const settled = run.then((r) => ({ r }), (e) => ({ e }));
@@ -769,6 +790,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (gate) {
         // Finished inside the window. Hand the outcome back to the blocking path
         // rather than making the client poll for something already done.
+        endProgress();
         if (gate.e) throw gate.e;
         return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false });
       }
@@ -776,6 +798,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // With the state database on, create() resolves once the row is stored
       // (file mode returns the record at once; await is a no-op there).
       const rec = await tasks.create({ slug: entry.def.slug, controller });
+      if (rec) {
+        progressTaskId = rec.taskId;
+        if (progressHeld) { const held = progressHeld; progressHeld = null; try { await tasks.update?.(rec.taskId, withMessage(held)); } catch { /* advisory */ } }
+      } else endProgress();
       if (!rec) {
         // Durability failed, so we cannot promise a handle. Stop waiting on the
         // run and say so. The run has already cleared the paywall and keeps
@@ -788,6 +814,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
 
       settled.then(async ({ r, e }) => {
+        endProgress();
         if (e) {
           const aborted = e?.name === "AbortError" || e?.name === "TimeoutError";
           let current = null;
@@ -917,7 +944,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             plan = buildPlanSketch(taskStr, {
               rank: (task) => findTools(catalog, task, { k: 3, baseUrl, powSlugs: freeSlugs }),
               weakScore: FIND_WEAK_SCORE,
-              upgrade: d ? { tool: "decide", route: "POST /api/decide", mcp: "decide.plan", price: d.price, note: "a judged plan with your inputs filled in and fallbacks checked; the fee is credited toward running it with decide.execute" } : null,
+              upgrade: d ? decideUpgradeOffer({ next: "decide.execute" }) : null,
               executable: Boolean(catalog["POST /api/decide/execute"]),
             });
           } catch { plan = null; }
@@ -1036,9 +1063,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           board = board.slice().sort((a, b) => sort === "usd"
             ? ((b.d7?.volumeUsdc || 0) - (a.d7?.volumeUsdc || 0)) || (b.transfers - a.transfers)
             : ((b.d7?.transfers || 0) - (a.d7?.transfers || 0)) || (b.transfers - a.transfers)).slice(0, limit);
-          const rows = board.map((r, i) => ({
+          // Seller-written names are cleaned and capped at serve time, and a
+          // name that trips the listing screen is replaced and marked.
+          const rows = board.map((r, i) => {
+            const named = r.self ? null : (r.sellers || []).map((s) => screenSellerNameOn(s, s?.name, String(s?.url || "").replace(/^https?:\/\//, "") || null));
+            return {
             rank: i + 1,
-            name: r.self ? "this host" : (r.sellers || []).map((s) => s.name).join(", ") || "unnamed recipient",
+            name: r.self ? "this host" : named.map((n) => n.name).filter(Boolean).join(", ") || "unnamed recipient",
+            ...(named ? (named.find((n) => n.marker.untrustedContent)?.marker || {}) : {}),
             network: "eip155:4217",
             wallet: r.recipient,
             homepage: r.sellers?.[0]?.url || null,
@@ -1049,7 +1081,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             volumeUsdc7d: Math.round((r.d7?.volumeUsdc || 0) * 10000) / 10000,
             routable: !!r.routable,
             ...(r.self ? {} : { untrustedContent: true }),
-          }));
+            };
+          });
           return mcpJsonResult({
             wire: "mpp",
             measure: "inbound USDC.e transfers on Tempo (chain 4217) to the recipient each seller's live MPP challenge names - a window read plus rolling 7d/30d, a proxy for settlements, not lifetime",
@@ -1086,9 +1119,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // (matching WALLET_ADDRESS) is trusted and unmarked.
           const rows = board.map((r) => {
             const isSelf = self && (r.wallet || "").toLowerCase() === self;
+            // Seller-written name: cleaned and capped at serve time, replaced
+            // and marked when it trips the listing screen.
+            const named = isSelf ? { name: r.name, marker: {} } : screenSellerNameOn(r, r.name, String(r.homepage || "").replace(/^https?:\/\//, "") || null);
             return {
               rank: r.rank,
-              name: r.name,
+              name: named.name,
+              ...named.marker,
               network: r.network,
               wallet: r.wallet,
               homepage: r.homepage || null,
@@ -1144,7 +1181,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
-            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session" },
+            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call (on by default; off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (opt-in; unset means no session cap)", enforced: "on the payment that is signed" },
             balanceAndHistory: {
               balance: "check a wallet's USDC balance via catalog.call with slug wallet-balances (multi-chain) or wallet-balance (single)",
               transactions: "pull a wallet's transaction history via catalog.call with slug wallet-transactions",
@@ -1323,6 +1360,22 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
    * short TTL - the same model as /r/:sessionId. The 2026-07-28 extension has
    * no tasks/list, so there is no enumeration surface to withhold.
    */
+  // tasks/get carries the job's progress (src/job-progress.js) in
+  // _meta["org.agent402/progress"]: status queued|running|succeeded|failed,
+  // stage, progress 0-1, etaSeconds; a live task's poll interval follows it.
+  let profileBySlug = null;
+  function withTaskProgress(out, rec) {
+    try {
+      profileBySlug ??= new Map(Object.values(catalog).filter((d) => d?.asyncProfile).map((d) => [d.slug, d.asyncProfile]));
+      const profile = profileBySlug.get(rec.slug) || null;
+      const pollSeconds = Math.max(1, Math.round((rec.pollIntervalMs || 5000) / 1000));
+      const { retryAfterSeconds, ...view } = progressView(rec, { pollSeconds, basisSeconds: profile?.basisSeconds ?? null, expectedSeconds: profile?.expectedSeconds ?? null, maxSeconds: profile?.maxSeconds ?? null });
+      if (rec.status === "working" && retryAfterSeconds) out.pollIntervalMs = retryAfterSeconds * 1000;
+      out._meta = { ...(out._meta || {}), [TASK_PROGRESS_META]: view };
+    } catch { /* progress is advisory */ }
+    return out;
+  }
+
   async function handleTaskRpc(body) {
     const id = body?.id ?? null;
     const err = (code, message, data) => ({ jsonrpc: "2.0", id, error: { code, message, ...(data ? { data } : {}) } });
@@ -1343,7 +1396,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (rec === "expired") return err(TASK_INVALID_PARAMS, "Failed to retrieve task: Task has expired");
     if (!rec) return err(TASK_INVALID_PARAMS, "Failed to retrieve task: Task not found");
 
-    if (body.method === "tasks/get") return okResult(detailedTask(rec));
+    if (body.method === "tasks/get") return okResult(withTaskProgress(detailedTask(rec), rec));
     if (body.method === "tasks/cancel") {
       // Cooperative and eventually consistent: we abort the live run, which
       // makes the paid request a non-200 and CANCELS settlement.

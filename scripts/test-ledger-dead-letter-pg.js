@@ -10,6 +10,7 @@
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-ledger-dead-letter-pg.js
 import { createServer, connect } from "node:net";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -120,7 +121,7 @@ try {
   `;
   // Async: the relay runs on this process's event loop.
   const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
-  const out = JSON.parse(stdout.trim().split("\n").pop());
+  const out = childJson(stdout);
   ok(out.refunds === 0 && out.sales === 0, "a fresh boot replays the dead-letter at its first load");
   ok(await count(`SELECT count(*) AS n FROM ${S}.refunds WHERE evidence = '0xdl-debt2'`) === 1 && await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = '0xdl-sale2'`) === 1, "a row already in the table is not inserted again (insert-if-absent by evidence and by tx)");
 
@@ -195,7 +196,7 @@ try {
       await sdb.closeStateDb();
     `;
     const { stdout: bo } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", childBoot], { env: kenv, cwd: ROOT, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
-    const b = JSON.parse(bo.trim().split("\n").pop());
+    const b = childJson(bo);
     ok(b.refunds === 0 && b.sales === 0, `the next boot from the same disk replays them (${JSON.stringify(b)})`);
     ok(await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx LIKE '0xkill-sale%'`) === 3 && await count(`SELECT count(*) AS n FROM ${S}.refunds WHERE evidence LIKE '0xkill-debt%'`) === 2, "a process killed with writes queued loses none of them: three sales and two debts, once each");
   }

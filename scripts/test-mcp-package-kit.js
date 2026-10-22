@@ -71,6 +71,7 @@ const OLD = {
 };
 const LIMITED = { ...GOOD, name: "limited-pkg", versions: { "1.2.0": { ...GOOD.versions["1.2.0"], name: "limited-pkg", repository: "https://github.com/acme/limited" } }, "dist-tags": { latest: "1.2.0" } };
 const RENAMED = { ...GOOD, name: "renamed-pkg", versions: { "1.2.0": { ...GOOD.versions["1.2.0"], name: "renamed-pkg", repository: "https://github.com/acme/old-name" } }, "dist-tags": { latest: "1.2.0" } };
+const HIDDEN = { ...GOOD, name: "hidden-pkg", versions: { "1.2.0": { ...GOOD.versions["1.2.0"], name: "hidden-pkg", repository: "https://github.com/acme/hidden" } }, "dist-tags": { latest: "1.2.0" } };
 const GONE = { ...GOOD, name: "gone-pkg", versions: { "1.2.0": { ...GOOD.versions["1.2.0"], name: "gone-pkg", repository: "https://github.com/acme/gone" } }, "dist-tags": { latest: "1.2.0" } };
 const BIG_VERSION_DOC = { name: "big-pkg", version: "7.0.0", scripts: { postinstall: "x" }, maintainers: [{ name: "dave" }], dist: { integrity: "sha512-big" }, repository: "https://github.com/acme/big" };
 const BIG_BODY = JSON.stringify({ name: "big-pkg", "dist-tags": { latest: "7.0.0" }, versions: { "7.0.0": BIG_VERSION_DOC }, readme: "x".repeat(__test.PACKUMENT_MAX_BYTES + 1024) });
@@ -78,7 +79,7 @@ const BIG_BODY = JSON.stringify({ name: "big-pkg", "dist-tags": { latest: "7.0.0
 const GH = (full, extra = {}) => ({ full_name: full, html_url: `https://github.com/${full}`, archived: false, fork: false, disabled: false, created_at: "2024-01-01T00:00:00Z", pushed_at: "2026-10-01T00:00:00Z", stargazers_count: 12, default_branch: "main", license: { spdx_id: "MIT" }, ...extra });
 
 const REGISTRY = new Map([
-  ["/good-pkg", GOOD], ["/@acme%2Fscripted", SCRIPTED], ["/old-pkg", OLD], ["/limited-pkg", LIMITED], ["/renamed-pkg", RENAMED], ["/gone-pkg", GONE],
+  ["/good-pkg", GOOD], ["/@acme%2Fscripted", SCRIPTED], ["/old-pkg", OLD], ["/limited-pkg", LIMITED], ["/renamed-pkg", RENAMED], ["/gone-pkg", GONE], ["/hidden-pkg", HIDDEN],
   ["/big-pkg/latest", BIG_VERSION_DOC], ["/big-pkg/7.0.0", BIG_VERSION_DOC],
 ]);
 const GITHUB = new Map([
@@ -86,6 +87,8 @@ const GITHUB = new Map([
   ["/repos/acme/limited", { status: 403, headers: { "x-ratelimit-remaining": "0" }, body: { message: "API rate limit exceeded" } }],
   ["/repos/acme/old-name", { status: 200, body: GH("acme/new-name", { archived: true, fork: true }) }],
   ["/repos/acme/gone", { status: 404, body: { message: "Not Found" } }],
+  // What a token with access to a private repository would see.
+  ["/repos/acme/hidden", { status: 200, body: GH("acme/hidden", { private: true, description: "internal notes", stargazers_count: 3 }) }],
   ["/repos/acme/big", { status: 200, body: GH("acme/big") }],
 ]);
 
@@ -202,6 +205,9 @@ try {
   ok(renamed.repository.archived === true && renamed.repository.fork === true && renamed.signals.includes("GitHub repository is archived") && renamed.signals.includes("GitHub repository is a fork"), "archived and fork flags");
   const gone = await h({ package: "gone-pkg" });
   ok(gone.partial === true && /not found on GitHub \(HTTP 404\)/.test(gone.skippedReads[0].reason), "a repository GitHub does not have is a skipped read");
+  const hidden = await h({ package: "hidden-pkg" });
+  ok(hidden.repository.read === false && hidden.skippedReads[0]?.reason === gone.skippedReads[0].reason && !JSON.stringify(hidden).includes("internal notes"),
+    `a private repository answers exactly like a missing one (${hidden.skippedReads[0]?.reason})`);
 
   // ---- oversize package document -> version document -----------------------
   reset();

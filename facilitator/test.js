@@ -272,6 +272,12 @@ const sorobanRpc = getRpcClient(NETWORK);
   ok(!isTransportFailure({ code: -32602, message: "invalid params" }) && !isTransportFailure(new Error("simulation failed: HostError")) && !isTransportFailure({ response: { status: 400 } }) && !isTransportFailure(null), "isTransportFailure: a JSON-RPC error, a simulation failure, a 4xx are ANSWERS, never failed over");
   // config
   ok(resolveFallbackUrls("stellar:pubnet", undefined).join(",") === DEFAULT_FALLBACKS["stellar:pubnet"].join(",") && resolveFallbackUrls("stellar:testnet", "").length === 1, "resolveFallbackUrls: network defaults when the env is unset");
+  {
+    const { DEFAULT_TESTNET_RPC_URL } = await import("@x402/stellar");
+    const primaryHost = new URL(DEFAULT_TESTNET_RPC_URL).host;
+    const testnetHosts = resolveFallbackUrls("stellar:testnet", undefined).map((u) => new URL(u).host);
+    ok(testnetHosts.length >= 1 && testnetHosts.every((h) => h !== primaryHost), `resolveFallbackUrls: every testnet fallback is a different host from the primary ${primaryHost} (${testnetHosts.join(", ")})`);
+  }
   ok(resolveFallbackUrls("stellar:pubnet", " https://a.example/ , https://b.example, junk, https://a.example ").join(",") === "https://a.example,https://b.example", "resolveFallbackUrls: env CSV wins, trimmed, deduped, junk dropped");
   ok(resolveFallbackUrls("stellar:pubnet", "off").length === 0 && resolveFallbackUrls("stellar:pubnet", "none").length === 0, "resolveFallbackUrls: off/none disables");
 
@@ -412,6 +418,11 @@ const sorobanRpc = getRpcClient(NETWORK);
   ok(shouldHedge("getHealth", fbInstance) === false, "hedge: a call already on a fallback url is not hedged again");
   for (const s of [slow, fb, quick, rpcErr]) { s.closeAllConnections?.(); s.close(); }
   console.log("rpc-hedge unit tests ✓");
+  // The unit tests above left the process-wide failover pointed at local
+  // stubs that are closed by now; the live section's own testnet calls get the
+  // production fallback list instead, as the facilitator child does.
+  _resetForTest();
+  installRpcFailover(resolveFallbackUrls("stellar:testnet", undefined), { log: () => {}, hedgeMs: 3_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +530,151 @@ const sorobanRpc = getRpcClient(NETWORK);
       "fee bid: a configured feeBumpSigner warns that the bid does not reach the submitted transaction");
   }
   console.log("fee-bid.js unit tests ✓");
+}
+
+// ---------------------------------------------------------------------------
+// settle-deadline.js + queue.js hold: past a settle's deadline nothing is
+// submitted, and the queue slot stays held until the abandoned work stopped.
+// Real rpc.Server calls against a local JSON-RPC server; the guard goes on a
+// subclass prototype so the process-wide prototype the live half uses is
+// left as it is.
+// ---------------------------------------------------------------------------
+{
+  const { createServer } = await import("node:http");
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const { rpc, Account } = await import("@stellar/stellar-sdk");
+  const { installSettleDeadline, PRE_SUBMIT_METHODS, newSettleContext, settleJob } = await import("./settle-deadline.js");
+  const { createSerialQueue, holdMaxFrom, HOLD_MAX_FLOOR_MS, HOLD_MAX_CEILING_MS } = await import("./queue.js");
+  const hits = { getLedgerEntries: 0, sendTransaction: 0 };
+  let ledgerDelayMs = 0;
+  const node = createServer((req, res) => {
+    let b = ""; req.on("data", (c) => { b += c; });
+    req.on("end", () => {
+      let j = {}; try { j = JSON.parse(b); } catch { /* ignore */ }
+      hits[j.method] = (hits[j.method] || 0) + 1;
+      const result = j.method === "sendTransaction"
+        ? { status: "PENDING", hash: "ab".repeat(32), latestLedger: 1, latestLedgerCloseTime: "1" }
+        : { entries: [], latestLedger: 7 };
+      setTimeout(() => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id: j.id ?? 1, result })); }, j.method === "getLedgerEntries" ? ledgerDelayMs : 0);
+    });
+  });
+  await new Promise((r) => node.listen(0, "127.0.0.1", r));
+  class GuardedServer extends rpc.Server {}
+  const als = new AsyncLocalStorage();
+  const logs = [];
+  ok(installSettleDeadline(() => als.getStore(), { proto: GuardedServer.prototype, log: (m) => logs.push(m) }) === PRE_SUBMIT_METHODS.length, "settle deadline: guards every pre-submit method");
+  ok(!Object.prototype.hasOwnProperty.call(GuardedServer.prototype, "getTransaction"), "settle deadline: the post-submit poll (getTransaction) is not guarded");
+  const server = new GuardedServer(`http://127.0.0.1:${node.address().port}`, { allowHttp: true });
+  const tx = new TransactionBuilder(new Account(Keypair.random().publicKey(), "1"), { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+    .addOperation(Operation.bumpSequence({ bumpTo: "2" })).setTimeout(30).build();
+  // The vendor settle's order: pre-submit reads, then the one submission.
+  const ledgerKey = xdr.LedgerKey.account(new xdr.LedgerKeyAccount({ accountId: Keypair.random().xdrPublicKey() }));
+  const fakeSettle = async () => { await server.getLedgerEntries(ledgerKey); return server.sendTransaction(tx); };
+  const SETTLE_MS = 150;
+  // index.js's /settle job (settleJob): deadline from arrival, the work held, the answer bounded.
+  const job = (ctx, onDone, extra = {}) => settleJob(ctx, { run: (c, fn) => als.run(c, fn), settle: () => fakeSettle().finally(onDone), ...extra });
+
+  // (a) a normal settle is unchanged: submitted once, answered with the RPC's result
+  ledgerDelayMs = 0; hits.sendTransaction = 0;
+  const enqueue = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
+  const normalCtx = newSettleContext(SETTLE_MS);
+  const normal = await enqueue(job(normalCtx, () => {}));
+  ok(normal?.status === "PENDING" && hits.sendTransaction === 1 && !normalCtx.deadlineRefused, "settle deadline: a settle inside its deadline submits exactly as before");
+
+  // (b) pre-submit steps outlast the deadline: the caller is answered at the
+  //     deadline, sendTransaction never reaches the node, and the next settle
+  //     does not start until the abandoned work has stopped
+  ledgerDelayMs = 400; hits.sendTransaction = 0;
+  const order = [];
+  const slowCtx = newSettleContext(SETTLE_MS);
+  const first = enqueue(job(slowCtx, () => order.push("first work stopped")));
+  const second = enqueue(() => { order.push("second started"); return "second"; });
+  let err = null;
+  try { await first; } catch (e) { err = e; }
+  order.push("first answered");
+  ok(err?.code === "FACILITATOR_TIMEOUT", "settle deadline: the caller is answered at the deadline");
+  ok(await second === "second", "settle deadline: the next settle runs");
+  await new Promise((r) => setTimeout(r, ledgerDelayMs + 100)); // past the slow read: any late submission would arrive here
+  ok(hits.sendTransaction === 0 && slowCtx.deadlineRefused === true && logs.some((m) => /transaction NOT submitted/.test(m)), `settle deadline: pre-submit steps past the deadline -> sendTransaction never called (${hits.sendTransaction} submitted)`);
+  ok(order.join(",") === "first answered,first work stopped,second started", `settle deadline: the queue slot is held until the abandoned work stopped (${order.join(" > ")})`);
+
+  // (d) a settle queued behind a hung one: its deadline runs from ARRIVAL, so
+  //     once the held slot is released past that deadline it never starts the
+  //     vendor settle and submits nothing (the caller has given up by then).
+  {
+    ledgerDelayMs = 0; hits.sendTransaction = 0;
+    const ledgerBefore = hits.getLedgerEntries;
+    const q = createSerialQueue({ holdMaxMs: SETTLE_MS * 3, log: () => {} });
+    const hungCtx = newSettleContext(SETTLE_MS);
+    const hung = q(settleJob(hungCtx, { run: (c, fn) => als.run(c, fn), settle: () => new Promise(() => {}) }));
+    const bCtx = newSettleContext(SETTLE_MS);
+    let bStarted = 0;
+    const b = q(job(bCtx, () => {}, { onStart: () => { bStarted = Date.now(); } }));
+    let hungErr = null, bErr = null;
+    try { await hung; } catch (e) { hungErr = e; }
+    try { await b; } catch (e) { bErr = e; }
+    await new Promise((r) => setTimeout(r, 50));
+    ok(hungErr?.code === "FACILITATOR_TIMEOUT", "settle queue: the hung settle is answered at its deadline");
+    ok(bStarted - bCtx.startedAt >= SETTLE_MS, `settle queue: the queued settle's slot came up after its arrival deadline (${bStarted - bCtx.startedAt}ms)`);
+    ok(bErr?.code === "FACILITATOR_TIMEOUT" && bCtx.lateStart === true && bCtx.deadlineRefused === true, "settle queue: a settle whose slot comes up past its arrival deadline is answered as timed out");
+    ok(hits.sendTransaction === 0 && hits.getLedgerEntries === ledgerBefore, `settle queue: past its arrival deadline the queued settle submits nothing (${hits.sendTransaction} submitted)`);
+  }
+  // (e) a queued settle gets only what is left of its arrival deadline
+  {
+    ledgerDelayMs = 400; hits.sendTransaction = 0;
+    const q = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
+    const aCtx = newSettleContext(SETTLE_MS);
+    const a = q(settleJob(aCtx, { settle: () => new Promise((r) => setTimeout(() => r("a"), 100)) }));
+    const bCtx = newSettleContext(SETTLE_MS);
+    const b = q(job(bCtx, () => {}));
+    await a;
+    let bErr = null;
+    try { await b; } catch (e) { bErr = e; }
+    const answeredAfter = Date.now() - bCtx.startedAt;
+    ok(bErr?.code === "FACILITATOR_TIMEOUT" && answeredAfter < SETTLE_MS + 70, `settle queue: a queued settle is answered by its arrival deadline, not a fresh one (${answeredAfter}ms)`);
+    await new Promise((r) => setTimeout(r, ledgerDelayMs + 100));
+    ok(hits.sendTransaction === 0, "settle queue: the bounded queued settle submits nothing past its deadline");
+  }
+  // (f) a caller that hung up while queued: the settle never starts
+  {
+    ledgerDelayMs = 0; hits.sendTransaction = 0;
+    const q = createSerialQueue({ holdMaxMs: 5_000, log: () => {} });
+    const ctx = newSettleContext(SETTLE_MS);
+    let started = false;
+    let e1 = null;
+    try { await q(settleJob(ctx, { clientClosed: () => true, settle: () => { started = true; return fakeSettle(); } })); } catch (e) { e1 = e; }
+    ok(e1?.code === "FACILITATOR_TIMEOUT" && !started && hits.sendTransaction === 0, "settle queue: a settle whose caller has gone never starts and submits nothing");
+  }
+  // FACILITATOR_SETTLE_HOLD_MAX_MS: always a positive, bounded cap
+  ok(holdMaxFrom(undefined, 85_000) === 85_000 && holdMaxFrom("", 85_000) === 85_000 && holdMaxFrom("abc", 85_000) === 85_000, "hold max: unset or garbage takes the default");
+  ok(holdMaxFrom("-5", 85_000) === 85_000 && holdMaxFrom("0", 85_000) === 85_000, "hold max: zero or negative never removes the cap");
+  ok(holdMaxFrom("10", 85_000) === HOLD_MAX_FLOOR_MS && holdMaxFrom("99999999", 85_000) === HOLD_MAX_CEILING_MS && holdMaxFrom("30000", 85_000) === 30_000, "hold max: held to its floor and ceiling");
+
+  // (c) no settle context (verify, health, payer recovery): never refused
+  ledgerDelayMs = 0;
+  ok((await server.getLedgerEntries(ledgerKey))?.latestLedger === 7, "settle deadline: a call outside a settle is untouched");
+  node.closeAllConnections?.(); node.close();
+
+  // queue.js: without hold the chain advances on the answer; a hold that
+  // never settles is released at holdMaxMs.
+  {
+    const q = createSerialQueue({ holdMaxMs: 120, log: () => {} });
+    const seen = [];
+    await q(() => { seen.push("a"); return 1; });
+    await q(() => { seen.push("b"); return 2; });
+    ok(seen.join("") === "ab", "queue: jobs without a hold run back to back, in order");
+    const capLogs = [];
+    const q2 = createSerialQueue({ holdMaxMs: 120, log: (m) => capLogs.push(m) });
+    const t0 = Date.now();
+    await q2((hold) => { hold(new Promise(() => {})); return "answered"; });
+    await q2(() => "next");
+    const waited = Date.now() - t0;
+    ok(waited >= 100 && waited < 2_000 && capLogs.some((m) => /releasing the slot/.test(m)), `queue: a hold that never settles is released at holdMaxMs (${waited}ms)`);
+    let threw = null;
+    try { await q2(() => { throw new Error("boom"); }); } catch (e) { threw = e; }
+    ok(threw?.message === "boom" && (await q2(() => "after")) === "after", "queue: a throwing job still rejects its own caller and never poisons the chain");
+  }
+  console.log("settle-deadline.js unit tests ✓");
 }
 
 // Everything above is offline and deterministic; everything below needs

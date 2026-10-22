@@ -239,6 +239,29 @@ try {
     ok(days.includes("2026-10-01") && days.includes("2026-10-02"), `mpp-reconcile: a day one container reconciled survives the other's run (${days.join(",")})`);
   }
 
+  // ---- MPP reconciliation explanations across containers ------------------------
+  {
+    const { createMppReconciler, dayStartMs } = await import("../src/mpp-reconcile.js");
+    const start = dayStartMs("2026-10-03");
+    let clock = start + 86_400_000 + 5 * 3600e3;
+    const hx = (n) => "0x" + n.toString(16).padStart(64, "0");
+    const R = "0x" + "ab".repeat(20), U = "0x20c000000000000000000000b9537d11c60e8b50";
+    const mk = (tag) => createMppReconciler({
+      file: join(DIR, tag, "mpp-reconcile-x.json"), explainedFile: join(DIR, tag, "mpp-reconcile-x-explained.json"), log: quiet, now: () => clock,
+      ledgerRows: () => [], refunds: () => [], recipients: () => [R], currencies: () => [U],
+      fetchTransfers: async () => ({ complete: true, source: "feed", rows: [{ tx: hx(3), token: U, amountAtomic: "1000", decimals: 6, ts: start + 36e6, recipient: R, sender: "0x" + "ee".repeat(20) }] }),
+    });
+    const XA = mk("xa"), XB = mk("xb");
+    await XA.ready(); await XB.ready();
+    await XB.runOnce();
+    const e = await XA.explain({ tx: hx(3), note: "dev test" });
+    ok(e.matched === true && e.status?.status === "ok", "mpp-reconcile explain: the container that did not run the day reads the row, re-runs it, reads ok");
+    clock += 61_000;
+    ok((await XB.status()).status === "ok" && (await XB.status()).window7d === "ok", "mpp-reconcile explain: the other container's status follows the stored row");
+    const rs = await XB.explain({ tx: hx(3), action: "restore" });
+    ok(rs.changed === true && rs.status?.status === "mismatch" && (await sdb.documents.get("mpp-reconcile-x-explained.json"))?.body?.entries?.length === 0, "mpp-reconcile restore from the other container lifts the shared mark");
+  }
+
   // ---- traffic rollups -----------------------------------------------------------
   {
     const { createTrafficStore } = await import("../src/traffic-classifier.js");

@@ -212,6 +212,15 @@ async function inSlot(contextOptions, body, { signal } = {}) {
 const DESKTOP_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
+// WebSocket connections are not requests context.route sees, so its public-
+// host check never runs for them: refuse every one at the context. Each route
+// is closed without connecting to the server. A Playwright without
+// routeWebSocket leaves the CDP byte budget and the exec deadline as the bound.
+async function refuseWebSockets(context) {
+  if (typeof context?.routeWebSocket !== "function") return;
+  await context.routeWebSocket(() => true, (ws) => Promise.resolve(ws.close({ code: 1008, reason: "blocked" })).catch(() => {}));
+}
+
 // Load one public URL in the pool. `contextOptions` overrides the default
 // desktop viewport/UA; `beforeGoto({ page, context, cdp })` runs after the
 // guards are installed and before navigation (listeners that must see the
@@ -222,7 +231,11 @@ async function withPage(rawUrl, fn, { signal, contextOptions = null, beforeGoto 
     viewport: { width: 1280, height: 800 },
     userAgent: DESKTOP_UA,
     ...(contextOptions || {}),
+    // A service worker's own fetches bypass context.route, so the per-request
+    // public-host check below would not see them. Never overridable.
+    serviceWorkers: "block",
   }, async (context) => {
+    await refuseWebSockets(context);
     // The browser does its own DNS resolution, so the upfront assertPublicUrl
     // is not enough (rebinding, redirects, subresources). Re-validate every
     // request the page makes at request time with the same public-IP policy.
@@ -698,6 +711,7 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
     acceptDownloads: false,
     userAgent: DESKTOP_UA,
   }, async (context) => {
+    await refuseWebSockets(context);
     let blockedRequests = 0;
     let served = false;
     await context.route("**/*", async (route) => {
@@ -811,7 +825,7 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
 export async function rasterizeSvg(svg, size = 512) {
   const { width, height } = typeof size === "number" ? { width: size, height: size } : size;
   const browser = await getBrowser();
-  const context = await browser.newContext({ viewport: { width, height } });
+  const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: "block" });
   try {
     const page = await context.newPage();
     await page.setContent(`<!doctype html><style>*{margin:0;padding:0}svg{display:block}</style>${svg}`);

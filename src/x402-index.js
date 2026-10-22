@@ -24,6 +24,7 @@
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
+import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, mergeProbeExamples, ProbeExampleMemo, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -33,6 +34,19 @@ import { createJsonDocument } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+
+// The last crawl's probe examples per origin (src/probe-example.js), memory
+// only and module-private: no export, persist, snapshot, state DB or replica
+// path reads it. When an origin's OpenAPI examples leave it (evicted, or over
+// the per-origin bound) the stored /openapi.json validator goes too, so the
+// next read is unconditional and a 304 is answered only while its examples are
+// still here: on a 304, no entry means the document published none.
+const probeExampleMemo = new ProbeExampleMemo({
+  onDrop: (origin, part) => { if (part === "openapi") rememberValidator(origin, "/openapi.json", null); },
+});
+/** Counts only (origins, bytes), never content: for tests. */
+export function __probeExampleMemoStatsForTest() { return probeExampleMemo.stats(); }
+
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
 const docs = new Map();
@@ -264,7 +278,7 @@ const INDEX_ROW_CAP = 100;
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
-import { decodeTagCharacters, hasHiddenCharacters } from "./hidden-chars.js";
+import { decodeTagCharacters, hasHiddenCharacters, stripHiddenCharacters } from "./hidden-chars.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -1049,6 +1063,7 @@ function purgeOrigin(key) {
   for (const [from, r] of [...successions]) if (match(from) || match(r.to)) { successions.delete(from); held.successions++; }
   for (const o of [...successionScanAt.keys()]) if (match(o)) successionScanAt.delete(o);
   for (const k of [...forcedCrawlAt.keys()]) if (match(k)) forcedCrawlAt.delete(k);
+  probeExampleMemo.purge(match);
   try { clearOriginProbeState(key); } catch { /* best-effort */ }
   try { deleteSellerRegistration(key); } catch { /* best-effort */ }
   return held;
@@ -1546,7 +1561,18 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
         const allowance = repriceAllowance(origin);
         if (allowance > 0) {
           noteReprice(origin);
-          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
+          // The examples the last crawl probed with (probeExampleMemo: manifest
+          // first, then OpenAPI), into a Map local to this call: the probe body
+          // only. A memo holding no manifest part (a restart) falls back to the
+          // manifest the crawl kept packed.
+          let probeExamples = probeExampleMemo.merged(origin);
+          if (!probeExampleMemo.get(origin, "manifest")) {
+            try {
+              const doc = await previousManifestDoc(fresh || existing);
+              if (doc) { const own = new Map(); normaliseManifestTools(doc, origin, { examples: own }); probeExamples = mergeProbeExamples(own, probeExamples); }
+            } catch { /* no examples */ }
+          }
+          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, probeExamples, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
           repriced = true;
         }
       }
@@ -2781,6 +2807,10 @@ export function singleResourceManifestTool(manifest, originUrl) {
 function catalogueEntryAccepts(raw, fallback) {
   if (!raw || typeof raw !== "object") return fallback;
   if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
+  // A per-entry `payment` block, the `paths` manifest's shape: its own accepts,
+  // or a `networks` list (CAIP-2) beside one asset and payTo.
+  const own = entryPaymentBlockAccepts(raw.payment);
+  if (own.length) return own;
   const network = raw.network || raw.chain;
   if (typeof network === "string" && network) {
     return [{
@@ -2795,6 +2825,58 @@ function catalogueEntryAccepts(raw, fallback) {
     }];
   }
   return fallback;
+}
+
+/** The accepts a catalogue entry's own `payment` block declares: its accepts
+ *  array, else one accept per network it names (`network`, `chain`, or a
+ *  `networks` list), each with the block's asset and, where its shape fits the
+ *  network, its payTo. Empty when the block names no chain. */
+function entryPaymentBlockAccepts(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return [];
+  if (Array.isArray(p.accepts) && p.accepts.length) return p.accepts;
+  const nets = [...new Set(
+    [p.network, p.chain, ...(Array.isArray(p.networks) ? p.networks : [])]
+      .filter((v) => typeof v === "string" && v.trim())
+      .map((v) => normalizeNetwork(v.trim())),
+  )].slice(0, 16);
+  if (!nets.length) return [];
+  const payTo = typeof p.payTo === "string" ? p.payTo.trim() : (typeof p.pay_to === "string" ? p.pay_to.trim() : "");
+  const asset = [p.asset, p.asset_address, p.assetAddress].find((v) => typeof v === "string" && v.trim()) || undefined;
+  return nets.map((network) => ({
+    scheme: typeof p.scheme === "string" && p.scheme ? p.scheme : "exact",
+    network,
+    ...(asset ? { asset } : {}),
+    ...(payToFitsNetwork(network, payTo) ? { payTo } : {}),
+    ...(p.amount != null || p.maxAmountRequired != null ? { amount: p.amount ?? p.maxAmountRequired, maxAmountRequired: p.maxAmountRequired ?? p.amount } : {}),
+    ...(p.maxTimeoutSeconds != null ? { maxTimeoutSeconds: p.maxTimeoutSeconds } : {}),
+    ...(p.extra && typeof p.extra === "object" ? { extra: p.extra } : {}),
+  }));
+}
+
+/**
+ * A top-level `paths` object read as a catalogue: path -> entry carrying
+ * `methods`, `resource` and a `payment` block. An OpenAPI document served as a
+ * manifest also has `paths`, keyed by verb; those path items (and any document
+ * that names itself `openapi`/`swagger`) are left to the OpenAPI reader, and an
+ * entry that carries none of the x402 entry fields is not read.
+ */
+// Verb keys and $ref mark an OpenAPI path item; `parameters` and `servers` are
+// shared with x402 entries that describe their own query, so they do not.
+const OPENAPI_PATH_ITEM_KEYS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace", "$ref"]);
+function manifestPathsCatalogue(manifest) {
+  const p = manifest?.paths;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  if (manifest.openapi != null || manifest.swagger != null) return null;
+  const out = [];
+  for (const [path, e] of Object.entries(p).slice(0, 1000)) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    if (Object.keys(e).some((k) => OPENAPI_PATH_ITEM_KEYS.has(k.toLowerCase()))) continue;
+    const x402Entry = (e.payment && typeof e.payment === "object") || typeof e.resource === "string"
+      || Array.isArray(e.methods) || typeof e.method === "string" || Array.isArray(e.accepts) || e.price != null;
+    if (!x402Entry) continue;
+    out.push({ ...e, path: typeof e.path === "string" && e.path ? e.path : path });
+  }
+  return out.length ? out : null;
 }
 
 /** Does this address have the shape of a wallet on this network's family?
@@ -2862,8 +2944,12 @@ function manifestPaymentAccepts(manifest) {
   }];
 }
 
-export function normaliseManifestTools(manifest, originUrl) {
-  const rows = normaliseManifestToolsUnscoped(manifest, originUrl);
+export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
+  // `examples` (a Map, crawl-local) collects each entry's published example
+  // request for the unpaid quote probe and nothing else; see
+  // src/probe-example.js. The rows returned never carry it.
+  const exampleOf = examples instanceof Map ? new WeakMap() : null;
+  const rows = normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf);
   // A path seller's manifest that declares its own origin WITH the prefix
   // writes its routes relative to that origin ("/v1/reconcile" under
   // ".../functions/v1/api"); read host-absolute they fall outside the prefix
@@ -2876,7 +2962,35 @@ export function normaliseManifestTools(manifest, originUrl) {
       if (r && r[MANIFEST_HOST_RELATIVE] && typeof r.route === "string" && r.route.startsWith("/") && r.route !== prefix && !r.route.startsWith(`${prefix}/`) && !r.route.startsWith(`${prefix}?`)) r.route = `${prefix}${r.route}`;
     }
   }
+  if (exampleOf && Array.isArray(rows)) {
+    for (const r of rows) {
+      const ex = r && exampleOf.get(r);
+      if (!ex) continue;
+      const route = r[SCOPED_ROW] ? r.route : scopeRouteToSeller(originUrl, r.route);
+      if (route != null) noteProbeExample(examples, r.methodInferred ? null : r.method, route, ex);
+    }
+  }
   return scopeRowsToSeller(rows, originUrl);
+}
+
+/** The example request bodies a seller's OpenAPI publishes for its POST
+ *  operations, into the crawl-local `examples` Map, keyed by the route the
+ *  OpenAPI reader gives the operation. For the unpaid quote probe only (see
+ *  src/probe-example.js); never put on a row. */
+export function openapiProbeExamples(openapi, originUrl, examples) {
+  if (!(examples instanceof Map) || !openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return examples;
+  const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return examples;
+  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
+    if (examples.size >= MAX_PROBE_EXAMPLES) break;
+    if (!methods || typeof methods !== "object" || !Object.hasOwn(methods, "post")) continue;
+    const ex = openapiOperationExample(methods.post, openapi);
+    if (!ex) continue;
+    const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
+    const route = scopeRouteToSeller(originUrl, pathStr);
+    if (route != null) noteProbeExample(examples, "POST", route, ex);
+  }
+  return examples;
 }
 function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
   const declared = typeof manifest?.origin === "string" ? manifest.origin : "";
@@ -2886,7 +3000,7 @@ function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
     return a.host === b.host && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
   } catch { return false; }
 }
-function normaliseManifestToolsUnscoped(manifest, originUrl) {
+function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
   // Relative entries resolve against where the manifest is served: a path
@@ -2902,6 +3016,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   const catalogues = ["tools", "resources", "endpoints", "services", "resourceCatalog"]
     .map((k) => manifest[k])
     .filter((v) => Array.isArray(v) && v.length);
+  const pathsCatalogue = manifestPathsCatalogue(manifest);
+  if (pathsCatalogue) catalogues.push(pathsCatalogue);
   if (!catalogues.length) {
     const single = singleResourceManifestTool(manifest, originUrl);
     return single ? [single] : [];
@@ -2909,6 +3025,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
 
   const byKey = new Map();
   const metaByPath = new Map();
+  // Probe examples by row key, only when the caller collects them.
+  const exampleByKey = exampleOf ? new Map() : null;
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
   // A catalogue row that carries only a bare `amount` under a manifest whose
@@ -2968,6 +3086,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
         }
       }
       if (!ref) continue;
+      const example = exampleByKey && typeof raw === "object" ? manifestEntryExample(raw) : null;
       // "POST /exchange/sell-clams" — a verb glued to a path.
       const verb = /^([A-Za-z]+)\s+(\/.*)$/.exec(ref);
       if (verb && MANIFEST_HTTP_METHODS.has(verb[1].toUpperCase())) {
@@ -3017,6 +3136,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
             ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}) } : {}),
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
+        if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
       }
     }
   }
@@ -3073,6 +3193,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl) {
   for (const [k, t] of [...byKey.entries()]) {
     if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) byKey.delete(k);
   }
+  if (exampleByKey) for (const [k, t] of byKey) { const ex = exampleByKey.get(k); if (ex) exampleOf.set(t, ex); }
   return [...byKey.values()];
 }
 
@@ -4388,7 +4509,7 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
@@ -4500,7 +4621,13 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       bump(quoteProbeStats.attempts, k);
       if (!firstOutcome) firstOutcome = k;
     };
-    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool)) {
+    // The seller's own example request for this route, when its documents
+    // publish one: the probe body only, never persisted, projected or logged
+    // (probe-example.js); the in-memory manifest copy is slimmed before persist.
+    // Never for a route the seller itself marks free (paid:false): a body the
+    // route accepts would run it, and only a paid route answers it with a 402.
+    const example = tool.paid === false ? null : probeExampleFor(probeExamples, "POST", tool.route);
+    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool, { example })) {
       if (pastDeadline()) break;
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
@@ -5192,6 +5319,7 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
 // a validator it no longer honours.
 const crawlValidators = new Map();
 const vkey = (originUrl, path) => `${originUrl}${path}`;
+
 export function validatorFor(originUrl, path) { return crawlValidators.get(vkey(originUrl, path)) || null; }
 export function rememberValidator(originUrl, path, validators) {
   const k = vkey(originUrl, path);
@@ -5343,6 +5471,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // normalised tool rows and the full operation-route list, and both are
     // small. So those are what the cache carries.
     let openapiTools = null, openapiRoutes = null;
+    // The OpenAPI's probe examples: read from the document, or on a 304 from
+    // probeExampleMemo (the document is not kept). null = no OpenAPI read.
+    let openapiExamples = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
       if (res.notModified && prev?.openapiTools) {
@@ -5350,6 +5481,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         openapiRoutes = prev.openapiRoutes || [];
         tools = openapiTools;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
+        openapiExamples = probeExampleMemo.get(originUrl, "openapi") || new Map();
       } else {
         const body = res.notModified
           ? (rememberValidator(originUrl, "/openapi.json", null),
@@ -5359,6 +5491,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         openapiTools = normaliseOpenapiTools(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
         tools = openapiTools;
+        openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
     } catch {
       /* manifest-only seller — fine */
@@ -5378,7 +5511,15 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // endpoints nobody else reported or enrich ones already known. It can
     // never add a second row for an endpoint we already list — see
     // mergeManifestIntoTools for the 16 -> 30 regression that proved why.
-    tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl), tools);
+    // The seller's published example requests, for this crawl's unpaid quote
+    // probes only: a local Map, never on a row or the cache entry, dropped when
+    // this crawl returns (src/probe-example.js). Manifest first, then OpenAPI.
+    const probeExamples = new Map();
+    tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl, { examples: probeExamples }), tools);
+    // Kept per origin in memory only, for the next 304 and a re-price.
+    probeExampleMemo.set(originUrl, "manifest", probeExamples);
+    mergeProbeExamples(probeExamples, openapiExamples);
+    probeExampleMemo.set(originUrl, "openapi", openapiExamples);
     tools = dropDeclaredFreeEndpoints(tools, manifest);
     tools = dropUnvouchedNonProductRoutes(tools, (bazaarToolsByOrigin.get(originUrl) || []).map((t) => t.route));
     // Which routes the seller's own documents name; the rest must prove
@@ -5387,7 +5528,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples });
 
     cache.set(originUrl, {
       // Derivation is done: the entry keeps the slim keys its readers use,
@@ -5515,7 +5656,12 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null });
+      // Crawl-local, as on the manifest path: the probe body only.
+      const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
+      // In memory only, for a re-price; this branch's reads are unconditional.
+      probeExampleMemo.set(originUrl, "manifest", null);
+      probeExampleMemo.set(originUrl, "openapi", probeExamples);
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
@@ -5883,6 +6029,146 @@ export function looksLikeListingInjection(text) {
 export function matchesInjectionPhrase(text) {
   for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
   return false;
+}
+/** Which rule of looksLikeListingInjection the text trips, by name, or null:
+ *  the same three rules in the same order, so this is non-null exactly when
+ *  that screen says true. */
+export function listingInjectionFinding(text) {
+  const t = String(text || "");
+  if (t.length > 8000) return "oversized";
+  if (hasHiddenCharacters(t)) return "hidden-characters";
+  return matchesInjectionPhrase(t) ? "instruction-phrase" : null;
+}
+
+// Serve-time hygiene for seller-written text on the JSON surfaces an agent
+// reads (/api/index/tools, /api/index?seller=, /api/mpp-index, sellers.list).
+// The stored row is unchanged, so the router's screen and ranking read the
+// text exactly as the seller wrote it.
+export const LISTING_NAME_MAX = 120;
+const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+/** Seller text with every hidden character and control character removed,
+ *  trimmed, and capped at `max` code points (never splitting a pair). */
+export function cleanListingText(text, max = 0) {
+  if (text == null) return text;
+  let s = stripHiddenCharacters(String(text)).replace(CONTROL_CHARS, "").trim();
+  if (max > 0 && s.length > max) {
+    const cps = Array.from(s);
+    if (cps.length > max) s = cps.slice(0, max).join("").trimEnd();
+  }
+  return s;
+}
+/** A seller-written name, cleaned and capped. */
+export const cleanListingName = (name) => cleanListingText(name, LISTING_NAME_MAX);
+/** One listing's served text. `fields` are the seller's own name, description,
+ *  category and tags; the screen reads them joined, the way the router's does.
+ *  A flagged listing keeps its fields but serves no description and no tags,
+ *  and a name that itself trips the screen falls back to `fallbackName`. */
+export function screenListingForServe({ name, description, category, tags } = {}, { fallbackName = null } = {}) {
+  const tagList = Array.isArray(tags) ? tags : [];
+  const finding = listingInjectionFinding(`${name ?? ""} ${description ?? ""} ${category ?? ""} ${tagList.join(" ")}`);
+  if (!finding) {
+    return {
+      name: cleanListingName(name),
+      description: cleanListingText(description),
+      tags: tagList.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x)),
+      finding: null,
+    };
+  }
+  const nameFlagged = name != null && matchesInjectionPhrase(String(name));
+  return {
+    name: nameFlagged ? fallbackName : cleanListingName(name),
+    description: description == null ? description : "",
+    tags: [],
+    finding,
+  };
+}
+/** A seller's display name for serving: cleaned and capped, or the bare host
+ *  when it is empty or itself trips the phrase screen. */
+export function servedSellerName(name, origin) {
+  const host = String(origin || "").replace(/^https?:\/\//, "");
+  if (name == null || name === "" || matchesInjectionPhrase(String(name))) return host;
+  return cleanListingName(name) || host;
+}
+/** The fields a flagged listing carries in place of its withheld text. */
+export const untrustedMarker = (finding, withheld = "description and tags withheld: the listing text tripped the listing screen") => (finding
+  ? { untrustedContent: true, contentFinding: finding, contentWithheld: withheld }
+  : {});
+/** A leaderboard row's seller-written name for serving, with the marker when
+ *  the name itself trips the screen (then the name is replaced by `fallback`). */
+export function screenSellerNameForServe(name, fallback = null) {
+  if (name == null || name === "") return { name: name ?? null, marker: {} };
+  const finding = listingInjectionFinding(String(name));
+  if (!finding) return { name: cleanListingName(name), marker: {} };
+  const kept = finding === "instruction-phrase" ? fallback : (cleanListingName(name) || fallback);
+  return { name: kept, marker: untrustedMarker(finding, "the seller-written name tripped the listing screen; it is shown cleaned, or replaced") };
+}
+
+// Serve-time screens run once per stored object, not once per request. The
+// result is kept in a WeakMap keyed on the object the text was read from (a
+// crawled tool row, a cache entry, a snapshot row), so it is released with
+// that object when the cache or snapshot replaces it. The inputs ride with
+// the result and are compared by identity on every read (array inputs element
+// by element), so a row edited in place is screened again, never served stale.
+// Each object holds one result per named slot, so two callers that read the
+// same object with different inputs never evict each other.
+const serveScreenMemo = new WeakMap();
+let serveScreenRuns = 0;
+const sameServeInput = (a, b) => {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+const sameServeInputs = (a, b) => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!sameServeInput(a[i], b[i])) return false;
+  return true;
+};
+const freezeServed = (v) => {
+  if (!v || typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return v;
+  for (const x of Object.values(v)) if (Array.isArray(x)) Object.freeze(x);
+  return Object.freeze(v);
+};
+/** `compute()` once per (`key`, `slot`) while `inputs` are unchanged. A key
+ *  that is not an object is never cached. The result is frozen (plain objects
+ *  and their array fields), since every caller shares it. */
+export function memoServeScreen(key, slot, inputs, compute) {
+  if (!key || (typeof key !== "object" && typeof key !== "function")) { serveScreenRuns++; return compute(); }
+  let slots = serveScreenMemo.get(key);
+  const hit = slots && slots[slot];
+  if (hit && sameServeInputs(hit.inputs, inputs)) return hit.value;
+  serveScreenRuns++;
+  const value = freezeServed(compute());
+  if (!slots) { slots = Object.create(null); serveScreenMemo.set(key, slots); }
+  slots[slot] = { inputs: inputs.map((x) => (Array.isArray(x) ? x.slice() : x)), value };
+  return value;
+}
+/** How many serve-time screens have actually run (a cache hit runs none). */
+export function _serveScreenRunsForTest() { return serveScreenRuns; }
+/** `screenListingForServe` for one crawled tool row, memoized on the row. The
+ *  directory build calls this for every row, so its inputs are compared field
+ *  by field with no allocation on a hit (same rule as memoServeScreen). */
+const toolScreenMemo = new WeakMap();
+function screenToolForServe(t, category, fallbackName) {
+  if (!t || typeof t !== "object") return memoServeScreen(null, "listing", [], () => screenListingForServe({}, { fallbackName }));
+  const name = t.name, description = t.description, tags = t.tags;
+  const hit = toolScreenMemo.get(t);
+  if (hit && hit.name === name && hit.description === description && hit.category === category && hit.fallbackName === fallbackName && sameServeInput(hit.tags, tags)) return hit.value;
+  serveScreenRuns++;
+  // The object is frozen but its tag list is not: the build slices it for
+  // every row, and slice on a frozen array leaves the fast path. The build
+  // never hands that list out, only its slice.
+  const value = Object.freeze(screenListingForServe({ name, description, category, tags }, { fallbackName }));
+  toolScreenMemo.set(t, { name, description, category, fallbackName, tags: Array.isArray(tags) ? tags.slice() : tags, value });
+  return value;
+}
+/** `servedSellerName`, memoized on the object the name was read from. */
+export function servedSellerNameOn(key, name, origin, slot = "sellerName") {
+  return memoServeScreen(key, slot, [name, origin], () => servedSellerName(name, origin));
+}
+/** `screenSellerNameForServe`, memoized on the row the name was read from. */
+export function screenSellerNameOn(key, name, fallback = null) {
+  return memoServeScreen(key, "screenedName", [name, fallback], () => screenSellerNameForServe(name, fallback));
 }
 
 let crawlerTimer = null;
@@ -7511,6 +7797,39 @@ export function sellerDetail(originOrHost) {
     };
   }
   return null;
+}
+
+/** The served form of a sellerDetail() answer (or anything built on one, such
+ *  as the ?seller= row with its verdicts): seller text cleaned and capped, and
+ *  a tool row whose listing trips the screen served without its description
+ *  and tags, marked with the finding. sellerDetail() itself stays as written,
+ *  since the dossier and trust tools screen its raw text. The screen reads
+ *  the crawled row's category too, as the router's does. */
+export function screenSellerDetailForServe(d) {
+  if (!d || typeof d !== "object") return d;
+  const out = { ...d };
+  // Memoized on the crawled entry and its tool rows (memoServeScreen), so a
+  // repeated lookup of the same seller does no screening work.
+  const entry = cache.get(d.origin);
+  if ("displayName" in d) out.displayName = servedSellerNameOn(entry, d.displayName, d.origin, "displayName");
+  if (Array.isArray(d.tools)) {
+    // Rebuilt per lookup (no regex work), so it always names the rows the
+    // entry holds now.
+    const raw = new Map((entry?.tools || []).map((t) => [`${t?.method || ""} ${t?.route || ""}`, t]));
+    out.tools = d.tools.map((t) => {
+      if (!t || typeof t !== "object") return t;
+      const rawRow = raw.get(`${t.method || ""} ${t.route || ""}`);
+      const category = rawRow?.category ?? t.category;
+      // Keyed on the crawled row (the served row is rebuilt per request); the
+      // served row's own text is the input, so a mismatch screens it afresh.
+      const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null],
+        () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags }, { fallbackName: t.route || null }));
+      const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
+      if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
+      return { ...row, ...untrustedMarker(s.finding) };
+    });
+  }
+  return out;
 }
 
 /**
@@ -9145,25 +9464,31 @@ function flatRowsForEntry(origin, v, self, seen, out) {
   if (normOrigin === "https://agent402.tools") return;
   if (v?.error) return;
   if (healthScore(v) <= 0) return;
-  const sellerName = v?.manifest?.name || origin.replace(/^https?:\/\//, "");
+  const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const description = String(t?.description || "").trim();
-    out.push({
+    // Seller text is cleaned here, at serve time, and a listing the screen
+    // flags serves no description or tags (screenListingForServe); the crawled
+    // row itself is unchanged.
+    // Memoized on the crawled row, so a rebuild of the directory screens only
+    // the rows the crawl has replaced since the last one.
+    const served = screenToolForServe(t, t?.category, route);
+    const description = String(served.description || "").trim();
+    const flatRow = {
       ours: false,
       seller: origin,
       sellerName,
-      name: String(t?.name || route),
+      name: String(served.name || route),
       route,
       method: t?.method || "POST",
       url: origin + route,
       description,
       described: description.length >= 12,
       category: t?.category || "other",
-      tags: Array.isArray(t?.tags) ? t.tags.slice(0, 6) : [],
+      tags: served.tags.slice(0, 6),
       // Was `typeof t.price === "number" ? t.price : null`, which silently
       // nulled every price stored as a string - and manifest and llms.txt
       // catalogues store them as "$0.002". parsePrice is what every other
@@ -9197,7 +9522,11 @@ function flatRowsForEntry(origin, v, self, seen, out) {
       // t.seller is not set on every row source.
       ...deliveryProjection(origin, t?.method, route),
       networks: Array.isArray(t?.networks) ? t.networks : [],
-    });
+    };
+    // A flagged row carries the marker. Added after the literal, so the common
+    // unflagged row keeps one shape and builds on the literal's fast path.
+    if (served.finding) Object.assign(flatRow, untrustedMarker(served.finding));
+    out.push(flatRow);
   }
   }
 

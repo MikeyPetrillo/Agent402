@@ -28,7 +28,7 @@
 // three-venue figure never reads as a total. DATABENTO_SUMMARY=off pins the
 // fallback.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, isUpstreamFailure } from "../upstream-deadline.js";
 import { getSharedRedisClient } from "../shared-limit.js";
 import { leased } from "../state-db.js";
 
@@ -47,8 +47,34 @@ export const COVERAGE = Object.freeze({
   }),
 });
 const summaryOn = () => String(process.env.DATABENTO_SUMMARY || "").trim().toLowerCase() !== "off";
+// A primary that refuses the request itself (HTTP 400, 401 or 403) refuses
+// the next one too: such a refusal is remembered for
+// DATABENTO_PRIMARY_SKIP_MS (default 1 h), and reads go straight to the
+// fallback meanwhile instead of spending a refused read on every call. A
+// timeout, a 5xx or a date-range 422 is not remembered.
+const PRIMARY_SKIP_STATUSES = new Set([400, 401, 403]);
+const primarySkipMs = () => { const n = Number(process.env.DATABENTO_PRIMARY_SKIP_MS); return Number.isFinite(n) && n > 0 ? n : 3600_000; };
+let primaryRefusedAt = 0;
+let primarySkips = 0;
+export function notePrimaryRefusal(dataset, err) {
+  if (dataset !== PRIMARY_DATASET || !PRIMARY_SKIP_STATUSES.has(err?.upstreamStatus)) return;
+  if (!primaryRefusedAt || Date.now() - primaryRefusedAt >= primarySkipMs()) {
+    console.warn(`[databento] ${PRIMARY_DATASET} refused a read (HTTP ${err.upstreamStatus}); reading ${FALLBACK_DATASET} directly for ${Math.round(primarySkipMs() / 60_000)} min`);
+  }
+  primaryRefusedAt = Date.now();
+}
+const primarySkipped = () => primaryRefusedAt > 0 && Date.now() - primaryRefusedAt < primarySkipMs();
+/** Operator view of the remembered refusal. */
+export function primarySkipStatus() {
+  return { skipping: primarySkipped(), since: primaryRefusedAt ? new Date(primaryRefusedAt).toISOString() : null, skippedReads: primarySkips };
+}
+export function __resetPrimarySkip() { primaryRefusedAt = 0; primarySkips = 0; }
 /** The datasets a read tries, in order. */
-export const datasetOrder = () => (summaryOn() ? [PRIMARY_DATASET, FALLBACK_DATASET] : [FALLBACK_DATASET]);
+export const datasetOrder = () => {
+  if (!summaryOn()) return [FALLBACK_DATASET];
+  if (primarySkipped()) return [FALLBACK_DATASET];
+  return [PRIMARY_DATASET, FALLBACK_DATASET];
+};
 // Databento prices are fixed-point integers scaled by 1e9.
 const PX = 1e-9;
 // A query is priced by uncompressed bytes. Nothing we issue should cost more
@@ -177,8 +203,8 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
     // An unknown symbol is the caller's input: no fallback read for it.
     if (res.status === 422 && /symbol/i.test(text)) throw bad("No market data for that symbol. US equities only - indices, FX and crypto are not covered.");
     if (res.status === 422) throw datasetFailure(bad("That date range is outside the available data."));
-    if (res.status === 401 || res.status === 403) throw datasetFailure(bad("Market data upstream rejected our credentials.", 503));
-    throw datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502));
+    if (res.status === 401 || res.status === 403) throw Object.assign(datasetFailure(bad("Market data upstream rejected our credentials.", 503)), { upstreamStatus: res.status });
+    throw Object.assign(datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502)), { upstreamStatus: res.status });
   }
   return text;
 }
@@ -187,7 +213,7 @@ async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await checkHost(url);
   const { res, body } = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
-  if (!res.ok) throw datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502));
+  if (!res.ok) throw Object.assign(datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502)), { upstreamStatus: res.status });
   const text = await body((r) => r.text());
   try { return JSON.parse(text); } catch { throw datasetFailure(bad("Market data upstream returned an unreadable range answer.", 502)); }
 }
@@ -199,12 +225,31 @@ async function get(path, params) {
  *  timer while there is demand, and a request serves the last confirmed value
  *  with its age (availableEndInfo). A request reads it inline only when there
  *  is no value yet or the last one is older than DATABENTO_RANGE_MAX_AGE_MS
- *  (the warmer was idle). Concurrent reads share one upstream call. */
+ *  (the warmer was idle). Concurrent reads share one upstream call.
+ *
+ *  LAST GOOD RANGE. A refresh that times out or errors does not fail the call
+ *  while the last confirmed end is younger than DATABENTO_RANGE_STALE_MAX_MS
+ *  (default 24 h): the call is answered on that end, with its real
+ *  confirmation time (checkedAt, ageMs) and stale: true. This is the safe
+ *  direction by construction: the end only ever bounds a read from above
+ *  (quoteWindow, stock-history's span), the end of a dataset only moves
+ *  forward, and every answer's asOf is the last bar's own day, so an older
+ *  end can make an answer omit the newest session but never claim a session
+ *  the dataset does not hold. Past the hard limit, or with no confirmed end
+ *  at all, the call fails as before. Between RANGE_REFRESH_MS and the max
+ *  age, a request with no warmer running starts one background refresh
+ *  (shared with any concurrent read, at most one attempt per
+ *  DATABENTO_RANGE_RETRY_MS) and answers on the value it has. */
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 export const RANGE_REFRESH_MS = envMs("DATABENTO_RANGE_REFRESH_MS", 15 * 60_000);
 const rangeMaxAgeMs = () => envMs("DATABENTO_RANGE_MAX_AGE_MS", 60 * 60_000);
+const rangeStaleMaxMs = () => envMs("DATABENTO_RANGE_STALE_MAX_MS", 24 * 3600_000);
+const rangeRetryMs = () => envMs("DATABENTO_RANGE_RETRY_MS", 30_000);
 let rangeState = { end: null, at: 0, dataset: null };
 let rangeInflight = null;
+let rangeRefreshAttemptAt = 0;
+let staleWarnAt = 0;
+const rangeStats = { staleServed: 0, refreshFailures: 0, backgroundRefreshes: 0 };
 // Every read here is the daily-bar schema, and its end trails the dataset's
 // own end whenever another schema (instrument definitions, statistics) runs
 // ahead of the last settled session, as over a weekend: bounding a read by the
@@ -234,6 +279,7 @@ function readRange() {
           sharedSet("range", rangeState, SHARED_RANGE_TTL_S);
           return end;
         } catch (e) {
+          notePrimaryRefusal(dataset, e);
           if (!e.datasetError || i === order.length - 1) throw e;
         }
       }
@@ -255,17 +301,40 @@ async function adoptSharedRange(maxAgeMs) {
 }
 /** `demand: false` (the self-check) reads the range without counting as a
  *  buyer's demand, so it never keeps the warmer awake. */
+const cachedRange = (extra) => ({ end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: Date.now() - rangeState.at, cached: true, ...extra });
+/** Background refresh off the request path: never awaited, never throws. */
+function refreshRangeInBackground() {
+  if (rangeInflight || Date.now() - rangeRefreshAttemptAt < rangeRetryMs()) return;
+  rangeRefreshAttemptAt = Date.now();
+  rangeStats.backgroundRefreshes++;
+  readRange().catch(() => { rangeStats.refreshFailures++; });
+}
 export async function availableEndInfo({ demand = true } = {}) {
   if (demand) lastDemandAt = Date.now();
-  let age = Date.now() - rangeState.at;
-  if (rangeState.end && age < rangeMaxAgeMs()) return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
-  // Stale here: another replica's warmer may have confirmed it since.
-  if (await adoptSharedRange(rangeMaxAgeMs())) {
-    age = Date.now() - rangeState.at;
-    return { end: rangeState.end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: age, cached: true };
+  const age = Date.now() - rangeState.at;
+  if (rangeState.end && age < rangeMaxAgeMs()) {
+    // The warmer, when running, refreshes on its own timer.
+    if (age >= RANGE_REFRESH_MS && !warm.started) refreshRangeInBackground();
+    return cachedRange();
   }
-  const end = await readRange();
-  return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
+  // Stale here: another replica's warmer may have confirmed it since.
+  if (await adoptSharedRange(rangeMaxAgeMs())) return cachedRange();
+  try {
+    const end = await readRange();
+    return { end, checkedAt: new Date(rangeState.at).toISOString(), ageMs: 0, cached: false };
+  } catch (e) {
+    rangeRefreshAttemptAt = Date.now();
+    rangeStats.refreshFailures++;
+    // The last good end, ours or another replica's, inside the hard limit.
+    await adoptSharedRange(rangeStaleMaxMs());
+    if (!rangeState.end || !(Date.now() - rangeState.at < rangeStaleMaxMs())) throw e;
+    rangeStats.staleServed++;
+    if (Date.now() - staleWarnAt > 60_000) {
+      staleWarnAt = Date.now();
+      console.warn(`[databento] range refresh failed (${e?.statusCode || "error"}); answering on the last confirmed end (${Math.round((Date.now() - rangeState.at) / 60_000)} min old)`);
+    }
+    return cachedRange({ stale: true });
+  }
 }
 export async function availableEnd(opts) { return (await availableEndInfo(opts)).end; }
 
@@ -340,15 +409,44 @@ const barsKey = (p) => `${p.dataset}|${p.symbols}|${p.schema}|${p.start}|${p.end
  *  Tries the primary dataset, then the fallback on a dataset-level failure
  *  (see the header). A refusal of our own (the price bound), an unknown
  *  symbol and a transport failure are answered as they are. */
-export async function dailyBarsRead({ symbol, start, end, maxUsd }) {
+export async function dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk = false }) {
   const order = datasetOrder();
+  if (summaryOn() && order[0] !== PRIMARY_DATASET) primarySkips++;
   for (const [i, dataset] of order.entries()) {
     try { return await dailyBarsOf(dataset, { symbol, start, end, maxUsd }); }
     catch (e) {
+      notePrimaryRefusal(dataset, e);
+      if (lastGoodOk && !e.datasetError && isUpstreamFailure(e)) {
+        const copy = lastGoodQuoteBars({ symbol, start, end });
+        if (copy) return copy;
+      }
       if (!e.datasetError || i === order.length - 1) throw e;
       console.warn(`[databento] ${dataset} read failed (${e.statusCode}); answering from ${order[i + 1]}`);
     }
   }
+}
+
+// LAST GOOD QUOTE. A quote read (stock-quote passes lastGoodOk; the
+// window must be the quote's own) whose upstream did not answer (a
+// deadline or a dropped connection, not a refusal) is answered from the
+// newest bars this process holds for the symbol, read inside
+// DATABENTO_QUOTE_STALE_MAX_MS (default 24 h). The bars are end-of-day, so
+// the copy is at most a session behind what the read asked for; the answer
+// says so in fields: stale: true, its own fetchedAt, and asOf is the last
+// bar's day as on every answer. Any other shape (a history range) fails as
+// before.
+const quoteStaleMaxMs = () => envMs("DATABENTO_QUOTE_STALE_MAX_MS", 24 * 3600_000);
+function lastGoodQuoteBars({ symbol, start, end }) {
+  const sym = String(symbol).toUpperCase();
+  if (start !== quoteWindow(end).start) return null;
+  let best = null, bestDataset = null;
+  for (const [key, entry] of barsCache) {
+    const [dataset, symbols, schema, kStart, kEnd] = key.split("|");
+    if (symbols !== sym || schema !== BAR_SCHEMA || kEnd > end || kStart !== quoteWindow(kEnd).start) continue;
+    if (!best || entry.fetchedAt > best.fetchedAt) { best = entry; bestDataset = dataset; }
+  }
+  if (!best || !(Date.now() - Date.parse(best.fetchedAt) < quoteStaleMaxMs())) return null;
+  return { bars: best.bars.map((b) => ({ ...b })), cached: true, stale: true, fetchedAt: best.fetchedAt, dataset: bestDataset };
 }
 
 async function dailyBarsOf(dataset, { symbol, start, end, maxUsd }) {
@@ -623,23 +721,29 @@ export function quoteWarmerStatus() {
     running: warm.started,
     lastTickAt: warm.lastTickAt ? new Date(warm.lastTickAt).toISOString() : null,
     range: rangeState.end ? { end: rangeState.end, dataset: rangeState.dataset, ageSec: Math.round((Date.now() - rangeState.at) / 1000) } : null,
+    rangeFallback: { ...rangeStats },
     background: { day, calls: warm.day === day ? warm.calls : 0, dailyMax: backgroundDailyMax(), ceilingHit: warm.ceilingHitDay === day },
     trackedSymbols: popularity.size, topN: warmTopN(), prefetched: warm.prefetched, adoptedFromShared: warm.adopted, leaseSkips: warm.leaseSkips,
     shared: sharedCacheCounts(),
     quotePriceCheck: quotePriceInline ? "inline" : "per-session",
     quotePriceAuditOk: quotePriceAudit.ok,
+    primarySkip: primarySkipStatus(),
     lastTick: warm.lastResult ? { skipped: warm.lastResult.skipped || null, error: warm.lastResult.error || null, prefetched: warm.lastResult.prefetched ?? null } : null,
   };
 }
 
+/** Test hook: move the last confirmed range's confirmation time back by `ms`. */
+export function __ageRange(ms) { rangeState = { ...rangeState, at: rangeState.at - ms }; }
 /** Test hook: forget every piece of warm state. */
 export function __resetDatabentoState() {
   stopQuoteWarmer();
   rangeState = { end: null, at: 0, dataset: null }; rangeInflight = null; hostCheckedAt = 0;
+  rangeRefreshAttemptAt = 0; staleWarnAt = 0; for (const k of Object.keys(rangeStats)) rangeStats[k] = 0;
   barsCache.clear(); barsInflight.clear(); popularity.clear(); lastDemandAt = 0;
   quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
   Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, adopted: 0, leaseSkips: 0, primed: false });
   for (const k of Object.keys(sharedCounts)) sharedCounts[k] = 0;
+  __resetPrimarySkip();
 }
 
 /** DBEQ.BASIC returns ONE BAR PER VENUE (EQUS.SUMMARY returns one bar per

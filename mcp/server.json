@@ -3,7 +3,7 @@
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402.Tools: pay-per-call web tools",
   "description": "Agentic Finance: 500+ agent tools, multi-chain USDC over x402 or MPP, or free via proof-of-work",
-  "version": "0.13.16",
+  "version": "0.13.17",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
     "source": "github"
@@ -20,7 +20,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent402-mcp",
-      "version": "0.13.16",
+      "version": "0.13.17",
       "transport": {
         "type": "stdio"
       },
@@ -33,13 +33,13 @@
         },
         {
           "name": "AGENT402_BUDGET",
-          "description": "Optional hard cap on total USDC spent per session (e.g. 1.00). Refused before any payment is signed.",
+          "description": "Optional hard cap on total USD spent per session (e.g. 1.00; unset or off = no session cap). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },
         {
           "name": "AGENT402_MAX_PER_CALL",
-          "description": "Optional max USD price for any single call (e.g. 0.01).",
+          "description": "Max USD price for any single call (default 4; e.g. 0.05; off disables). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },

@@ -16,7 +16,7 @@
 // separate OPRA build), premarket-quote (extended-hours needs the live feed)
 // and stock-dividends (corporate actions are not market data and Databento
 // does not carry them). Removing beat keeping an unlicensed source.
-import { availableEnd, availableEndInfo, dailyBarsRead, noteQuoteSymbol, quoteWindow, COVERAGE, PRIMARY_DATASET } from "./databento.js";
+import { availableEndInfo, dailyBarsRead, noteQuoteSymbol, quoteWindow, COVERAGE, PRIMARY_DATASET } from "./databento.js";
 import { computeIndicators } from "./crypto-signals-kit.js";
 
 function bad(message, statusCode = 400) {
@@ -117,7 +117,9 @@ export const FINANCE_TOOLS = [
       // it is a separate, larger query, so the fields are gone rather than
       // sold at a loss or silently narrowed. stock-history serves a range.
       const { start, end } = quoteWindow(range.end);
-      const read = await dailyBarsRead({ symbol, start, end });
+      // A read the upstream does not answer may be served from the last good
+      // read (labeled stale), except for the self-check, which must see it.
+      const read = await dailyBarsRead({ symbol, start, end, lastGoodOk: !ctx?.selfcheck });
       // The self-check's own call (/api/selfcheck) is not a buyer's demand.
       if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
       const bars = read.bars;
@@ -143,6 +145,12 @@ export const FINANCE_TOOLS = [
         cached: read.cached,
         fetchedAt: read.fetchedAt,
         rangeCheckedAt: range.checkedAt,
+        // The session boundary's refresh failed: the answer is bounded by the
+        // last confirmed end (up to DATABENTO_RANGE_STALE_MAX_MS old).
+        ...(range.stale ? { rangeStale: true } : {}),
+        // The upstream did not answer this read: the bars are the newest this
+        // server holds for the symbol (databento.js, last good quote).
+        ...(read.stale ? { stale: true, staleReason: "The market data upstream did not answer in time; this quote is the last end-of-day read this server holds for the symbol (see asOf and fetchedAt)." } : {}),
         note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${where.note}`,
       };
     },
@@ -201,7 +209,8 @@ export const FINANCE_TOOLS = [
         points = Number(i.points);
         if (!Number.isInteger(points) || points < 1 || points > 100) throw bad(`"points" must be a whole number from 1 to 100 (got ${JSON.stringify(i.points)}).`);
       }
-      const end = await availableEnd({ demand: !ctx?.selfcheck });
+      const range = await availableEndInfo({ demand: !ctx?.selfcheck });
+      const end = range.end;
       // N sessions span about 1.4N calendar days once weekends are counted,
       // so the lookback SCALES rather than adding a flat margin: a flat +10
       // returned 29 bars for a 30-session ask, and the shortfall grows with
@@ -222,6 +231,9 @@ export const FINANCE_TOOLS = [
         bars,
         asOf: bars.at(-1)?.day ?? null,
         ...provenance(read.dataset),
+        // The session boundary's refresh failed: the bars end at the last
+        // confirmed end, which `rangeCheckedAt` dates.
+        ...(range.stale ? { rangeStale: true, rangeCheckedAt: range.checkedAt } : {}),
         ...(want && bars.length >= 2 ? { analysis: stockAnalysis(bars, want, points) } : {}),
       };
     },

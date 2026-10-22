@@ -35,6 +35,7 @@ import { getFreePort } from "./lib/free-port.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { PROBE_POW_SLUG } from "../src/pow.js";
 import { isIdentityBoundRoute } from "../src/payments.js";
+import { requestExampleOf } from "../src/openapi-request.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -214,8 +215,8 @@ async function main() {
       else {
         if (f.route !== `${e.method} ${e.path}` || f.price !== e.price || !near(f.priceUsd, priceNum(e.price))) findDrift.push(`${e.slug}: find says ${f.route} ${f.price}, pricing ${e.method} ${e.path} ${e.price}`);
         const op = openapi.paths[e.path]?.[e.method.toLowerCase()];
-        const docEx = op?.requestBody?.content?.["application/json"]?.example ?? Object.fromEntries((op?.parameters || []).filter((p) => p.example !== undefined).map((p) => [p.name, p.example]));
-        const docReq = op?.requestBody?.content?.["application/json"]?.schema?.required ?? (op?.parameters || []).filter((p) => p.required).map((p) => p.name);
+        const docEx = requestExampleOf(op)?.example ?? Object.fromEntries((op?.parameters || []).filter((p) => p.example !== undefined).map((p) => [p.name, p.example]));
+        const docReq = requestExampleOf(op)?.schema?.required ?? (op?.parameters || []).filter((p) => p.required).map((p) => p.name);
         // Key order is not a difference: a GET example is rebuilt from the
         // parameter list, whose order need not match the tool's own input.
         const canon = (v) => JSON.stringify(v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1))) : v);

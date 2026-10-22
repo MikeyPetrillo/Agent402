@@ -27,6 +27,41 @@ ok(shouldShedFree({ inFlight: 0, lagMs: 5000, lateTicks: 2, now: Date.now() + 12
 ok(shouldShedFree({ inFlight: 10_000, lagMs: 0 }) === "inflight", "too many requests in flight sheds free traffic");
 process.env.LOAD_SHED = "off"; ok(shouldShedFree({ inFlight: 10_000, lagMs: 5000, lateTicks: 4 }) === null, "LOAD_SHED=off disables it"); delete process.env.LOAD_SHED;
 
+// --- shed counts by kind, and which of them degrade serving health
+{
+  const { noteShed, shedStatus, resetShedCounters, shedVerdict, FREE_SHED_COUNTERS } = await import("../src/load-shed.js");
+  resetShedCounters();
+  const kinds = ["lag", "inflight", "discovery-budget", "discovery-inflight", "discovery-deadline", "chain-seller-view", "some-new-kind"];
+  for (const k of kinds) noteShed(k);
+  const st = shedStatus();
+  ok(st.shed === kinds.length && st.shedLag === 1 && st.shedInflight === 1 && st.discoveryBudget === 1 && st.discoveryInflight === 1 && st.discoveryDeadline === 1 && st.chainSellerView === 1 && st.shedOther === 1, `every shed kind has a counter, and an unlisted kind is counted as other (${JSON.stringify(st)})`);
+  ok(st.free === 4 && st.serving === 3 && st.free + st.serving === st.shed, `the free / serving split sums to the total (free ${st.free}, serving ${st.serving})`);
+  ok(FREE_SHED_COUNTERS.every((k) => k in st), "every free counter is reported");
+  const at = Date.now();
+  const verdict = (o) => shedVerdict(o, 200, at);
+  const base = { since: at - 1000 };
+  const freeOnly = verdict({ ...base, shed: 5000, discoveryBudget: 3000, chainSellerView: 2000 });
+  ok(freeOnly.reasons.length === 0 && freeOnly.info.join() === "free-shedding", `free-work sheds alone are informational: they do not degrade (${JSON.stringify(freeOnly)})`);
+  const lag = verdict({ ...base, shed: 500, shedLag: 500 });
+  ok(lag.reasons.join() === "shedding" && lag.info.length === 0, "lag sheds past the threshold degrade");
+  const inflight = verdict({ ...base, shed: 500, shedInflight: 500 });
+  ok(inflight.reasons.join() === "shedding", "in-flight sheds past the threshold degrade");
+  const unknown = verdict({ ...base, shed: 500, shedOther: 500 });
+  ok(unknown.reasons.join() === "shedding", "a shed of a kind no counter names still degrades: nothing new is hidden");
+  const legacy = verdict({ ...base, shed: 500 });
+  ok(legacy.reasons.join() === "shedding", "a status with only a total (no kinds) reads as serving shedding, as before");
+  const both = verdict({ ...base, shed: 1000, shedLag: 300, discoveryInflight: 700 });
+  ok(both.reasons.join() === "shedding" && both.info.join() === "free-shedding", "both at once: degraded, with the free word as info");
+  ok(verdict({ ...base, shed: 150, shedLag: 150 }).reasons.length === 0, "under the threshold: no word");
+  ok(shedVerdict({ shed: 5000, shedLag: 5000, since: at - 3_700_000 }, 200, at).reasons.length === 0, "counts older than an hour are not read");
+  resetShedCounters();
+  ok(shedStatus().shed === 0 && shedStatus().chainSellerView === 0 && shedStatus().shedOther === 0, "the hourly reset clears every counter");
+  const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("function servingHealth()"), src.indexOf("setInterval(() => { try { resetShedCounters(); }"));
+  ok(/shedVerdict\(shed, SERVING\.shed1h\)/.test(fn) && /reasons\.push\(\.\.\.shedWords\.reasons\)/.test(fn) && /info: shedWords\.info/.test(fn) && !/reasons\.push\("shedding"\)/.test(fn), "serving health takes its shedding words from shedVerdict: degrading words in reasons, the rest in info");
+  ok(/status: reasons\.length \? "degraded" : "ok"/.test(fn), "status still degrades on any reason");
+}
+
 process.env.RATE_LIMIT_MAX_KEYS = "3";
 const { createLimiter, limiterKey } = await import("../src/rate-limit.js?cap");
 ok(limiterKey("2001:db8:1:2:aaaa::1") === limiterKey("2001:db8:1:2:ffff::9") && limiterKey("2001:db8:1:3::1") !== limiterKey("2001:db8:1:2::1"), "IPv6 addresses fold to their /64 (and different /64s stay apart)");
@@ -81,6 +116,7 @@ try {
   const sh = await (await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json();
   ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
   ok(Array.isArray(sh.reasons) && sh.thresholds && sh.loop && "stalls1h" in sh.loop, "the verdict carries its reasons, thresholds and loop counts");
+  ok(Array.isArray(sh.info) && !sh.reasons.includes("free-shedding") && typeof sh.shed.free === "number" && typeof sh.shed.serving === "number", `informational words are apart from the reasons, and the shed counts carry the split (${JSON.stringify({ reasons: sh.reasons, info: sh.info, free: sh.shed.free, serving: sh.shed.serving })})`);
   const unauth = await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5"));
   ok(unauth.status === 404, "serving health is operator-only");
 } finally { proc.kill("SIGKILL"); }
@@ -131,6 +167,8 @@ try {
   ok(bodies.some((b) => /\$\{?REASONS/.test(b)), "the issue body carries the reason words");
   ok(/echo "serving health: \$STATUS \(\$SUMMARY\)"/.test(step), "the figures still reach the run log");
   ok(/REASONS=.*\.reasons/.test(step) && !/REASONS=.*responses1h/.test(step), "the reasons variable reads the reason words and nothing counted");
+  ok(!/REASONS=.*\.info/.test(step) && /STATUS=\$\(echo "\$J" \| jq -r '\.status/.test(step) && /if \[ "\$STATUS" = "degraded" \]/.test(step), "the alarm pages on .status alone; informational words never open an issue");
+  ok(/info=\\\(\(\.info \/\/ \[\]\)\|join\(","\)\)/.test(step), "the informational words reach the run log");
 }
 
 console.log(`test-load-shed: ${n} passed`);

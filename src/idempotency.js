@@ -52,20 +52,26 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // A credits-settled request binds to its key hash FIRST: the gate already
     // authorized it, and an unverified x-pow-solution riding alongside would
     // otherwise bind a paid entry to a public string anyone could replay.
-    const cred = paymentHeaderOf(req) || (req.creditsSettled === true ? creditsCred : null) || req.header("x-pow-solution") || creditsCred;
+    const x402Cred = paymentHeaderOf(req);
+    const powCred = req.header("x-pow-solution");
+    const cred = x402Cred || (req.creditsSettled === true ? creditsCred : null) || powCred || creditsCred;
     if (!cred) return null; // nothing to securely bind the key to → don't cache
+    // Which presented credential the key is bound to, so the store step can
+    // require that it is the one the gate actually verified.
+    const kind = cred === x402Cred ? "x402" : cred === creditsCred ? "credits" : "pow";
     // Bind to the exact route AND the request body, so the same key+credential
     // can't be used to retrieve a cached response from a different payload or
     // different endpoint. Body is hashed (not stored) so the key stays compact.
     const bodyHash = req.body && Object.keys(req.body).length
       ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
       : "-";
-    return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex");
+    return { key: createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind };
   };
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
-    const key = idemHashKey(req);
-    if (!key) return next();
+    const bound = idemHashKey(req);
+    if (!bound) return next();
+    const { key, kind } = bound;
     let hit;
     try { hit = await store.get(key); } catch { hit = null; }
     if (hit !== null && hit !== undefined) {
@@ -122,6 +128,12 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       // dev/test only, so it keeps caching.)
       if (res.getHeader("X-Trial-Accepted") === "true") return;
       const powVerified = res.getHeader("X-Pow-Accepted") === "true";
+      // A PoW-served answer is stored only under the PoW token it was served
+      // on. The key is computed before the PoW gate, so a payment header riding
+      // alongside a valid solution is unverified text: binding the entry to it
+      // would let anyone presenting that text replay the answer. Such a call is
+      // simply not stored; a call carrying only its solution keeps its replay.
+      if (powVerified && kind !== "pow") return;
       const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true || req.tempoSettled === true;
       if (!freeMode && !paid && !powVerified) return;
       let bytes = 0;

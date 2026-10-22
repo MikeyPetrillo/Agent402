@@ -715,22 +715,33 @@ jobs:
           esac
 
       # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
-      # aging / stuck page; ok closes; unknown does neither. The status Worker
-      # runs the same check every five minutes under the same title.
+      # owed (any buyer's debt past a 15 min grace) / aging / stuck page; ok
+      # closes; unknown does neither. The status Worker runs the same check
+      # every five minutes under the same title. The issue carries counts only
+      # (rows, distinct buyers, read from the operator view): never an address
+      # or an amount.
       - name: Refunds owed check (alarm when a debt to a buyer is waiting)
         if: always()
         continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
+          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          WORD=$(printf '%s' "$GW" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
+          case "$WORD" in owed|aging|stuck|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "refunds owed: $WORD"
+          WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Refunds owed to a buyer are waiting"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            aging|stuck)
+            owed|aging|stuck)
+              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
+              # A debt can stay owed for days (held for review), so an open
+              # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports refundsOwed.status=$WORD. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48) - read /__operator/refunds.json and dispatch refund.yml (dry run first). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
@@ -771,6 +782,43 @@ jobs:
               fi
               ;;
           esac
+
+      # Tool and upstream failures (src/tool-failure-monitor.js): three words
+      # on /api/gateway-status. toolFailures and upstreamHealth page on
+      # degraded / failing; facilitatorFunds pages on refused / demoted; ok
+      # closes; unknown does neither. The issues are public, so a body carries
+      # the word and the operator endpoint only: slugs, upstreams, facilitators
+      # and reasons stay on /__operator/tool-failures.json. The status Worker
+      # runs the same checks every five minutes under the same titles.
+      - name: Tool, upstream and facilitator failure checks (alarm on a failing tool or upstream)
+        if: always()
+        continue-on-error: true
+        run: |
+          GS=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          # TITLE is set before each call (the Worker test reads it as written).
+          check_word() {
+            FIELD="$1"; BAD="$2"; GOOD="$3"
+            WORD=$(echo "$GS" | jq -r ".${FIELD}.status // \"unknown\"" 2>/dev/null || echo unknown)
+            echo "$FIELD: $WORD"
+            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+            if echo " $BAD " | grep -q " $WORD "; then
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+            elif echo " $GOOD " | grep -q " $WORD "; then
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: ${FIELD} reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+            fi
+          }
+          TITLE="toolFailures: a tool is answering 5xx to buyers"
+          check_word toolFailures "degraded failing" "ok"
+          TITLE="upstreamHealth: an upstream is timing out or failing"
+          check_word upstreamHealth "degraded failing" "ok"
+          TITLE="facilitatorFunds: a facilitator refused settlement"
+          check_word facilitatorFunds "refused demoted" "ok"
 
       # Money writes (sales, refund debts, card report records, subscription
       # records, decide writes) kept on the container's local disk because the
@@ -908,9 +956,11 @@ jobs:
           esac
 
       # Serving health: event-loop stalls, 5xx and paid-call error rates, and
-      # load shedding, from /__operator/serving-health.json (counts only). Two
-      # readings 30 s apart must agree, because a reading taken while a deploy
-      # swaps containers can be bad on its own.
+      # load shedding by the shared gate, from /__operator/serving-health.json
+      # (counts only). Only .status pages; free work refused by its own bounds
+      # is an .info word and reaches the run log. Two readings 30 s apart must
+      # agree, because a reading taken while a deploy swaps containers can be
+      # bad on its own.
       - name: Serving health check (alarm on stalls, paid-call errors, 5xx or shedding)
         if: always()
         continue-on-error: true
@@ -923,7 +973,7 @@ jobs:
           if [ "$S1" = "degraded" ]; then sleep 30; J=$(read1); fi
           STATUS=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
           # The run log keeps the figures; the issue (public) carries the reason words only.
-          SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed)"' 2>/dev/null || echo "unreadable")
+          SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) info=\((.info // [])|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed) shedServing=\(.shed.serving) shedFree=\(.shed.free)"' 2>/dev/null || echo "unreadable")
           REASONS=$(echo "$J" | jq -r '(.reasons // []) | join(", ")' 2>/dev/null || echo "unreadable")
           echo "serving health: $STATUS ($SUMMARY)"
           TITLE="Serving health DEGRADED"

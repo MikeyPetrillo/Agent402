@@ -118,6 +118,63 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("discovery.js shed-503 retry \u2713 (bounded, capped, 503-only; catalog loads through a shed, catalog.find names the surface)");
 }
 
+// 0c) Slow routes run as a job (./async-job.js): the catalog's
+// async.recommended sends the paid call with Prefer: respond-async, the job
+// link is polled honoring Retry-After, the route's 200 is the tool result,
+// and a caller that asked for progress gets notifications/progress from the
+// job's stage. Driven end to end through the real server process on the
+// card-credits path (no wallet needed) against a stub host.
+{
+  const { awaitJob, shouldRequestAsync, retryAfterMs, AsyncJobPendingError } = await import("./async-job.js");
+  if (!shouldRequestAsync({ recommended: true }) || shouldRequestAsync({ recommended: false }) || !shouldRequestAsync({ recommended: false }, true) || shouldRequestAsync({ recommended: true }, false) || shouldRequestAsync(null, true)) fail("shouldRequestAsync modes");
+  if (retryAfterMs(new Headers({ "retry-after": "2" }), {}) !== 2000 || retryAfterMs(new Headers(), { pollIntervalSeconds: 600 }) !== 30000 || retryAfterMs(new Headers(), {}) !== 5000) fail("retryAfterMs: header, body, cap, default");
+  const plain = new Response("{}", { status: 200 });
+  if ((await awaitJob(plain, { baseUrl: "http://x" })) !== plain) fail("a non-202 answer is returned unchanged");
+  let err = null;
+  try { await awaitJob(new Response(JSON.stringify({ statusUrl: "https://evil.example/j" }), { status: 202 }), { baseUrl: "http://127.0.0.1:1", fetchImpl: async () => { throw new Error("must not fetch"); } }); } catch (e) { err = e; }
+  if (!(err instanceof AsyncJobPendingError) || !/another origin/.test(err.message)) fail("a job link on another origin is never followed");
+
+  const { createServer } = await import("node:http");
+  const KEY = `a402_${"k".repeat(40)}`;
+  const seen = { prefer: null, auth: null, polls: 0 };
+  const stub = createServer((req, res) => {
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "slow-report", method: "POST", path: "/v1/slow-report", price: "$0.60", description: "A slow report", category: "Research", computePayable: false, async: { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", statusUrl: "/api/jobs/{id}" } }] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: { "/v1/slow-report": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { query: { type: "string" } } } } } } } } } });
+    if (u.pathname === "/v1/slow-report") {
+      seen.prefer = req.headers.prefer || null; seen.auth = req.headers.authorization || null; seen.polls = 0;
+      return send(202, { jobId: "cd".repeat(24), status: "working", state: "queued", statusUrl: `/api/jobs/${"cd".repeat(24)}`, pollIntervalSeconds: 1 }, { location: `/api/jobs/${"cd".repeat(24)}`, "retry-after": "1" });
+    }
+    if (u.pathname.startsWith("/api/jobs/")) {
+      seen.polls++;
+      if (seen.polls === 1) return send(200, { status: "working", state: "running", stage: "searching", steps: { done: 1, total: 5 }, progress: 0.2, etaSeconds: 60 }, { "retry-after": "1" });
+      if (seen.polls === 2) return send(200, { status: "working", state: "running", stage: "writing report", steps: { done: 4, total: 5 }, progress: 0.8, etaSeconds: 10 }, { "retry-after": "1" });
+      return send(200, { status: "completed", state: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "x-credits-balance": "9.40" }, body: { report: "the answer" } } });
+    }
+    return send(404, { error: "not found" });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_CREDITS_KEY: KEY };
+  delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_BUDGET; delete stubEnv.AGENT402_MAX_PER_CALL; delete stubEnv.AGENT402_ASYNC;
+  const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
+  await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  try {
+    const notes = [];
+    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, CallToolResultSchema, { onprogress: (p) => notes.push(p), timeout: 30_000 });
+    if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
+    if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
+    if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);
+    const pcts = notes.map((n) => n.progress);
+    if (pcts.join(",") !== "0,20,80,100" || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`progress notifications follow the job stage and only rise (${JSON.stringify(notes)})`);
+  } finally {
+    await jobClient.close().catch(() => {});
+    stub.close();
+  }
+  console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
@@ -323,8 +380,25 @@ try {
     const seen = { preflights: 0, authorized: 0 };
     const challenge = (usd) => Buffer.from(JSON.stringify({
       x402Version: 2,
-      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: "0xUSDC", payTo: "0xdead", extra: { name: "USD Coin" } }],
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } }],
     })).toString("base64");
+    // A signable offer (real address shapes) at `amount` base units of Base
+    // USDC, with optional extra fields.
+    const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const signable = (path, amount, extra = {}) => Buffer.from(JSON.stringify({
+      x402Version: 2,
+      resource: { url: `http://127.0.0.1${path}`, description: "paid", mimeType: "application/json" },
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", ...extra } }],
+    })).toString("base64");
+    // /api/switch lists at $0.01 and quotes $5 on its 402 (the request the
+    // wallet signs for); /api/hinted quotes 5000000 base units of USDC ($5)
+    // beside a decimals hint of 18; /api/fixed quotes $0.01. Every unpaid
+    // request is counted, and a request carrying a signature is counted and
+    // answered 200.
+    const switchRow = { slug: "switch", method: "POST", path: "/api/switch", price: "$0.01", description: "switch", category: "util", computePayable: false };
+    const fixedRow = { slug: "fixed", method: "POST", path: "/api/fixed", price: "$0.01", description: "fixed", category: "util", computePayable: false };
+    const hintedRow = { slug: "hinted", method: "POST", path: "/api/hinted", price: "$0.01", description: "hinted", category: "util", computePayable: false };
+    seen.switchUnpaid = 0; seen.signed = 0;
     const catalogRow = { slug: "chat", method: "POST", path: "/v1/chat/completions", price: `$${LIST_USD}`, description: "chat", category: "llm", computePayable: false };
     // A route that refuses every request, the paid retry included, the way this
     // server's paywall does: 402 + PAYMENT-REQUIRED + a JSON body that mirrors
@@ -354,11 +428,44 @@ try {
       "/api/plain-400": [400, '{"error": "bad input", "expected": {"text": "string"}}'],
       "/api/plain-502": [502, '{"error": "upstream failed", "status": 502, "hint": "retry later"}'],
     };
+    // A second origin a redirect points at. Every request it gets is counted:
+    // a paid call must never reach it, unpaid or signed.
+    const elsewhereSeen = { unpaid: 0, signed: 0 };
+    const elsewhere = createServer((req, res) => {
+      req.resume();
+      if (req.headers["payment-signature"] || req.headers["x-payment"]) { elsewhereSeen.signed++; res.writeHead(200, { "Content-Type": "application/json" }); return res.end('{"from":"elsewhere"}'); }
+      elsewhereSeen.unpaid++;
+      res.writeHead(402, { "Content-Type": "application/json", "PAYMENT-REQUIRED": signable(req.url.split("?")[0], 1000) });
+      res.end("{}");
+    });
+    await new Promise((r) => elsewhere.listen(0, "127.0.0.1", r));
+    const ELSEWHERE = `http://127.0.0.1:${elsewhere.address().port}`;
+    // /api/redir-first redirects before any 402; /api/redir-paid quotes an
+    // honest 402 and redirects the signed retry.
+    const redirRows = [
+      { slug: "redir-first", method: "POST", path: "/api/redir-first", price: "$0.001", description: "redirect first", category: "util", computePayable: false },
+      { slug: "redir-paid", method: "POST", path: "/api/redir-paid", price: "$0.001", description: "redirect paid", category: "util", computePayable: false },
+    ];
+    seen.redirPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/redir-first")) { req.resume(); res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
+      if (req.url.startsWith("/api/redir-paid")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.redirPaidSigned++; res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
+        return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/redir-paid", 1000) });
+      }
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
+      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted") || req.url.startsWith("/api/fixed")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return send(200, { ok: true }); }
+        const path = req.url.split("?")[0];
+        seen.switchUnpaid++;
+        if (path === "/api/hinted") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 5000000, { decimals: 18 }) });
+        return send(402, {}, { "PAYMENT-REQUIRED": signable(path, path === "/api/fixed" ? 10000 : 5000000) });
+      }
       if (req.url.startsWith("/api/refused")) {
         if (req.headers["payment-signature"] || req.headers["x-payment"]) seen.refusedPaid++;
         req.resume();
@@ -419,10 +526,10 @@ try {
     try {
       const refused = await call(wallet, "premium-model");
       if (!refused.isError || !/Refused without paying/.test(text(refused))) {
-        fail(`the wallet path must refuse an over-cap quote before signing: ${text(refused).slice(0, 300)}`);
+        fail(`the wallet path must refuse an over-cap quote at signing: ${text(refused).slice(0, 300)}`);
       }
       if (seen.authorized !== walletBefore) fail("the wallet path paid a call it had refused");
-      console.log("the wallet path reads the same quote and refuses before signing ✓");
+      console.log("the wallet path refuses an over-cap quote at signing ✓");
 
       // A refused PAID call reads as its reason, not as the offer the 402 body
       // also carries: kilobytes of accepts and schemas an agent cannot act on.
@@ -443,7 +550,75 @@ try {
         if (!r.isError || pt !== PLAIN[row.path][1]) fail(`${row.slug}: an error body with no x402 offer must reach the agent byte-identical, got: ${pt.slice(0, 300)}`);
       }
       console.log("a plain 400 and 502 reach the agent byte-identical, with no offer note ✓");
-    } finally { await wallet.close().catch(() => {}); }
+
+      // No unpaid preflight on the wallet path: a capped call under the cap
+      // makes exactly one request before it pays (the paid request's own 402),
+      // then one signed request.
+      seen.switchUnpaid = 0; seen.signed = 0;
+      const fixed = await wallet.callTool({ name: "catalog.call", arguments: { slug: "fixed", params: { text: "x" } } });
+      if (fixed.isError) fail(`a quote inside the cap must pay: ${text(fixed).slice(0, 300)}`);
+      if (seen.switchUnpaid !== 1 || seen.signed !== 1) fail(`a capped wallet call must make one unpaid request then one signed one (saw ${seen.switchUnpaid} unpaid, ${seen.signed} signed)`);
+      console.log("a capped wallet call sends no preflight: one 402, then the signed request ✓");
+
+      // The cap holds on the payment that is SIGNED: the route lists at $0.01
+      // and its 402 asks $5, and the signing guard refuses it.
+      seen.switchUnpaid = 0; seen.signed = 0;
+      const switched = await wallet.callTool({ name: "catalog.call", arguments: { slug: "switch", params: { text: "x" } } });
+      if (seen.switchUnpaid !== 1) fail(`expected only the paid request's own 402, no preflight (saw ${seen.switchUnpaid} unpaid requests)`);
+      if (seen.signed !== 0) fail("the wallet signed a $5 payment over a $0.10 cap");
+      if (!switched.isError || !/Refused without paying/.test(text(switched)) || !/\$5\b/.test(text(switched))) fail(`a 402 quoting above the list price and the cap must be refused at signing: ${text(switched).slice(0, 300)}`);
+      console.log("an over-cap 402 is refused at signing ✓");
+
+      // A seller decimals hint does not lower the price: 5000000 base units of
+      // USDC is $5 whatever decimals the accept declares.
+      seen.signed = 0;
+      const hinted = await wallet.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
+      if (seen.signed !== 0 || !hinted.isError || !/Refused without paying/.test(text(hinted))) fail(`a $5 quote declared at 18 decimals must be refused: ${text(hinted).slice(0, 300)}`);
+      console.log("a quote is priced from the known asset, not the seller's decimals hint ✓");
+
+      // A paid call never follows a redirect: not to another origin's 402,
+      // and not with a signature already made.
+      const first = await wallet.callTool({ name: "catalog.call", arguments: { slug: "redir-first", params: { text: "x" } } });
+      if (!first.isError || !/never follow redirects/.test(text(first)) || !text(first).includes(ELSEWHERE)) fail(`a redirect before the 402 must be refused, naming where it pointed: ${text(first).slice(0, 300)}`);
+      const paidRedirect = await wallet.callTool({ name: "catalog.call", arguments: { slug: "redir-paid", params: { text: "x" } } });
+      if (seen.redirPaidSigned !== 1) fail(`control: the redirecting route must have received its signed retry (saw ${seen.redirPaidSigned})`);
+      if (!paidRedirect.isError || !/never follow redirects/.test(text(paidRedirect))) fail(`a redirect of the signed retry must be refused: ${text(paidRedirect).slice(0, 300)}`);
+      if (elsewhereSeen.unpaid !== 0 || elsewhereSeen.signed !== 0) fail(`the other origin must get no request at all (saw ${elsewhereSeen.unpaid} unpaid, ${elsewhereSeen.signed} signed)`);
+      console.log("a paid call refuses a redirect, before the 402 and after signing; the other origin sees nothing ✓");
+    } finally { await wallet.close().catch(() => {}); elsewhere.close(); }
+
+    // The session budget is checked at signing too: $0.03 left, and the paid
+    // request's 402 asks $5 for a route listed at $0.01.
+    {
+      const budgeted = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.03" });
+      try {
+        seen.switchUnpaid = 0; seen.signed = 0;
+        const r = await budgeted.callTool({ name: "catalog.call", arguments: { slug: "switch", params: { text: "x" } } });
+        if (seen.signed !== 0 || !r.isError || !/AGENT402_BUDGET/.test(text(r))) fail(`the budget must hold at signing: ${text(r).slice(0, 300)}`);
+        const info = JSON.parse(text(await budgeted.callTool({ name: "get_payment_info", arguments: {} })));
+        if (info.spendControls?.maxPerCallUsd !== "unlimited" || info.spendControls?.spentThisSessionUsd !== 0) fail(`off disables the per-call cap and a refusal spends nothing: ${JSON.stringify(info.spendControls)}`);
+        console.log("the session budget holds at signing; off disables the per-call cap ✓");
+      } finally { await budgeted.close().catch(() => {}); }
+    }
+
+    // Defaults: with neither variable set, a $5 quote is refused (the default
+    // per-call cap), the default covers the dearest tool in the catalog, and
+    // there is no session budget (opt-in), so a long session is never refused.
+    {
+      const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
+      try {
+        seen.signed = 0;
+        const r = await defaults.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
+        if (seen.signed !== 0 || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`the default per-call cap must refuse a $5 quote: ${text(r).slice(0, 300)}`);
+        const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
+        const perCall = info.spendControls?.maxPerCallUsd, budget = info.spendControls?.sessionBudgetUsd;
+        if (!(Number.isFinite(perCall) && budget === "unlimited" && info.spendControls?.remainingUsd === "unlimited")) fail(`a finite default per-call cap and no default session budget expected: ${JSON.stringify(info.spendControls)}`);
+        const pricing = await (await fetch(`${API}/api/pricing`)).json();
+        const dearest = Math.max(...pricing.endpoints.map((e) => parseFloat(String(e.price).replace(/[^0-9.]/g, "")) || 0));
+        if (!(dearest > 0 && perCall >= dearest)) fail(`the default per-call cap $${perCall} must cover the dearest catalog price $${dearest}`);
+        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), no session budget ✓`);
+      } finally { await defaults.close().catch(() => {}); }
+    }
     await new Promise((r) => stub.close(r));
   }
 

@@ -7,6 +7,7 @@
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-refund-ledger-pg.js
 import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,9 +65,9 @@ try {
       console.log(JSON.stringify({ n, imported: rl.listRefunds({ status: "all" }).length }));
       await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
     `;
-    const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+    const out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
       env: { ...process.env, STATE_DB_SCHEMA: `${sdb.stateDbSchema()}_imp`, LEDGER_MIRROR_MARGIN_MS: "60000", LEDGER_MIRROR_REFRESH_MS: "1000000000" }, cwd: ROOT, encoding: "utf8",
-    }).trim().split("\n").pop());
+    }));
     ok(out.imported === 3 && out.n === 0, `M2: the first refresh after an import pulls none of the imported rows (${out.n}; mirror holds ${out.imported})`);
   }
 
@@ -124,15 +125,15 @@ try {
     console.log(JSON.stringify({ rows, totals: rl.refundTotals(), alarm: rl.refundAlarmStatus().status }));
     await sdb.closeStateDb();
   `;
-  const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  const out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }));
   const ev = out.rows.map((r) => r[1]);
   ok(ev.filter((e) => e === "ALGO-file3").length === 1 && (await pgRows("evidence = $1", ["ALGO-file3"])).length === 1, "a debt missing from the table is restored from the file at the next boot (insert-if-absent by evidence), once");
   ok(ev.includes("0xnew1") && out.rows.find((r) => r[1] === "0xnew1")[2] === "paid", "the second boot reads the table's current state, not the file");
   ok(out.rows.find((r) => r[1] === "0xpush1")[3].endsWith("then disconnected"), "the second boot sees the note rewrite");
-  ok(out.alarm === "ok" || out.alarm === "aging", `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
+  ok(["ok", "owed", "aging"].includes(out.alarm), `the second boot's alarm reads from a loaded mirror (${out.alarm})`);
 
   // ---- roll-forward after a rollback -----------------------------------------
-  const boot = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  const boot = () => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }));
   // (a) an ordinary write-through: the file sits within the grace of the table's newest row, so a file edit is not applied.
   ok((await rl.recordRefundOwed({ slug: "r", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000004", priceUsd: 0.005, tx: "0xroll1", httpStatus: 500 })) === true, "a debt booked by the database build (written through to the file)");
   { const f = new Database(FILE); f.prepare("UPDATE refunds SET note = 'file edit within grace' WHERE evidence = '0xroll1'").run(); f.close(); }

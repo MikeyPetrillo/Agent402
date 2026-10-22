@@ -28,6 +28,25 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(tickerSuggestions(map, "zzzz").length === 0, "no match suggests nothing");
 }
 
+// --- an EDGAR 5xx is read once more, inside the budget (offline) ---
+{
+  const { withEdgarRetry } = await import("../src/tools/edgar-kit.js");
+  const e5 = (s) => Object.assign(new Error(`EDGAR upstream HTTP ${s} - try again later`), { statusCode: 502, upstreamStatus: s });
+  const e404 = Object.assign(new Error("EDGAR returned 404"), { statusCode: 422, upstreamStatus: 404 });
+  const seq = (answers) => { let n = 0; const f = async () => { const a = answers[n++]; if (a instanceof Error) throw a; return a; }; f.calls = () => n; return f; };
+  let r = seq([e5(500), { ok: 1 }]);
+  ok((await withEdgarRetry(r, { pauseMs: 0, budget: null })).ok === 1 && r.calls() === 2, "an EDGAR 500 is retried once and the second answer is used");
+  r = seq([e5(503), e5(500)]);
+  let err = null; try { await withEdgarRetry(r, { pauseMs: 0, budget: null }); } catch (e) { err = e; }
+  ok(err?.statusCode === 502 && r.calls() === 2, "a second 5xx stands as the 502 (two reads, no more)");
+  r = seq([e404]);
+  err = null; try { await withEdgarRetry(r, { pauseMs: 0, budget: null }); } catch (e) { err = e; }
+  ok(err?.statusCode === 422 && r.calls() === 1, "a 404 is not retried");
+  r = seq([e5(500), { ok: 1 }]);
+  err = null; try { await withEdgarRetry(r, { pauseMs: 0, budget: { remaining: () => 1_000 } }); } catch (e) { err = e; }
+  ok(err?.statusCode === 502 && r.calls() === 1, "with too little budget left the 5xx stands without a retry");
+}
+
 // --- an empty first search page is read once more (offline, stubbed reader) ---
 {
   const { eftsSearchWith } = await import("../src/tools/edgar-kit.js");

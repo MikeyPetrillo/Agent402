@@ -34,6 +34,7 @@
 const USDC_DECIMALS = 6;
 import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { unpackRequestContract } from "./request-contract.js";
+import { boundedProbeExample, MAX_EXAMPLE_BYTES } from "./probe-example.js";
 const USDC_NAME = /^(usdc|usd coin)$/i;
 
 /**
@@ -301,16 +302,31 @@ export function probeBodyFor(tool) {
 /**
  * Every unpaid request one quote probe may make for a route, in order: each
  * target (placeholder query first, then bare) by each allowed verb, and for a
- * POST the placeholder body before `{}`. Duplicates are dropped, so a route
- * that declares nothing makes exactly the requests it always did.
+ * POST the seller's own example request first, then the placeholder body, then
+ * `{}`. Duplicates are dropped, so a route that declares nothing makes exactly
+ * the requests it always did.
+ *
+ * `example` is the one private use of a seller sample (src/probe-example.js):
+ * already bounded JSON text, read from the seller's own document during this
+ * crawl, sent only as the body of this probe to the targets probeTargetsFor
+ * yields for the seller's own route, with none of the seller's headers. It is
+ * never persisted, logged or projected; request-contract.js keeps its "shape, not
+ * the sample" rule for every projection.
  */
-export function probeAttemptsFor(originUrl, tool) {
+export function probeAttemptsFor(originUrl, tool, { example = null } = {}) {
   const filled = probeBodyFor(tool);
+  // Re-checked here against every bound, whoever built the text.
+  let own = null;
+  if (typeof example === "string" && example.length <= MAX_EXAMPLE_BYTES) {
+    try { own = boundedProbeExample(JSON.parse(example)); } catch { own = null; }
+  }
+  // An empty example says nothing the bare `{}` does not; it keeps its place last.
+  if (own === "{}") own = null;
   const out = [];
   const seen = new Set();
   for (const target of probeTargetsFor(originUrl, tool)) {
     for (const method of probeMethodsFor(tool)) {
-      const bodies = method === "POST" ? [filled, "{}"].filter(Boolean) : [null];
+      const bodies = method === "POST" ? [own, filled, "{}"].filter(Boolean) : [null];
       for (const body of bodies) {
         const k = `${method} ${target} ${body}`;
         if (seen.has(k)) continue;

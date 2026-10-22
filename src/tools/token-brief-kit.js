@@ -31,6 +31,7 @@
 // state, LP-locked bucket, top-holder bucket, banded risk level, rugged flag.
 // A changed fingerprint is what triggers a paid re-run + alert, exactly like
 // probeDomain / probeRecalls.
+import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { checkReportGrounding } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
@@ -200,6 +201,9 @@ const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, ""))
 function makeTokenBriefHandlerInner(tierSlug) {
   const t = TOKEN_BRIEF_TIERS[tierSlug];
   return async (input, req) => {
+    // Job progress (src/job-progress.js): a no-op outside an async job or task.
+    const steps = stepProgress(2, req);
+    steps.next("reading on-chain data");
     if (!input || typeof input !== "object") throw bad(`Body must be a JSON object: {"mint": "${MINTS.JUP}"}`);
     const mint = normMint(input);
     const user = safeUser(req);
@@ -363,6 +367,7 @@ ${holderBlock}
 ${riskBlock}`;
 
     let spent = 0;
+    steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose = proseOf(sd, cutShort);

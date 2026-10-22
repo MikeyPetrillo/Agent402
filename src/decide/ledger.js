@@ -128,11 +128,19 @@ function ensureSqliteSchema(db) {
   // and paid again cannot run the same plan twice.
   try { db.exec("ALTER TABLE runs ADD COLUMN run_key TEXT"); } catch { /* already there */ }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS runs_decision_key ON runs (decision_id, run_key) WHERE run_key IS NOT NULL");
+  // Added for the decide stats (no text): the planner version and plan shape
+  // a decision was built with, copied onto each of its runs, and whether the
+  // traffic was our own (signed probes, our wallets).
+  for (const t of ["decisions", "runs"]) {
+    for (const col of ["planner_version TEXT", "shape_key TEXT", "synthetic INTEGER NOT NULL DEFAULT 0"]) {
+      try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already there */ }
+    }
+  }
 }
 
 function prepareSqlite(db) {
   return {
-    saveDecision: db.prepare("INSERT OR REPLACE INTO decisions (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES (?,?,?,?,?,?,?,0,?)"),
+    saveDecision: db.prepare("INSERT OR REPLACE INTO decisions (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash, planner_version, shape_key, synthetic) VALUES (?,?,?,?,?,?,?,0,?,?,?,?)"),
     feedback: db.prepare("INSERT INTO feedback (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(decision_id, step) DO UPDATE SET tool_id = excluded.tool_id, outcome = excluded.outcome, quality = excluded.quality, latency_ms = excluded.latency_ms, created_at = excluded.created_at"),
     feedbackExisting: db.prepare("SELECT 1 FROM feedback WHERE decision_id = ? AND step = ?"),
     getDecision: db.prepare("SELECT * FROM decisions WHERE id = ?"),
@@ -142,7 +150,7 @@ function prepareSqlite(db) {
     credit: db.prepare("SELECT * FROM credits WHERE token_hash = ?"),
     redeem: db.prepare("UPDATE credits SET state = 'redeemed', run_id = ? WHERE token_hash = ? AND decision_id = ? AND state = 'active' AND expires_at > ?"),
     restore: db.prepare("UPDATE credits SET state = 'active', run_id = NULL WHERE token_hash = ? AND state = 'redeemed' AND run_id = ?"),
-    createRun: db.prepare("INSERT INTO runs (id, decision_id, payer, status, budget_micro, credit_micro, created_at, run_key) VALUES (?,?,?, 'running', ?, ?, ?, ?)"),
+    createRun: db.prepare("INSERT INTO runs (id, decision_id, payer, status, budget_micro, credit_micro, created_at, run_key, planner_version, shape_key, synthetic) VALUES (?,?,?, 'running', ?, ?, ?, ?, ?, ?, ?)"),
     runByKey: db.prepare("SELECT id, status, payer, spent_micro, steps_json FROM runs WHERE decision_id = ? AND run_key = ?"),
     releaseRunKey: db.prepare("UPDATE runs SET run_key = NULL WHERE id = ?"),
     finishRun: db.prepare("UPDATE runs SET status = ?, spent_micro = ?, steps_json = ?, finished_at = ? WHERE id = ?"),
@@ -158,6 +166,8 @@ function prepareSqlite(db) {
     sellerHoldSet: db.prepare("UPDATE seller_spend SET micro = ? WHERE rowid = ?"),
     sellerHoldDrop: db.prepare("DELETE FROM seller_spend WHERE rowid = ?"),
     sellerSince: db.prepare("SELECT COALESCE(SUM(micro),0) AS s FROM seller_spend WHERE seller = ? AND created_at >= ?"),
+    statsDecisions: db.prepare("SELECT id, created_at, depth, payer, settled, planner_version, shape_key, synthetic FROM decisions WHERE created_at >= ?"),
+    statsRuns: db.prepare("SELECT id, decision_id, payer, status, steps_json, created_at, planner_version, shape_key, synthetic FROM runs WHERE created_at >= ?"),
   };
 }
 
@@ -195,8 +205,8 @@ function openFileLedger(path) {
   const st = prepareSqlite(db);
   const payerExposure = (payer, sinceMs, now) => usd(st.payerSince.get(payer || "", sinceMs).s + st.payerRunning.get(payer || "", now - RUN_MAX_MS).s);
   const globalExposure = (sinceMs, now) => usd(st.globalSince.get(sinceMs).s + st.globalRunning.get(now - RUN_MAX_MS).s);
-  const insertRun = ({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now }) => {
-    try { st.createRun.run(runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey); return true; }
+  const insertRun = ({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, plannerVersion = null, shapeKey = null, synthetic = false }) => {
+    try { st.createRun.run(runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey, plannerVersion || null, shapeKey || null, synthetic ? 1 : 0); return true; }
     catch (e) { if (runKey && /UNIQUE/.test(String(e?.message))) return false; throw e; }
   };
   // The caps and the booking in one transaction (see bookRun).
@@ -219,8 +229,8 @@ function openFileLedger(path) {
     db,
     async: false,
     ready: Promise.resolve(),
-    saveDecision({ decisionId, depth, priceUsd, payer, plan, costViaUsd, feedbackHash = null, now = Date.now() }) {
-      st.saveDecision.run(decisionId, now, depth, micro(priceUsd), payer || null, JSON.stringify(plan), micro(costViaUsd), feedbackHash);
+    saveDecision({ decisionId, depth, priceUsd, payer, plan, costViaUsd, feedbackHash = null, now = Date.now(), plannerVersion = null, shapeKey = null, synthetic = false }) {
+      st.saveDecision.run(decisionId, now, depth, micro(priceUsd), payer || null, JSON.stringify(plan), micro(costViaUsd), feedbackHash, plannerVersion || null, shapeKey || null, synthetic ? 1 : 0);
     },
     /** True when `token` is the feedback token minted with this decision, the
      *  decision's payment settled, and it is no older than `maxAgeMs`. */
@@ -241,7 +251,7 @@ function openFileLedger(path) {
     getDecision(id) {
       const r = st.getDecision.get(String(id || ""));
       if (!r) return null;
-      return { id: r.id, createdAt: r.created_at, depth: r.depth, priceUsd: usd(r.price_micro), payer: r.payer, plan: JSON.parse(r.plan_json), costViaUsd: usd(r.cost_via_micro), settled: !!r.settled };
+      return { id: r.id, createdAt: r.created_at, depth: r.depth, priceUsd: usd(r.price_micro), payer: r.payer, plan: JSON.parse(r.plan_json), costViaUsd: usd(r.cost_via_micro), settled: !!r.settled, plannerVersion: r.planner_version || null, shapeKey: r.shape_key || null, synthetic: !!r.synthetic };
     },
     markDecisionSettled(id) { st.settleDecision.run(id); },
 
@@ -283,16 +293,16 @@ function openFileLedger(path) {
     restoreCredit(token, runId) { if (typeof token === "string" && token) st.restore.run(hashToken(token), runId); },
 
     /** Returns false when a run with this (decision, runKey) already exists. */
-    createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now() }) {
-      return insertRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now });
+    createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), plannerVersion = null, shapeKey = null, synthetic = false }) {
+      return insertRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, plannerVersion, shapeKey, synthetic });
     },
     /** createRun with the spend ceilings checked in the SAME atomic step as the
      *  booking: `caps` = { payerHourUsd, payerDayUsd, globalDayUsd (null when
      *  the plan pays no outside seller), hourSinceMs, daySinceMs }. Answers
      *  { ok: true } or { ok: false, reason: "key" | "payerHour" | "global" |
      *  "payerDay" }; a refused booking writes nothing. */
-    bookRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), caps = null }) {
-      return bookRunTx({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, caps });
+    bookRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), caps = null, plannerVersion = null, shapeKey = null, synthetic = false }) {
+      return bookRunTx({ runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, caps, plannerVersion, shapeKey, synthetic });
     },
     runByKey(decisionId, runKey) {
       const r = runKey ? st.runByKey.get(decisionId, runKey) : null;
@@ -327,11 +337,26 @@ function openFileLedger(path) {
     },
     sellerSpendUsd(seller, sinceMs) { return usd(st.sellerSince.get(String(seller || ""), sinceMs).s); },
     globalExposureUsd(sinceMs, now = Date.now()) { return globalExposure(sinceMs, now); },
+    /** Decisions and runs since `sinceMs`, for the operator stats: no plan, no
+     *  params, no credit; a run's steps only (their outcome and skip codes). */
+    statsRows(sinceMs) {
+      return { decisions: st.statsDecisions.all(sinceMs).map(statsDecisionRow), runs: st.statsRuns.all(sinceMs).map(statsRunRow) };
+    },
   };
   // The synchronous reads the 402 quote uses: on this backend, the reads themselves.
   api.getDecisionSync = api.getDecision;
   api.creditAvailableUsdSync = api.creditAvailableUsd;
   return api;
+}
+
+// The stats rows, one shape for both backends.
+function statsDecisionRow(r) {
+  return { id: r.id, createdAt: Number(r.created_at), depth: r.depth, payer: r.payer || null, settled: Number(r.settled) === 1, plannerVersion: r.planner_version || null, shapeKey: r.shape_key || null, synthetic: Number(r.synthetic) === 1 };
+}
+function statsRunRow(r) {
+  let steps = [];
+  try { steps = JSON.parse(r.steps_json || "[]"); } catch { /* keep [] */ }
+  return { id: r.id, decisionId: r.decision_id, payer: r.payer || null, status: r.status, createdAt: Number(r.created_at), plannerVersion: r.planner_version || null, shapeKey: r.shape_key || null, synthetic: Number(r.synthetic) === 1, steps: Array.isArray(steps) ? steps : [] };
 }
 
 // ---- state database backend --------------------------------------------------
@@ -373,6 +398,13 @@ const PG_DDL = (T) => `
   );
   CREATE INDEX IF NOT EXISTS decide_ledger_seller_spend_seller ON ${T("seller_spend")} (seller, created_at);
   CREATE INDEX IF NOT EXISTS decide_ledger_seller_spend_created ON ${T("seller_spend")} (created_at);
+  ALTER TABLE ${T("decisions")} ADD COLUMN IF NOT EXISTS planner_version TEXT;
+  ALTER TABLE ${T("decisions")} ADD COLUMN IF NOT EXISTS shape_key TEXT;
+  ALTER TABLE ${T("decisions")} ADD COLUMN IF NOT EXISTS synthetic INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ${T("runs")} ADD COLUMN IF NOT EXISTS planner_version TEXT;
+  ALTER TABLE ${T("runs")} ADD COLUMN IF NOT EXISTS shape_key TEXT;
+  ALTER TABLE ${T("runs")} ADD COLUMN IF NOT EXISTS synthetic INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX IF NOT EXISTS decide_ledger_decisions_created ON ${T("decisions")} (created_at);
 `;
 const num = (v) => (v == null ? null : Number(v));
 
@@ -406,7 +438,7 @@ function openDatabaseLedger(path) {
   // Mirror for the synchronous quote reads.
   const decisions = new Map();
   const credits = new Map();
-  const rowDecision = (r) => (r ? { id: r.id, createdAt: num(r.created_at), depth: r.depth, priceUsd: usd(r.price_micro), payer: r.payer, plan: JSON.parse(r.plan_json), costViaUsd: usd(r.cost_via_micro), settled: num(r.settled) === 1, feedbackHash: r.feedback_hash || null } : null);
+  const rowDecision = (r) => (r ? { id: r.id, createdAt: num(r.created_at), depth: r.depth, priceUsd: usd(r.price_micro), payer: r.payer, plan: JSON.parse(r.plan_json), costViaUsd: usd(r.cost_via_micro), settled: num(r.settled) === 1, feedbackHash: r.feedback_hash || null, plannerVersion: r.planner_version || null, shapeKey: r.shape_key || null, synthetic: num(r.synthetic) === 1 } : null);
   const rowCredit = (r) => (r ? { hash: r.token_hash, decisionId: r.decision_id, payer: r.payer, amountMicro: num(r.amount_micro), expiresAt: num(r.expires_at), state: r.state, runId: r.run_id, createdAt: num(r.created_at) } : null);
   const publicDecision = ({ feedbackHash, ...d }) => d;
   const remember = (d) => { if (d) decisions.set(d.id, d); return d; };
@@ -446,9 +478,9 @@ function openDatabaseLedger(path) {
     try {
       const tables = new Set(src.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
       if (tables.has("decisions")) for (const r of src.prepare("SELECT * FROM decisions").all()) {
-        await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-          ${upsert("(id)", "created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = EXCLUDED.settled, feedback_hash = EXCLUDED.feedback_hash")}`,
-          [r.id, r.created_at, r.depth, r.price_micro, r.payer ?? null, r.plan_json, r.cost_via_micro, r.settled ? 1 : 0, r.feedback_hash ?? null]); rows++;
+        await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash, planner_version, shape_key, synthetic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          ${upsert("(id)", "created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = EXCLUDED.settled, feedback_hash = EXCLUDED.feedback_hash, planner_version = EXCLUDED.planner_version, shape_key = EXCLUDED.shape_key, synthetic = EXCLUDED.synthetic")}`,
+          [r.id, r.created_at, r.depth, r.price_micro, r.payer ?? null, r.plan_json, r.cost_via_micro, r.settled ? 1 : 0, r.feedback_hash ?? null, r.planner_version ?? null, r.shape_key ?? null, r.synthetic ? 1 : 0]); rows++;
       }
       if (tables.has("credits")) for (const r of src.prepare("SELECT * FROM credits").all()) {
         await q(`INSERT INTO ${T("credits")} (token_hash, decision_id, payer, amount_micro, expires_at, state, run_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -458,9 +490,9 @@ function openDatabaseLedger(path) {
       if (tables.has("runs")) for (const r of src.prepare("SELECT * FROM runs").all()) {
         // A run key the table already holds on another run keeps that run's key.
         if (win === "file" && r.run_key != null) await q(`UPDATE ${T("runs")} SET run_key = NULL, updated_at = now() WHERE decision_id = $1 AND run_key = $2 AND id <> $3`, [r.decision_id, r.run_key, r.id]);
-        await q(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, spent_micro, credit_micro, steps_json, created_at, finished_at, run_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-          ${upsert("(id)", "decision_id = EXCLUDED.decision_id, payer = EXCLUDED.payer, status = EXCLUDED.status, budget_micro = EXCLUDED.budget_micro, spent_micro = EXCLUDED.spent_micro, credit_micro = EXCLUDED.credit_micro, steps_json = EXCLUDED.steps_json, created_at = EXCLUDED.created_at, finished_at = EXCLUDED.finished_at, run_key = EXCLUDED.run_key")}`,
-          [r.id, r.decision_id, r.payer ?? null, r.status, r.budget_micro, r.spent_micro ?? 0, r.credit_micro ?? 0, r.steps_json ?? "[]", r.created_at, r.finished_at ?? null, r.run_key ?? null]); rows++;
+        await q(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, spent_micro, credit_micro, steps_json, created_at, finished_at, run_key, planner_version, shape_key, synthetic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          ${upsert("(id)", "decision_id = EXCLUDED.decision_id, payer = EXCLUDED.payer, status = EXCLUDED.status, budget_micro = EXCLUDED.budget_micro, spent_micro = EXCLUDED.spent_micro, credit_micro = EXCLUDED.credit_micro, steps_json = EXCLUDED.steps_json, created_at = EXCLUDED.created_at, finished_at = EXCLUDED.finished_at, run_key = EXCLUDED.run_key, planner_version = EXCLUDED.planner_version, shape_key = EXCLUDED.shape_key, synthetic = EXCLUDED.synthetic")}`,
+          [r.id, r.decision_id, r.payer ?? null, r.status, r.budget_micro, r.spent_micro ?? 0, r.credit_micro ?? 0, r.steps_json ?? "[]", r.created_at, r.finished_at ?? null, r.run_key ?? null, r.planner_version ?? null, r.shape_key ?? null, r.synthetic ? 1 : 0]); rows++;
       }
       if (tables.has("feedback")) for (const r of src.prepare("SELECT * FROM feedback").all()) {
         await q(`INSERT INTO ${T("feedback")} (decision_id, step, tool_id, outcome, quality, latency_ms, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -547,10 +579,10 @@ function openDatabaseLedger(path) {
   const globalExposureWith = async (run, sinceMs, now) => usd(
     sum(await run(`SELECT COALESCE(SUM(micro),0)::bigint AS s FROM ${T("seller_spend")} WHERE created_at >= $1`, [sinceMs]))
     + sum(await run(`SELECT COALESCE(SUM(budget_micro),0)::bigint AS s FROM ${T("runs")} WHERE status = 'running' AND created_at >= $1`, [now - RUN_MAX_MS])));
-  const insertRunWith = async (run, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now }) => {
-    const r = await run(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, credit_micro, created_at, run_key) VALUES ($1,$2,$3,'running',$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING id`,
-      [runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey]);
-    if (r.rowCount === 1) { through((w) => w.createRun.run(runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey)); return true; }
+  const insertRunWith = async (run, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, plannerVersion = null, shapeKey = null, synthetic = false }) => {
+    const r = await run(`INSERT INTO ${T("runs")} (id, decision_id, payer, status, budget_micro, credit_micro, created_at, run_key, planner_version, shape_key, synthetic) VALUES ($1,$2,$3,'running',$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id`,
+      [runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey, plannerVersion || null, shapeKey || null, synthetic ? 1 : 0]);
+    if (r.rowCount === 1) { through((w) => w.createRun.run(runId, decisionId, payer || null, micro(budgetUsd), micro(creditUsd), now, runKey, plannerVersion || null, shapeKey || null, synthetic ? 1 : 0)); return true; }
     if (runKey) return false;
     throw new Error("run id already exists");
   };
@@ -559,15 +591,16 @@ function openDatabaseLedger(path) {
     db: null,
     async: true,
     get ready() { return readyP(); },
-    async saveDecision({ decisionId, depth, priceUsd, payer, plan, costViaUsd, feedbackHash = null, now = Date.now() }) {
+    async saveDecision({ decisionId, depth, priceUsd, payer, plan, costViaUsd, feedbackHash = null, now = Date.now(), plannerVersion = null, shapeKey = null, synthetic = false }) {
       await readyP();
       const planJson = JSON.stringify(plan);
-      const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8)
-        ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = 0, feedback_hash = EXCLUDED.feedback_hash, updated_at = now()
-        RETURNING *`, [decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash]);
+      const syn = synthetic ? 1 : 0;
+      const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash, planner_version, shape_key, synthetic) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11)
+        ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, depth = EXCLUDED.depth, price_micro = EXCLUDED.price_micro, payer = EXCLUDED.payer, plan_json = EXCLUDED.plan_json, cost_via_micro = EXCLUDED.cost_via_micro, settled = 0, feedback_hash = EXCLUDED.feedback_hash, planner_version = EXCLUDED.planner_version, shape_key = EXCLUDED.shape_key, synthetic = EXCLUDED.synthetic, updated_at = now()
+        RETURNING *`, [decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash, plannerVersion || null, shapeKey || null, syn]);
       remember(rowDecision(r.rows[0]));
       pruneMirror(now);
-      through((w) => w.saveDecision.run(decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash));
+      through((w) => w.saveDecision.run(decisionId, now, depth, micro(priceUsd), payer || null, planJson, micro(costViaUsd), feedbackHash, plannerVersion || null, shapeKey || null, syn));
     },
     async feedbackTokenOk(decisionId, token, { now = Date.now(), maxAgeMs = 7 * 86_400_000 } = {}) {
       await readyP();
@@ -658,11 +691,11 @@ function openDatabaseLedger(path) {
       const r = await q(`UPDATE ${T("credits")} SET state = 'active', run_id = NULL, updated_at = now() WHERE token_hash = $1 AND state = 'redeemed' AND run_id = $2 RETURNING *`, [h, runId]);
       if (r.rowCount === 1) { rememberCredit(rowCredit(r.rows[0])); through((w) => w.restore.run(h, runId)); }
     },
-    async createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now() }) {
+    async createRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), plannerVersion = null, shapeKey = null, synthetic = false }) {
       await readyP();
-      return insertRunWith(q, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now });
+      return insertRunWith(q, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, plannerVersion, shapeKey, synthetic });
     },
-    async bookRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), caps = null }) {
+    async bookRun({ runId, decisionId, payer, budgetUsd, creditUsd, runKey = null, now = Date.now(), caps = null, plannerVersion = null, shapeKey = null, synthetic = false }) {
       await readyP();
       return withStateTx(async (c) => {
         const run = (text, params) => c.query(text, params);
@@ -681,7 +714,7 @@ function openDatabaseLedger(path) {
           });
           if (reason) return { ok: false, reason };
         }
-        const booked = await insertRunWith(run, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now });
+        const booked = await insertRunWith(run, { runId, decisionId, payer, budgetUsd, creditUsd, runKey, now, plannerVersion, shapeKey, synthetic });
         return booked ? { ok: true } : { ok: false, reason: "key" };
       });
     },
@@ -744,6 +777,13 @@ function openDatabaseLedger(path) {
       return usd(sum(await q(`SELECT COALESCE(SUM(micro),0)::bigint AS s FROM ${T("seller_spend")} WHERE seller = $1 AND created_at >= $2`, [String(seller || ""), sinceMs])));
     },
     async globalExposureUsd(sinceMs, now = Date.now()) { await readyP(); return globalExposureWith(q, sinceMs, now); },
+    /** Decisions and runs since `sinceMs`, for the operator stats (see the file backend). */
+    async statsRows(sinceMs) {
+      await readyP();
+      const d = await q(`SELECT id, created_at, depth, payer, settled, planner_version, shape_key, synthetic FROM ${T("decisions")} WHERE created_at >= $1`, [sinceMs]);
+      const r = await q(`SELECT id, decision_id, payer, status, steps_json, created_at, planner_version, shape_key, synthetic FROM ${T("runs")} WHERE created_at >= $1`, [sinceMs]);
+      return { decisions: d.rows.map(statsDecisionRow), runs: r.rows.map(statsRunRow) };
+    },
 
     // ---- pending writes (see PENDING WRITES above) -------------------------
     /** Journal a write to local disk for replay; true when it is on disk. A token becomes its hash. */
@@ -788,9 +828,10 @@ function openDatabaseLedger(path) {
     switch (kind) {
       case "saveDecision": {
         // Never over a row already there: a replay must not unsettle it.
-        const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8) ON CONFLICT (id) DO NOTHING RETURNING *`,
-          [p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null]);
-        if (r.rows[0]) { remember(rowDecision(r.rows[0])); through((w) => w.saveDecision.run(p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null)); }
+        const syn = p.synthetic ? 1 : 0;
+        const r = await q(`INSERT INTO ${T("decisions")} (id, created_at, depth, price_micro, payer, plan_json, cost_via_micro, settled, feedback_hash, planner_version, shape_key, synthetic) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING RETURNING *`,
+          [p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null, p.plannerVersion || null, p.shapeKey || null, syn]);
+        if (r.rows[0]) { remember(rowDecision(r.rows[0])); through((w) => w.saveDecision.run(p.decisionId, p.now, p.depth, micro(p.priceUsd), p.payer || null, JSON.stringify(p.plan || []), micro(p.costViaUsd || 0), p.feedbackHash || null, p.plannerVersion || null, p.shapeKey || null, syn)); }
         return true;
       }
       case "markDecisionSettled": return (await api.markDecisionSettled(p.decisionId)) === true;

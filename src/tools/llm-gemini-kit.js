@@ -49,6 +49,18 @@ export const GEMINI_PATH_BY_TIER = {
   // Metered LAST (the TIERS ordering rule).
   "v1-chat-metered": "/v1/metered/gemini",
 };
+/** The model a Gemini-wire call serves when it names none: a current Gemini
+ *  model this tier admits (TIERS prefixes), so a Google GenAI SDK pointed here
+ *  without a model is answered by Gemini, not by the chat wire's default. The
+ *  auto tier routes (no default). Live ids only: the live-catalog guard
+ *  (scripts/test-gateway-model-ids.js) and test-llm-gemini-kit pin them. */
+export const GEMINI_DEFAULT_MODEL_BY_TIER = Object.freeze({
+  "v1-chat-nano": "google/gemini-3.1-flash-lite",
+  "v1-chat": "google/gemini-3.5-flash-lite",
+  "v1-chat-pro": "google/gemini-3.6-flash",
+  "v1-chat-premium": "google/gemini-3.1-pro-preview",
+  "v1-chat-metered": "google/gemini-3.5-flash-lite",
+});
 export const GEMINI_TIER_BY_PATH = Object.fromEntries(Object.entries(GEMINI_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
 const MAX_CONTENTS = 100;
@@ -258,11 +270,12 @@ export function meteredGeminiQuoteUsd(input) {
 }
 
 /** The model for this call: the `model` field the alias rewrite folded in from
- *  the Google-shaped path, else one sent in the body, else the tier default. */
-function modelOf(input, tierSlug) {
+ *  the Google-shaped path, else one sent in the body, else this wire's Gemini
+ *  default for the tier (GEMINI_DEFAULT_MODEL_BY_TIER). */
+export function modelOf(input, tierSlug) {
   const raw = input?.model;
   const m = canonicalModel(typeof raw === "string" ? raw.replace(/^models\//, "") : raw);
-  return m || TIERS[tierSlug].defaultModel;
+  return m || GEMINI_DEFAULT_MODEL_BY_TIER[tierSlug] || TIERS[tierSlug].defaultModel;
 }
 
 /** Chat path -> this wire's path, for the tiers that have BOTH. The chat
@@ -321,15 +334,19 @@ export function makeGeminiHandler(tierSlug) {
   };
 }
 
-const EXAMPLE_IN = {
+// The example's output budget per tier. The pro and premium defaults reason
+// before they speak (reasoning tokens count against maxOutputTokens), so their
+// examples leave room for the one sentence after the thinking.
+const EXAMPLE_MAX_OUTPUT_TOKENS = { "v1-chat-pro": 1024, "v1-chat-premium": 1024 };
+const exampleIn = (tierSlug) => ({
   contents: [{ role: "user", parts: [{ text: "Summarize x402 in one sentence." }] }],
-  generationConfig: { maxOutputTokens: 256 },
-};
-const EXAMPLE_OUT = {
+  generationConfig: { maxOutputTokens: EXAMPLE_MAX_OUTPUT_TOKENS[tierSlug] ?? 256 },
+});
+const exampleOut = (tierSlug) => ({
   candidates: [{ content: { role: "model", parts: [{ text: "x402 is an HTTP-native way for agents to pay per request with USDC." }] }, finishReason: "STOP", index: 0 }],
   usageMetadata: { promptTokenCount: 14, candidatesTokenCount: 18, totalTokenCount: 32 },
-  modelVersion: "google/gemini-3.5-flash-lite",
-};
+  modelVersion: GEMINI_DEFAULT_MODEL_BY_TIER[tierSlug] || "google/gemini-3.5-flash-lite",
+});
 const INPUT_SCHEMA = {
   type: "object",
   required: ["contents"],
@@ -355,9 +372,9 @@ export const LLM_GEMINI_TOOLS = Object.entries(GEMINI_PATH_BY_TIER).map(([tierSl
     // Price by model on a flat route: the same model this wire hands the chat
     // handler (modelOf), so the gate's price and the served tier agree.
     ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, modelOf(body, tierSlug)) } : {}),
-    description: `Google's native generateContent wire on the ${TIER_LABEL[tierSlug]} tier. Send Gemini's own request shape (contents, systemInstruction, generationConfig, function declarations) and get Gemini's own response shape (candidates, usageMetadata) back. Point a Google GenAI SDK at this gateway and pay per request with USDC, no account. Also answers the Google-shaped path /v1beta/models/<model>:generateContent.`,
+    description: `Google's native generateContent wire on the ${TIER_LABEL[tierSlug]} tier. Send Gemini's own request shape (contents, systemInstruction, generationConfig, function declarations) and get Gemini's own response shape (candidates, usageMetadata) back. Point a Google GenAI SDK at this gateway and pay per request with USDC, no account. Also answers the Google-shaped path /v1beta/models/<model>:generateContent.${GEMINI_DEFAULT_MODEL_BY_TIER[tierSlug] ? ` Omit the model and this route serves ${GEMINI_DEFAULT_MODEL_BY_TIER[tierSlug]}.` : " Omit the model and the auto tier routes the prompt."}`,
     tags: ["llm", "gemini", "google", "generatecontent", "chat"],
-    discovery: { bodyType: "json", inputSchema: INPUT_SCHEMA, input: EXAMPLE_IN, output: { example: EXAMPLE_OUT } },
+    discovery: { bodyType: "json", inputSchema: INPUT_SCHEMA, input: exampleIn(tierSlug), output: { example: exampleOut(tierSlug) } },
     handler: makeGeminiHandler(tierSlug),
   };
 });

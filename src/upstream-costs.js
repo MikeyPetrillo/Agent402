@@ -3,7 +3,13 @@
 // CI) or from the file named by UPSTREAM_COSTS_FILE, and are never committed.
 //
 // Shape:
-//   { models: [[prefix, { prompt, completion }], ...],   USD per 1M tokens, longest prefix wins
+//   { models: [[prefix, { prompt, completion, tiers? }], ...],   USD per 1M tokens, longest prefix wins
+//       tiers (optional): [{ aboveTokens, prompt, completion }, ...], the long-context
+//       prices a model bills once a prompt reaches aboveTokens prompt tokens
+//       (inclusive, the upstream's min_prompt_tokens). Strictly ascending by
+//       aboveTokens, every rate positive and never below the base row or the
+//       tier before it; a row whose tiers break any of that is dropped (a gap),
+//       because keeping its base rate would underprice a long prompt.
 //     speech: { modelId: usdPerChar },                       the speech wire models and the direct speech fallbacks
 //     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit },
 //     embeddings: { model: usdPer1MInputTokens },
@@ -56,6 +62,38 @@ function parse(text) {
   return j;
 }
 
+// A row's long-context tiers, validated, or null when any entry is malformed.
+// Each tier needs a positive whole aboveTokens, strictly above the previous
+// one, and positive rates at or above both the base row and the tier before
+// it: upstream long-context prices only rise with the prompt, and a tier
+// cheaper than the one below it would make a longer prompt quote less.
+function normalizeTiers(raw, baseP, baseC, pos) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  let prev = { aboveTokens: 0, prompt: baseP, completion: baseC };
+  for (const t of raw) {
+    const above = t?.aboveTokens, p = pos(t?.prompt), c = pos(t?.completion);
+    if (!Number.isSafeInteger(above) || above <= prev.aboveTokens || p == null || c == null) return null;
+    if (p < prev.prompt || c < prev.completion) return null;
+    prev = Object.freeze({ aboveTokens: above, prompt: p, completion: c });
+    out.push(prev);
+  }
+  return Object.freeze(out);
+}
+
+/** The rate a row bills for a prompt of `promptTokens` tokens: the last tier
+ *  whose aboveTokens it reaches, else the base row itself (the same object,
+ *  so a caller comparing rows by identity sees the row). A missing or
+ *  non-finite size reads as the base row. */
+export function rowRateAt(row, promptTokens) {
+  if (!row || !Array.isArray(row.tiers) || !row.tiers.length) return row;
+  const n = Number(promptTokens);
+  if (!Number.isFinite(n)) return row;
+  let hit = row;
+  for (const t of row.tiers) if (n >= t.aboveTokens) hit = t;
+  return hit;
+}
+
 function normalize(j) {
   // Only a real positive number is a rate. null, "", false and [] coerce to 0
   // under Number(), and a zero rate turns a margin clamp off or prices a fee
@@ -72,7 +110,10 @@ function normalize(j) {
     const prefix = row[0].toLowerCase();
     const p = rate(row[1]?.prompt, prefix), c = rate(row[1]?.completion, prefix);
     if (p == null || c == null) { dropped.push(prefix); continue; }
-    models.push([prefix, Object.freeze({ prompt: p, completion: c })]);
+    if (row[1].tiers === undefined) { models.push([prefix, Object.freeze({ prompt: p, completion: c })]); continue; }
+    const tiers = normalizeTiers(row[1].tiers, p, c, pos);
+    if (!tiers) { dropped.push(prefix); continue; }
+    models.push([prefix, Object.freeze({ prompt: p, completion: c, tiers })]);
   }
   const map = (o, f) => Object.freeze(Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {}).map(([k, v]) => [k, f(v)]).filter(([, v]) => v != null)));
   return Object.freeze({

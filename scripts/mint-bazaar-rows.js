@@ -27,6 +27,13 @@
 //   node scripts/mint-bazaar-rows.js --live           # buys the cheap set
 //   node scripts/mint-bazaar-rows.js --live --expensive
 //   node scripts/mint-bazaar-rows.js --live --only token-safety,exa-search
+//   node scripts/mint-bazaar-rows.js --live --out pass-mint.json
+//
+// --out FILE writes one record per buy (registry bazaar, chain base, method,
+// path, charged, tx, boughtAt), rewritten after every buy. The workflow keeps
+// it as the mint-bazaar-rows artifact, which the weekly listing pass reads as
+// purchase memory (scripts/listing-pass-memory.js): a route minted here is not
+// bought again by that pass within 14 days.
 //
 // Env: BURNER_KEY (or KEY_FILE), POW_SECRET (marks the buys internal so they do
 // not read as external demand in the ledger), TARGET_URL (default prod).
@@ -34,12 +41,16 @@
 // Runs OUT OF TREE (copied to a temp dir by its workflow), so no import from src/:
 // the vendor client default since @x402/core 2.23 is a $1 pegged-assets cap and
 // this script bounds spend itself; the same line src/x402-spend-controls.js wraps.
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { createHmac } from "node:crypto";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const LIVE = process.argv.includes("--live");
 const EXPENSIVE = process.argv.includes("--expensive");
+const OUT = (() => {
+  const i = process.argv.indexOf("--out");
+  return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : null;
+})();
 const ONLY = (() => {
   const i = process.argv.indexOf("--only");
   return i > -1 && process.argv[i + 1] ? new Set(process.argv[i + 1].split(",").map((s) => s.trim())) : null;
@@ -212,6 +223,15 @@ async function main() {
 
   const ctx = { lastSettledTx: null };
   let settled = 0, failed = 0, skipped = 0, spent = 0;
+  // The purchase records, in the listing pass's shape, rewritten after every
+  // attempt so a run cut short still leaves what it signed.
+  const startedAt = new Date().toISOString();
+  const records = [];
+  const writeRecords = () => {
+    if (!OUT) return;
+    writeFileSync(`${OUT}.tmp`, JSON.stringify({ target: TARGET, registry: "bazaar", chain: "base", startedAt, measuredAt: new Date().toISOString(), records }, null, 2));
+    renameSync(`${OUT}.tmp`, OUT);
+  };
 
   for (const leg of legs) {
     if (leg.needsTx && !ctx.lastSettledTx) { console.log(`SKIP  ${leg.slug} - no settled tx yet to attach a verdict to`); skipped++; continue; }
@@ -222,9 +242,16 @@ async function main() {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
+    // Until an answer arrives the buy may have settled.
+    const rec = { registry: "bazaar", chain: "base", slug: leg.slug, method: leg.method, path: String(leg.path).split("?")[0], priceUsd: leg.priceUsd, status: null, tx: null, charged: false, chargeUnknown: true, boughtAt: new Date().toISOString(), error: null };
+    records.push(rec);
+    writeRecords();
     let res;
     try { res = await payFetch(url, init); }
-    catch (e) { console.log(`FAIL  ${leg.slug} - request threw: ${e.message}`); failed++; continue; }
+    catch (e) { rec.error = String(e.message || e).slice(0, 160); writeRecords(); console.log(`FAIL  ${leg.slug} - request threw: ${e.message}`); failed++; continue; }
+    rec.status = res.status;
+    rec.chargeUnknown = false;
+    writeRecords();
 
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch { json = null; }
@@ -237,6 +264,8 @@ async function main() {
     const receipt = res.headers.get("payment-response") || res.headers.get("PAYMENT-RESPONSE");
     let tx = null;
     if (receipt) { try { tx = JSON.parse(Buffer.from(receipt, "base64").toString()).transaction || null; } catch {} }
+    // Charged whenever a receipt names a transaction, whatever the answer.
+    if (tx) { rec.tx = tx; rec.charged = true; writeRecords(); }
     if (!tx) {
       // A 200 with no settle receipt means it was served FREE - no Bazaar row
       // is minted by that, which is the whole point of this run.

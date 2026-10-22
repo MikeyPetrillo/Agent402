@@ -20,6 +20,7 @@
 // long-running (EVM exact only), not cached. 503 without OPENROUTER_API_KEY.
 // LinkedIn has no public API for publishing personal articles; this delivers
 // the package to paste, never posts.
+import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding } from "../report-grounding.js";
@@ -138,6 +139,10 @@ function makeLinkedInHandlerInner(tierSlug) {
     const p = normLinkedInInput(input);
     const user = safeUser(req);
     let spent = 0;
+    // Job progress (src/job-progress.js): research, write, images; the nested
+    // research run reports nothing of its own. A no-op outside a job.
+    const steps = stepProgress(3, req);
+    steps.next("researching");
 
     // 1) GROUNDED RESEARCH (the whole research-deep pipeline, booked here).
     const rq = `${p.topic}${p.angle ? ` - angle: ${p.angle}` : ""}${p.audience ? ` - for ${p.audience}` : ""}`;
@@ -147,6 +152,7 @@ function makeLinkedInHandlerInner(tierSlug) {
     const sourceBlock = sources.map((s) => `[${s.n}] ${s.title}${s.fullText ? " (full text read)" : " (excerpt)"} - ${s.url}`).join("\n");
 
     // 2) SYNTHESIS in LinkedIn's shape, as JSON.
+    steps.next("writing article");
     const prompt = `You are a ghostwriter producing a READY-TO-PUBLISH LinkedIn ARTICLE${p.author?.name ? ` for ${p.author.name}${p.author.role ? ` (${p.author.role})` : ""}` : ""} that will be SOLD to a paying customer. Fabrication is the worst possible failure.
 
 === ABSOLUTE GROUNDING RULES ===
@@ -184,9 +190,10 @@ ${sourceBlock}`;
     // 3) IMAGES: one generation per brief, then every LinkedIn size for the slot.
     const wanted = art.briefs.filter((b) => (b.slot === "cover" ? p.cover : p.inlineN > 0)).slice(0, t.maxImages);
     if (p.cover && !wanted.some((b) => b.slot === "cover")) wanted.unshift({ slot: "cover", prompt: `${p.imageStyle}. Theme: ${art.headlines[0]}. Centered subject, generous margins, no text, no logos, no faces.`, alt: art.headlines[0] });
-    const images = [];
-    const imageErrors = [];
-    for (const b of wanted) {
+    // The briefs are independent (at most t.maxImages), so they generate and
+    // resize at once; the deliverable keeps the briefs' order.
+    steps.next("generating images");
+    const outcomes = await Promise.all(wanted.map(async (b) => {
       try {
         const g = await Promise.race([d.generateImage({ prompt: b.prompt }), new Promise((_, r) => setTimeout(() => r(bad("image generation timed out", 504)), IMAGE_TIMEOUT_MS))]);
         spent += Number(g?.usage?.cost) || 0.014;
@@ -194,9 +201,11 @@ ${sourceBlock}`;
         if (!b64) throw bad("no image returned", 502);
         const src = Buffer.from(b64, "base64");
         const variants = await renderSizes(src, b.slot, { resize: d.resize });
-        images.push({ slot: b.slot, alt: b.alt, prompt: b.prompt, source: { width: declaredDimensions(src)?.width || null, height: declaredDimensions(src)?.height || null, model: g?.model || null }, files: variants });
-      } catch (e) { imageErrors.push({ slot: b.slot, error: String(e?.message || e).slice(0, 160) }); }
-    }
+        return { image: { slot: b.slot, alt: b.alt, prompt: b.prompt, source: { width: declaredDimensions(src)?.width || null, height: declaredDimensions(src)?.height || null, model: g?.model || null }, files: variants } };
+      } catch (e) { return { error: { slot: b.slot, error: String(e?.message || e).slice(0, 160) } }; }
+    }));
+    const images = outcomes.filter((o) => o.image).map((o) => o.image);
+    const imageErrors = outcomes.filter((o) => o.error).map((o) => o.error);
     // A cover was asked for and every image failed: the buyer is not charged.
     if (p.cover && !images.some((i) => i.slot === "cover")) throw bad(`Image generation failed (${imageErrors.map((x) => x.error).join("; ") || "no image"}) - not charged, please retry.`, 502);
 

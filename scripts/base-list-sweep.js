@@ -29,6 +29,7 @@
 //   node scripts/base-list-sweep.js [--out report.json] [--max-usd 25] [--limit N]
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
+import { multipartBodyFrom } from "../src/openapi-request.js";
 import { createHmac } from "node:crypto";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
@@ -94,12 +95,11 @@ async function multipartAudioBody(fields) {
     if (!r.ok) throw new Error(`audio clip fetch HTTP ${r.status}`);
     audioClip = new Uint8Array(await r.arrayBuffer());
   }
-  const form = new FormData();
-  form.append("file", new Blob([audioClip], { type: MULTIPART_AUDIO.type }), MULTIPART_AUDIO.filename);
-  for (const [k, v] of Object.entries(fields || {})) if (k !== "file" && v != null && typeof v !== "object") form.append(k, String(v));
-  return form;
+  return multipartBodyFrom(fields, { bytes: audioClip, type: MULTIPART_AUDIO.type, filename: MULTIPART_AUDIO.filename });
 }
-const isMultipartExample = (body) => typeof body?.file === "string" && /multipart/i.test(body.file);
+// The challenge's bazaar input says form-data for these routes; the
+// placeholder is the fallback for a challenge that predates the field.
+const isMultipartExample = (input) => input?.bodyType === "form-data" || (typeof input?.body?.file === "string" && /multipart/i.test(input.body.file));
 
 const args = process.argv.slice(2);
 const arg = (n, d = null) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
@@ -201,7 +201,7 @@ for (const entry of ROUTES) {
   // to the list's hint only when it does not.
   const payMethod = (typeof example.method === "string" && /^(GET|POST)$/i.test(example.method)) ? example.method.toUpperCase() : method;
   const init = { method: payMethod, headers: stamp({ "Content-Type": "application/json", Accept: "application/json" }), signal: AbortSignal.timeout(CALL_TIMEOUT_MS) };
-  if (payMethod === "POST" && isMultipartExample(example.body)) {
+  if (payMethod === "POST" && isMultipartExample(example)) {
     try { init.body = await multipartAudioBody(example.body); } catch (e) { report.failed.push({ entry, reason: `multipart body: ${e.message}` }); continue; }
     delete init.headers["Content-Type"]; // fetch sets multipart/form-data with its boundary
   } else if (payMethod === "POST") init.body = JSON.stringify(example.body || {});

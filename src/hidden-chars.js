@@ -145,7 +145,20 @@ const FORMATTING_CARRIERS = new Set([
  *  buyer text only; a listing is screened as written. */
 export function stripFormattingCarriers(text) {
   const s = String(text || "");
-  const drop = hiddenCharacters(s).filter((h) => FORMATTING_CARRIERS.has(h.cp));
+  return removeAt(s, hiddenCharacters(s).filter((h) => FORMATTING_CARRIERS.has(h.cp)));
+}
+
+/** `text` with EVERY hidden character the scan reports removed: TAG text,
+ *  zero-width and bidi controls, variation-selector carriers and soft hyphens.
+ *  The allowances above are kept, since the scan does not report them. For
+ *  third-party text at serve time; the listing screen still reads the text as
+ *  written, so a finding is never hidden by this. */
+export function stripHiddenCharacters(text) {
+  const s = String(text ?? "");
+  return removeAt(s, hiddenCharacters(s));
+}
+
+function removeAt(s, drop) {
   if (!drop.length) return s;
   let out = "";
   let from = 0;

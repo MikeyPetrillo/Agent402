@@ -18,3 +18,6 @@ PROD = "https://agent402.tools"
 #                          Use a fine-grained token scoped to this repository
 #                          with Issues: Read and write only.
 # Without GITHUB_ISSUES_TOKEN the issue alarms are a no-op.
+# Optional var GITHUB_ISSUES_LOGIN: the account that token belongs to (else
+# read from GET /user). Only that account's and the Actions bot's issues count
+# as alarms.

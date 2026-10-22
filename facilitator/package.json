@@ -20,6 +20,8 @@
     "settle-poll.js",
     "fee-bid.js",
     "signer-reread.js",
+    "settle-deadline.js",
+    "access-policy.js",
     "README.md"
   ],
   "engines": {

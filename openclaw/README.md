@@ -76,7 +76,10 @@ export AGENT402_MAX_PER_CALL_USD=2   # per-call ceiling checked before signing (
 ```
 
 With no credits key present the proxy signs an x402 payment per call from that
-wallet. The key never leaves the machine.
+wallet. The key never leaves the machine. The ceiling is checked on the payment
+option that is signed, priced from the known decimals of its asset (USDC or
+USDG on a known network); an option in any other asset is not signed while a
+ceiling is set.
 
 Two ways the wallet can pay a metered call:
 

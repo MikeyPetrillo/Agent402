@@ -70,7 +70,7 @@ function capabilityMap(catalog, powSlugs) {
  * /.well-known/x402. Designed so a discovery agent can decide "use this seller"
  * from a single GET, then drill into /openapi.json or each route's 402 for terms.
  */
-export function serviceManifest({ baseUrl, network, networks, wallet, walletName, payToByNetwork = null, catalog, toolCount, powSlugs, powDifficulty, prices }) {
+export function serviceManifest({ baseUrl, network, networks, wallet, walletName, payToByNetwork = null, payToByRoute = null, catalog, toolCount, powSlugs, powDifficulty, prices }) {
   const powEligible = [...powSlugs];
   // The chains this instance takes, from the networks it enabled at boot (not
   // the full rail table): a self-host on one chain names one chain.
@@ -165,6 +165,16 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         // not conclude a non-EVM rail pays to an EVM address (an outside
         // reader did, 2026-09-03). Only rails with a configured address appear.
         ...(payToByNetwork && Object.keys(payToByNetwork).length ? { payToByNetwork } : {}),
+        // The routes whose 402 names a different payee on some network, keyed
+        // by resource URL then CAIP-2 network (src/payments.js payToForRoute,
+        // the function the 402 builder calls). Absent when every route
+        // settles to the payees above.
+        ...(payToByRoute && Object.keys(payToByRoute).length
+          ? {
+            payToByRoute,
+            payToNote: "The routes in payToByRoute are the router tiers: on the networks listed there they settle to the router's own spending wallet, the wallet that pays the outside sellers they buy from. Every other route and network settles to payTo / payToByNetwork.",
+          }
+          : {}),
         // A sentence, not a boolean: a boolean cannot carry the exception, and the
         // exception is real (prepaid card credits and card-paid reports are held
         // balances; see /security). Same rule as `deterministic` and

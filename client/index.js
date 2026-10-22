@@ -18,14 +18,19 @@
 //   // paid tools: pass an x402-wrapped fetch (your wallet signs)
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { quoteOf, guardSigning } from "./known-assets.js";
+export { KNOWN_ASSETS, knownAsset, acceptUsd } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
+import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
+export { AsyncJobPendingError } from "./async-job.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.15";
+const VERSION = "0.8.16";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -62,6 +67,16 @@ async function shedRetryWaitMs(r, maxWaitMs = DISCOVERY_MAX_WAIT_MS) {
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// A pre-wrapped payment fetch with no x402Client is the one mode where the caps
+// are checked on an unpaid preflight only, not on the payment that is signed.
+// Said once per process, on the first capped paid call in that mode.
+let advisoryCapsWarned = false;
+function warnAdvisoryCaps() {
+  if (advisoryCapsWarned) return;
+  advisoryCapsWarned = true;
+  console.warn("[agent402-client] spending caps are set with a pre-wrapped payment fetch and no x402Client, so they are checked on a preflight of the 402 only, not on the payment that is signed. Pass { x402Client } (the client your fetch wraps) to enforce them at signing.");
+}
+
 export class Agent402 {
   /**
    * @param {object} [opts]
@@ -74,6 +89,8 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
+   * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
+   *                                         enforced on the payment that is signed (see guardX402Client)
    * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) already issued (new credits are
    *                                         not on sale) - pays wallet-only tools when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
@@ -81,10 +98,23 @@ export class Agent402 {
    * @param {{id:string, validate:function}} [opts.outputValidator]
    *        Optional buyer-owned result validator. `id` namespaces cache entries;
    *        `validate` may return false or throw to reject delivery.
+   * @param {"auto"|boolean} [opts.respondAsync="auto"]
+   *        Slow paid routes (the catalog's `async.recommended`): "auto" sends the
+   *        paid call with Prefer: respond-async and polls the job link until the
+   *        answer is ready; true does it on every route that runs as a job; false
+   *        never (wait on the connection).
+   * @param {number} [opts.asyncTimeoutMs=900000] overall wait for a job; past it,
+   *        AsyncJobPendingError carries the job link to collect later
+   * @param {function} [opts.onProgress] called with each job document
+   *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
-    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null,
-    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null } = {}) {
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null,
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
+    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null } = {}) {
+    this.respondAsync = respondAsync;
+    this.asyncTimeoutMs = numOrNull(asyncTimeoutMs) ?? DEFAULT_ASYNC_TIMEOUT_MS;
+    this.onProgress = typeof onProgress === "function" ? onProgress : null;
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
     if (fetchImpl === undefined) {
       fetchImpl = globalThis.fetch;
@@ -120,11 +150,63 @@ export class Agent402 {
       perHost: numOrNull(maxPerHostUsd),
       log: [], // [{ ts, host, usd }] - settled paid calls in the last 24h
     };
+    // The paid call being signed right now, so the signing guard can tell this
+    // call's own reservation from every other one (see guardX402Client).
+    this._signCtx = new AsyncLocalStorage();
+    this._guarded = false;
+    if (x402Client) this.guardX402Client(x402Client);
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
     // Buyer-owned delivery policy. The callback stays entirely local and may
     // use Ajv, Zod, agent-payment-policy, or ordinary application code.
     this.outputValidator = normalizeOutputValidator(outputValidator, "constructor");
+  }
+
+  /**
+   * Enforce this client's spending caps on the payment that is signed.
+   *
+   * Register it on the x402Client your `fetch` wraps (or pass it as the
+   * `x402Client` option): every accept that cannot be priced from a known
+   * asset, or that asks more than the per-call cap or what is left of the
+   * rolling caps, is dropped before the client selects one, and the selected
+   * one is checked again just before its payload is built. The preflight read
+   * of the 402 still runs for a readable refusal, but the challenge that is
+   * signed is the one this guard sees, so the caps hold on the paid request's
+   * own 402 whatever the preflight said. Returns the client.
+   */
+  guardX402Client(client) {
+    guardSigning(client, {
+      allowance: () => this._signAllowance().cap,
+      onSign: (usd) => {
+        const ctx = this._signCtx.getStore();
+        if (!ctx) return;
+        ctx.signedUsd = usd;
+        if (ctx.reservation) ctx.reservation.usd = usd;
+      },
+      onRefuse: (detail) => {
+        const ctx = this._signCtx.getStore();
+        if (ctx) ctx.refusal = { ...detail, limit: this._signAllowance().limit };
+      },
+    });
+    this._guarded = true;
+    return client;
+  }
+
+  /** The most the payment being signed may ask for: the per-call cap and what
+   *  is left of the rolling-24h caps, net of every other call's reservation
+   *  (this call's own one is what is being replaced). */
+  _signAllowance() {
+    const s = this._spend;
+    const own = this._signCtx.getStore()?.reservation || null;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const others = s.log.filter((e) => e.ts >= cutoff && e !== own);
+    const host = hostOf(this.baseUrl);
+    let cap = Infinity, limit = null;
+    const tighten = (value, name) => { if (value < cap) { cap = value; limit = name; } };
+    if (s.maxPerCall != null) tighten(s.maxPerCall, "maxPerCallUsd");
+    if (s.daily != null) tighten(s.daily - others.reduce((a, e) => a + e.usd, 0), "dailyLimitUsd");
+    if (s.perHost != null) tighten(s.perHost - others.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0), "maxPerHostUsd");
+    return { cap: Math.max(0, cap), limit };
   }
 
   /**
@@ -215,7 +297,7 @@ export class Agent402 {
     const r = await this._discoveryGet("could not load catalog", "/api/pricing");
     const j = await r.json();
     const m = new Map();
-    for (const e of j.endpoints || []) m.set(e.slug, { method: e.method, path: e.path, computePayable: e.computePayable, price: e.price });
+    for (const e of j.endpoints || []) m.set(e.slug, { method: e.method, path: e.path, computePayable: e.computePayable, price: e.price, async: e.async && typeof e.async === "object" ? e.async : null });
     this._catalog = m;
     return m;
   }
@@ -341,7 +423,7 @@ export class Agent402 {
    * Call a tool by slug; pays automatically (PoW for free tools, x402 for
    * wallet-only) and returns the parsed JSON result.
    */
-  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator } = {}) {
+  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress } = {}) {
     // Resolve and validate the buyer-owned contract before catalog fetch,
     // credential access, payment preflight, or any other network action.
     const validator = outputValidator == null
@@ -376,12 +458,17 @@ export class Agent402 {
     const idem = idempotencyKey || (cache
       ? `a402-${createHash("sha256").update(`${this._idemSalt}:${cacheKey}`).digest("hex").slice(0, 24)}`
       : `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`);
-    const send = (extraHeaders = {}, useFetch = this.f) => {
+    const send = async (extraHeaders = {}, useFetch = this.f, { paid = false } = {}) => {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
       const headers = { "User-Agent": USER_AGENT, "Idempotency-Key": idem, ...extraHeaders };
       let url = `${this.baseUrl}${tool.path}`;
-      const init = { method: tool.method, headers };
+      // A request that can carry a payment never follows a redirect: followed,
+      // it would answer a 402 from another origin with a signature to that
+      // origin's payee, or forward a signature already made to another host,
+      // and deliver that host's answer as this route's. The redirect is
+      // refused with where it pointed, so an alias baseUrl is easy to fix.
+      const init = paid ? { method: tool.method, headers, redirect: "manual" } : { method: tool.method, headers };
       if (tool.method === "GET") {
         const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
         if (qs) url += `?${qs}`;
@@ -389,8 +476,20 @@ export class Agent402 {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(params);
       }
-      return useFetch(url, init);
+      const r = await useFetch(url, init);
+      if (paid && (r?.type === "opaqueredirect" || (r?.status >= 300 && r?.status < 400))) throw new PaymentRedirectError(slug, url, r);
+      return r;
     };
+    const paidSend = (extraHeaders = {}, useFetch = this.f) => send(extraHeaders, useFetch, { paid: true });
+    // A slow route runs as a job: the paid call carries Prefer: respond-async,
+    // answers 202 with a job link, and the answer is collected from it (free)
+    // when ready. Payment still settles only on the delivered answer.
+    const asyncHeaders = shouldRequestAsync(tool.async, respondAsync ?? this.respondAsync) ? { Prefer: "respond-async" } : {};
+    const collect = (r) => awaitJob(r, {
+      baseUrl: this.baseUrl, fetchImpl: this.f, slug, sleep: this._sleep,
+      timeoutMs: numOrNull(asyncTimeoutMs) ?? this.asyncTimeoutMs,
+      onProgress: typeof onProgress === "function" ? onProgress : this.onProgress,
+    });
 
     // Wallet-only tool → settle in USDC via the provided x402 fetch.
     if (!tool.computePayable) {
@@ -407,22 +506,40 @@ export class Agent402 {
         // amount THIS request is quoted. Fail-open: a 402 we cannot read
         // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
-        const usd = await this._quotedUsd(send, listUsd);
+        const guarded = this._guarded;
+        if (!guarded && this._spendCapsConfigured()) warnAdvisoryCaps();
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
-        // cap; release the reservation if the call doesn't settle.
-        const reservation = this._spendReserve(host, usd, slug, listUsd);
+        // cap; release the reservation if the call doesn't settle. With the
+        // signing guard on, the reservation is replaced by the amount actually
+        // signed, and a call that signed nothing spends nothing.
+        const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded });
+        const ctx = { reservation, signedUsd: null, refusal: null };
+        const signedNothing = () => guarded && ctx.signedUsd == null;
         let settled = false;
         try {
-          const r = await send({}, this.payFetch);
+          const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
-          this._spendSettle(reservation); // confirm the reservation as settled spend
+          if (signedNothing()) this._spendRelease(reservation);
+          else this._spendSettle(reservation); // confirm the reservation as settled spend
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // An invalid or oversized paid HTTP-success body is failed delivery,
-          // not a rollback of money that already moved.
-          if (!settled) this._spendRelease(reservation);
+          // not a rollback of money that already moved. A job still running
+          // past the wait may yet settle, so its reservation stands.
+          // A redirect after a signature was sent leaves that payment's outcome
+          // unknown, so it counts against the caps, like a job still running.
+          if ((e instanceof AsyncJobPendingError || e instanceof PaymentRedirectError) && !signedNothing()) this._spendSettle(reservation);
+          else if (!settled) this._spendRelease(reservation);
+          if (ctx.refusal) {
+            const d = ctx.refusal;
+            throw new SpendingLimitError(d.reason === "unknown-asset"
+              ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
+              : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
+            { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e });
+          }
           throw e;
         }
       }
@@ -436,11 +553,11 @@ export class Agent402 {
         // debit.
         const host = hostOf(this.baseUrl);
         const listUsd = parseUsd(tool.price);
-        const usd = await this._quotedUsd(send, listUsd);
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: "credits" });
         const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
-          const r = await send({ Authorization: `Bearer ${this.creditsKey}` });
+          const r = await collect(await paidSend({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
           if (r.status === 402) {
             const body = await r.json().catch(() => ({}));
             throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} ${body.topup ? ` - top up at ${body.topup}` : body.topupNote ? ` - ${body.topupNote}` : ""}`);
@@ -449,7 +566,11 @@ export class Agent402 {
           this._spendSettle(reservation);
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
-        } catch (e) { if (!settled) this._spendRelease(reservation); throw e; }
+        } catch (e) {
+          if (e instanceof AsyncJobPendingError) this._spendSettle(reservation);
+          else if (!settled) this._spendRelease(reservation);
+          throw e;
+        }
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
@@ -466,6 +587,22 @@ export class Agent402 {
     }
     if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
     return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+  }
+
+  /**
+   * Collect a job link (AsyncJobPendingError.jobUrl, or a 202's Location) until
+   * it has the answer, and return the parsed answer. The link is free to poll
+   * and must be on this client's baseUrl origin.
+   */
+  async collectJob(jobUrl, { timeoutMs, onProgress, maxResponseBytes } = {}) {
+    const start = new Response(JSON.stringify({ statusUrl: String(jobUrl), pollIntervalSeconds: 1 }), { status: 202, headers: { "content-type": "application/json" } });
+    const r = await awaitJob(start, {
+      baseUrl: this.baseUrl, fetchImpl: this.f, slug: "job", sleep: this._sleep,
+      timeoutMs: numOrNull(timeoutMs) ?? this.asyncTimeoutMs,
+      onProgress: typeof onProgress === "function" ? onProgress : this.onProgress,
+    });
+    if (!r.ok) throw this._fail("job", r, await this._failureDetail("job", r));
+    return this._readJson(r, { maxBytes: maxResponseBytes, slug: "job", paid: true });
   }
 
   async _assertOutput(slug, body, validator, { paid = false, cacheHit = false } = {}) {
@@ -506,17 +643,38 @@ export class Agent402 {
    *  body. Only preflights when a ceiling is configured (it costs a round trip,
    *  and with no cap the number changes nothing). The preflight send carries no
    *  payment header and no credits key, so it can only ever draw a 402.
-   *  @returns {Promise<number>} the quoted amount, or `listUsd` when unreadable */
-  async _quotedUsd(send, listUsd) {
+   *
+   *  Each accept is priced from the table of known assets (./known-assets.js),
+   *  never from a decimals value the seller sends. `mode` says who signs:
+   *  "guarded" (the signing guard holds every signature to the caps, so the
+   *  cheapest known accept is what can be paid, and unknown ones are dropped
+   *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
+   *  one counts, and one that cannot be priced is refused here), or "credits"
+   *  (nothing is signed; the dearest known accept counts).
+   *  @returns {Promise<number>} the quoted amount, or `listUsd` when there is no readable 402 */
+  async _quotedUsd(send, listUsd, { slug = "", mode = "wallet" } = {}) {
     if (!this._spendCapsConfigured()) return listUsd;
+    let q = null;
     try {
       const pre = await send();
       if (pre?.status !== 402) return listUsd;
-      const quoted = await quoted402Usd(pre);
-      // Larger of the two: an understated catalog must not lower the ceiling
-      // the cap is checked against.
-      return quoted == null ? listUsd : Math.max(listUsd, quoted);
-    } catch { return listUsd; /* fail-open to the advertised price */ }
+      q = quoteOf(await challengeAccepts(pre));
+    } catch (e) {
+      // A redirect is refused here, before anything is reserved or signed.
+      if (e instanceof PaymentRedirectError) throw e;
+      return listUsd; /* no readable 402: the advertised price */
+    }
+    if (!q) return listUsd;
+    if (q.max == null || (mode === "wallet" && q.unknown > 0)) {
+      if (mode === "credits") return listUsd;
+      throw new SpendingLimitError(
+        `refusing to pay for "${slug}" - ${q.max == null ? "no" : "a"} payment option it offers is in an asset this client cannot price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
+        { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
+    }
+    const quoted = mode === "guarded" ? q.min : q.max;
+    // Larger of the two: an understated catalog must not lower the ceiling
+    // the cap is checked against.
+    return Math.max(listUsd, quoted);
   }
 
   /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
@@ -594,9 +752,9 @@ export class Agent402 {
    *  concurrent calls account for each other's in-flight reservations instead of
    *  all passing against the same pre-commit total. Returns a reservation handle
    *  (or null for a $0 call). Throws SpendingLimitError before reserving if over. */
-  _spendReserve(host, usd, slug, listUsd = null) {
+  _spendReserve(host, usd, slug, listUsd = null, { always = false } = {}) {
     this._spendCheck(host, usd, slug, listUsd);
-    if (!(usd > 0)) return null;
+    if (!(usd > 0) && !always) return null;
     const entry = { ts: Date.now(), host, usd, pending: true };
     this._spend.log.push(entry);
     return entry;
@@ -633,6 +791,22 @@ export class Agent402 {
  *  time the body arrives, so a caller must be able to tell "I was charged and
  *  the seller sent something unusable" from "nothing happened". Losing that
  *  distinction would turn a refused response into a silently forgotten spend. */
+/** A request that could carry a payment was answered with a redirect, which
+ *  is never followed. `location` is where it pointed (null when the runtime
+ *  hides it, as a browser does for a manual redirect). */
+export class PaymentRedirectError extends Error {
+  constructor(slug, url, r) {
+    const location = r?.headers?.get?.("location") || null;
+    const to = location ? new URL(location, url).href : null;
+    super(`refusing to follow a redirect on a paid call to "${slug}": ${url} answered HTTP ${r?.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set baseUrl to ${new URL(to).origin}` : ""}.`);
+    this.name = "PaymentRedirectError";
+    this.slug = slug;
+    this.status = r?.status ?? null;
+    this.location = to;
+    this.paid = false;
+  }
+}
+
 export class ResponseTooLargeError extends Error {
   constructor(size, cap, { slug, paid, source } = {}) {
     super(`response for "${slug}" is ${size} bytes, over the ${cap}-byte ceiling (${source}) - refused before parsing${paid ? "; this call WAS paid" : ""}`);
@@ -659,23 +833,30 @@ export class SpendingLimitError extends Error {
   }
 }
 
-// Parse the USD amount an x402 `402` challenge actually requires - the max across
-// the offered rails. x402 is stablecoin-settled (USDC/USDG), so
-// atomic / 10^decimals ≈ USD. Returns null if the body isn't a parseable 402
-// challenge, so the caller fails open to the advertised catalog price.
 /** The dearest amount a 402 asks for, in USD, or null when it cannot be read.
+ *
+ *  Each accept is priced from the known-asset table (./known-assets.js): the
+ *  base-unit amount over that asset's real decimals, never a decimals value
+ *  the seller sends. One accept that is not a known asset makes the whole
+ *  quote unreadable (null).
  *
  *  x402 v2 carries the challenge base64 in the `PAYMENT-REQUIRED` HEADER and
  *  leaves the body `{}`, so a body-only reader learns nothing from a stock v2
  *  seller and silently falls back to the catalog price. Header first, then the
  *  body (v1 sellers, and sellers that serve both). */
 export async function quoted402Usd(res) {
-  const header = res?.headers?.get?.("payment-required");
-  const fromHeader = usdFromAccepts(decodeChallengeHeader(header));
-  if (fromHeader != null) return fromHeader;
+  const q = quoteOf(await challengeAccepts(res));
+  // Every accept must be priceable: the wallet picks which one to sign.
+  return q && q.unknown === 0 ? q.max : null;
+}
+
+/** The accepts array of a 402, from the PAYMENT-REQUIRED header first, then the body. */
+async function challengeAccepts(res) {
+  const fromHeader = decodeChallengeHeader(res?.headers?.get?.("payment-required"));
+  if (fromHeader) return fromHeader;
   let body = null;
   try { body = await res.json(); } catch { body = null; }
-  return usdFromAccepts(acceptsOf(body));
+  return acceptsOf(body);
 }
 
 function decodeChallengeHeader(header) {
@@ -692,29 +873,6 @@ function acceptsOf(obj) {
     if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) return nested.accepts;
   }
   return null;
-}
-
-/** The MAXIMUM across accepts: the wallet picks which chain to settle on and
- *  this client cannot know which, so the only sound ceiling is the dearest
- *  offer. Any entry we cannot price returns null (unreadable, never a guess -
- *  the caller falls back to the advertised price). */
-function usdFromAccepts(accepts) {
-  if (!Array.isArray(accepts) || !accepts.length) return null;
-  let maxUsd = null;
-  for (const a of accepts) {
-    // v2 names the base-unit amount `amount`; x402 v1 called it `maxAmountRequired`.
-    const atomic = Number(a && (a.amount ?? a.maxAmountRequired));
-    if (!Number.isFinite(atomic) || atomic < 0) return null;
-    // USDC is 6 decimals on every chain these rails settle; an accept may say
-    // otherwise, and a wrong exponent is a 1000x pricing error, so a
-    // non-integer or out-of-range hint makes the whole quote unreadable.
-    const declared = (a && a.extra && a.extra.decimals) ?? (a && a.decimals);
-    const decimals = declared == null ? 6 : Number(declared);
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 30) return null;
-    const usd = atomic / 10 ** decimals;
-    if (maxUsd == null || usd > maxUsd) maxUsd = usd;
-  }
-  return maxUsd;
 }
 
 function numOrNull(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }

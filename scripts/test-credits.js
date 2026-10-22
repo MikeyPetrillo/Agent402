@@ -182,12 +182,25 @@ const forged = { method: "GET", path: "/api/whois", headers: { authorization: `B
 gate(forged, res, () => { nexted = true; });
 ok(nexted && !("x-payment" in forged.headers) && !("payment-signature" in forged.headers) && !("payment-identifier" in forged.headers), "SECURITY: unsigned x402 payment headers are stripped when a credits request is accepted");
 res.statusCode = 200; res.emit("finish");
-// a prompt-cache hit is not charged
+// a pre-paywall prompt-cache hit (req.gatewayCacheHit) is not charged
 nexted = false; res = fakeRes(); res.getHeader = (k) => (k === "X-Cache" ? "hit" : undefined);
 const bal0 = cr.balance(KEY).balanceUsd;
+{ const req = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } };
+  gate(req, res, () => { nexted = true; req.gatewayCacheHit = true; }); }
+res.statusCode = 200; res.emit("finish");
+ok(cr.balance(KEY).balanceUsd === bal0 && cr.balance(KEY).heldUsd === 0, "a pre-paywall cache hit (req.gatewayCacheHit) releases the hold - credits buyers get cached answers free like x402 buyers");
+// a route result cache inside the handler also says X-Cache: hit, after the
+// paywall; x402 charges that answer, so credits debit it too
+nexted = false; res = fakeRes(); res.getHeader = (k) => (k === "X-Cache" ? "hit" : undefined);
 gate({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
 res.statusCode = 200; res.emit("finish");
-ok(cr.balance(KEY).balanceUsd === bal0 && cr.balance(KEY).heldUsd === 0, "a cache hit (X-Cache: hit) releases the hold - credits buyers get cached answers free like x402 buyers");
+ok(Math.abs(cr.balance(KEY).balanceUsd - (bal0 - 0.001)) < 1e-9 && cr.balance(KEY).heldUsd === 0, `a handler cache hit (X-Cache: hit alone) is debited like any served 200 [bal=${cr.balance(KEY).balanceUsd}]`);
+// ... and the same holds for a client that left before the first byte
+nexted = false; res = fakeRes(); res.getHeader = (k) => (k === "X-Cache" ? "hit" : undefined);
+{ const bal1 = cr.balance(KEY).balanceUsd;
+  gate({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
+  res.emit("close"); res.statusCode = 200; res.end();
+  ok(Math.abs(cr.balance(KEY).balanceUsd - (bal1 - 0.001)) < 1e-9 && cr.balance(KEY).heldUsd === 0, `an abandoned handler cache hit is not released as a cache hit [bal=${cr.balance(KEY).balanceUsd}]`); }
 // clawback: a refunded/disputed pack disables its key
 ok(cr.disableByPaymentIntent("pi_1", "refunded") === m1.keyId && cr.authorize(KEY, 0.001).reason === "disabled", "a refunded pack payment disables its key (clawback by PaymentIntent)");
 cr.setDisabled(m1.keyId, false);
@@ -197,9 +210,9 @@ ok(cr.disableByPaymentIntent("pi_nope") === null, "an unknown PaymentIntent disa
 ok(cr.setDisabled(m1.keyId, true) && cr.authorize(KEY, 0.001).reason === "disabled", "operator can disable a key; it then refuses");
 cr.setDisabled(m1.keyId, false);
 const st = cr.status();
-ok(st.keys === 1 && st.loadedUsd === 20 && st.outstandingUsd === 19.996 && st.rows[0].keyId === m1.keyId && !JSON.stringify(st).includes(KEY) && !JSON.stringify(st).includes(a.hash), "operator status has totals + key ids and never the key or its hash");
+ok(st.keys === 1 && st.loadedUsd === 20 && st.outstandingUsd === 19.994 && st.rows[0].keyId === m1.keyId && !JSON.stringify(st).includes(KEY) && !JSON.stringify(st).includes(a.hash), "operator status has totals + key ids and never the key or its hash");
 cr = mk();
-ok(cr.balance(KEY).balanceUsd === 19.996 && (await cr.claim("cs_paid")).status === "claimed", "a fresh instance reads balances and the claim-once index from disk");
+ok(cr.balance(KEY).balanceUsd === 19.994 && (await cr.claim("cs_paid")).status === "claimed", "a fresh instance reads balances and the claim-once index from disk");
 
 // A $19 dossier on a $19.998 key IS covered (authorizes at balance >= price).
 nexted = false; res = fakeRes();

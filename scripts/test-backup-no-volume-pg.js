@@ -12,6 +12,7 @@
 //   - the documents table is read one row per FETCH (a row is a whole store)
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { createServer } from "node:http";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -152,7 +153,7 @@ try {
     const kill = setTimeout(() => p.kill(), 60_000);
     p.on("close", () => { clearTimeout(kill); resolve({ stdout, stderr }); });
   });
-  let r4 = null; try { r4 = JSON.parse(String(child.stdout).trim().split("\n").pop()); } catch { /* reported below */ }
+  let r4 = null; try { r4 = childJson(String(child.stdout)); } catch { /* reported below */ }
   ok(r4 && r4.ok === false && (r4.heldState || []).includes("state/*"), `a run whose snapshot failed is not ok and names state/* (${String(child.stdout).slice(-200)}${String(child.stderr).slice(-200)})`);
   ok(r4 && !r4.pruned && oldLeft() === 2, `a run whose snapshot failed prunes no older day (${oldLeft()} old objects left)`);
   ok(r4 && r4.alarm === "held", `the alarm word after a failed snapshot is held (${r4?.alarm})`);

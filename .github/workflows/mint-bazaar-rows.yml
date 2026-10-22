@@ -14,6 +14,10 @@ name: Mint Bazaar rows (buy + verify the unlisted tools)
 # Dry by default: `live: true` is what sends money. The two route-execute tiers
 # (which also spend the SPENDING wallet at an outside seller)
 # need `expensive: true` on top.
+#
+# Each buy is recorded in pass-mint.json (rewritten after every buy) and kept
+# as the mint-bazaar-rows artifact for 15 days: the weekly listing pass reads
+# it as purchase memory and does not buy a minted route again within 14 days.
 on:
   workflow_dispatch:
     inputs:
@@ -60,9 +64,18 @@ jobs:
           echo "::add-mask::$BURNER_KEY"
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
           ARGS=""
-          [ "$MINT_LIVE" = "true" ] && ARGS="$ARGS --live"
+          [ "$MINT_LIVE" = "true" ] && ARGS="$ARGS --live --out /tmp/mint/pass-mint.json"
           [ "$MINT_EXPENSIVE" = "true" ] && ARGS="$ARGS --expensive"
           [ -n "$MINT_ONLY" ] && ARGS="$ARGS --only $MINT_ONLY"
           cd /tmp/mint && env -i PATH="$PATH" HOME="$HOME" \
             BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" \
             node mint-bazaar-rows.js $ARGS
+      - name: Keep the mint records (route, status, tx; never a key)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mint-bazaar-rows
+          path: /tmp/mint/pass-*.json
+          if-no-files-found: ignore
+          # Longer than the 14-day memory window the listing pass reads.
+          retention-days: 15

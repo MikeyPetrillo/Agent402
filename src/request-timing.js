@@ -41,6 +41,10 @@ export function responseCounts(minutes = 60, now = Date.now()) {
 }
 let fetchInstalled = false;
 
+/** The current request's scope object (null outside a request). A caller may
+ *  mark it (the failure monitor reads `synthetic`); timing reads only its own field. */
+export function currentRequestScope() { return als.getStore() || null; }
+
 // Catalog routes are RESERVED: they always get their own ring, so a caller
 // minting arbitrary paths can fill the free slots but never push a paid route
 // into "(other)".

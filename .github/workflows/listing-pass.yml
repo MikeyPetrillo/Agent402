@@ -1,0 +1,183 @@
+name: Listing pass (Bazaar and PayAI)
+
+# Keep every paid route listed in both settlement-driven registries, on Base
+# and on Solana: the Bazaar (CDP's discovery index) and the PayAI facilitator
+# registry. Each lists a route from a settlement its own facilitator carried,
+# so a route neither has seen settle stays unlisted until someone pays it.
+#
+# scripts/payai-listing-pass.js runs four legs, one after another, each a
+# coverage read followed by one buy per route that registry lacks on that
+# chain (the same measurement as scripts/listing-coverage.js --missing):
+#
+#   bazaar base     BURNER_KEY, untagged: CDP is first on Base by boot order.
+#   bazaar solana   SOLANA_BURNER_KEY, untagged: CDP is first on every chain
+#                   its /supported lists, Solana included. Before it spends the
+#                   leg proves the untagged Solana signer is not PayAI's.
+#   payai solana    SOLANA_BURNER_KEY, tagged: X-Agent402-Settle-Via plus the
+#   payai base      operator token (BURNER_KEY on Base) route that one buy to
+#                   PayAI (src/settle-preference.js). Before the first buy the
+#                   leg reads one 402 with and without the headers and spends
+#                   nothing unless the Solana signer differs; on Base it also
+#                   requires PayAI's /supported to list exact v2 on Base.
+#
+# Every paid route is in scope: no per-route price cap by default (the
+# max_price_usd input sets one), the report products and both route-execute
+# tiers included. Those two tiers also spend the router's spending wallet at an
+# outside seller while they serve, on top of the list price paid here. A
+# quoted (metered) route is priced by its own 402 (the published example sent
+# unpaid) and bought at that amount. Each leg is bounded by the per-run
+# ceiling max_spend_usd (default 40), cut as a prefix of the cheapest-first
+# order; the rest is skipped, named, and bought next week. The list price lands
+# in our own treasury; the real cost is the vendor call behind a route that
+# serves through one. A week with nothing missing spends nothing.
+#
+# A registry lists a paid route on its own schedule, so a route bought this
+# week may still read as missing next week. Before the legs the job downloads
+# the pass records of the last 14 days (this workflow's listing-pass
+# artifacts, the PayAI-only pass it replaced, and the Bazaar mint;
+# scripts/listing-pass-memory.js) and each leg skips a route charged on its
+# registry and chain within 14 days ("bought <date>, awaiting registry"). The
+# records are rewritten after every attempt and kept 15 days.
+#
+# Routes named in scripts/listing-inputs.json (the reports, the premium model
+# tiers, the X user lookup) are bought on those purposeful inputs instead of
+# their published examples, and every record keeps what came back (status,
+# latency, request-id, model and receipt headers, the body up to 20 KB) for
+# grading. Request headers are never recorded.
+#
+# The dispatch input `legs` narrows a run to chosen legs and `only`
+# (comma-separated slugs) to chosen routes. One issue, "Listing pass FAILED",
+# stays open while a run fails and closes on the next green run.
+on:
+  schedule:
+    # Wednesdays 03:53 UTC: clear of the Bazaar keep-alive (Tuesday 04:17,
+    # daily 05:37), the paid canary's slots at :17, the heartbeat's quarter
+    # hours, the MPP probe at :17 and :47, and the Monday catalog buy. Each
+    # scheduled run waits on the spending environment's approval, like the
+    # catalog buy.
+    - cron: "53 3 * * 3"
+  workflow_dispatch:
+    inputs:
+      max_spend_usd:
+        description: "Per-leg ceiling on what may be signed (cheapest first), above 0 and at most 100."
+        required: false
+        default: "40"
+      max_price_usd:
+        description: "Optional per-route price cap above 0; empty means none (every paid route is in scope)."
+        required: false
+        default: ""
+      legs:
+        description: "Comma-separated legs to run, from bazaar-base, bazaar-solana, payai-solana, payai-base."
+        required: false
+        default: "bazaar-base,bazaar-solana,payai-solana,payai-base"
+      only:
+        description: "Optional comma-separated slugs (for example dub,html-frames): buy only these routes. Empty buys every route a registry lacks."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  # Lists and downloads this repository's own listing artifacts (the
+  # purchase memory).
+  actions: read
+
+concurrency:
+  group: listing-pass
+  cancel-in-progress: false
+
+jobs:
+  pass:
+    runs-on: ubuntu-24.04
+    # Four legs in one job, so one spending approval covers the run. The
+    # largest gap (hundreds of routes on one leg) runs well past an hour.
+    timeout-minutes: 340
+    environment: spending
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.5.0 viem@2.52.2
+      - name: Download the purchase memory (records of the last 14 days)
+        # The workflow token reads artifacts only; no wallet secret here. A
+        # failure stops the job before the step that spends.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/listing-pass-memory.js --out bought --days 14
+      - name: Buy each route a registry lacks once, per registry and chain
+        # Wallet, gate and pow secrets are scoped to this step, never the
+        # install above.
+        env:
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '40' }}
+          MAX_PRICE_USD: ${{ inputs.max_price_usd || '' }}
+          # Read from the environment, never interpolated into the script.
+          LEGS: ${{ inputs.legs || 'bazaar-base,bazaar-solana,payai-solana,payai-base' }}
+          ONLY: ${{ inputs.only || '' }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the Base legs cannot pay"; exit 1; }
+          [ -n "$SOLANA_BURNER_KEY" ] || { echo "::error::SOLANA_BURNER_KEY is not set - the Solana legs cannot pay"; exit 1; }
+          [ -n "$AGENT402_OPERATOR_TOKEN" ] || { echo "::error::AGENT402_OPERATOR_TOKEN is not set - the settle-via gate cannot be opened"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          echo "::add-mask::$SOLANA_BURNER_KEY"
+          echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          printf '%s' "$MAX_SPEND_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_SPEND_USD" 'BEGIN { exit !(v > 0 && v <= 100) }' || { echo "::error::max_spend_usd must be a USD amount above 0 and at most 100"; exit 1; }
+          if [ -n "$MAX_PRICE_USD" ]; then
+            printf '%s' "$MAX_PRICE_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_PRICE_USD" 'BEGIN { exit !(v > 0) }' || { echo "::error::max_price_usd must be a USD amount above 0, or empty for no cap"; exit 1; }
+          fi
+          if [ -n "$ONLY" ]; then
+            printf '%s' "$ONLY" | grep -Eq '^[a-z0-9][a-z0-9,-]*$' || { echo "::error::only must be comma-separated slugs"; exit 1; }
+          fi
+          printf '%s' "$LEGS" | grep -Eq '^(bazaar|payai)-(base|solana)(,(bazaar|payai)-(base|solana))*$' || { echo "::error::legs must be comma-separated from bazaar-base, bazaar-solana, payai-solana, payai-base"; exit 1; }
+          FAILED=""
+          for LEG in $(printf '%s' "$LEGS" | tr ',' ' '); do
+            REGISTRY="${LEG%%-*}"
+            CHAIN="${LEG#*-}"
+            echo "::group::$REGISTRY / $CHAIN"
+            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --inputs scripts/listing-inputs.json --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
+            echo "::endgroup::"
+          done
+          if [ -n "$FAILED" ]; then echo "::error::legs that did not complete (exit code):$FAILED"; exit 1; fi
+      - name: Keep the pass records (route, status, tx; never a key)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: listing-pass
+          path: pass-*.json
+          if-no-files-found: ignore
+          # Longer than the 14-day memory window that reads it back.
+          retention-days: 15
+
+  report:
+    needs: pass
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Page if the pass failed, close the page when it passes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASS: ${{ needs.pass.result }}
+          SCHEDULE: ${{ github.event.schedule }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Listing pass FAILED"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$PASS" != "success" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A listing pass did not complete (result: $PASS, trigger: ${GITHUB_EVENT_NAME}${SCHEDULE:+ $SCHEDULE}). While it fails, a route the Bazaar or the PayAI registry lacks on Base or Solana stays unlisted there. Read the run: each leg is a log group; exit 2 is a refused preflight (the settle-via preference not honored, PayAI not listing the chain, or a secret missing) and that leg spent nothing; exit 1 names the route whose buy failed. Records: the listing-pass artifact on $RUN_URL. Re-run: \`gh workflow run listing-pass.yml --ref main\`."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) (result: $PASS). $RUN_URL"
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the listing pass completed at $(date -u +%FT%TZ). $RUN_URL"
+          fi

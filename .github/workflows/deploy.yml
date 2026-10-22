@@ -491,10 +491,11 @@ jobs:
 
   bazaar-solana:
     # One-shot sweep: pays every catalog route priced <= $0.05 once VIA SOLANA
-    # (SVM client -> PayAI facilitator), so settlement-driven indexes register
-    # each tool for Solana — PayAI's merchant listing, x402scan's facilitator
-    # view — and every harvester re-observes the live 402 with the full
-    # multi-chain accepts. Skips the LLM/image/audio/code proxies (real
+    # (SVM client, settled at the boot order's first facilitator, CDP), so
+    # settlement-driven indexes register each tool for Solana and every
+    # harvester re-observes the live 402 with the full multi-chain accepts.
+    # The PayAI registry is filled by listing-pass.yml, which asks for PayAI
+    # per request. Skips the LLM/image/audio/code proxies (real
     # upstream credit per call). Payments recycle burner -> revenue wallet.
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-solana' || needs.markers.outputs.bazaar_solana == 'true'
@@ -1172,6 +1173,8 @@ jobs:
           t node scripts/test-no-third-party-names.js
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
+          # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
+          t node scripts/test-listing-text-serve.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -1292,6 +1295,8 @@ jobs:
           t node scripts/test-x402-manifest.js
           # MPP subscription rail-canary gate (canary product is never advertised and is mintable only for a heartbeat-token caller; boots a real server, spends nothing)
           t node scripts/test-mpp-subscription-canary-gate.js
+          # MPP monitor manage routes take the token from X-Manage-Token, a JSON body or ?token=, and answer no-store with no referrer (boots a real server, spends nothing)
+          t node scripts/test-mpp-manage-token.js
           # /api/leaderboard envelope (spec, defaults, per-row shape — MCP top_x402_sellers piggybacks on this)
           t node scripts/test-leaderboard-envelope.js
           # Payer concentration on leaderboard rows (no payer address leaks; both axes trip the flag)
@@ -1316,9 +1321,9 @@ jobs:
           # Security regressions (proto-pollution, input-DoS, 500-hardening)
           t node scripts/test-security.js
 
-      # The live-catalog guard (scripts/test-gateway-model-ids.js) runs daily in
-      # model-drift.yml, not on a push: an upstream price change is not a
-      # defect in the change under review.
+      # The live-catalog guard (scripts/test-gateway-model-ids.js) runs every 6
+      # hours in model-drift.yml, not on a push: an upstream price change is
+      # not a defect in the change under review.
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1446,6 +1451,8 @@ jobs:
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
+          # A free (proof-of-work or trial) call drops any payment header riding on it before the handler: a forged header naming our wallet keeps the call on the outside lane of the failure monitor, read from its snapshot on REAL redis (needs this lane's Redis; stub facilitator, offline).
+          t node scripts/test-free-call-payment-headers.js
           t node scripts/test-mpp-subscriptions-pg.js
           t node scripts/test-decide-ledger-pg.js
           # A paid step is never turned into a 500 by a later ledger failure; writes after a spend survive an exit.
@@ -1573,8 +1580,12 @@ jobs:
           t node scripts/test-composite-guard.js
           t node scripts/test-run-time-note.js
           t node scripts/test-async-jobs.js
+          # Through the CDN proxy: a paid call to a route that outlasts its wait runs as a job (a 202-following SDK) or is refused before any gate; LLM and image waits end inside the bound; 402s and paid answers are never cacheable (paid-mode boot vs stub facilitator and upstream - offline)
+          t node scripts/test-cdn-sync-window.js
           # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
           t node scripts/test-async-jobs-body-loss.js
+          # Slow routes advertise their duration and async advice; job progress (queued/running/stage/ETA), sinks keyed in-process only, throttled writes, terminal records never updated (offline)
+          t node scripts/test-job-progress.js
           # A settle failure's PAYMENT-RESPONSE carries a code and a fixed message, never the facilitator's raw text (paid-mode boot vs stub facilitator - offline)
           t node scripts/test-settle-failure-header.js
           # One payment_settled per settlement, from the one place a settlement becomes final: direct, async-replayed, hang-up (settled, owed), none for a 4xx or a refused payment (paid-mode boot vs stub facilitator - offline)
@@ -1779,6 +1790,10 @@ jobs:
           # Listing coverage per registry and chain from fixtures; the PayAI pass's selection, cap and preflight (offline)
           t node scripts/test-listing-coverage.js
           t node scripts/test-payai-listing-pass.js
+          # The listing pass's purposeful inputs validate against each route's published input schema (booted FREE_MODE, offline)
+          t node scripts/test-listing-inputs.js
+          # Multipart routes publish multipart/form-data on /openapi.json; the example sent that way answers 402 unpaid and reaches the handler on FREE_MODE, a JSON body gets 400 (two boots, stub facilitator, keys blank, offline)
+          t node scripts/test-multipart-openapi.js
           # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub facilitators, offline)
           t node scripts/test-settle-preference.js
           # Tool resolver (/api/find ranking, guards)
@@ -1857,6 +1872,14 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
+          t node scripts/test-escape-quotes.js
+          # The document CSP's form-action allows only this origin and mailto:, and every form in the tree submits inside it
+          t node scripts/test-csp-form-action.js
+          # The report page's image preview src comes only from an allowlisted image type and a plain base64 payload
+          t node scripts/test-report-view-image.js
+          # The STATUS_PROBE_TOKEN comment names every route that accepts it, and the value is read once
+          t node scripts/test-status-probe-token-scope.js
           # /api/revenue publishes no payer address and no outside buyer's tx hash
           t node scripts/test-revenue-no-payers.js
           # /api/revenue publishes no wallet balance; the operator view keeps them
@@ -1881,6 +1904,12 @@ jobs:
           t node scripts/test-ocr-crash.js
           # Secretless worker isolation (F02/F04/F06 — worker auth/dispatch, client round-trip, secret-guard refuses to boot with a payment secret — offline)
           t node scripts/test-worker-isolation.js
+          # Render-worker wake retries (connection refused / edge 502 while the worker starts are retried in the deadline; a worker answer is final - offline)
+          t node scripts/test-worker-wake-retry.js
+          # Published examples that a tool fetches name a page that exists (no path on a reserved example host - offline)
+          t node scripts/test-example-urls-fetchable.js
+          # RugCheck-backed tools pause on consecutive RugCheck outages: free 503 + Retry-After before any gate, fail open after the cool-down (offline)
+          t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
 
@@ -1919,6 +1948,8 @@ jobs:
           # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
           t node scripts/test-resale-copy.js
           t node scripts/test-mcp-dockerfiles.js
+          # Buyer packages price quotes from one known-asset table: copies identical, table matches the rails (offline)
+          t node scripts/test-known-assets.js
           # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
           t node scripts/test-tls-distrust.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
@@ -2362,6 +2393,20 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
+      # scripts/test-facilitator-access-policy.js boots facilitator/index.js,
+      # which needs the facilitator's own dependencies (its own lockfile); under
+      # CI that suite fails rather than skips without them. Same secretless env
+      # as the install above.
+      - name: Install facilitator dependencies (secretless)
+        working-directory: facilitator
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: npm ci --ignore-scripts
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,
@@ -2410,6 +2455,7 @@ jobs:
           # Settlement-aware idempotency (FR4-01 — a non-200/unsettled response is NOT cached; @x402/express settles AFTER the handler)
           t node scripts/test-idempotency-settlement.js
           t node scripts/test-idempotency-inflight.js
+          t node scripts/test-idempotency-pow-binding.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
           # MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
@@ -2428,6 +2474,8 @@ jobs:
           t node scripts/test-client-mpp.js
           # "Facilitator diagnostics (an HTML error page must name itself: block vs rate limit vs origin failure, and never touch the response — offline)"
           t node scripts/test-facilitator-diagnostics.js
+          # Facilitator access policy (open-mainnet startup warning, constant-time bearer compare; offline)
+          t node scripts/test-facilitator-access-policy.js
 
   test-unit-b4:
     # The second half of test-unit-b2 (2026-08-25, split by the seconds each item
@@ -2568,6 +2616,7 @@ jobs:
           t node scripts/test-live-quote-query-params.js
           t node scripts/test-live-price-adopt.js
           t node scripts/test-live-quote-body-redirect.js
+          t node scripts/test-probe-example.js
           t node scripts/test-proto-pollution-guard.js
           t node scripts/test-tool-judge.js
           # Free /api/route judged answers are bounded per caller (boots a free server against a stub judgment endpoint - offline)
@@ -2618,6 +2667,7 @@ jobs:
           t node scripts/test-databento-timeouts.js
           t node scripts/test-databento-fallback.js
           t node scripts/test-databento-bar-range.js
+          t node scripts/test-databento-range-fallback.js
           # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"
           t node scripts/test-stock-quote-speed.js
           # "Operator bulk seed route: token-only, bounded, same validation as /sell, dry by default"
@@ -2657,6 +2707,8 @@ jobs:
           t node scripts/test-avm-validity.js
           t node scripts/test-decide-index.js
           t node scripts/test-decide-planner.js
+          # Decide specialized planners: one seam each, router threshold and fallback, seller neutrality, synthetic suite plan-only (offline)
+          t node scripts/test-decide-harness.js
           t node scripts/test-decide-execute.js
           # Execute runs independent plan steps at once: one run budget reserved per leg, deadline and drain on every step (offline)
           t node scripts/test-decide-execute-parallel.js
@@ -2664,6 +2716,10 @@ jobs:
           t node scripts/test-decide-site.js
           t node scripts/test-decide-cost.js
           t node scripts/test-decide-reconcile.js
+          # Decide instrumentation: planner version, text-free plan shape, run join, skip codes, own-traffic flag, operator stats (offline)
+          t node scripts/test-decide-instrumentation.js
+          # Decide as a buyer meets it: valid 402s that name each depth's price and carry the whole example, the execute example runs as written, an unknown decisionId is a free 404, prices follow DECIDE_CONFIG alone (boots the server twice; nothing paid)
+          t node scripts/test-decide-paywall.js
           DECIDE_TEST_PG_URL=postgres://decide@127.0.0.1:5432/decide_test t node scripts/test-decide-pg.js
           t node scripts/test-image-gen-kit.js
           # Leaderboard chain config (right token on the right rail; testnets excluded — offline)
@@ -2697,6 +2753,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # A child's JSON result is read with childJson, never as its last line (offline)
+          t node scripts/test-child-json.js
           # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
           t node scripts/test-no-em-dash-shipped.js
           # A public issue body carries reasons and ids, never a dollar figure (workflow bodies + the quoted runner log lines - offline)
@@ -2863,7 +2921,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (86 scripts, one process each)
+      - name: Offline suites (87 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2885,6 +2943,10 @@ jobs:
           t node scripts/test-llms-route-execute-tiers.js
           # Status probe worker (Cloudflare cron observer mapping; stubbed fetch — offline)
           t node scripts/test-status-probe-worker.js
+          # Tool and upstream failure monitor (counting by class and origin, the word thresholds, the replica merge, the Celo settle demotion and its safety rule, words-only public view, operator endpoint 404 without the token; boots a free server on port 0)
+          t node scripts/test-tool-failure-monitor.js
+          # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
+          t node scripts/test-heartbeat-failure-words.js
           t node scripts/test-charged-failure-leg.js
           # 402 Index price sync (reprices only our own priced listings that drifted; other hosts, unpriced and unsold rows untouched - offline)
           t node scripts/test-index402-sync.js
@@ -2912,6 +2974,8 @@ jobs:
           # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
           t node scripts/test-analytics-privacy.js
           t node scripts/test-chain-page-cache.js
+          # ?seller= views: unknown sellers never build, one build per listed seller, bounded memo, flat heap
+          t node scripts/test-chain-seller-view-memo.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)
@@ -2941,6 +3005,7 @@ jobs:
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
           t node scripts/test-ssrf-literal-ip.js
+          t node scripts/test-dns-name-filter.js
           t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
           t node scripts/test-discovery.js
@@ -3003,6 +3068,8 @@ jobs:
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
           t node scripts/test-refund-monitor.js
+          # Model-drift redaction (no dollar figure, bare decimal or exponent reaches the log or issue; stale-high grader on stub rows; offline)
+          t node scripts/test-model-drift-redaction.js
           # Bazaar register verdict (harvester lag is not a failure; a failed or unpaid route is — offline)
           t node scripts/test-bazaar-verdict.js
           # Bazaar feed read (two full passes must agree, a third on disagreement; only routes absent from every pass are bought; short pages never end a walk, offline)
@@ -3102,6 +3169,8 @@ jobs:
           t node scripts/test-workflow-run-refs.js
           # Every workflow job names a versioned runner image, never a moving -latest label (offline)
           t node scripts/test-workflow-runner-pins.js
+          # Workflow trust gates (workflow_run jobs need a push run of this repo; PyPI build has no id-token; wish text fenced)
+          t node scripts/test-workflow-trust-gates.js
           # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
           t node scripts/test-gateway-meter.js
           t node scripts/test-metered-quote-binding.js
@@ -3297,6 +3366,8 @@ jobs:
           t node scripts/test-tollbooth-replay.js
           # Tollbooth verifier timeout/cancellation (FR4-10 — x402VerifierFromExpress honors the AbortSignal; a late settle can't grant — offline)
           t node scripts/test-tollbooth-verifier.js
+          # WordPress tollbooth plugin (static: skip rule reads what WordPress serves; verifier pass must be HMAC-bound to the request)
+          t node scripts/test-wp-tollbooth-plugin.js
 
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js
@@ -3685,6 +3756,8 @@ jobs:
           ( cd examples/agentkit-data-to-deploy && npm i --no-save --ignore-scripts --no-audit --no-fund --silent solc@0.8.28 && node contracts/compile.js && rm -rf node_modules )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
+          # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)
+          node scripts/test-adapter-paid-redirects.js
           # Python adapter (agent402-langchain): requests-only keeps CI lean; the
           # test skips the langchain-native path gracefully without langchain-core,
           # so this locks the spec + free proof-of-work call behavior.
@@ -4379,6 +4452,9 @@ jobs:
       - name: Browser pool tools (page-speed fixture + html-frames sandbox)
         run: node scripts/test-page-speed-frames.js
 
+      - name: Browser contexts block service workers and WebSockets (real Chromium)
+        run: node scripts/test-render-isolation.js
+
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
 
@@ -4513,6 +4589,8 @@ jobs:
           t node scripts/test-report-probes.js
           # Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) — boots a server, offline
           t node scripts/test-checkout-limiter.js
+          # Client address behind the CDN proxy: CF-Connecting-IP only from a CDN peer and only when valid, IPv4 and IPv6, a forged header never mints a limiter bucket (boots a server, offline)
+          t node scripts/test-cdn-client-ip.js
           # A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
           t node scripts/test-payment-reject.js
           # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
@@ -4541,6 +4619,8 @@ jobs:
           t node scripts/test-erase-subject.js
           # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
           t node scripts/test-tweet-queue.js
+          # tweet.js media upload: --upload-only honors DRY_RUN=1 and --dry-run (no request at all), a refused STATUS read while a video processes is exit 2 with the status (stub fetch preload, nothing reaches X)
+          t node scripts/test-tweet-cli.js
           # Public reports: buyer toggle by session id, unguessable public id, indexable page, revocable (boots FREE_MODE)
           t node scripts/test-public-reports.js
           # House style on every report tier: no em/en dashes in delivered copy (offline)
@@ -4562,6 +4642,8 @@ jobs:
           t node scripts/test-paid-settle-breaker.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
+          # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)
+          t node scripts/test-payto-by-route.js
           # Every skill pack's Algorand accept matches the requirement the paid request rebuilds; a refusal for the buyer's balance is insufficient-funds to the buyer and funding (not a rail failure) to the sweep (offline, stub facilitator kinds)
           t node scripts/test-skill-pack-avm-match.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
@@ -4856,6 +4938,7 @@ jobs:
           # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
           t node scripts/test-verify-failed-payer-key.js
           t node scripts/test-svm-payer.js
+          t node scripts/test-non-evm-payer.js
           # Event-loop lag monitor measures a real block and stays cheap enough to leave on (offline)
           t node scripts/test-loop-lag.js
           # Tempo MPP settlement (native tempo/charge via Tempo's relay — challenge wiring + settlement-ordering proof — offline)

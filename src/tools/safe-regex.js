@@ -1,7 +1,7 @@
 import vm from "node:vm";
 // Guards for CALLER-SUPPLIED regexes that run on the main event loop.
 //
-// All ~1,400 tools share one Node event loop, and a synchronous regex with
+// Every tool shares one Node event loop, and a synchronous regex with
 // catastrophic backtracking (ReDoS) freezes it for everyone — an unauthenticated,
 // free-tier DoS. The dedicated `regex` tool sandboxes arbitrary patterns in a
 // worker thread with a hard timeout; convenience tools that accept a user regex

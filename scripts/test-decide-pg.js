@@ -42,7 +42,31 @@ const admin = mk();
   await pool.end();
 }
 
-await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions, decide_tools, decide_feedback, decide_tool_reliability, decide_migrations CASCADE");
+// ---- plan shapes: saved with the decision, text-free, and kept past the prune ----
+{
+  const pool = mk();
+  await migrate(pool);
+  const { PgDecisionStore } = await import("../services/decide/decision-store.js");
+  const { planShape } = await import("../src/decide/plan-shape.js");
+  const store = new PgDecisionStore(pool);
+  const tool = { id: "t1", slug: "hash", seller: "agent402", firstParty: true };
+  const plan = [{ step: 1, purpose: "hash the private words", tool, fallbacks: [], dependsOn: [], score: 0.9 }];
+  const shape = planShape(plan, { gaps: [], categories: ["crypto"] });
+  await store.save({ decisionId: "dshape", task: "hash the private words", depth: "plan", confidence: 0.9, plan, gaps: [] }, { plannerVersion: "pv_test00000001", shape, synthetic: true });
+  const got = await store.getShape("dshape");
+  ok(got && got.shapeKey === shape.shapeKey && got.plannerVersion === "pv_test00000001" && got.synthetic === true && got.stepCount === 1 && got.slugs[0] === "hash", "the shape row is written with the decision");
+  const row = (await pool.query("SELECT * FROM decide_plan_shapes WHERE decision_id = 'dshape'")).rows[0];
+  ok(!/private words/.test(JSON.stringify(row)), "the shape row holds no task text");
+  const dv = (await pool.query("SELECT planner_version, synthetic FROM decide_decisions WHERE id = 'dshape'")).rows[0];
+  ok(dv.planner_version === "pv_test00000001" && dv.synthetic === true, "the decision row carries the planner version and the own-traffic flag");
+  await pool.query("UPDATE decide_decisions SET created_at = now() - interval '31 days' WHERE id = 'dshape'");
+  await store.prune(30);
+  const gone = (await pool.query("SELECT 1 FROM decide_decisions WHERE id = 'dshape'")).rows.length;
+  ok(gone === 0 && (await store.getShape("dshape"))?.shapeKey === shape.shapeKey, "the 30-day prune drops the decision (its text) and keeps its shape");
+  await pool.end();
+}
+
+await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions, decide_tools, decide_feedback, decide_tool_reliability, decide_plan_shapes, decide_migrations CASCADE");
 
 // ---- two boots racing migrate(): each migration applied exactly once ----
 {
@@ -53,6 +77,9 @@ await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions,
   ok(rows.map((r) => r.id).join() === MIGRATIONS.map((m) => m.id).join(), `every migration recorded once (${rows.map((r) => r.id).join()})`);
   const cols = await admin.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'decide_decisions' AND column_name = 'cost'");
   ok(cols.rows.length === 1, "migration 3 added the cost column");
+  const pv = await admin.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'decide_decisions' AND column_name IN ('planner_version', 'synthetic')");
+  const shp = await admin.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'decide_plan_shapes'");
+  ok(pv.rows.length === 2 && shp.rows.length === 1, "migration 4 added the planner version, the flag and the shapes table");
   await a.end(); await b.end();
 }
 
@@ -98,7 +125,7 @@ await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions,
   await pool.end();
 }
 
-await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions, decide_tools, decide_feedback, decide_tool_reliability, decide_migrations CASCADE");
+await admin.query("DROP TABLE IF EXISTS decide_decision_steps, decide_decisions, decide_tools, decide_feedback, decide_tool_reliability, decide_plan_shapes, decide_migrations CASCADE");
 await admin.end();
 console.log(`\ntest-decide-pg: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

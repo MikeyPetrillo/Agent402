@@ -225,6 +225,9 @@ async function readGithub(owner, repo) {
   let doc;
   try { doc = JSON.parse(text); } catch { return remember(githubCache, key, { skipped: "GitHub returned a document that is not JSON" }); }
   if (!doc || typeof doc !== "object" || typeof doc.full_name !== "string") return remember(githubCache, key, { skipped: "GitHub returned a record without a name" });
+  // A private repository a configured token can read answers exactly like a
+  // missing one: nothing about it leaves through this tool.
+  if (doc.private === true) return remember(githubCache, key, { skipped: "repository not found on GitHub (HTTP 404)" });
   return remember(githubCache, key, doc);
 }
 

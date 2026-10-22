@@ -10,7 +10,7 @@
 //
 // The frame that is actually correct is different and the evidence for it was
 // already on the site, unstated: this host indexes the market, publishes a
-// leaderboard it excludes itself from, and settles on twelve rails. Being small
+// leaderboard it excludes itself from, and settles on every rail it lists. Being small
 // in revenue and central in infrastructure are not in tension - they are the
 // position. The leaderboard ranking a rival above us is the strongest possible
 // evidence the index is neutral, which is the whole reason to trust it.

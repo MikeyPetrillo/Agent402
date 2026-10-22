@@ -93,7 +93,17 @@ curl -s https://agent402.tools/api/status | jq '.components[] | select(.key=="pa
 The Worker holds two secrets: `STATUS_PROBE_TOKEN`, which writes to
 `POST /api/status/probe`, and an optional `GITHUB_ISSUES_TOKEN`
 (`Issues: write` on this repository only) for opening and closing its own
-status issues. It cannot start workflows.
+status issues. It cannot start workflows. `/run` and `/verify` accept
+`STATUS_PROBE_TOKEN` only (compared in constant time); the root operator
+token is not read.
+
+An open issue counts as an alarm only when the account that
+`GITHUB_ISSUES_TOKEN` belongs to opened it, or the Actions bot did
+(`heartbeat.yml` opens issues under the same titles). The Worker learns
+its own account from `GET /user` once per isolate; set the optional
+`GITHUB_ISSUES_LOGIN` var to name it and skip that read. An issue anyone
+else opens under an alarm title is neither closed nor taken as an open
+alarm.
 
 Verify the Worker with the probe token, not the operator token:
 

@@ -20,8 +20,8 @@
 // same way before it is requested. Discovered links are filtered before they
 // are ever fetched: non-http(s) schemes dropped, private IP literals refused
 // outright, and the same-host policy applied; anything the guard refuses at
-// fetch time (a hostname resolving privately) is counted under
-// skipped.unsafe and never retried.
+// fetch time (a hostname that does not resolve or resolves privately: the
+// guard answers both alike) is counted under skipped.unsafe and never retried.
 //
 // Budgets are hard, shared across every fetch a call makes (time, bytes,
 // fetch count) so a hostile or merely huge site cannot hold the event loop or
@@ -38,7 +38,7 @@ import { gunzipSync } from "node:zlib";
 import { isIP } from "node:net";
 import { runHtml } from "./html-pool.js";
 import { cleanText } from "./html-parse-ops.js";
-import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp } from "./fetch-guard.js";
+import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
 
@@ -420,7 +420,7 @@ async function siteMapHandler(input) {
   const home = await budgetedFetch(startUrl, budget, { hostPolicy, maxBytes: 2 * 1024 * 1024 });
   if (!home.ok) {
     if (home.kind === "http") throw bad(home.status >= 500 ? `Start URL returned HTTP ${home.status} - upstream issue, try again later` : `Start URL returned HTTP ${home.status} - check the URL is correct and publicly reachable`, home.status >= 500 ? 502 : 422);
-    if (home.kind === "unsafe") throw bad("URL resolves to a private address");
+    if (home.kind === "unsafe") throw bad(UNRESOLVED_OR_PRIVATE);
     if (home.kind === "offsite") throw bad("Start URL redirected off the site - give the final host as the start URL", 422);
     if (home.kind === "budget" || home.kind === "timeout") throw bad("Start URL did not respond within the time budget", 504);
     if (home.kind === "binary") throw bad("Start URL is not an HTML or text document", 422);
@@ -629,7 +629,7 @@ async function siteCrawlRun(input) {
   if (startFailure) {
     const f = startFailure;
     if (f.kind === "http") throw bad(f.status >= 500 ? `Start URL returned HTTP ${f.status} - upstream issue, try again later` : `Start URL returned HTTP ${f.status} - check the URL is correct and publicly reachable`, f.status >= 500 ? 502 : 422);
-    if (f.kind === "unsafe") throw bad("URL resolves to a private address");
+    if (f.kind === "unsafe") throw bad(UNRESOLVED_OR_PRIVATE);
     if (f.kind === "offsite") throw bad("Start URL redirected off the site - give the final host as the start URL", 422);
     if (f.kind === "timeout") throw bad("Start URL did not respond within the time budget", 504);
     if (f.kind === "binary") throw bad("Start URL is not an HTML or text document", 422);

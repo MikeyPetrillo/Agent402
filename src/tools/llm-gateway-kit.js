@@ -26,7 +26,7 @@
 // cache hooks res.json only).
 
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
-import { upstreamCosts, upstreamCostsLoaded } from "../upstream-costs.js";
+import { upstreamCosts, upstreamCostsLoaded, rowRateAt } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
 import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
@@ -54,6 +54,7 @@ import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
 
@@ -484,6 +485,10 @@ export const TIERS = {
       // older model) out. With a 4k-char prompt the clamp still leaves a usable
       // output budget on either (pinned in test-llm-gateway).
       "openai/gpt-6-astra", "anthropic/claude-fable-5.1",
+      // Gemini's pro model, also on pro: the premium Gemini wire's default
+      // (llm-gemini-kit.js), served here at this tier's caps and price. The
+      // bare family id maps to the live -preview id (PREFIX_CANONICAL).
+      "google/gemini-3.1-pro",
     ],
   },
   // Auto tier - model chosen server-side (see AUTO_RANKINGS above). Listed
@@ -866,15 +871,22 @@ export const PAYMENT_WINDOW_TAIL_MS = 5_000;
  *  when too little is left to start another attempt. */
 const windowAttempted = new WeakSet();
 export function paymentWindowTimeoutMs(req, defaultMs) {
-  const left = evmCredentialSettleableMs(req);
-  if (left == null) return defaultMs;
+  // Through the CDN proxy the answer must also start inside the proxy's wait
+  // (src/cdn-sync-window.js); the nearer of the two bounds applies.
+  const evmLeft = evmCredentialSettleableMs(req);
+  const cdnLeft = cdnSyncLeftMs(req);
+  if (evmLeft == null && cdnLeft == null) return defaultMs;
+  const cdnBinds = cdnLeft != null && (evmLeft == null || cdnLeft <= evmLeft);
+  const left = cdnBinds ? cdnLeft : evmLeft;
   // The first attempt of a request always starts while any window is left (a
   // fast call settles inside a short one); a further attempt needs enough
   // window left to be worth starting.
   const first = req && typeof req === "object" && !windowAttempted.has(req);
   if (first) windowAttempted.add(req);
   if (left <= PAYMENT_WINDOW_TAIL_MS || (!first && left < PAYMENT_WINDOW_MIN_START_MS)) {
-    throw bad("The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
+    throw bad(cdnBinds
+      ? "The call did not finish within the time this connection waits for an answer - not charged; retry, or ask for a streamed answer where the route offers one"
+      : "The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
   }
   return Math.min(defaultMs, left - PAYMENT_WINDOW_TAIL_MS);
 }
@@ -1050,14 +1062,17 @@ function requireFee(v) {
 }
 
 /** Upstream list price for a model (longest matching prefix), or null when
- *  the family is unknown - callers fall back to the tier's max_price bound. */
-export function costFor(model) {
+ *  the family is unknown - callers fall back to the tier's max_price bound.
+ *  With `promptTokens`, the price at that prompt size: a row with long-context
+ *  tiers answers the tier the prompt reaches (src/upstream-costs.js rowRateAt),
+ *  and without it, or below every tier, the base row itself. */
+export function costFor(model, promptTokens) {
   const id = canonicalModel(model).toLowerCase();
   let best = null;
   for (const [prefix, cost] of modelCostRows()) {
     if (id.startsWith(prefix) && (!best || prefix.length > best.prefix.length)) best = { prefix, cost };
   }
-  return best ? best.cost : null;
+  return best ? rowRateAt(best.cost, promptTokens) : null;
 }
 
 /** Worst-case input multiplier when prompt caching is on: an Anthropic cache
@@ -1385,6 +1400,27 @@ function estimateInputTokens(body, imageCount) {
   return Math.ceil(countTokensBounded(text) * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
 }
 
+/** The prompt size, in the upstream's own tokens, that picks a long-context
+ *  tier for this body: the estimated input (exact BPE with headroom, see
+ *  estimateInputTokens), the tier's own injected input and every server-tool
+ *  result, as one turn (the last turn of a loop carries all of it), scaled by
+ *  the model's tokenizer correction. Every turn is priced at the tier this
+ *  largest turn reaches, so the selection can only err dear. */
+export function promptTokensFor(body, tier, imageCount = 0) {
+  const st = serverToolWorstCase(body, tier);
+  return promptTokensOf(estimateInputTokens(body, imageCount), body, tier, st);
+}
+function promptTokensOf(estimated, body, tier, st) {
+  return Math.ceil((estimated + (tier.extraInputTokens || 0) + st.injectedTokens) * tokenizerFactor(body.model));
+}
+
+/** The provider.max_price bound a metered call sends: the model's row at this
+ *  body's prompt size, the same row its quote priced (null when the model has
+ *  no row; the metered tier refuses before then). */
+export function meteredBoundFor(body, tier, imageCount = 0) {
+  return costFor(body.model, promptTokensFor(body, tier, imageCount));
+}
+
 /** Worst-case upstream bill (USD) for an outbound body at this tier:
  *  exact-BPE input pricing plus the full output cap × n, against the model's
  *  list cost elementwise-min'd with the tier's provider max_price bound.
@@ -1392,7 +1428,16 @@ function estimateInputTokens(body, imageCount) {
  *  CI test (scripts/test-pricing-margin.js) imports it so the test and the
  *  runtime can never disagree on the math. */
 export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
-  const row = costFor(body.model) || tier.maxPrice;
+  const st = serverToolWorstCase(body, tier);
+  const estimated = estimateInputTokens(body, imageCount);
+  const promptTokens = promptTokensOf(estimated, body, tier, st);
+  // A long-context tier (a row's `tiers`) prices the whole call once the
+  // prompt reaches it: upstream bills every token of such a prompt, prompt
+  // and completion alike, at the higher rate.
+  const base = costFor(body.model);
+  const atSize = costFor(body.model, promptTokens);
+  const longContext = !!base && atSize !== base;
+  const row = atSize || tier.maxPrice;
   // A priority-tier request (service_tier "priority", pro/premium only) can be
   // served by the model's "*/fast" or "*/priority" endpoint, which bills a
   // multiple of the default row (PRIORITY_PRICE_FACTOR, measured live); the
@@ -1405,7 +1450,10 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   // own row and sends THAT row as its bound (`costFor` in the handlers), so
   // its quote must not be min'd with a ceiling the request never carries
   // (review 2026-08-27: a pricier model quoted under its own row).
-  const cost = tier.metered ? { prompt: listed.prompt, completion: listed.completion } : {
+  // A long-context tier is not min'd with the flat bound either: max_price is
+  // documented against an endpoint's listed price, and nothing states it
+  // bounds the long-context price an admitted endpoint bills above it.
+  const cost = tier.metered || longContext ? { prompt: listed.prompt, completion: listed.completion } : {
     prompt: Math.min(listed.prompt, tier.maxPrice.prompt),
     completion: Math.min(listed.completion, tier.maxPrice.completion),
   };
@@ -1419,8 +1467,7 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   // transcript, plus a per-use execution fee. `st` is all-zero / turns:1 for
   // every request that carries none, so the numbers below are byte-identical
   // to the pre-server-tools arithmetic on those.
-  const st = serverToolWorstCase(body, tier);
-  const inTokens = (estimateInputTokens(body, imageCount) + (tier.extraInputTokens || 0) + st.injectedTokens) * st.turns;
+  const inTokens = (estimated + (tier.extraInputTokens || 0) + st.injectedTokens) * st.turns;
   // Prompt caching rides by default (top-level cache_control, see
   // cacheControlPref): on Anthropic a cache WRITE bills above list input
   // (see cacheWriteFactor), so the worst case for a first-seen long prompt is
@@ -1442,7 +1489,7 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const outFactor = reasoningOutsideMaxTokens(body.model) ? UNCAPPED_REASONING_OUT_FACTOR : 1;
   const outTokens = (Number(body.max_tokens) || 0) * outFactor;
   const outUsd = (outTokens / 1e6) * cost.completion * n * st.turns;
-  return { inTokens, inUsd, fixedUsd, outUsd, outTokens, outFactor, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st };
+  return { inTokens, inUsd, fixedUsd, outUsd, outTokens, outFactor, totalUsd: inUsd + fixedUsd + outUsd, cost, serverTools: st, promptTokens, longContext };
 }
 
 /** Output tokens priced per token of max_tokens for a model whose reasoning
@@ -2023,6 +2070,10 @@ export const REASONING_MODELS = [
   { id: "google/gemini-3.5-flash-lite", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.5-flash", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.6-flash", efforts: ["minimal", "low", "medium", "high"] },
+  // Gemini 3.1 Pro: reasoning MANDATORY, default effort medium, no "minimal"
+  // (live catalog 2026-10-21). Pro injects "low"; premium leaves the model
+  // default unless the call's budget is small (smallBudgetEffort).
+  { id: "google/gemini-3.1-pro-preview", efforts: ["low", "medium", "high"] },
   { id: "anthropic/claude-sonnet-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Claude Sonnet 5.5 (pro, via the claude-sonnet prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-29); pro injects "low".
@@ -2101,13 +2152,32 @@ export function reasoningProfile(model) {
   }
   return best;
 }
+/** The effort a "model"-policy tier (premium) asks for when a call's output
+ *  budget is below the room the tier itself gives a reasoning model
+ *  (defaultMaxTokens): "low" where the model takes it, else null. Reasoning
+ *  tokens count against max_tokens, so a model left at its own default effort
+ *  (high on Claude Opus 5, medium on Gemini 3.1 Pro) can spend a small budget
+ *  thinking and come back cut off or empty. A buyer reasoning preference
+ *  always wins; the callers only ask when the buyer set none. */
+export function smallBudgetEffort(model, tierSlug, maxTokens) {
+  const tier = TIERS[tierSlug];
+  if (tier?.reasoningDefault !== "model" || !tier.defaultMaxTokens) return null;
+  const n = Number(maxTokens);
+  if (!Number.isFinite(n) || n >= tier.defaultMaxTokens) return null;
+  const prof = reasoningProfile(model);
+  return prof && prof.efforts.includes("low") ? "low" : null;
+}
 /** The reasoning object to inject for a chain link when the buyer set none:
- *  null = leave the model's default alone. */
-export function defaultReasoningFor(model, tierSlug) {
+ *  null = leave the model's default alone. `maxTokens` is the link's output
+ *  budget after the clamp (see smallBudgetEffort). */
+export function defaultReasoningFor(model, tierSlug, maxTokens) {
   const prof = reasoningProfile(model);
   if (!prof) return null;
   const policy = TIERS[tierSlug]?.reasoningDefault || "lowest";
-  if (policy === "model") return null;
+  if (policy === "model") {
+    const effort = smallBudgetEffort(model, tierSlug, maxTokens);
+    return effort ? { effort } : null;
+  }
   const nonNone = prof.efforts.filter((e) => e !== "none");
   if (policy === "low") return { effort: nonNone.includes("low") ? "low" : (nonNone[0] || null) };
   // "lowest": the cheapest effort the model supports that still reasons
@@ -3244,7 +3314,8 @@ function makeHandler(routeTier) {
     // upstream bound is that row, not the tier-wide 20/100 - a pricier
     // provider of the same model is refused upstream instead of served at a
     // loss the quote never covered (audit 2026-08-26).
-    const meteredBound = TIERS[tierSlug].metered ? costFor(body.model) : null;
+    // A row with long-context tiers bounds at the tier this prompt reaches.
+    const meteredBound = TIERS[tierSlug].metered ? meteredBoundFor(body, TIERS[tierSlug], countImages(body.messages)) : null;
     const providerPrefs = {
       ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }
         : TIERS[tierSlug].maxPrice ? { max_price: TIERS[tierSlug].maxPrice } : {}),
@@ -3288,7 +3359,7 @@ function makeHandler(routeTier) {
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug);
+      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
       const plugins = [
         ...(TIERS[tierSlug].web ? [{ ...TIERS[tierSlug].web }] : []),
         ...(structured && body.stream !== true ? [{ id: "response-healing" }] : []),
@@ -3812,7 +3883,7 @@ export const LLM_GATEWAY_TOOLS = [
     binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],
     discovery: {
       bodyType: "json",
-      input: { input: "Agent402 serves fourteen hundred tools, paid per call.", voice: "alloy" },
+      input: { input: "Agent402 serves 500+ tools, paid per call.", voice: "alloy" },
       inputSchema: {
         properties: {
           input: { type: "string", description: "Text to speak (up to 2,000 chars)" },

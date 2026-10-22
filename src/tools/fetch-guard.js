@@ -249,6 +249,9 @@ export async function hostIsPublic(hostname) {
   return ok;
 }
 
+/** The refusal for a host that does not resolve or resolves to a private address. */
+export const UNRESOLVED_OR_PRIVATE = "URL host could not be resolved, or resolves to a private address";
+
 /**
  * Validate that a URL is http(s) and does not resolve to a private address.
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
@@ -275,18 +278,20 @@ export async function assertPublicUrl(rawUrl) {
   // check actually evaluates the address (literals never hit DNS, so this
   // upfront check is the only guard they get).
   const host = url.hostname.replace(/^\[|\]$/g, "");
+  // One message for "does not resolve" and "resolves to a private address",
+  // so the answer cannot tell the caller which internal names exist.
   if (isIP(host) ? isPrivateIp(host) : false) {
-    throw badRequest("URL resolves to a private address");
+    throw badRequest(UNRESOLVED_OR_PRIVATE);
   }
   if (!isIP(host)) {
     let resolved;
     try {
       resolved = await lookup(host);
     } catch {
-      throw badRequest(`Could not resolve host: ${host}`);
+      throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
     if (isPrivateIp(resolved.address)) {
-      throw badRequest("URL resolves to a private address");
+      throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
   }
   return url;

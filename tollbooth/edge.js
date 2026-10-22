@@ -98,8 +98,13 @@ export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, 
     if (!constEq(sig, expected)) return { ok: false, reason: "bad signature" };
     if (res !== resource) return { ok: false, reason: "wrong resource" };
     if (Date.now() > Number(expStr)) return { ok: false, reason: "expired" };
+    // Hold every solution to the configured difficulty too, not only the one the
+    // token claims (same rule as pow.js), so a token minted under a lower
+    // setting, or by another gate sharing the secret, buys no discount.
+    const claimedBits = Number(diffStr);
+    if (!Number.isFinite(claimedBits) || claimedBits < difficulty) return { ok: false, reason: "difficulty below policy" };
     const h = await sha256(`${chal}:${nonce}`);
-    if (leadingZeroBits(h) < Number(diffStr)) return { ok: false, reason: "insufficient work" };
+    if (leadingZeroBits(h) < claimedBits) return { ok: false, reason: "insufficient work" };
     // Atomically claim single-use only AFTER the work is validated, so an invalid
     // attempt never consumes the token and concurrent dupes can't both pass.
     // F05: FAIL CLOSED, if the claim store is unavailable, deny rather than let

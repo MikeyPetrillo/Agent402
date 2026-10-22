@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd } from "./index.js";
+import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3081;
@@ -19,6 +19,9 @@ const proc = spawn("node", ["src/server.js"], {
 });
 const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
 let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
+// The advisory-caps warning is captured (and still printed) so a test can count it.
+const advisoryWarnings = [];
+{ const warn = console.warn; console.warn = (...args) => { const line = args.join(" "); if (line.includes("[agent402-client] spending caps")) advisoryWarnings.push(line); warn(...args); }; }
 
 // Offline: withNetworkPreference pins the settlement chain (e.g. USDG on
 // Robinhood Chain) on any duck-typed x402 client - no @x402 dependency here.
@@ -147,13 +150,16 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
 // that budgets from the catalog would sign whatever the seller asked for. x402
 // v2 carries the challenge base64 in the PAYMENT-REQUIRED header and leaves the
 // body `{}`, which is why reading the body alone learned nothing.
+const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 {
   const okResp = { ok: true, json: async () => ({ ok: true }) };
   const challengeHeader = (usd) => Buffer.from(JSON.stringify({
     x402Version: 2,
     accepts: [
-      { scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: "0xUSDC", payTo: "0xdead", extra: { name: "USD Coin" } },
-      { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", amount: String(Math.round(usd * 1e6)), asset: "mint", payTo: "sol" },
+      { scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } },
+      { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", amount: String(Math.round(usd * 1e6)), asset: SOL_USDC, payTo: "sol" },
     ],
   })).toString("base64");
   // 402 to an unauthenticated send (the preflight), served to one carrying a
@@ -218,12 +224,231 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   // the max across accepts (the wallet picks the chain, so the dearest bounds it)
   {
     const hdr = (obj) => ({ headers: new Headers({ "payment-required": Buffer.from(JSON.stringify(obj)).toString("base64") }), json: async () => ({}) });
-    ok(await quoted402Usd(hdr({ accepts: [{ amount: "20000" }, { amount: "500000" }] })) === 0.5, "the quote is the dearest accept");
-    ok(await quoted402Usd(hdr({ accepts: [{ maxAmountRequired: "3000" }] })) === 0.003, "a v1 maxAmountRequired is read");
-    ok(await quoted402Usd({ headers: new Headers(), json: async () => ({ accepts: [{ amount: "1000" }] }) }) === 0.001, "a body-carried challenge is read when the header has none");
+    const base = (amount, extra) => ({ network: "eip155:8453", asset: BASE_USDC, amount, ...(extra ? { extra } : {}) });
+    ok(await quoted402Usd(hdr({ accepts: [base("20000"), base("500000")] })) === 0.5, "the quote is the dearest accept");
+    ok(await quoted402Usd(hdr({ accepts: [{ network: "eip155:8453", asset: BASE_USDC, maxAmountRequired: "3000" }] })) === 0.003, "a v1 maxAmountRequired is read");
+    ok(await quoted402Usd({ headers: new Headers(), json: async () => ({ accepts: [base("1000")] }) }) === 0.001, "a body-carried challenge is read when the header has none");
     ok(await quoted402Usd({ headers: new Headers(), json: async () => ({}) }) === null, "an unreadable 402 quotes null, never a guess");
-    ok(await quoted402Usd(hdr({ accepts: [{ amount: "1000", extra: { decimals: 99 } }] })) === null, "an out-of-range decimals hint makes the quote unreadable");
+    // The price comes from the known-asset table, never from a decimals value
+    // the seller sends: the signer signs the raw amount whatever the hint says.
+    ok(await quoted402Usd(hdr({ accepts: [base("5000000", { decimals: 18 })] })) === 5, "a decimals hint is ignored: 5000000 base units of Base USDC is $5");
+    ok(await quoted402Usd(hdr({ accepts: [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "5000000", extra: { decimals: 18 } }] })) === null,
+      "an accept in an asset that is not known cannot be priced (null), whatever decimals it declares");
+    ok(await quoted402Usd(hdr({ accepts: [{ network: "eip155:137", asset: BASE_USDC, amount: "1000" }] })) === null, "a known address on the wrong network is not a known asset");
+    ok(acceptUsd({ network: "stellar:pubnet", asset: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", amount: "10000000" }) === 1, "Stellar USDC is priced at its 7 decimals");
+    ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC.toLowerCase(), amount: "1000" }) === 0.001, "an EVM address matches without case");
+    ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "1e6" }) === null, "an amount that is not whole base units cannot be priced");
   }
+
+  // wallet, no signing guard: a capped wallet may sign any accept, so one it
+  // cannot price is refused before anything is signed
+  {
+    const counters = { paid: 0, preflights: 0 };
+    const unknownOffer = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead" },
+      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } },
+    ] })).toString("base64");
+    const c = new Agent402({
+      baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.1,
+      fetch: async () => { counters.paid++; return okResp; },
+      fetchImpl: async () => { counters.preflights++; return { ok: false, status: 402, headers: new Headers({ "payment-required": unknownOffer }), json: async () => ({}) }; },
+    });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset", `an accept in an unknown asset is refused under a cap (${e?.message})`);
+    ok(counters.paid === 0, "nothing was signed for it");
+  }
+}
+
+// Offline: the caps hold on the payment that is SIGNED. A real @x402/core
+// client and @x402/fetch wrapper with a throwaway key, against an in-process
+// seller that quotes one price on the unpaid preflight and another on the
+// request the wallet signs for. No network, no facilitator, no funds.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const account = privateKeyToAccount("0x" + "22".repeat(32));
+  const offer = (accepts) => Buffer.from(JSON.stringify({
+    x402Version: 2,
+    resource: { url: "https://seller.example/v1/chat/completions", description: "chat", mimeType: "application/json" },
+    accepts: accepts.map((a) => ({ scheme: "exact", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" }, ...a })),
+  })).toString("base64");
+  // The seller: the client's own preflight (fetchImpl) sees `preflight`; the
+  // payFetch's unpaid request sees `paid`; a request carrying a signature is
+  // recorded and answered 200.
+  const seller = ({ preflight, paid }) => {
+    const seen = { preflights: 0, unpaid: 0, signed: [] };
+    const answer402 = (accepts) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(accepts) } });
+    const preflightFetch = async () => { seen.preflights++; return answer402(preflight); };
+    const payInner = async (req) => {
+      const sig = req.headers.get("payment-signature");
+      if (sig) {
+        const payload = JSON.parse(Buffer.from(sig, "base64").toString("utf8"));
+        seen.signed.push({ network: payload.accepted?.network, amount: payload.accepted?.amount });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      seen.unpaid++;
+      return answer402(paid);
+    };
+    return { seen, preflightFetch, payInner };
+  };
+  const build = ({ preflight, paid, guard = true, ...caps }) => {
+    const s = seller({ preflight, paid });
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    const payFetch = wrapFetchWithPayment(s.payInner, xc);
+    const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: payFetch, fetchImpl: s.preflightFetch, ...(guard ? { x402Client: xc } : {}), ...caps });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.01" }]]);
+    return { c, seen: s.seen };
+  };
+  const cheap = [{ network: "eip155:8453", asset: BASE_USDC, amount: "10000" }]; // $0.01
+  const dear = [{ network: "eip155:8453", asset: BASE_USDC, amount: "5000000" }]; // $5
+
+  // Control: the same exchange with no guard registered signs the dearer quote.
+  // This is what the guard exists to stop, and it shows the fixture really signs.
+  {
+    const { c, seen } = build({ preflight: cheap, paid: dear, guard: false, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].amount === "5000000", "control: without the guard, a 402 that changes after the preflight gets the dearer one signed");
+  }
+  {
+    const { c, seen } = build({ preflight: cheap, paid: dear, maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(seen.preflights === 1 && seen.unpaid === 1, "the preflight read $0.01 and the paid request drew its own 402");
+    ok(seen.signed.length === 0, "with the guard, the $5 the paid request asked for was never signed");
+    ok(e?.name === "SpendingLimitError" && e.atSigning === true && e.limit === "maxPerCallUsd" && e.priceUsd === 5 && /\$5\b/.test(e.message) && /\$0\.1\b/.test(e.message), `the refusal is a SpendingLimitError at signing naming the cap (${e?.message})`);
+    ok(c.spendingSummary().calls === 0, "nothing was booked as spent");
+  }
+  // The pre-wrapped-fetch mode (no x402Client) is the one where caps are
+  // advisory, and says so once per process; a guarded client never warns.
+  {
+    ok(advisoryWarnings.length === 1 && /not on the payment that is signed/.test(advisoryWarnings[0]), `capped calls through a pre-wrapped fetch warned exactly once (saw ${advisoryWarnings.length})`);
+    const before = advisoryWarnings.length;
+    const { c } = build({ preflight: cheap, paid: cheap, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(advisoryWarnings.length === before, "a client given its x402Client does not warn");
+  }
+  // A mixed offer pays the option that fits.
+  {
+    const mixed = [...dear, { network: "eip155:137", asset: POLYGON_USDC, amount: "20000" }];
+    const { c, seen } = build({ preflight: mixed, paid: mixed, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].network === "eip155:137" && seen.signed[0].amount === "20000", "with an over-cap and an in-cap option, the in-cap one is signed");
+    ok(c.spendingSummary().dailyUsd === 0.02, `the ledger books the signed amount (${c.spendingSummary().dailyUsd})`);
+  }
+  // A seller decimals hint does not lower the price the guard reads.
+  {
+    const hinted = [{ network: "eip155:8453", asset: BASE_USDC, amount: "5000000", extra: { name: "USD Coin", version: "2", decimals: 18 } }];
+    const { c, seen } = build({ preflight: cheap, paid: hinted, maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", "5000000 base units of USDC declared as 18 decimals is still $5, and is refused");
+  }
+  // An unknown asset is never signed under the guard.
+  {
+    const odd = [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1", extra: { name: "Odd", version: "1", decimals: 18 } }];
+    const { c, seen } = build({ preflight: cheap, paid: odd, maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", `an accept in an unknown asset is not signed (${e?.message})`);
+  }
+  // The rolling cap is checked at signing against what is left.
+  {
+    const { c, seen } = build({ preflight: cheap, paid: [{ network: "eip155:8453", asset: BASE_USDC, amount: "60000" }], dailyLimitUsd: 0.1 });
+    await c.call("chat", {});
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(seen.signed.length === 1 && e?.name === "SpendingLimitError" && e.limit === "dailyLimitUsd" && e.atSigning === true,
+      `a second $0.06 signature is refused with $0.04 of the daily cap left (${e?.message})`);
+  }
+}
+
+// Offline: a paid call never follows a redirect. Two real loopback servers, a
+// real @x402/fetch wrapper and a throwaway key, nothing on chain. Followed, a
+// redirect before the 402 would pay the other origin's payee, and a redirect
+// of the signed retry would hand the signature to the other origin; either way
+// the other origin's answer would come back as this route's. The control: the
+// same client pays a route that does not redirect.
+{
+  const { createServer } = await import("node:http");
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { PaymentRedirectError } = await import("./index.js");
+  const account = privateKeyToAccount("0x" + "22".repeat(32));
+  const listen = (handler) => new Promise((res) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => res(srv)); });
+  const offerFor = (url, payTo) => Buffer.from(JSON.stringify({ x402Version: 2,
+    resource: { url, description: "chat", mimeType: "application/json" },
+    accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
+  const elsewhereSeen = { unpaid: 0, signed: 0 };
+  const elsewhere = await listen((req, res) => {
+    req.resume();
+    if (req.headers["payment-signature"]) { elsewhereSeen.signed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"elsewhere"}'); }
+    elsewhereSeen.unpaid++;
+    res.writeHead(402, { "content-type": "application/json", "payment-required": offerFor(`http://127.0.0.1:${elsewhere.address().port}${req.url}`, "0x000000000000000000000000000000000000bEEF") });
+    res.end("{}");
+  });
+  const OTHER = `http://127.0.0.1:${elsewhere.address().port}`;
+  const sellerSeen = { signedRedirected: 0, signedServed: 0 };
+  const seller = await listen((req, res) => {
+    req.resume();
+    const signed = Boolean(req.headers["payment-signature"]);
+    const here = `http://127.0.0.1:${seller.address().port}${req.url}`;
+    if (req.url === "/first") { res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/paid" && signed) { sellerSeen.signedRedirected++; res.writeHead(307, { location: `${OTHER}${req.url}` }); return res.end(); }
+    if (req.url === "/plain" && signed) { sellerSeen.signedServed++; res.writeHead(200, { "content-type": "application/json" }); return res.end('{"from":"seller"}'); }
+    res.writeHead(402, { "content-type": "application/json", "payment-required": offerFor(here, "0x000000000000000000000000000000000000dEaD") });
+    res.end("{}");
+  });
+  const SELLER = `http://127.0.0.1:${seller.address().port}`;
+  const build = (caps = {}) => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    const c = new Agent402({ baseUrl: SELLER, cache: false, tlsDistrust: false, fetch: wrapFetchWithPayment(fetch, xc), x402Client: xc, ...caps });
+    c._catalog = new Map([
+      ["first", { method: "POST", path: "/first", computePayable: false, price: "$0.001" }],
+      ["paid", { method: "POST", path: "/paid", computePayable: false, price: "$0.001" }],
+      ["plain", { method: "POST", path: "/plain", computePayable: false, price: "$0.001" }],
+    ]);
+    return c;
+  };
+  try {
+    for (const caps of [{}, { maxPerCallUsd: 0.01, dailyLimitUsd: 1 }]) {
+      const label = Object.keys(caps).length ? "capped" : "uncapped";
+      const c = build(caps);
+      const plain = await c.call("plain", { q: 1 });
+      ok(plain?.from === "seller" && sellerSeen.signedServed > 0, `${label}: control, a route that does not redirect is paid and answers`);
+      let e = null; try { await c.call("first", { q: 1 }); } catch (err) { e = err; }
+      ok(e instanceof PaymentRedirectError && e.location === `${OTHER}/first` && e.message.includes(`set baseUrl to ${OTHER}`),
+        `${label}: a redirect before the 402 is refused, naming where it pointed (${e?.message})`);
+      const before = sellerSeen.signedRedirected;
+      e = null; try { await c.call("paid", { q: 1 }); } catch (err) { e = err; }
+      ok(sellerSeen.signedRedirected === before + 1, `${label}: control, the route received the signed retry it redirected`);
+      ok(e instanceof PaymentRedirectError, `${label}: a redirect of the signed retry is refused (${e?.message})`);
+      ok(elsewhereSeen.unpaid === 0 && elsewhereSeen.signed === 0, `${label}: the other origin got no request (${elsewhereSeen.unpaid} unpaid, ${elsewhereSeen.signed} signed)`);
+      if (caps.dailyLimitUsd) {
+        const spent = c._spend.log.reduce((t, x) => t + x.usd, 0);
+        ok(Math.abs(spent - 0.002) < 1e-9, `${label}: the signed-then-redirected payment counts against the caps beside the paid control ($${spent})`);
+      }
+    }
+    // Caps with a pre-wrapped fetch and no x402Client: the client cannot see
+    // what was signed, so a redirect on the unpaid preflight must stop the
+    // call before anything is reserved, not book the list price as spent.
+    {
+      const xc = new x402Client();
+      xc.setSpendControls?.(false);
+      registerExactEvmScheme(xc, { signer: account });
+      const c = new Agent402({ baseUrl: SELLER, cache: false, tlsDistrust: false, fetch: wrapFetchWithPayment(fetch, xc), maxPerCallUsd: 0.01, dailyLimitUsd: 0.002 });
+      c._catalog = new Map([["first", { method: "POST", path: "/first", computePayable: false, price: "$0.001" }]]);
+      let last = null;
+      for (let i = 0; i < 3; i++) { try { await c.call("first", { q: i }); } catch (err) { last = err; } }
+      ok(last instanceof PaymentRedirectError, `unguarded caps: every redirected call is refused as a redirect, never as a spent cap (${last?.name}: ${last?.message})`);
+      ok(c._spend.log.length === 0, `unguarded caps: a refused redirect books no spend (${c._spend.log.length} entries)`);
+      ok(elsewhereSeen.unpaid === 0 && elsewhereSeen.signed === 0, "unguarded caps: the other origin got no request");
+    }
+  } finally { seller.close(); elsewhere.close(); }
 }
 
 // Offline: caller-supplied output validators bind buyer intent without a peer
@@ -626,6 +851,80 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   await c.call("cheap"); // payFetch path
   ok(uas.length >= 2 && uas.every((u) => u === expectedUa),
     `every request carries the current ${expectedUa} product token (got ${JSON.stringify(uas)})`);
+}
+
+// Offline: a slow route (async.recommended on its /api/pricing row) is sent
+// with Prefer: respond-async and collected from its job link: 202, then
+// polling that honors Retry-After, then the route's 200 with its receipt
+// header. A fast route is sent without the header; a failed job is a failed
+// call whose spend is released; a job still running past the caller's
+// timeout throws AsyncJobPendingError with the link and keeps the spend; a
+// job link on another origin is never followed.
+{
+  const { createServer } = await import("node:http");
+  const { AsyncJobPendingError } = await import("./index.js");
+  const seen = { prefer: [], polls: 0, sleeps: [] };
+  let jobPlan = ["running", "running", "succeeded"], jobFail = false, foreignLocation = false, oldServer = false;
+  const srv = createServer((req, res) => {
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (req.url === "/api/pricing") return send(200, { endpoints: [
+      { slug: "slow", method: "POST", path: "/v1/slow", computePayable: false, price: "$0.50", async: { recommended: true, expectedSeconds: 40, maxSeconds: 240, prefer: "respond-async", statusUrl: "/api/jobs/{id}" } },
+      { slug: "fast", method: "POST", path: "/api/fast", computePayable: false, price: "$0.01" },
+    ] });
+    if (req.url === "/api/fast") { seen.prefer.push(["fast", req.headers.prefer || null]); return send(200, { fast: true }); }
+    if (req.url === "/v1/slow") {
+      seen.prefer.push(["slow", req.headers.prefer || null]);
+      // The spend-cap preflight (no Prefer, no payment) draws the 402, as live.
+      if (!req.headers.prefer) return send(402, { x402Version: 2, accepts: [] });
+      seen.polls = 0;
+      const id = "ab".repeat(24);
+      return send(202, { jobId: id, status: "working", state: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 3 }, { location: foreignLocation ? "https://elsewhere.example/api/jobs/x" : `/api/jobs/${id}`, "retry-after": "3" });
+    }
+    if (req.url.startsWith("/api/jobs/")) {
+      const st = jobPlan[Math.min(seen.polls++, jobPlan.length - 1)];
+      if (st === "running") return send(200, { status: "working", state: "running", stage: "generating", progress: 0.5, etaSeconds: 20, pollIntervalSeconds: 2 }, { "retry-after": "2" });
+      if (jobFail) return send(200, { status: "failed", state: "failed", message: "The call ended with HTTP 502 and nothing was charged.", error: { httpStatus: 502, body: { error: "upstream down" } } });
+      if (oldServer) return send(200, { status: "completed", result: { httpStatus: 200, body: { clip: "done" } } });
+      return send(200, { status: "completed", state: "succeeded", progress: 1, result: { httpStatus: 200, headers: { "payment-response": "cmVjZWlwdA==" }, body: { clip: "done" } } });
+    }
+    send(404, {});
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const progress = [];
+    const c = new Agent402({ baseUrl: base, cache: false, fetch: fetch, fetchImpl: fetch, tlsDistrust: false, onProgress: (d) => progress.push(d.state), dailyLimitUsd: 10 });
+    c._sleep = async (ms) => { seen.sleeps.push(ms); };
+    const out = await c.call("slow", { prompt: "x" });
+    ok(out.clip === "done", "a slow route's job answer is returned as the call's result");
+    ok(seen.prefer.filter((p) => p[0] === "slow").map((p) => p[1]).join(",") === ",respond-async", `the unpaid preflight is plain and the paid call carries Prefer: respond-async (${JSON.stringify(seen.prefer)})`);
+    ok(JSON.stringify(seen.sleeps) === JSON.stringify([3000, 2000, 2000]), `polling honors Retry-After (${seen.sleeps.join(",")})`);
+    ok(JSON.stringify(progress) === JSON.stringify(["queued", "running", "running", "succeeded"]), `onProgress sees each job document (${progress.join(",")})`);
+    ok(c.spendingSummary().dailyUsd === 0.5, "a delivered job counts its price as spent");
+    await c.call("fast", {});
+    ok(seen.prefer.find((p) => p[0] === "fast")?.[1] === null, "a fast route is sent without Prefer");
+    const off = new Agent402({ baseUrl: base, cache: false, fetch: fetch, fetchImpl: fetch, tlsDistrust: false, respondAsync: false });
+    seen.prefer.length = 0;
+    try { await off.call("slow", {}); } catch { /* a 202 is not a result when async is off */ }
+    ok(seen.prefer[0]?.[1] === null, "respondAsync: false never asks for a job");
+    jobFail = true; jobPlan = ["succeeded"];
+    let e = null; try { await c.call("slow", { prompt: "y" }); } catch (x) { e = x; }
+    ok(e && e.status === 502 && /upstream down/.test(e.message) && c.spendingSummary().dailyUsd === 0.51, `a failed job is a failed call and its spend is released (${e?.status} ${e?.message?.slice(0, 60)})`);
+    jobFail = false; jobPlan = ["running"];
+    e = null; try { await c.call("slow", { prompt: "z" }, { asyncTimeoutMs: 4500 }); } catch (x) { e = x; }
+    ok(e instanceof AsyncJobPendingError && e.jobUrl === `${base}/api/jobs/${"ab".repeat(24)}` && e.mayBeCharged === true, `a job past the timeout throws AsyncJobPendingError with its link (${e?.name})`);
+    ok(c.spendingSummary().dailyUsd === 1.01, "a job still running keeps its spend reserved (it may yet settle)");
+    jobPlan = ["succeeded"];
+    const collected = await c.collectJob(e.jobUrl);
+    ok(collected.clip === "done", "collectJob(jobUrl) collects the answer later");
+    oldServer = true;
+    const fromOld = await c.collectJob(e.jobUrl);
+    ok(fromOld.clip === "done", "a server that sends only the original status (completed) is still collected");
+    oldServer = false;
+    foreignLocation = true;
+    e = null; try { await c.call("slow", { prompt: "w" }); } catch (x) { e = x; }
+    ok(e instanceof AsyncJobPendingError && /another origin/.test(e.message), "a job link on another origin is never followed");
+  } finally { srv.close(); }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

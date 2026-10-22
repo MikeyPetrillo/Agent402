@@ -94,6 +94,14 @@ ok(seen[0].b.reasoning?.effort === "minimal" && seen[0].b.provider?.sort === "pr
 seen = [];
 await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, reasoning: { effort: "high" } }, fakeReq);
 ok(seen[0].b.reasoning?.effort === "high", "buyer reasoning preference wins");
+// Premium leaves a reasoning model at its own effort unless the budget is
+// under the tier's reasoning room; then effort low (smallBudgetEffort).
+seen = [];
+await bySlug("v1-chat-premium-responses").handler({ model: "anthropic/claude-opus-5", input: "hi", max_output_tokens: 1024 }, fakeReq);
+ok(seen[0].b.reasoning?.effort === "low" && seen[0].b.max_output_tokens === 1024, "premium + a small budget: effort low");
+seen = [];
+await bySlug("v1-chat-premium-responses").handler({ model: "anthropic/claude-opus-5", input: "hi" }, fakeReq);
+ok(seen[0].b.reasoning === undefined, "premium + the tier default budget: the model's own effort");
 // failover + paid-empty on nano (has fallbacks)
 seen = [];
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b.model + (b.service_tier ? ":flex" : "")); return { ok: true, status: 200, text: async () => JSON.stringify(b.model === "openai/gpt-5-nano" ? reply(b.model, { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [{ type: "reasoning", summary: [] }] }) : reply(b.model)) }; };

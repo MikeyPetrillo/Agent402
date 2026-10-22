@@ -135,8 +135,10 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   `package.json`.
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
-- `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) daily, never
-  on a push, and keeps one issue open while it fails; its output is redacted before log or issue.
+- `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
+  never on a push, and keeps one issue open while it fails (a cost row under its dearest live
+  endpoint, or more than 15% above it for every servable model the row owns); its output is
+  redacted before log or issue (`scripts/test-model-drift-redaction.js`).
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
 
 ## Splitting work across agents
@@ -190,9 +192,16 @@ before the handler) and for a close during the settle call itself, the charge go
 and `src/hangup-settlement.js` books it as owed. The budget never refuses service. A route
 whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the memory writers,
 `attest`, `feedback`, the route-execute tiers, `seller-payability`); add a new one there.
+A payer's first hang-up in the window is forgiven at any price under the service-wide budget
+when its payer and IP keys hold nothing in flight or abandoned; later ones meet the per-key
+budget. Refunds stay human-run (`refund.yml`, dry run first); any buyer's owed row reads
+`refundsOwed=owed` on `/api/gateway-status` past a short grace, and the status Worker and
+heartbeat page on it under one issue that closes when nothing is owed.
 
 ## Subsystem pointers
-- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it.
+- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it. Jobs report progress: `status` keeps working/completed/failed, `state` is queued/running/succeeded/failed with `stage`, `progress`, `etaSeconds` and `Retry-After` (`src/job-progress.js`); which routes are slow, and what the 402, /api/pricing, /openapi.json and /llms.txt say about them, comes from `src/slow-routes.js`.
+  Through the CDN proxy (`req.viaCdn`), a paid call without the header to a route whose run budget is past `CDN_SYNC_MAX_SECONDS` (default 90) runs as a job only for a client that follows a 202 on its own (agent402-client 0.8.16+) and is otherwise refused with a 504 before any gate, while LLM attempts, image fallback links and route-execute's seller waits are bounded by `cdnSyncLeftMs(req)` (`src/cdn-sync-window.js`).
+- **Client address:** `src/cdn-client-ip.js` redefines `req.ip` right after `trust proxy`: CF-Connecting-IP is the client only when the edge-reported peer is inside the embedded CDN ranges (plus `CF_IP_RANGES_EXTRA`) and the header parses as an address; from any other peer it is ignored. `CDN_PROXY` (`cloudflare` or `on`, default off) turns the resolver and the CDN sync window on, and while on a peer's CF-Connecting-IP counts (and the request is `req.viaCdn`) only when it also carries `CDN_ORIGIN_SECRET` in `X-Origin-Auth` (constant-time compare, stripped before handlers), so off or without the secret `req.ip` is the trust-proxy address. Read the client address only through `req.ip`.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + body, committed only after a settled 200.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
@@ -236,6 +245,7 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
   query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
+- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`, and `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer

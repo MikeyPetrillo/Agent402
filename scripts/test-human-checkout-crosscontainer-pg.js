@@ -22,6 +22,7 @@
 //     decides, so it neither generates nor refunds.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -94,7 +95,7 @@ const pgDirect = async (sql, params) => {
   try { return await c.query(sql, params); } finally { await c.end(); }
 };
 const rowOf = async (id) => (await pgDirect(`SELECT body FROM ${schema}.records WHERE collection = 'human-checkout' AND id = $1`, [id])).rows[0]?.body ?? null;
-const runB = (id, env = {}) => JSON.parse(execFileSync(process.execPath, [SELF, "child", id], { env: { ...process.env, STATE_DATABASE_URL: DIRECT, STATE_DB_SCHEMA: schema, ...env }, encoding: "utf8" }).trim().split("\n").pop());
+const runB = (id, env = {}) => childJson(execFileSync(process.execPath, [SELF, "child", id], { env: { ...process.env, STATE_DATABASE_URL: DIRECT, STATE_DB_SCHEMA: schema, ...env }, encoding: "utf8" }));
 // Age the claim as the clock would: `claimMs` ago it was made, `beatMs` ago it last beat (null: leave the beat).
 const ageClaim = (id, { claimMs, beatMs = null, takeovers }) => pgDirect(
   `UPDATE ${schema}.records SET body = body || jsonb_build_object('claimedAt', $2::bigint, 'takeovers', $3::int) || CASE WHEN $4::bigint IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('beatAt', $4::bigint) END WHERE collection = 'human-checkout' AND id = $1`,

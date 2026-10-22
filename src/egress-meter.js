@@ -146,6 +146,10 @@ export function needsCaller(host) {
   } catch { return false; }
 }
 
+let outcomeObserver = null;
+/** One observer of each outbound call's outcome: fn(host, promise, init). */
+export function setEgressOutcomeObserver(fn) { outcomeObserver = typeof fn === "function" ? fn : null; }
+
 /** Install the hooks. Idempotent; safe to call once at boot. */
 export function installEgressMeter() {
   if (installed) return false;
@@ -154,8 +158,8 @@ export function installEgressMeter() {
   const origFetch = globalThis.fetch;
   if (typeof origFetch === "function") {
     globalThis.fetch = function meteredFetch(input, init) {
+      let h = "";
       try {
-        let h = "";
         if (typeof input === "string") h = new URL(input).host;
         else if (input instanceof URL) h = input.host;
         else if (input && typeof input.url === "string") h = new URL(input.url).host;
@@ -167,7 +171,11 @@ export function installEgressMeter() {
         const refusal = h ? hardCapRefusalForHost(h) : null;
         if (refusal) return Promise.reject(refusal);
       } catch { /* an unparseable input is the caller's problem, not ours */ }
-      return origFetch.apply(this, arguments);
+      const p = origFetch.apply(this, arguments);
+      // The outcome observer (src/tool-failure-monitor.js) sees the host and
+      // the promise; it attaches its own handlers and never changes either.
+      if (outcomeObserver && h) { try { outcomeObserver(h, p, init); } catch { /* observing must never break a request */ } }
+      return p;
     };
   }
   return true;

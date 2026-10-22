@@ -15,6 +15,7 @@
 //
 // Needs a booted server: TARGET_URL=http://127.0.0.1:PORT node scripts/test-pack-examples.js
 import { SKILL_PACKS } from "../src/skills.js";
+import { fredMaintenanceError } from "../src/tools/macro-kit.js";
 
 const BASE = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
 
@@ -71,10 +72,19 @@ const NOT_OURS_BASE = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? o
 const ACCESS_REFUSED = /^The host refused this server's request \(HTTP (401|403|407|451)\)/i;
 // Most examples now target agent402.tools: an access refusal from our own site
 // is our defect and is NOT excused for a pack whose input names it.
-let NOT_OURS = NOT_OURS_BASE;
+// FRED's scheduled maintenance: the FRED tools answer it in one fixed sentence
+// (fredMaintenanceError), only when FRED serves its maintenance page in place
+// of data. That exact sentence is excused, nothing broader.
+const FRED_MAINTENANCE = fredMaintenanceError().message;
+const baseNotOurs = (s) => NOT_OURS_BASE.test(s) || String(s) === FRED_MAINTENANCE;
+if (!baseNotOurs(FRED_MAINTENANCE) || baseNotOurs("FRED returned no rows") || baseNotOurs(`${FRED_MAINTENANCE} x`)) {
+  console.error("FAIL - control: only FRED's exact maintenance sentence is excused");
+  process.exit(1);
+}
+let NOT_OURS = { test: baseNotOurs };
 const notOursFor = (body) => {
   const ours = /agent402\.tools/i.test(JSON.stringify(body));
-  return { test: (s) => NOT_OURS_BASE.test(s) || (!ours && ACCESS_REFUSED.test(s)) };
+  return { test: (s) => baseNotOurs(s) || (!ours && ACCESS_REFUSED.test(s)) };
 };
 
 let failed = 0, reported = 0, checked = 0;

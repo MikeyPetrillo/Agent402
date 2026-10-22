@@ -34,7 +34,8 @@ import { Challenge } from "mppx";
 const TMP = mkdtempSync(join(tmpdir(), "a402-mcp-tasks-"));
 process.env.REFUND_DB_DIR = TMP;
 
-const { mountMcp } = await import("../src/mcp-http.js");
+const { mountMcp, TASK_PROGRESS_META } = await import("../src/mcp-http.js");
+const { PROGRESS_HEADER, progressMiddleware, reportProgress } = await import("../src/job-progress.js");
 const {
   createTaskStore, clientDeclaresTasks, mcpTasksEnabled, detailedTask, createTaskResult,
   TASKS_EXTENSION, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, isTaskMethod, newTaskId,
@@ -61,6 +62,9 @@ const CATALOG = {
   "POST /v1/research": def("research", "POST /v1/research", "$1.00"),
   "POST /v1/research/market-brief": def("market-brief", "POST /v1/research/market-brief", "$15.00"),
   "POST /api/whois": def("whois", "POST /api/whois", "$0.001"),
+  // A slow paid route that is NOT a composite (src/slow-routes.js): it runs
+  // as a task too, and reports its own stage.
+  "POST /api/image-gen-premium": def("image-gen-premium", "POST /api/image-gen-premium", "$0.12", { asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75, basisSeconds: 40 } }),
   // uuid is free AND deliberately slow: the free path must stay blocking
   // regardless of how long it runs.
   "GET /api/uuid": def("uuid", "GET /api/uuid", "$0.001", { handler: async () => { await new Promise((r) => setTimeout(r, 600)); return { ok: true, slug: "uuid", slow: true }; } }),
@@ -88,10 +92,19 @@ const jsonRes = (status, body, headers = {}) => ({
 // call records the abort signal so cancellation can be observed.
 const calls = [];
 let plan = {};
-async function stubLoopback({ def: d, params, signal, timeoutMs }) {
-  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false };
+async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey }) {
+  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey };
   calls.push(rec);
   const p = plan[d.slug] || { delayMs: 0, res: jsonRes(200, { ok: true, slug: d.slug }) };
+  // What the real paid route does with the progress key: the middleware finds
+  // the task's sink and the handler reports its stages through it.
+  if (p.progress) {
+    setTimeout(() => {
+      const fakeReq = { headers: { [PROGRESS_HEADER]: progressKey } };
+      progressMiddleware()(fakeReq, {}, () => {});
+      for (const patch of p.progress) reportProgress(patch, fakeReq);
+    }, p.progressAtMs ?? 0);
+  }
   if (p.delayMs) {
     await new Promise((resolve, reject) => {
       const t = setTimeout(resolve, p.delayMs);
@@ -175,6 +188,25 @@ ok(done.result?.result?.structuredContent?.result?.report === "the goods", "the 
 ok(Array.isArray(done.result?.result?.content), "the stored result is a CallToolResult - exactly what the blocking call would have returned");
 ok(calls.filter((c) => c.slug === "research").length === 1, "the work ran exactly once (the in-flight request BECOMES the task, never a second run)");
 ok(calls.find((c) => c.slug === "research").timeoutMs > 60_000, "a task run gets a timeout longer than the default 60s loopback bound");
+
+// ------------------------------------------------- 2b. slow route + progress
+
+plan = { "image-gen-premium": { delayMs: 900, progressAtMs: 300, progress: [{ phase: "running" }, { stage: "rendering", done: 1, total: 2 }], res: jsonRes(200, { data: [{ b64_json: "AA" }] }) } };
+const imgHandle = (await callComposite("image-gen-premium")).result;
+ok(imgHandle?.resultType === "task", "a slow non-composite route (asyncProfile) answers with a task handle");
+ok(typeof calls.at(-1).progressKey === "string" && calls.at(-1).progressKey.length >= 32, "the task's loopback carries an in-process progress key");
+const early = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
+ok(early.result?._meta?.[TASK_PROGRESS_META]?.state === "queued", `before the handler starts the task's progress says queued (${early.result?._meta?.[TASK_PROGRESS_META]?.state})`);
+await sleep(450);
+const mid = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
+const midP = mid.result?._meta?.[TASK_PROGRESS_META];
+ok(mid.result?.status === "working" && midP?.state === "running" && midP?.stage === "rendering" && midP?.progress === 0.5 && midP?.steps?.total === 2, `a running task carries the route's stage and steps (${JSON.stringify(midP)})`);
+ok(/Running image-gen-premium: rendering \(1 of 2 steps done\)/.test(mid.result?.statusMessage || ""), `statusMessage names the stage (${mid.result?.statusMessage})`);
+ok(mid.result?.pollIntervalMs >= 1000 && Number.isInteger(midP?.etaSeconds), "a running task's poll interval and ETA follow its progress");
+await sleep(700);
+const fin = await rpc("tasks/get", { taskId: imgHandle.taskId, _meta: CLIENT_CAPS });
+ok(fin.result?.status === "completed" && fin.result?._meta?.[TASK_PROGRESS_META]?.state === "succeeded" && fin.result?._meta?.[TASK_PROGRESS_META]?.progress === 1, "the finished task says succeeded with progress 1");
+ok(fin.result?.statusMessage !== mid.result?.statusMessage, "a late progress write never reopens or relabels the finished task");
 
 // ------------------------------------------------------------- 3. failures
 

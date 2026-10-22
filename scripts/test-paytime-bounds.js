@@ -654,8 +654,8 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 
 // Forgiveness ON with a per-wallet (and per-IP) budget that fits exactly one
 // nano run ($0.003 of $0.005): a wallet's first nano hang-up is forgiven (not
-// settled), every later one is settled, and nothing priced above $0.005 (the
-// image and video tiers) is ever forgiven. The forgiveness rule itself is
+// settled), every later one is settled, and a run priced above $0.005 (the
+// image and video tiers) is forgiven only as the wallet's first hang-up. The forgiveness rule itself is
 // scripts/test-hangup-settlement.js; here it only has to stay uncounted.
 // With REDIS_URL the server keeps its controls in the shared store: its own
 // key prefix, so state the unit sections above wrote (and a fire-and-forget
@@ -766,14 +766,17 @@ try {
   }
 
   // 2d. The same on an expensive route: a hang-up whose settlement fails on
-  // /v1/images/fast feeds the composite guard, which answers first.
+  // /v1/images/fast feeds the composite guard, which answers first. The
+  // wallet's first hang-up is forgiven (never settled, never counted); the
+  // three after it settle, fail and count.
   {
     const W = wallet(0xd1);
     fac.refuse.add(W.toLowerCase());
     or.imagesDelayMs = 1_200;
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 0; i <= 3; i++) {
       const r0 = fac.refused;
       await hangUpMidRun(FAST, W, `10.1.3.${i}`, "images");
+      if (i === 0) { await sleep(1_500); ok(fac.refused === r0, "d. the wallet's first image hang-up is forgiven: nothing is settled"); continue; }
       await waitFor(() => fac.refused > r0, 5000);
       await sleep(200);
     }

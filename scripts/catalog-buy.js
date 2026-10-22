@@ -85,6 +85,7 @@ import { createHmac } from "node:crypto";
 import { appendFileSync, writeFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
+import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
 
 export const BASE_CAIP2 = "eip155:8453";
@@ -138,9 +139,10 @@ export function exampleOf(method, op) {
     }
     return { kind: "query", query };
   }
-  const body = op.requestBody?.content?.["application/json"]?.example;
+  const published = requestExampleOf(op);
+  const body = published?.example;
   if (body === undefined) return null;
-  if (body && typeof body.file === "string" && /multipart/i.test(body.file)) return { kind: "multipart", fields: body };
+  if (published.contentType === MULTIPART_TYPE || (body && typeof body.file === "string" && /multipart/i.test(body.file))) return { kind: "multipart", fields: body };
   return { kind: "json", body };
 }
 
@@ -465,10 +467,7 @@ export async function runCatalogBuy({
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(ex.body ?? {});
     } else {
-      const form = new FormData();
-      form.append("file", new Blob([await fixtureBytes()], { type: "audio/wav" }), "sample-speech.wav");
-      for (const [k, v] of Object.entries(ex.fields || {})) if (k !== "file" && v != null && typeof v !== "object") form.append(k, String(v));
-      init.body = form;
+      init.body = multipartBodyFrom(ex.fields, { bytes: await fixtureBytes(), type: "audio/wav", filename: "sample-speech.wav" });
     }
     return { url, init };
   }

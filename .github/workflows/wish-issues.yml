@@ -51,13 +51,19 @@ jobs:
           CREATED=0
           echo "$WISHES" | jq -c '.clusters[] | select(.qualified == true)' | while read -r c; do
             [ "$CREATED" -ge "$MAX_NEW" ] && { echo "cap reached ($MAX_NEW)"; break; }
-            TEXT=$(echo "$c" | jq -r '.text')
-            COUNT=$(echo "$c" | jq -r '.count')
-            SOURCES=$(echo "$c" | jq -r '.sources | to_entries | map("\(.key): \(.value)") | join(", ")')
-            FIRST=$(echo "$c" | jq -r '.firstSeen')
+            # Wish text is buyer-supplied. Same treatment as wish-reports.yml: it
+            # goes into the body inside a code fence, so it renders as plain
+            # text (no markdown, links or @mentions). Control characters become
+            # spaces and backticks become quotes, so nothing can close the
+            # fence early; length is bounded.
+            CLEAN='def clean: tostring | explode | map(if . < 32 or . == 127 then 32 elif . == 96 then 39 else . end) | implode | .[0:2000];'
+            TEXT=$(echo "$c" | jq -r "$CLEAN"' .text | clean')
+            COUNT=$(echo "$c" | jq -r '.count | tonumber? // 0')
+            SOURCES=$(echo "$c" | jq -r "$CLEAN"' .sources | to_entries | map("\(.key | clean): \(.value | clean)") | join(", ") | clean')
+            FIRST=$(echo "$c" | jq -r "$CLEAN"' .firstSeen | clean | .[0:40]')
             TITLE="Tool wish: ${TEXT:0:80}"
             if echo "$EXISTING" | grep -Fxq "$TITLE"; then echo "already tracked: $TITLE"; continue; fi
-            BODY=$(printf 'Agents asked for this **%s** times (sources: %s; first seen %s).\n\nNormalized request:\n\n> %s\n\nOpened by the wish-issues bridge (WISH_ISSUES_ENABLED=true).' "$COUNT" "$SOURCES" "$FIRST" "$TEXT")
+            BODY=$(printf 'Agents asked for this **%s** times.\n\nSources and first seen:\n\n```text\n%s; first seen %s\n```\n\nNormalized request:\n\n```text\n%s\n```\n\nOpened by the wish-issues bridge (WISH_ISSUES_ENABLED=true).' "$COUNT" "$SOURCES" "$FIRST" "$TEXT")
             gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY" --label tool-wish
             CREATED=$((CREATED+1)); echo "opened: $TITLE"
           done

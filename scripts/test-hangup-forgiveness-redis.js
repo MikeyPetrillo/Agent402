@@ -5,9 +5,12 @@
 // bounded by, not a read and separate adds):
 //   - one payer, a different IP per replica: the payer budget bounds the sum;
 //   - every ticket a fresh payer and IP: the service-wide budget bounds it;
+//   - one payer, a price above the per-key budget: only the payer's first
+//     hang-up is admitted, once across both replicas;
 //   - control: released tickets free their room for the other replica.
 // Requires REDIS_URL (under CI a missing one fails).
 import { spawn } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -30,7 +33,7 @@ if (process.argv[2] === "child") {
     const keys = mode === "payer"
       ? [process.env.XC_PAYER, `ip:${process.env.XC_IP}`]
       : [`0x${randomBytes(20).toString("hex")}`, `ip:10.${process.pid % 250}.${i}.${Math.floor(Math.random() * 250)}`];
-    return Promise.resolve(H.reserveHangupForgiveness(req, { keys, priceUsd: PRICE, slug: "hash" })).then((t) => ({ t, req }));
+    return Promise.resolve(H.reserveHangupForgiveness(req, { keys, priceUsd: Number(process.env.XC_PRICE) || PRICE, slug: "hash" })).then((t) => ({ t, req }));
   }));
   const granted = tickets.filter(({ t }) => t.granted).length;
   const reasons = [...new Set(tickets.filter(({ t }) => !t.granted).map(({ t }) => t.reason))];
@@ -48,7 +51,7 @@ const base = { HANGUP_FORGIVE_FILE: "off", STATE_DATABASE_URL: "", HANGUP_FORGIV
 const replica = (env) => new Promise((resolve, reject) => {
   const c = spawn(process.execPath, [SELF, "child"], { env: { ...process.env, ...base, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; c.stdout.on("data", (d) => { out += d; });
-  c.on("close", (code) => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
+  c.on("close", (code) => { try { resolve(childJson(out)); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
 });
 const pair = (envA, envB) => { const at = String(Date.now() + 2500); return Promise.all([replica({ ...envA, XC_AT: at }), replica({ ...envB, XC_AT: at })]); };
 
@@ -67,6 +70,14 @@ for (let i = 0; i < 2; i++) {
   const [a, b] = await pair(env, env);
   const total = a.granted + b.granted;
   ok(total === 6 && [...a.reasons, ...b.reasons].every((r) => r === "global budget"), `global race ${i + 1}: two replicas grant ${total} tickets in all (${a.granted}+${b.granted}), the service budget's 6`);
+}
+// One payer, $0.40 a ticket (over the $0.25 per-key budget): the first
+// hang-up exemption admits exactly one ticket across both replicas.
+for (let i = 0; i < 2; i++) {
+  const env = { SHARED_LIMITS_PREFIX: `hfr${process.pid}f${i}${Date.now().toString(36)}`, XC_MODE: "payer", XC_PAYER: `0x${randomBytes(20).toString("hex")}`, XC_PRICE: "0.40", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "100" };
+  const [a, b] = await pair({ ...env, XC_IP: "10.3.0.1" }, { ...env, XC_IP: "10.3.0.2" });
+  const total = a.granted + b.granted;
+  ok(total === 1 && [...a.reasons, ...b.reasons].every((r) => r === "payer budget"), `first-hang-up race ${i + 1}: two replicas admit ${total} ticket above the per-key budget for one payer (${a.granted}+${b.granted}), refusals name the payer budget`);
 }
 // Control: tickets released (answered, not abandoned) free their room.
 {

@@ -72,6 +72,11 @@ export const CORS_EXPOSE_HEADERS = [
   // page of many, which is the misreading /api/index kept inviting.
   "Link",
   "X-Total-Count",
+  // Slow routes: the 402's advice to send Prefer: respond-async, and the 202's
+  // job link and the preference it honored (src/slow-routes.js, src/async-jobs.js).
+  "X-Async-Recommended",
+  "Location",
+  "Preference-Applied",
 ];
 
 /**
@@ -90,6 +95,7 @@ export const CORS_DEFAULT_ALLOW_HEADERS = [
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",
   "Last-Event-Id",
+  "Prefer",
 ];
 
 export const CORS_METHODS = "GET, HEAD, POST, OPTIONS";

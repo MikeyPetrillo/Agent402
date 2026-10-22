@@ -3,7 +3,7 @@
  * Plugin Name:       Agent402 Tollbooth
  * Plugin URI:        https://agent402.tools/tollbooth
  * Description:       Open-source pay-per-crawl gate for WordPress. Charge AI crawlers per request (USDC via x402, or a free CPU proof-of-work) while humans browse free. Mirrors the agent402-tollbooth npm package for non-Node sites.
- * Version:           0.1.0
+ * Version:           0.1.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Havok Holdings LLC
@@ -22,9 +22,11 @@
  * external verifier, pure PHP can't reuse the JS HMAC/replay store. Set
  * "Verifier URL" in the settings page to point at the Cloudflare Worker
  * template at tollbooth/deploy/cloudflare; the plugin then forwards
- * candidate headers and trusts the verifier's pass/fail. Until you
- * configure that, the gate runs as a pure observe-or-block, which is
- * still the right starting point per the recommended rollout.
+ * candidate headers and accepts a pass only when the answer carries an
+ * HMAC bound to this request, keyed with the shared "Verifier secret"
+ * (see verify_with_worker). Until you configure both, the gate runs as a
+ * pure observe-or-block, which is still the right starting point per the
+ * recommended rollout.
  */
 
 if (!defined('ABSPATH')) { exit; }
@@ -33,7 +35,9 @@ class Agent402_Tollbooth {
 
     const OPT_KEY        = 'agent402_tollbooth_options';
     const STATS_KEY      = 'agent402_tollbooth_stats';
-    const VERSION        = '0.1.0';
+    const VERSION        = '0.1.1';
+    const MIN_SECRET_LEN = 32;
+    const VERIFY_DOMAIN  = 'agent402-tollbooth-verify.v1';
     const NONCE_ACTION   = 'agent402_tollbooth_save';
     const ADMIN_SLUG     = 'agent402-tollbooth';
 
@@ -55,7 +59,8 @@ class Agent402_Tollbooth {
             'pay_to'       => '',            // 0x... Base wallet
             'price'        => '$0.002',
             'network'      => 'base',
-            'verifier_url' => '',            // Worker URL for PoW/x402 verification
+            'verifier_url' => '',            // your verifier service for PoW/x402
+            'verifier_secret' => '',         // shared HMAC key; the verifier signs its answer with it
             'site_id'      => parse_url(home_url(), PHP_URL_HOST) ?: 'wordpress',
             'enabled'      => '1',
         ];
@@ -73,6 +78,7 @@ class Agent402_Tollbooth {
         add_action('admin_menu',  [__CLASS__, 'admin_menu']);
         add_action('admin_init',  [__CLASS__, 'admin_init']);
         add_action('admin_post_agent402_tollbooth_reset', [__CLASS__, 'admin_reset_stats']);
+        add_action('admin_notices', [__CLASS__, 'admin_notice_verifier_secret']);
     }
 
     public static function on_activate() {
@@ -131,16 +137,27 @@ class Agent402_Tollbooth {
         return self::is_known_bot($ua); // 'bots' (default) and observe
     }
 
-    /** Skip the gate for admin, WP-CLI, cron, and the WordPress login/admin paths. */
+    /**
+     * Skip the gate for WP-CLI, cron, the admin screens and the login page.
+     * The decision reads what WordPress is actually serving (is_admin(), and
+     * the script that is running for the login page), never a prefix of the
+     * raw REQUEST_URI, which can carry encoded or dot segments that the web
+     * server resolves to a different script.
+     */
     private static function should_skip() {
         if (defined('WP_CLI') && WP_CLI) return true;
         if (defined('DOING_CRON') && DOING_CRON) return true;
-        if (defined('REST_REQUEST') && REST_REQUEST) return false; // gate REST too
         if (is_admin()) return true;
-        $uri = $_SERVER['REQUEST_URI'] ?? '';
-        if (strpos($uri, '/wp-admin') === 0) return true;
-        if (strpos($uri, '/wp-login.php') === 0) return true;
+        if (self::is_login_request()) return true;
         return false;
+    }
+
+    /** True only when wp-login.php itself is the script serving this request. */
+    private static function is_login_request() {
+        $now = $GLOBALS['pagenow'] ?? '';
+        if ($now === 'wp-login.php') return true;
+        $script = $_SERVER['SCRIPT_FILENAME'] ?? '';
+        return is_string($script) && $script !== '' && basename($script) === 'wp-login.php';
     }
 
     public static function gate() {
@@ -171,8 +188,8 @@ class Agent402_Tollbooth {
         // pure PHP can't share the JS HMAC + single-use replay store. Without
         // a configured verifier, fall through to send 402.
         $pow_header = $_SERVER['HTTP_X_POW_SOLUTION'] ?? '';
-        if ($pow_header && !empty($opts['verifier_url'])) {
-            if (self::verify_with_worker($opts['verifier_url'], 'pow', $pow_header)) {
+        if ($pow_header && self::verifier_ready($opts)) {
+            if (self::verify_with_worker($opts['verifier_url'], $opts['verifier_secret'], 'pow', $pow_header)) {
                 self::bump('powSolved');
                 header('X-Tollbooth-Paid: pow');
                 return;
@@ -181,8 +198,8 @@ class Agent402_Tollbooth {
 
         // Paid rail (x402 USDC). Same delegated verification model.
         $pay_header = $_SERVER['HTTP_X_PAYMENT'] ?? ($_SERVER['HTTP_PAYMENT_SIGNATURE'] ?? '');
-        if (!empty($opts['pay_to']) && $pay_header && !empty($opts['verifier_url'])) {
-            if (self::verify_with_worker($opts['verifier_url'], 'x402', $pay_header, $opts['pay_to'], $opts['price'], $opts['network'])) {
+        if (!empty($opts['pay_to']) && $pay_header && self::verifier_ready($opts)) {
+            if (self::verify_with_worker($opts['verifier_url'], $opts['verifier_secret'], 'x402', $pay_header, $opts['pay_to'], $opts['price'], $opts['network'])) {
                 self::bump('x402Paid');
                 header('X-Tollbooth-Paid: x402');
                 return;
@@ -194,16 +211,68 @@ class Agent402_Tollbooth {
         exit;
     }
 
+    /** A verifier is used only with both a URL and a long enough shared secret. */
+    private static function verifier_ready($opts) {
+        return !empty($opts['verifier_url'])
+            && is_string($opts['verifier_secret'] ?? null)
+            && strlen($opts['verifier_secret']) >= self::MIN_SECRET_LEN;
+    }
+
     /**
-     * Delegate verification to a configured Worker. We POST a JSON envelope
-     * the Worker can verify with its own HMAC secret / x402 facilitator, and
-     * trust the boolean answer. Conservative: any error = fail = 402.
+     * A Verifier URL with no usable secret: both rails fail closed (every
+     * X-Pow-Solution and X-Payment request gets a 402). A site that set the
+     * URL before the secret existed lands here on upgrade.
      */
-    private static function verify_with_worker($url, $kind, $token, $payTo = '', $price = '', $network = '') {
+    public static function verifier_secret_missing($opts) {
+        return !empty($opts['verifier_url']) && !self::verifier_ready($opts);
+    }
+
+    /**
+     * Shown on every admin page, to administrators only, while the Verifier
+     * URL is set and the secret is missing, so the refusal is never silent.
+     */
+    public static function admin_notice_verifier_secret() {
+        if (!current_user_can('manage_options')) return;
+        $opts = self::opts();
+        if (!self::verifier_secret_missing($opts)) return;
+        $settings = admin_url('options-general.php?page=' . self::ADMIN_SLUG);
+        printf(
+            '<div class="notice notice-error"><p><strong>%1$s</strong> %2$s <a href="%3$s">%4$s</a></p></div>',
+            esc_html__('Agent402 Tollbooth:', 'agent402-tollbooth'),
+            esc_html(sprintf(
+                /* translators: %d: minimum secret length */
+                __('a Verifier URL is set but the Verifier secret is missing or shorter than %d characters. The verifier now needs this secret: every answer it gives must carry an HMAC made with it. Until it is set, paid (x402) and proof-of-work crawlers are refused with a 402.', 'agent402-tollbooth'),
+                self::MIN_SECRET_LEN
+            )),
+            esc_url($settings),
+            esc_html__('Set the Verifier secret', 'agent402-tollbooth')
+        );
+    }
+
+    /**
+     * The string a verifier signs to pass one request. Binds the answer to
+     * the rail, the exact resource, the credential presented and a fresh
+     * per-call nonce, so a stored or generic answer passes nothing else.
+     */
+    public static function verify_message($kind, $resource, $nonce, $token) {
+        return self::VERIFY_DOMAIN . "\n" . $kind . "\n" . $resource . "\n" . $nonce . "\n" . hash('sha256', (string)$token);
+    }
+
+    /**
+     * Delegate verification to the configured verifier. We POST a JSON
+     * envelope with a fresh nonce; the verifier must answer 200 with
+     * {"ok": true, "nonce": <same>, "sig": hex HMAC-SHA256(secret,
+     * verify_message(kind, resource, nonce, token))}. A bare {"ok": true}
+     * is not a pass. Conservative: any error = fail = 402.
+     */
+    private static function verify_with_worker($url, $secret, $kind, $token, $payTo = '', $price = '', $network = '') {
+        $resource = self::canonical_resource();
+        $nonce    = bin2hex(random_bytes(16));
         $body = json_encode([
             'kind'     => $kind,
             'token'    => $token,
-            'resource' => self::canonical_resource(),
+            'resource' => $resource,
+            'nonce'    => $nonce,
             'payTo'    => $payTo,
             'price'    => $price,
             'network'  => $network,
@@ -218,7 +287,16 @@ class Agent402_Tollbooth {
         if (is_wp_error($resp)) return false;
         if (wp_remote_retrieve_response_code($resp) !== 200) return false;
         $j = json_decode(wp_remote_retrieve_body($resp), true);
-        return is_array($j) && !empty($j['ok']);
+        return self::verifier_answer_ok($j, $secret, $kind, $resource, $nonce, $token);
+    }
+
+    /** Accept a verifier answer only when its HMAC matches this exact request. */
+    public static function verifier_answer_ok($j, $secret, $kind, $resource, $nonce, $token) {
+        if (!is_array($j) || ($j['ok'] ?? null) !== true) return false;
+        if (!is_string($j['nonce'] ?? null) || !hash_equals($nonce, $j['nonce'])) return false;
+        if (!is_string($j['sig'] ?? null)) return false;
+        $expected = hash_hmac('sha256', self::verify_message($kind, $resource, $nonce, $token), $secret);
+        return hash_equals($expected, strtolower($j['sig']));
     }
 
     private static function canonical_resource() {
@@ -241,9 +319,9 @@ class Agent402_Tollbooth {
                 'payTo'              => $opts['pay_to'],
                 'resource'           => $resource,
             ]],
-            'note'    => empty($opts['verifier_url'])
-                ? 'Proof-of-work and x402 verification require a configured verifier URL. See plugin settings.'
-                : 'POST X-Pow-Solution or X-Payment header; the gate will verify and retry.',
+            'note'    => !self::verifier_ready($opts)
+                ? 'Proof-of-work and x402 verification require a configured verifier URL and verifier secret. See plugin settings.'
+                : 'Send an X-Pow-Solution or X-Payment header; the gate will verify it.',
         ];
         nocache_headers();
         status_header(402, 'Payment Required');
@@ -279,6 +357,9 @@ class Agent402_Tollbooth {
         $out['price']        = preg_replace('/[^0-9.$]/', '', $input['price'] ?? '');
         $out['network']      = in_array(($input['network'] ?? ''), ['base', 'base-sepolia', 'polygon', 'arbitrum'], true) ? $input['network'] : 'base';
         $out['verifier_url'] = esc_url_raw($input['verifier_url'] ?? '');
+        // A blank field keeps the saved secret (the form never echoes it back).
+        $sec = isset($input['verifier_secret']) ? trim((string)$input['verifier_secret']) : '';
+        $out['verifier_secret'] = $sec !== '' ? preg_replace('/[^\x21-\x7e]/', '', $sec) : ($cur['verifier_secret'] ?? '');
         $out['site_id']      = sanitize_text_field($input['site_id'] ?? $cur['site_id']);
         $out['enabled']      = !empty($input['enabled']) ? '1' : '0';
         return $out;
@@ -379,10 +460,17 @@ class Agent402_Tollbooth {
               <tr>
                 <th><label for="att-verifier">Verifier URL</label></th>
                 <td>
-                  <input type="url" id="att-verifier" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[verifier_url]" value="<?php echo esc_attr($opts['verifier_url']); ?>" placeholder="https://tollbooth.your-domain.com/verify">
+                  <input type="url" id="att-verifier" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[verifier_url]" value="<?php echo esc_attr($opts['verifier_url']); ?>" placeholder="https://verifier.your-domain.com/verify">
                   <p class="description">
-                    Optional. Point at a deployed <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" target="_blank" rel="noopener">Cloudflare Worker</a> (or any HTTP service) that knows how to verify proof-of-work tokens and x402 settlements. Without it the plugin runs as a pure observe-or-block gate, fine for AI-training-deterrent use, but the free PoW rail and the paid USDC rail need this.
+                    Optional. Point at an HTTP service you run that verifies proof-of-work tokens and settles x402 payments, and signs each answer with the verifier secret below (contract in the plugin README). Without it the plugin runs as a pure observe-or-block gate, fine for AI-training-deterrent use, but the free PoW rail and the paid USDC rail need this.
                   </p>
+                </td>
+              </tr>
+              <tr>
+                <th><label for="att-verifier-secret">Verifier secret</label></th>
+                <td>
+                  <input type="password" autocomplete="new-password" id="att-verifier-secret" class="regular-text code" name="<?php echo esc_attr(self::OPT_KEY); ?>[verifier_secret]" value="" placeholder="<?php echo empty($opts['verifier_secret']) ? 'at least 32 characters' : '(saved; leave blank to keep)'; ?>">
+                  <p class="description">Shared with your verifier. Every pass must carry an HMAC of this request made with it; the verifier URL is ignored until this is set (32 characters or more).</p>
                 </td>
               </tr>
               <tr>

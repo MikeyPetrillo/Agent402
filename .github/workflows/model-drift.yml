@@ -1,7 +1,10 @@
-# Daily live-catalog guard for the LLM gateway's model tables: every advertised,
-# ranked, fallback, image and speech id still exists upstream, every private cost
-# row covers its dearest live endpoint, and no ranked model expires inside the
-# warning window (scripts/test-gateway-model-ids.js, public catalog, no key).
+# Live-catalog guard for the LLM gateway's model tables, every 6 hours: every
+# advertised, ranked, fallback, image and speech id still exists upstream, every
+# private cost row covers its dearest live endpoint, no cost row sits more than
+# 15% above the dearest live endpoint of every servable model it owns (stale
+# high), every row's long-context tiers cover the higher price an endpoint bills
+# past a prompt size, and no ranked model expires inside the warning window
+# (scripts/test-gateway-model-ids.js, public catalog, no key).
 #
 # This is the single owner of that check. It runs on a schedule, never on a push:
 # a vendor repricing a model is not a defect in the change under review, and
@@ -12,12 +15,15 @@
 # Logs and issues are public. The script names models only under CI, and every
 # line it prints passes through REDACT_RATES before it reaches the log or the
 # issue, so an amount next to "$", a per-unit price or a "row"/"table" value is
-# replaced even if the script's output changes. Spends nothing.
-name: Upstream model price drift (daily)
+# replaced even if the script's output changes; so is any standalone decimal
+# or exponent figure. The stale-high lines carry a row key, a unit, the
+# direction and a whole percent only. scripts/test-model-drift-redaction.js
+# runs this same program on such lines. Spends nothing.
+name: Upstream model price drift (every 6 hours)
 
 on:
   schedule:
-    - cron: "53 4 * * *" # daily ~04:53 UTC
+    - cron: "53 */6 * * *" # every 6 hours, at :53
   workflow_dispatch:
 
 permissions:
@@ -38,7 +44,8 @@ jobs:
       REDACT_RATES: >-
         s/\$\s?[0-9][0-9.,eE+\-]*/\$[redacted]/g;
         s/[0-9][0-9.,eE+\-]*(\s?(?:\/|per\s)\s?(?:1M|1K|M|K|mtok|tokens?|chars?|characters?|s|secs?|seconds?|mins?|minutes?|requests?|calls?|images?|megapixels?|units?)\b)/[redacted]$1/gi;
-        s/\b(rows?|tables?|rates?|costs?|prices?|live|costPerChar)(\s*[:=]?\s*)[0-9][0-9.,eE+\-]*/$1$2\[redacted]/gi
+        s/\b(rows?|tables?|rates?|costs?|prices?|live|costPerChar)(\s*[:=]?\s*)[0-9][0-9.,eE+\-]*/$1$2\[redacted]/gi;
+        s/(?<![\w.\-\/:])(?:[0-9]*\.[0-9]+(?:[eE][+\-]?[0-9]+)?|[0-9]+[eE][+\-]?[0-9]+)/[redacted]/g
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +61,7 @@ jobs:
         run: npm ci --ignore-scripts && npm rebuild better-sqlite3
       - name: Redactor self-check
         run: |
-          out=$(printf '%s\n' 'm $1.25 row 0.0001 live 3 2e-6/char 7 per token 4.5/M table 9' | perl -pe "$REDACT_RATES")
+          out=$(printf '%s\n' 'm $1.25 row 0.0001 live 3 2e-6/char 7 per token 4.5/M table 9 bare 0.00042 and 3e-7' | perl -pe "$REDACT_RATES")
           echo "$out"
           if printf '%s' "$out" | grep -q '[0-9]'; then
             echo "::error::REDACT_RATES left a digit in its own canary line; refusing to run the guard"
@@ -85,14 +92,14 @@ jobs:
           # The nightly corpus workflow used to own this check under another title.
           OLD=$(find_issue "$LEGACY")
           if [ -n "$OLD" ]; then
-            gh issue close "$OLD" --repo "$GITHUB_REPOSITORY" --comment "Superseded: the live catalog guard now runs daily in model-drift.yml and reports under \"$TITLE\". Run: $RUN"
+            gh issue close "$OLD" --repo "$GITHUB_REPOSITORY" --comment "Superseded: the live catalog guard now runs every 6 hours in model-drift.yml and reports under \"$TITLE\". Run: $RUN"
           fi
           if [ "$RESULT" != "0" ]; then
             FAILS=$(grep -E '^FAIL ' guard.log 2>/dev/null | head -30 || true)
             if [ -z "$FAILS" ]; then FAILS="(no FAIL lines: the guard itself did not complete; log tail follows)
           $(tail -25 guard.log 2>/dev/null)"; fi
             FAILS=$(printf '%s\n' "$FAILS" | perl -pe "$REDACT_RATES")
-            BODY="The daily live-catalog guard failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is under its dearest live endpoint, or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
+            BODY="The live-catalog guard (every 6 hours) failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is UNDER its dearest live endpoint (the clamp lets too many tokens through), a private cost row is more than 15% ABOVE the dearest live endpoint of every servable model it owns (stale high: metered quotes are inflated and the model can be kept off a tier), a private cost row has no long-context tier, or one under the upstream price, where an endpoint bills more past a prompt size the tier admits, or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
 
           \`\`\`
           $FAILS

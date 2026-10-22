@@ -14,18 +14,20 @@ import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
 import { getHorizonClient } from "@x402/stellar";
 import { loadSigner, NETWORK, RPC_CONFIG } from "./signer.js";
 import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "./shape.js";
-import { createSerialQueue } from "./queue.js";
+import { createSerialQueue, holdMaxFrom } from "./queue.js";
 import { withTimeout } from "./timeout.js";
 import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
 import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
 import { installSignerReread } from "./signer-reread.js";
+import { installSettleDeadline, newSettleContext, settleJob } from "./settle-deadline.js";
 import { installPollClamp } from "./settle-poll.js";
 import { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched } from "./fee-bid.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import tls from "node:tls";
 import https from "node:https";
 import { createHash, X509Certificate } from "node:crypto";
+import { openFacilitatorRefusal, tokenMatches } from "./access-policy.js";
 
 // Distrusted intermediate CAs: refuse any TLS chain (Soroban RPC, Horizon,
 // anything this process connects to) that passes through one of these keys.
@@ -68,6 +70,10 @@ function distrustCheckServerIdentity(host, cert) {
 tls.checkServerIdentity = distrustCheckServerIdentity;
 https.globalAgent.options.checkServerIdentity = distrustCheckServerIdentity;
 
+// The running settle's context (deadline, submitted hash), read by the RPC
+// patches below and the poll clamp.
+const settleContext = new AsyncLocalStorage();
+
 // Must install before ExactStellarScheme ever calls getRpcClient() /
 // sendTransaction() - a patch applied after the first real request would
 // simply miss it. The request timeout goes FIRST so the diagnostics wrapper
@@ -78,6 +84,9 @@ https.globalAgent.options.checkServerIdentity = distrustCheckServerIdentity;
 // (2026-08-14 and 2026-08-19, both pre-submission stalls).
 installRpcRequestTimeout(process.env.FACILITATOR_RPC_TIMEOUT_MS === undefined ? 10_000 : Number(process.env.FACILITATOR_RPC_TIMEOUT_MS));
 installRpcDiagnostics();
+// Before the failover, so its attempts and hedged reads are checked too: past
+// a settle's deadline no pre-submit step runs and nothing is submitted.
+console.log(`[startup] settle deadline guard installed (${installSettleDeadline(() => settleContext.getStore())} pre-submit rpc.Server methods refuse once a settle's deadline has passed)`);
 // Installed LAST so it wraps the timeout + diagnostics and sees their errors.
 // Reads that stay silent past FACILITATOR_RPC_HEDGE_MS (default 3 s) are also
 // sent to the first fallback; first answer wins (2026-08-28: a slow-but-
@@ -120,11 +129,24 @@ const LOW_BALANCE_XLM = Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 1;
 // and no hash. Now this side answers first, with both. The post-submit poll
 // is capped separately (FACILITATOR_MAX_POLL_ATTEMPTS, settle-poll.js).
 const SETTLE_TIMEOUT_MS = Number(process.env.FACILITATOR_SETTLE_TIMEOUT_MS) || 25_000;
+// How long the queue slot stays held for a timed-out settle's work after the
+// answer went out (queue.js). Past the deadline nothing new is submitted, so
+// this only waits for a submission already sent, or its poll, to finish.
+const SETTLE_HOLD_MAX_MS = holdMaxFrom(process.env.FACILITATOR_SETTLE_HOLD_MAX_MS, SETTLE_TIMEOUT_MS + 60_000);
 const MAX_POLL_ATTEMPTS = Number(process.env.FACILITATOR_MAX_POLL_ATTEMPTS) || 8;
-const settleContext = new AsyncLocalStorage();
 const VERIFY_TIMEOUT_MS = Number(process.env.FACILITATOR_VERIFY_TIMEOUT_MS) || 30_000;
 const HEALTH_TIMEOUT_MS = Number(process.env.FACILITATOR_HEALTH_TIMEOUT_MS) || 10_000;
 
+// Open on mainnet (no token, no payTo allowlist): refuse to start unless the
+// operator opted in with FACILITATOR_ALLOW_OPEN=1 (access-policy.js).
+const openRefusal = openFacilitatorRefusal({
+  network: NETWORK, authToken: AUTH_TOKEN, allowedPayTo: ALLOWED_PAYTO,
+  allowOpen: process.env.FACILITATOR_ALLOW_OPEN === "1",
+});
+if (openRefusal) {
+  console.error(openRefusal);
+  process.exit(1);
+}
 if (!AUTH_TOKEN) {
   console.warn("[startup] FACILITATOR_AUTH_TOKEN is not set - /verify, /settle, and /supported are UNAUTHENTICATED.");
 }
@@ -160,7 +182,7 @@ assertFeeBumpUnpatched(stellarScheme);
 // Settlement is serialized through this queue - see queue.js. Only settle()
 // touches the signer's Stellar sequence number; verify() is read-only
 // simulation and stays fully concurrent.
-const enqueueSettle = createSerialQueue();
+const enqueueSettle = createSerialQueue({ holdMaxMs: SETTLE_HOLD_MAX_MS });
 
 const app = express();
 
@@ -217,7 +239,7 @@ function requireAuth(req, res, next) {
   if (!AUTH_TOKEN) return next();
   const header = req.get("authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token !== AUTH_TOKEN) return res.status(401).json({ error: "unauthorized" });
+  if (!tokenMatches(token, AUTH_TOKEN)) return res.status(401).json({ error: "unauthorized" });
   next();
 }
 
@@ -274,25 +296,28 @@ app.post("/settle", requireAuth, async (req, res) => {
     return res.status(200).json(invalidSettle("payto_not_allowed", paymentRequirements.network));
   }
   try {
-    // The timeout wraps the JOB ITSELF, not just this HTTP call - so
-    // enqueueSettle's internal chain advances to the next queued settlement
-    // once this rejects, even though the underlying vendor call is still
-    // running unseen in the background. That reopens a narrower version of
-    // the exact sequence-number race this queue exists to prevent: if the
-    // abandoned call eventually DOES submit, and a later queued call reads
-    // the signer's sequence number before that submission lands, both
-    // transactions can conflict. Accepted trade-off, not an oversight - the
-    // alternative (never time out) is the failure this fix exists for, and
-    // a stall long enough to matter here is already rare enough that this
-    // codebase's usual answer applies: bound the failure, then let the
-    // calling side's own chain-confirmation (src/stellar-confirm.js) catch
-    // whatever lands late, the same way it already does for OpenZeppelin.
-    const ctx = { txHash: "", startedAt: Date.now() };
-    const result = await enqueueSettle(() => settleContext.run(ctx, () => withTimeout(
-      (_currentSettleCtx = ctx, facilitator.settle(paymentPayload, paymentRequirements)),
-      SETTLE_TIMEOUT_MS,
-      "settle",
-    )));
+    // The caller is answered at SETTLE_TIMEOUT_MS, but the vendor settle is
+    // not cancellable and keeps running. Two things keep that from racing the
+    // signer's sequence number: ctx.deadline makes settle-deadline.js refuse
+    // every pre-submit step and the submission itself once it has passed, and
+    // hold(work) keeps this queue slot until the work has actually stopped
+    // (bounded by SETTLE_HOLD_MAX_MS), so the next settle never reads the
+    // sequence while this one could still submit or is still landing.
+    // The deadline runs from this request's arrival (newSettleContext), so a
+    // settle that waited in the queue behind a held one gets only what is left
+    // of it, and one whose caller has gone or whose time is up never starts.
+    const ctx = newSettleContext(SETTLE_TIMEOUT_MS);
+    let clientGone = false;
+    res.on("close", () => { if (!res.writableEnded) clientGone = true; });
+    let result = await enqueueSettle(settleJob(ctx, {
+      run: (c, fn) => settleContext.run(c, fn),
+      onStart: (c) => { _currentSettleCtx = c; },
+      clientClosed: () => clientGone || req.socket?.destroyed === true,
+      settle: () => facilitator.settle(paymentPayload, paymentRequirements),
+    }));
+    // The deadline check and the timer can land in either order; a settle
+    // that ended because a step was refused at the deadline reads as timed out.
+    if (!result?.success && ctx.deadlineRefused) result = { ...result, errorReason: "settle_timed_out" };
     console.log(`[/settle] ${result?.success ? "settled" : `not settled (${result?.errorReason || "?"})`} in ${Date.now() - ctx.startedAt}ms${ctx.txHash ? ` tx ${ctx.txHash.slice(0, 12)}...` : " (nothing submitted)"}`);
     res.status(200).json(normalizeSettle(result, paymentRequirements.network));
   } catch (err) {

@@ -28,6 +28,9 @@
 import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
 import { routerLanes } from "../router-lanes.js";
 import { baseUnprovenAllowanceUsd } from "../base-unproven.js";
+// The served display name is cleaned and capped like every agent-read seller
+// surface; the assessment below reads the detail as written.
+import { servedSellerName } from "../x402-index.js";
 
 /** Advertised-vs-settling summary for one origin. Pure; all state injected. */
 export function assessSeller({ origin, detail, settledCalls, sorThreshold, sorCap, requireNetwork }) {
@@ -178,7 +181,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
         origin: detail.origin,
         listed: true,
         ...(isSelf ? { self: true, note: "this is the local catalog - our router never routes to itself, so the router gate below does not apply" } : {}),
-        displayName: detail.displayName,
+        displayName: servedSellerName(detail.displayName, detail.origin),
         manifestParsed: !detail.error,
         crawlError: detail.error || null,
         healthScore: detail.health,

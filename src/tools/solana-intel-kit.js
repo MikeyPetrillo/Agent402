@@ -34,8 +34,9 @@
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
-import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
+import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
 // Refuse an over-large body BEFORE reading it into a string: `res.text()` has
@@ -65,7 +66,9 @@ function assertBodyWithinCap(res, capBytes, label) {
 // composition and the two 503 classes are src/upstream-deadline.js, shared
 // with every other kit that reads an upstream.
 const RUGCHECK_SUMMARY_MS = 8_000;
-const RUGCHECK_REPORT_MS = 12_000;
+// 15 s: a slow day ran a healthy report past 12 s; the holders tool's
+// optional RPC fill still fits the 20 s budget behind it.
+const RUGCHECK_REPORT_MS = 15_000;
 const JUPITER_MS = 8_000;
 const DEXSCREENER_MS = 8_000;
 const RPC_MS = 5_000;
@@ -76,7 +79,7 @@ const RPC_FLOOR_MS = 1_500;
 const FULL_REPORT_FLOOR_MS = 4_000;
 // ...and gets a shorter cap than the report tools' own read: the safety tool
 // is the fast headline read (summary + index answer in well under a second),
-// so an optional fill must not hold it for the report tools' full 12 s.
+// so an optional fill must not hold it for the report tools' full cap.
 // Measured 2026-10-14: a healthy report answers in 1.2 to 3.6 s; a slow day
 // ran past 12 s, where the fill gives up and the answer says why.
 const RUGCHECK_FALLBACK_MS = 6_000;
@@ -142,7 +145,29 @@ function round(v, places = 4) {
 
 // One shared egress helper. Upstream bodies are NEVER relayed to the buyer:
 // the only text that leaves here is our own, keyed off the status class.
-async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS, budget, method = "GET", body, notFound } = {}) {
+// RugCheck reads report their outcome, keyed by the mint they read, to the
+// automatic pause (src/rugcheck-pause.js), and a RugCheck outage names a
+// retry delay.
+async function upstreamJson(url, opts = {}) {
+  if (opts.label !== "RugCheck") return upstreamJsonOnce(url, opts);
+  // A read capped below its own timeout by the handler's budget times out on
+  // the caller's clock, not RugCheck's.
+  const ownCap = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : JUPITER_MS;
+  const budgetShortened = capOf(ownCap, opts.budget === undefined ? currentBudget() : opts.budget) < ownCap;
+  try {
+    const out = await upstreamJsonOnce(url, opts);
+    rugcheckPause.noteSuccess();
+    return out;
+  } catch (err) {
+    const kind = rugcheckFailureKind(err, { budgetShortened });
+    if (kind === "answer") { rugcheckPause.noteSuccess(); throw err; }
+    if (kind !== "neutral") rugcheckPause.noteFailure(`${opts.step || "read"}: ${err.upstreamFailure || err.statusCode}`, { key: rugcheckInputKey(url), kind });
+    if (!Number.isInteger(err.retryAfter)) err.retryAfter = Math.max(30, rugcheckPause.state().retryAfterSeconds);
+    throw err;
+  }
+}
+
+async function upstreamJsonOnce(url, { label, step = "data", timeoutMs = JUPITER_MS, budget, method = "GET", body, notFound } = {}) {
   // The read gets its own cap, or what is left of the handler's budget if
   // that is shorter; a budget already spent refuses before any egress
   // (upstreamFetch). The deadline classes are the shared module's.
@@ -169,7 +194,8 @@ async function upstreamJson(url, { label, step = "data", timeoutMs = JUPITER_MS,
     // 503 rather than a 422 blaming the mint.
     const errText = await res.text().then((t) => t.slice(0, 500)).catch(() => "");
     if (/unable to generate|temporarily|try again|timeout/i.test(errText)) {
-      throw bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503);
+      // RugCheck answered for this input; the pause does not count it.
+      throw Object.assign(bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503), { rugcheckNoReport: true });
     }
     throw bad(notFound || `${label} has no data for that input`, 422);
   }

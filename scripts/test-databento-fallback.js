@@ -35,8 +35,9 @@ globalThis.fetch = async (url, init) => {
   const kind = u.includes("get_dataset_range") ? "range" : u.includes("get_cost") ? "cost" : u.includes("get_range") ? "data" : "other";
   up.calls.push(`${kind}:${ds}`);
   if (kind === "range") {
+    if (up.rangeAll === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
     if (ds === "EQUS.SUMMARY" && up.summaryRange === "500") return new Response("busy", { status: 500 });
-    return new Response(JSON.stringify({ end: "2026-10-14" }), { status: 200 });
+    return new Response(JSON.stringify({ end: up.rangeEnd || "2026-10-14" }), { status: 200 });
   }
   if (kind === "cost") return new Response("0.00001", { status: 200 });
   if (kind === "data") {
@@ -44,6 +45,7 @@ globalThis.fetch = async (url, init) => {
       if (up.summary === "timeout") throw Object.assign(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
       if (up.summary === "500") return new Response("internal", { status: 500 });
       if (up.summary === "403") return new Response("not entitled", { status: 403 });
+      if (up.summary === "400") return new Response('{"detail":"bad request"}', { status: 400 });
       if (up.summary === "empty") return new Response("", { status: 200 });
       if (up.summary === "422range") return new Response('{"detail":"end is after the available range"}', { status: 422 });
       if (up.summary === "422symbol") return new Response('{"detail":"Could not resolve symbol ZZZZ"}', { status: 422 });
@@ -54,7 +56,7 @@ globalThis.fetch = async (url, init) => {
   }
   throw new Error(`unstubbed path ${u}`);
 };
-const reset = () => { db.__resetDatabentoState(); up.calls = []; up.summary = "ok"; up.summaryRange = "ok"; up.dbeq = "ok"; };
+const reset = () => { db.__resetDatabentoState(); up.calls = []; up.summary = "ok"; up.summaryRange = "ok"; up.rangeAll = "ok"; up.dbeq = "ok"; up.rangeEnd = null; };
 const dataReads = () => up.calls.filter((c) => c.startsWith("data:"));
 
 try {
@@ -119,6 +121,69 @@ try {
   const before = dataReads().length;
   const again = await quote({ symbol: "MSFT" });
   ok(again.cached === true && again.dataset === "EQUS.SUMMARY" && dataReads().length === before, "a repeat inside the session answers from the primary's cache");
+
+  // ---- a primary that refuses the request is skipped for a while
+  for (const mode of ["400", "403"]) {
+    reset(); up.summary = mode;
+    await quote({ symbol: "AAPL" });
+    up.calls = [];
+    const r = await quote({ symbol: "NVDA" });
+    ok(r.dataset === "DBEQ.BASIC" && JSON.stringify(dataReads()) === JSON.stringify(["data:DBEQ.BASIC"]),
+      `after a primary ${mode}, the next read goes straight to the fallback (${dataReads().join(" ")})`);
+    ok(db.quoteWarmerStatus().primarySkip?.skipping === true && db.quoteWarmerStatus().primarySkip.skippedReads >= 1, "the operator view says the primary is being skipped");
+  }
+  {
+    reset(); up.summary = "403"; process.env.DATABENTO_PRIMARY_SKIP_MS = "40";
+    await quote({ symbol: "AAPL" });
+    await new Promise((r) => setTimeout(r, 60));
+    up.calls = []; up.summary = "ok";
+    const r = await quote({ symbol: "TSLA" });
+    ok(r.dataset === "EQUS.SUMMARY" && dataReads()[0] === "data:EQUS.SUMMARY", `once the skip window ends the primary is asked again (${dataReads().join(" ")})`);
+    delete process.env.DATABENTO_PRIMARY_SKIP_MS;
+  }
+  {
+    reset(); up.summary = "500";
+    await quote({ symbol: "AAPL" });
+    up.calls = [];
+    await quote({ symbol: "NVDA" });
+    ok(dataReads()[0] === "data:EQUS.SUMMARY", `a primary 5xx is not remembered: the next read asks the primary first (${dataReads().join(" ")})`);
+  }
+
+  // ---- a timed-out quote answers from the last good read, labeled
+  {
+    reset(); up.rangeEnd = "2026-10-13";
+    const first = await quote({ symbol: "AAPL" });
+    process.env.DATABENTO_RANGE_MAX_AGE_MS = "1";
+    await new Promise((r) => setTimeout(r, 5));
+    up.rangeEnd = "2026-10-14"; up.summary = "timeout";
+    const r = await quote({ symbol: "AAPL" });
+    ok(r.stale === true && /did not answer in time/.test(r.staleReason), `a timed-out quote read answers from the last good read and says so (${r.stale})`);
+    ok(r.asOf === first.asOf && r.fetchedAt === first.fetchedAt && r.dataset === "EQUS.SUMMARY", `the stale answer carries its own day, read time and dataset (${r.asOf}, ${r.fetchedAt})`);
+    try { await history({ symbol: "AAPL", days: 2 }); ok(false, "history is not served stale"); }
+    catch (e) { ok(e.statusCode === 503, `a timed-out history read is still the 503 (${e.statusCode})`); }
+    try { await quote({ symbol: "MSFT" }); ok(false, "no copy, no answer"); }
+    catch (e) { ok(e.statusCode === 503, `a timed-out quote with no copy is still the 503 (${e.statusCode})`); }
+    process.env.DATABENTO_QUOTE_STALE_MAX_MS = "1";
+    await new Promise((r) => setTimeout(r, 5));
+    try { await quote({ symbol: "AAPL" }); ok(false, "an old copy is not served"); }
+    catch (e) { ok(e.statusCode === 503, `a copy older than the stale limit is not served (${e.statusCode})`); }
+    delete process.env.DATABENTO_QUOTE_STALE_MAX_MS; delete process.env.DATABENTO_RANGE_MAX_AGE_MS;
+  }
+  // ---- a session boundary served from the last confirmed end says so
+  {
+    reset();
+    const fresh = await quote({ symbol: "AAPL" });
+    const freshH = await history({ symbol: "AAPL", days: 2 });
+    ok(!("rangeStale" in fresh) && !("rangeStale" in freshH) && !("rangeCheckedAt" in freshH), "a confirmed boundary adds no stale field to either answer");
+    db.__ageRange(2 * 3600_000);
+    up.rangeAll = "timeout";
+    const q = await quote({ symbol: "AAPL" });
+    const aged = (x) => Date.parse(x) <= Date.now() - 2 * 3600_000 + 5000;
+    ok(q.rangeStale === true && aged(q.rangeCheckedAt), `a quote on the fallback boundary carries rangeStale and the original (aged) rangeCheckedAt (${q.rangeStale}, ${q.rangeCheckedAt})`);
+    const h = await history({ symbol: "AAPL", days: 2 });
+    ok(h.rangeStale === true && aged(h.rangeCheckedAt) && h.bars.length === 2, `history on the fallback boundary carries rangeStale and rangeCheckedAt (${h.rangeStale}, ${h.rangeCheckedAt})`);
+    up.rangeAll = "ok";
+  }
 } finally {
   globalThis.fetch = realFetch;
   db.__resetDatabentoState();

@@ -153,7 +153,19 @@ const FRED_YIELD_SERIES = [
 // cells mean "no observation" (weekend, holiday, or series gap) and become
 // null. We trim to rows that have *any* yield value so callers don't see a
 // trailing weekend with all-null values from a midweek pull.
+// FRED answers a scheduled maintenance window with an HTML page (HTTP 200) in
+// place of data. That is the upstream's own outage: a 503 that says so, with a
+// retry hint, never a generic 502. Uncharged like every refusal.
+export function isFredMaintenancePage(text) {
+  const head = String(text || "").slice(0, 2000);
+  return /<html[\s>]/i.test(head) && /maintenance/i.test(head);
+}
+export function fredMaintenanceError() {
+  return Object.assign(bad("FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now. Retry later; you were not charged.", 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
+}
+
 function parseFredYieldsCsv(csv) {
+  if (isFredMaintenancePage(csv)) throw fredMaintenanceError();
   const lines = csv.trim().split(/\r?\n/);
   if (lines.length < 2) throw bad("FRED returned no rows", 502);
   const header = lines[0].split(",");
@@ -735,6 +747,7 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
     if (res.status === 429 || res.status === 423) throw Object.assign(bad("FRED is temporarily unavailable (rate limited) - retry shortly. You were not charged.", 503), { noRetry: true });
     throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
   }
+  if (!body && isFredMaintenancePage(text)) throw fredMaintenanceError();
   if (!body) throw bad("FRED returned non-JSON response", 502);
   return body;
 }

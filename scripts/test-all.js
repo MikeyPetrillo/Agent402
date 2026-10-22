@@ -8,6 +8,7 @@
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
+import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -102,8 +103,10 @@ const NETWORK = new Set([
   // seller-payability pays an external seller's probe from the spending
   // wallet - 503 without X402_UPSTREAM_BUYER_KEY (CI boots keyless).
   "/api/seller-payability",
-  // route-execute-max/-plus: external tiers may pay an upstream seller — lenient.
-  "/api/route/execute-max", "/api/route/execute-plus",
+  // route-execute-max/-plus/-pro: external tiers may pay an upstream seller,
+  // and the max and pro examples route to one (include:"external", refused
+  // with a 409 on a host without external routing) - lenient.
+  "/api/route/execute-max", "/api/route/execute-plus", "/api/route/execute-pro",
   // captcha-verify hits a live provider siteverify (egress) — lenient.
   "/api/captcha-verify",
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",
@@ -458,9 +461,14 @@ for (const [path, methods] of paths) {
       url = buildGetUrl(path, op);
       init = {};
     } else {
-      const example = op.requestBody?.content?.["application/json"]?.example ?? {};
+      const published = requestExampleOf(op);
+      const example = published?.example ?? {};
       url = `${TARGET}${path}`;
-      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(example) };
+      // A multipart route (the transcription wire) is sent as its document
+      // describes it: the server's own speech fixture as the file part.
+      init = published?.contentType === MULTIPART_TYPE
+        ? { method: "POST", multipartFields: example }
+        : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(example) };
     }
     // Memory tools need an identity in free mode; give them a demo namespace.
     if (isMemory(path)) url += (url.includes("?") ? "&" : "?") + "ns=smoke-all";
@@ -474,11 +482,17 @@ for (const [path, methods] of paths) {
 // 32-deep queue absorbing rather than answering 503, which this sweep would
 // (correctly) read as a failure.
 const CONCURRENCY = Math.max(1, Number(process.env.TEST_ALL_CONCURRENCY) || 8);
+let speechFixture = null;
 async function runTask(t) {
   let status = 0, body = null, threw = null;
   const _t0 = Date.now();
   try {
-    const res = await fetch(t.url, { ...t.init, signal: AbortSignal.timeout(20000) });
+    let init = t.init;
+    if (init.multipartFields) {
+      speechFixture ??= new Uint8Array(await (await fetch(`${TARGET}/fixtures/sample-speech.wav`, { signal: AbortSignal.timeout(20000) })).arrayBuffer());
+      init = { method: "POST", body: multipartBodyFrom(init.multipartFields, { bytes: speechFixture, type: "audio/wav", filename: "sample-speech.wav" }) };
+    }
+    const res = await fetch(t.url, { ...init, signal: AbortSignal.timeout(20000) });
     status = res.status;
     const ct = res.headers.get("content-type") || "";
     body = ct.includes("application/json") ? await res.json() : (await res.arrayBuffer()).byteLength;
