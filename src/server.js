@@ -2468,10 +2468,32 @@ app.use(requestTimingMiddleware((req) => {
   for (const [re, k] of BEARER_PATH_KEYS) if (re.test(path)) return `${method} ${k}`;
   // Outside /api and /v1, collapse to the first segment: /tools/<slug> alone is
   // 600 pages and filled the key table within ten minutes on production.
+  // A segment no registered route starts with reads "(other)": the key reaches
+  // the stall alarm's public issue text, so a caller's own path never does.
   const segs = path.split("/").filter(Boolean);
-  if (segs[0] === "api" || segs[0] === "v1") return `${method} /${segs.slice(0, 2).join("/")}`;
-  return `${method} /${segs[0] || ""}${segs.length > 1 ? "/*" : ""}`;
+  const known = knownRouteSegments();
+  if (segs[0] === "api" || segs[0] === "v1") return `${method} /${segs[0]}/${segs[1] == null ? "" : known.has(`${segs[0]}/${segs[1]}`) ? segs[1] : "(other)"}`;
+  if (!segs.length) return `${method} /`;
+  return `${method} /${known.has(segs[0]) ? segs[0] : "(other)"}${segs.length > 1 ? "/*" : ""}`;
 }, carriesPaidCredential));
+// First path segments (and "api/<x>", "v1/<x>") that some registered route or
+// catalog entry starts with, read once from the router after the routes exist.
+let knownSegs = null;
+function knownRouteSegments() {
+  if (knownSegs && knownSegs.size) return knownSegs;
+  const set = new Set();
+  const addPath = (p) => {
+    if (typeof p !== "string") return;
+    const parts = p.split("/").filter(Boolean);
+    if (!parts.length || /^[:*(]/.test(parts[0])) return;
+    set.add(parts[0]);
+    if ((parts[0] === "api" || parts[0] === "v1") && parts[1] && !/^[:*(]/.test(parts[1])) set.add(`${parts[0]}/${parts[1]}`);
+  };
+  try { for (const layer of app.router?.stack || app._router?.stack || []) { const rp = layer?.route?.path; for (const p of Array.isArray(rp) ? rp : [rp]) addPath(p); } } catch { /* best effort */ }
+  for (const k of Object.keys(CATALOG)) addPath(k.slice(k.indexOf(" ") + 1));
+  knownSegs = set;
+  return set;
+}
 setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it

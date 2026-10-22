@@ -111,6 +111,10 @@ try {
   await fetch(`${base}/tools/some-tool-slug`, from("203.0.113.5"));
   const keys2 = (await (await fetch(`${base}/__operator/perf.json?min=1&top=200`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json()).routes.map((r) => r.route);
   ok(keys2.includes("GET /tools/*") && !keys2.some((k) => k.includes("some-tool-slug")), "a page outside /api and /v1 collapses to its first segment");
+  await fetch(`${base}/www.caller-chosen.example`, from("203.0.113.5"));
+  await fetch(`${base}/api/0xAbCdEf0123456789abcdef0123456789abcdef01`, from("203.0.113.5"));
+  const keys3 = (await (await fetch(`${base}/__operator/perf.json?min=1&top=200`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json()).routes.map((r) => r.route);
+  ok(keys3.includes("GET /(other)") && keys3.includes("GET /api/(other)") && !keys3.some((k) => /caller-chosen|0xAbCd/i.test(k)), `a path no route serves never reaches a timing key, a stall line or the public issue text (${keys3.filter((k) => k.includes("other")).join(", ")})`);
   const unpaidPriced = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json" }), body: JSON.stringify({ text: "a" }) });
   ok(unpaidPriced.status !== 503, `an UNPAID call to a priced route is not shed either: the 402 is the first step of a purchase (${unpaidPriced.status})`);
   const op = await fetch(`${base}/__operator/perf.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }));

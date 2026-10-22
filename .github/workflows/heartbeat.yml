@@ -978,7 +978,7 @@ jobs:
           # What the long stalls were running: route keys and background job
           # names only (never a value, a payer or a figure), so the issue says
           # where to look without anyone reading the log.
-          CULPRITS=$(echo "$J" | jq -r '((.stallCulprits.routes // []) + (.stallCulprits.jobs // [] | map("job " + .))) | map(gsub("[^A-Za-z0-9 /:*._-]"; "")) | .[0:8] | join(", ")' 2>/dev/null || echo "")
+          CULPRITS=$(echo "$J" | jq -r '((.stallCulprits.routes // []) + (.stallCulprits.jobs // [] | map("job " + .))) | map(gsub("[^A-Za-z0-9 /:*()._-]"; "") | .[0:60]) | .[0:8] | join(", ")' 2>/dev/null || echo "")
           if [ -n "$CULPRITS" ]; then CULPRIT_NOTE=" Running during the long stalls: $CULPRITS."; else CULPRIT_NOTE=""; fi
           # Whether the long stalls were mostly garbage collection (a word, never a figure).
           STALL_CAUSE=$(echo "$J" | jq -r '.stallCause // ""' 2>/dev/null || echo "")
@@ -988,7 +988,7 @@ jobs:
           esac
           # Paid calls whose handler ran past its bound: tool names only, safe
           # characters, never a payer or an amount.
-          SLOW_SLUGS=$(echo "$J" | jq -r '(.slowPaid.slugs // []) | map(gsub("[^A-Za-z0-9._-]"; "")) | map(select(length > 0)) | .[0:8] | join(", ")' 2>/dev/null || echo "")
+          SLOW_SLUGS=$(echo "$J" | jq -r '(.slowPaid.slugs // []) | map(gsub("[^A-Za-z0-9._-]"; "") | .[0:60]) | map(select(length > 0)) | .[0:8] | join(", ")' 2>/dev/null || echo "")
           if [ -n "$SLOW_SLUGS" ]; then CULPRIT_NOTE="${CULPRIT_NOTE} Slow paid calls: $SLOW_SLUGS."; fi
           echo "serving health: $STATUS ($SUMMARY)"
           echo "stall culprits: ${CULPRITS:-none named} cause: ${STALL_CAUSE:-none}"
