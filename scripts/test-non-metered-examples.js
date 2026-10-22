@@ -131,6 +131,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The list lives in src/metered-slugs.js so the server can publish its count
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
+import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
 export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot", "page-speed", "html-frames"]);
@@ -249,6 +250,32 @@ export function runnerProbeLabel(status, body) {
   return m && RUNNER_PROBES[m[1]] ? m[1] : null;
 }
 const RUNNER_PROBE_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
+
+// FRED'S SCHEDULED MAINTENANCE. FRED answers a maintenance window with an HTML
+// page (HTTP 200) where its data should be, and the FRED tools then answer 503
+// in exactly fredMaintenanceError()'s words. That answer is excused only when
+// this runner, reading the same keyless CSV the tools read, gets the
+// maintenance page too. If FRED serves data (or anything else) to the runner,
+// the tool's claim is wrong and it fails. One probe per run.
+const FRED_MAINTENANCE_MESSAGE = fredMaintenanceError().message;
+export function isFredMaintenanceAnswer(status, body) {
+  return status === 503 && String(body?.error || "") === FRED_MAINTENANCE_MESSAGE;
+}
+const FRED_PROBE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10";
+let fredProbeMemo = null;
+function fredInMaintenanceForRunner() {
+  if (!fredProbeMemo) {
+    const t0 = Date.now();
+    fredProbeMemo = fetch(FRED_PROBE_URL, { headers: { "User-Agent": RUNNER_PROBE_UA }, signal: AbortSignal.timeout(10_000) })
+      .then(async (res) => {
+        const inMaintenance = isFredMaintenancePage(await res.text());
+        console.log(`\n# runner probe FRED: HTTP ${res.status} in ${Date.now() - t0} ms, ${inMaintenance ? "maintenance page" : "not the maintenance page"}`);
+        return inMaintenance;
+      })
+      .catch((e) => { console.log(`\n# runner probe FRED: ${e?.name || "error"} after ${Date.now() - t0} ms (not counted as maintenance)`); return false; });
+  }
+  return fredProbeMemo;
+}
 const runnerProbeMemo = new Map();
 function upstreamAnswersRunner(label) {
   if (!runnerProbeMemo.has(label)) {
@@ -506,6 +533,15 @@ function runControls() {
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
   }
 
+  ok(isFredMaintenanceAnswer(503, { error: fredMaintenanceError().message }) === true,
+    "control: the FRED tools' own maintenance 503 is a FRED-probe candidate");
+  ok(isFredMaintenanceAnswer(502, { error: fredMaintenanceError().message }) === false
+    && isFredMaintenanceAnswer(503, { error: "FRED returned no rows" }) === false
+    && isFredMaintenanceAnswer(503, { error: `${fredMaintenanceError().message} and more` }) === false,
+    "control: any other status or words from a FRED tool still fail");
+  ok(isFredMaintenancePage("<!doctype html><html lang=\"en\"><head><title>Site Maintenance | St. Louis Fed</title>") === true
+    && isFredMaintenancePage("observation_date,DGS10\n2026-10-20,4.01") === false,
+    "control: the runner probe tells the maintenance page from FRED's CSV");
   ok(isClientTimeoutFlake(0, null, "The operation was aborted due to timeout") === true,
     "control: client AbortSignal timeout is a soft-skip");
   ok(isClientTimeoutFlake(504, { error: "timeout" }, null) === false,
@@ -638,6 +674,7 @@ async function main() {
   let skippedCertTransparency = 0;
   let skippedClientTimeout = 0;
   let skippedRunnerUnreachable = 0;
+  let skippedFredMaintenance = 0;
   const upstreamRefusals = [];
   const liveFails = [];
   // Documented-output-keys check on every strict pass. This used to live only
@@ -736,6 +773,12 @@ async function main() {
       return;
     }
 
+    if (isFredMaintenanceAnswer(r.status, r.body) && await fredInMaintenanceForRunner()) {
+      skippedFredMaintenance++;
+      console.log(`\nskip - ${t.slug}: FRED serves its maintenance page to this runner too (upstream window, not our defect)`);
+      return;
+    }
+
     const probeLabel = runnerProbeLabel(r.status, r.body);
     if (probeLabel && !(await upstreamAnswersRunner(probeLabel))) {
       skippedRunnerUnreachable++;
@@ -771,12 +814,16 @@ async function main() {
     console.log(`skip - ${skippedRunnerUnreachable} tool(s) soft-skipped: their upstream does not answer this runner directly (checked once per upstream)`);
   }
 
+  if (skippedFredMaintenance) {
+    console.log(`skip - ${skippedFredMaintenance} FRED tool(s) soft-skipped: FRED is in scheduled maintenance for this runner too (checked once)`);
+  }
+
   if (upstreamRefusals.length) {
     console.log(`skip - ${upstreamRefusals.length} tool(s) reported as upstream refusals: a keyless upstream listed in SHARED_IP_LIMITED_UPSTREAMS refused this runner twice (evidence below)`);
     for (const line of upstreamRefusals) console.log(`  upstream refusal - ${line}`);
   }
 
-  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable + upstreamRefusals.length;
+  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable + skippedFredMaintenance + upstreamRefusals.length;
   const asserted = work.length - softSkipped;
   ok(liveFails.length === 0,
     liveFails.length
