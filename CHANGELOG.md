@@ -6,6 +6,21 @@ carries its own version on npm.
 
 ## v2.8.0 - 2026-10-20
 
+### 2026-10-22
+- Please upgrade the buyer packages: `agent402-client` 0.8.16,
+  `agent402-mcp` 0.13.17, `agent402-agentkit` 0.1.7, `agent402-openclaw`
+  0.5.4, `elizaos-plugin-agent402` 0.2.7, `agent402-langchain` 0.2.11,
+  `agent402-ai-sdk` 0.2.11, `agent402-google-adk` 0.1.11 and
+  `agent402-openai-agents` 0.1.12 on npm, and `agent402-langchain` 0.1.5 on
+  PyPI.
+- Spending caps are checked against the payment that is signed, priced from
+  the assets the package knows, so a payment over a cap is refused before it
+  is signed, whatever amount the 402 quoted.
+- A request that can carry a payment does not follow a redirect. The package
+  refuses it and names where it pointed, so a signature or a credits key
+  stays with the host you configured; if the new address is the one you
+  meant, set it as the base URL.
+
 ### 2026-10-20
 - New tool `dub` (`POST /api/dub`): translates a text into a target language
   and speaks the translation in one paid call, priced as the sum of the chat
