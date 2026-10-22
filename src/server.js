@@ -36,7 +36,8 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // is a TIMER firing, so a blocked loop is indistinguishable from an unreachable
 // upstream - which is what seven CDP verify failures looked like on 2026-08-30
 // while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
-import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
+import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentStalls, longStallVerdict, stallAlarmMsFromEnv } from "./loop-lag.js";
+import { runAsJob, activeJobs } from "./active-jobs.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
@@ -2394,7 +2395,7 @@ function memoSurface(key, ttlMs, build) {
   if (hit) {
     if (!hit.rebuilding) {
       hit.rebuilding = true;
-      setImmediate(() => {
+      setImmediate(() => runAsJob(surfaceJobName(key), () => {
         try {
           const partial = !stateStoresLoaded();
           const built = build();
@@ -2403,7 +2404,7 @@ function memoSurface(key, ttlMs, build) {
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
         } finally { hit.rebuilding = false; }
-      });
+      }));
     }
     return hit.value;
   }
@@ -2419,6 +2420,9 @@ function memoSurface(key, ttlMs, build) {
 // fresh value instead of taking the stale one. A built value that says it is
 // partial (it read a partial memo) is stored as partial.
 const surfaceBuilds = new Map();
+// A rebuild runs as a named background job (src/active-jobs.js) so a stall
+// line names it; the name is the key's first two segments, never a value.
+function surfaceJobName(key) { return `surface:${String(key).split(":").slice(0, 2).join(":")}`; }
 async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false } = {}) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
@@ -2428,7 +2432,7 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false }
     pending = (async () => {
       try {
         const loading = !stateStoresLoaded();
-        const built = await buildAsync();
+        const built = await runAsJob(surfaceJobName(key), buildAsync);
         const partial = loading || built?.partial === true;
         const value = partial ? markPartialState(built) : built;
         surfaceMemo.set(key, { at: Date.now(), value, partial });
@@ -3810,8 +3814,9 @@ const revenueWallets = () => ({
 // cache has actually gone stale. Best-effort, unref'd; skipped when the crawler
 // is off (offline tests) to keep them from hitting live RPCs.
 if (process.env.X402_INDEX_CRAWL !== "off" && process.env.X402_SYNC_ON_START !== "false") {
-  setTimeout(() => { revenueSnapshot(revenueWallets()).catch(() => {}); }, 4_000).unref();
-  setInterval(() => { revenueSnapshot(revenueWallets()).catch(() => {}); }, 5 * 60_000).unref();
+  const revenueTick = () => { runAsJob("revenue-snapshot", () => revenueSnapshot(revenueWallets())).catch(() => {}); };
+  setTimeout(revenueTick, 4_000).unref();
+  setInterval(revenueTick, 5 * 60_000).unref();
 }
 
 // Stealth-model availability probe (v1-chat-ox / stealth/ox-alpha). ONE
@@ -5365,6 +5370,9 @@ const SERVING = {
   s5xxRate: Number(process.env.ALERT_5XX_RATE) || 0.05,
   totalMin: 100,
   shed1h: Number(process.env.ALERT_SHED_PER_HOUR) || 200,
+  // One stall at least this long in the last hour degrades on its own
+  // ("stall"), whatever the count; ALERT_STALL_MS=off disables it (0 here).
+  stallMs: stallAlarmMsFromEnv(process.env.ALERT_STALL_MS),
 };
 function servingHealth() {
   const loop = loopLagStatus();
@@ -5374,13 +5382,16 @@ function servingHealth() {
   const reasons = [];
   if ((loop.lastMinute?.p99 ?? 0) > SERVING.loopP99Ms) reasons.push("loop-p99");
   if (stalls.count > SERVING.stalls1h) reasons.push("stalls");
+  // The routes and jobs named by the long stalls: names only, never a value.
+  const longStall = longStallVerdict(SERVING.stallMs, 3600_000);
+  if (longStall.degraded) reasons.push("stall");
   if (counts.paid >= SERVING.paidMin && counts.paid5xx / counts.paid > SERVING.paidErrorRate) reasons.push("paid-errors");
   if (counts.total >= SERVING.totalMin && counts.s5xx / counts.total > SERVING.s5xxRate) reasons.push("5xx");
   const shedWords = shedVerdict(shed, SERVING.shed1h);
   reasons.push(...shedWords.reasons);
   const paidRoutes = routeTimings({ top: 200, minSamples: 5 }).filter((r) => Object.prototype.hasOwnProperty.call(CATALOG, r.route)).sort((a, b) => b.count - a.count).slice(0, 10)
     .map((r) => ({ route: r.route, count: r.count, p95Ms: r.totalMs.p95, computeP95Ms: r.computeMs.p95 }));
-  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes };
+  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes, stallCulprits: longStall.culprits, recentStalls: recentStalls() };
 }
 // The shed counter is cumulative since boot; reset hourly so "shed in the last
 // hour" means that.
@@ -5403,7 +5414,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:

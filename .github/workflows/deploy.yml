@@ -2751,6 +2751,7 @@ jobs:
           t node scripts/test-request-timing.js
           t node scripts/test-surface-memo.js
           t node scripts/test-load-shed.js
+          t node scripts/test-stall-alarm.js
           t node scripts/test-perf-budget.js
           # Crawl cadence copy is derived (served pages cannot advertise a cadence we do not run — offline)
           t node scripts/test-crawl-cadence.js
