@@ -56,9 +56,20 @@ const stallRing = [];
 /** Record one stall (the monitor calls this; tests feed it directly). */
 export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [] } = {}) {
   const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String) };
+  row.mostlyGc = gcDominated(row);
   stallTimes.push([at, row.ms]); if (stallTimes.length > 1000) stallTimes.shift();
   stallRing.push(row); if (stallRing.length > STALL_RING) stallRing.shift();
   return row;
+}
+/** A stall that was mostly garbage collection: GC time at least half of it. */
+export function gcDominated({ ms, gcMs } = {}) {
+  const m = Number(ms) || 0, g = Number(gcMs) || 0;
+  return m > 0 && g * 2 >= m;
+}
+/** Whether any recorded stall's block overlaps [fromMs, toMs] (epoch ms). */
+export function stallOverlapping(fromMs, toMs) {
+  for (const r of stallRing) if (r.atMs - r.ms <= toMs && r.atMs >= fromMs) return true;
+  return false;
 }
 /** The last stalls, newest first (copies, without the internal epoch field). */
 export function recentStalls() {
@@ -83,16 +94,21 @@ export function longStallVerdict(thresholdMs, windowMs = 3600_000, now = Date.no
   const { maxMs } = stallsInWindow(windowMs, now);
   const on = thresholdMs > 0;
   const routes = [], jobs = [];
-  let long = 0;
+  let long = 0, gcLong = 0;
   if (on) {
     for (const r of stallRing) {
       if (now - r.atMs > windowMs || r.ms < thresholdMs) continue;
       long++;
+      if (r.mostlyGc) gcLong++;
       for (const f of r.inFlight) { const k = f.replace(/\s+\d+ms( done)?$/, ""); if (!routes.includes(k)) routes.push(k); }
       for (const j of r.jobs) if (!jobs.includes(j)) jobs.push(j);
     }
   }
-  return { degraded: on && maxMs >= thresholdMs, thresholdMs, worstMs: maxMs, longStalls: long, culprits: { routes: routes.slice(0, 10), jobs: jobs.slice(0, 10) } };
+  // What the long stalls were: "gc" when every one was mostly garbage
+  // collection, "code" when none was, "mixed" otherwise (null with none). A
+  // GC-dominated stall still degrades: it froze buyers all the same.
+  const cause = long === 0 ? null : gcLong === long ? "gc" : gcLong === 0 ? "code" : "mixed";
+  return { degraded: on && maxMs >= thresholdMs, thresholdMs, worstMs: maxMs, longStalls: long, gcStalls: gcLong, cause, culprits: { routes: routes.slice(0, 10), jobs: jobs.slice(0, 10) } };
 }
 export function recentLagMs() { return Math.round(lagEwma); }
 /** How many of the last RECENT_TICKS ticks ran at least `ms` late. */
@@ -204,7 +220,7 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
       try { gc = gcPhrase(late, now); gcMs = gcDuring(now - late - 50, now).ms; } catch { /* attribution is best-effort */ }
       try { recordStall({ at: now, ms: late, gcMs, inFlight, jobs }); } catch { stallTimes.push([now, Math.round(late)]); }
       const ctx = `${inFlight.length ? ` in-flight: ${inFlight.join(", ")}` : ""}${jobs.length ? ` jobs: ${jobs.join(", ")}` : ""}`;
-      log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls})${gc} - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
+      log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls})${gc}${gcDominated({ ms: late, gcMs }) ? " (mostly garbage collection)" : ""} - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
     }
   }, tickMs);
   // Never hold the process open: a diagnostic must not change shutdown.

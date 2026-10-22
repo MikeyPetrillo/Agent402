@@ -283,6 +283,7 @@ import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
+import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
@@ -5373,6 +5374,10 @@ const SERVING = {
   // One stall at least this long in the last hour degrades on its own
   // ("stall"), whatever the count; ALERT_STALL_MS=off disables it (0 here).
   stallMs: stallAlarmMsFromEnv(process.env.ALERT_STALL_MS),
+  // One paid call whose handler ran this long in the last hour degrades
+  // ("slow-paid"); a route declared slow is held to its own run budget
+  // instead (src/slow-paid-calls.js). ALERT_SLOW_PAID_MS=off disables it.
+  slowPaidMs: slowPaidMsFromEnv(process.env.ALERT_SLOW_PAID_MS),
 };
 function servingHealth() {
   const loop = loopLagStatus();
@@ -5385,13 +5390,17 @@ function servingHealth() {
   // The routes and jobs named by the long stalls: names only, never a value.
   const longStall = longStallVerdict(SERVING.stallMs, 3600_000);
   if (longStall.degraded) reasons.push("stall");
+  // Paid calls whose handler ran past its bound while the loop may have been
+  // fine: slugs only, never a payer or an amount.
+  const slowPaid = slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs);
+  if (slowPaid.degraded) reasons.push("slow-paid");
   if (counts.paid >= SERVING.paidMin && counts.paid5xx / counts.paid > SERVING.paidErrorRate) reasons.push("paid-errors");
   if (counts.total >= SERVING.totalMin && counts.s5xx / counts.total > SERVING.s5xxRate) reasons.push("5xx");
   const shedWords = shedVerdict(shed, SERVING.shed1h);
   reasons.push(...shedWords.reasons);
   const paidRoutes = routeTimings({ top: 200, minSamples: 5 }).filter((r) => Object.prototype.hasOwnProperty.call(CATALOG, r.route)).sort((a, b) => b.count - a.count).slice(0, 10)
     .map((r) => ({ route: r.route, count: r.count, p95Ms: r.totalMs.p95, computeP95Ms: r.computeMs.p95 }));
-  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes, stallCulprits: longStall.culprits, recentStalls: recentStalls() };
+  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes, stallCulprits: longStall.culprits, stallCause: longStall.cause, slowPaid, recentStalls: recentStalls(), recentSlowPaid: recentSlowPaidCalls() };
 }
 // The shed counter is cumulative since boot; reset hourly so "shed in the last
 // hour" means that.
@@ -5414,7 +5423,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
