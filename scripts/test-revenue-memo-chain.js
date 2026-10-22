@@ -20,7 +20,8 @@ const surfaceMemo = new Map();
 const realNow = Date.now;
 Date.now = () => now;
 // eslint-disable-next-line no-new-func
-const { memoSurfaceAsync } = new Function("surfaceMemo", "stateStoresLoaded", `${memoCode}\nreturn { memoSurfaceAsync };`)(surfaceMemo, () => loaded);
+const { runAsJob } = await import("../src/active-jobs.js");
+const { memoSurfaceAsync } = new Function("surfaceMemo", "stateStoresLoaded", "runAsJob", `${memoCode}\nreturn { memoSurfaceAsync };`)(surfaceMemo, () => loaded, runAsJob);
 const settle = () => new Promise((r) => setImmediate(r));
 
 try {
