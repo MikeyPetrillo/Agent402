@@ -249,7 +249,7 @@ app.use(createTollbooth({
 The `tempo` object takes `apiKey` (required), `recipient` (required, your
 Tempo payTo), `currency` or `currencies` (TIP-20 token addresses; default USDC.e
 `0x20C000000000000000000000b9537d11c60E8b50`, one challenge minted per currency,
-first = preferred), `splits` (up to 10, total below the price, same transaction),
+first = preferred), `splits` (up to 10, total below the price, same transaction; Tempo only - for Base see [Split revenue on Base with 0xSplits](#split-revenue-on-base-with-0xsplits)),
 `chainId` (default 4217, Tempo mainnet), `apiBaseUrl` (relay, default
 `https://api.tempo.xyz`), `decimals` (6), `timeoutSeconds` (300), plus the
 confirm knobs below. A bad config throws at construction - the gate never boots
@@ -643,3 +643,32 @@ so test from a second wallet. Every paid request settles as USDC into the Coinba
 browse your site normally. Full walkthrough with an Express example:
 https://agent402.tools/guides/coinbase-business-get-paid-by-agents
 
+
+## Split revenue on Base with 0xSplits
+
+Native `tempo.splits` only work on Tempo. On a chain where your split contract
+is deployed, `payTo` is just an address, so you can point it at an
+[0xSplits](https://splits.org) split contract instead of a wallet. The split
+contract holds the percentages. The tollbooth quotes that address, and the
+facilitator settles the buyer's signed transfer to it. No code or config
+change is needed beyond the address:
+
+```bash
+TOLLBOOTH_PAYTO=0xYourSplitContract \
+TOLLBOOTH_NETWORK=base \
+TOLLBOOTH_FACILITATOR_URL=https://your-base-facilitator \
+TOLLBOOTH_UPSTREAM=http://localhost:8080 \
+npx agent402-tollbooth
+```
+
+`TOLLBOOTH_TEMPO_RECIPIENT` falls back to `TOLLBOOTH_PAYTO` when unset. An
+operator who also enables Tempo should set `TOLLBOOTH_TEMPO_RECIPIENT` to a
+Tempo wallet, so Tempo payments do not go to the Base split's address on
+another chain.
+
+- Use an **immutable** split if recipients must never change after launch.
+- A Push split holds the USDC it receives until someone calls `distribute` on
+  it. Anyone can call it, and it costs a little Base gas. Distribution is not
+  per payment.
+- The facilitator and USDC only see an address. Nothing here checks that
+  `payTo` really is a split, so double-check the address you configure.
