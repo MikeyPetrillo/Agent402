@@ -19,6 +19,7 @@
 //            and a paid ok answer by class on the operator endpoint.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile, chmod, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -254,7 +255,7 @@ await check("answerDigestWindow over a scratch ledger: external rows with a dige
   try {
     const r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, SALES_LEDGER_DB: join(dir, "sales.db"), STATE_DATABASE_URL: "" }, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
-    const rows = JSON.parse(r.stdout.trim().split("\n").at(-1));
+    const rows = childJson(r.stdout);
     const by = Object.fromEntries(rows.map((x) => [x.slug, x]));
     assert.deepEqual(by["stock-quote"], { slug: "stock-quote", sales: 5, distinctAnswers: 1, payers: 5 }, "a row without a digest is not counted");
     assert.deepEqual(by["fx-rate"], { slug: "fx-rate", sales: 5, distinctAnswers: 2, payers: 1 });
