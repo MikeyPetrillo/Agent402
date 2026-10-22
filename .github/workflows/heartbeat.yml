@@ -975,14 +975,20 @@ jobs:
           # The run log keeps the figures; the issue (public) carries the reason words only.
           SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) info=\((.info // [])|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed) shedServing=\(.shed.serving) shedFree=\(.shed.free)"' 2>/dev/null || echo "unreadable")
           REASONS=$(echo "$J" | jq -r '(.reasons // []) | join(", ")' 2>/dev/null || echo "unreadable")
+          # What the long stalls were running: route keys and background job
+          # names only (never a value, a payer or a figure), so the issue says
+          # where to look without anyone reading the log.
+          CULPRITS=$(echo "$J" | jq -r '((.stallCulprits.routes // []) + (.stallCulprits.jobs // [] | map("job " + .))) | map(gsub("[^A-Za-z0-9 /:*._-]"; "")) | .[0:8] | join(", ")' 2>/dev/null || echo "")
+          if [ -n "$CULPRITS" ]; then CULPRIT_NOTE=" Running during the long stalls: $CULPRITS."; else CULPRIT_NOTE=""; fi
           echo "serving health: $STATUS ($SUMMARY)"
+          echo "stall culprits: ${CULPRITS:-none named}"
           TITLE="Serving health DEGRADED"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}). The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}).${CULPRIT_NOTE} The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given})." >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given}).${CULPRIT_NOTE}" >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true

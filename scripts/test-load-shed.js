@@ -120,6 +120,8 @@ try {
   ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
   ok(Array.isArray(sh.reasons) && sh.thresholds && sh.loop && "stalls1h" in sh.loop, "the verdict carries its reasons, thresholds and loop counts");
   ok(Array.isArray(sh.info) && !sh.reasons.includes("free-shedding") && typeof sh.shed.free === "number" && typeof sh.shed.serving === "number", `informational words are apart from the reasons, and the shed counts carry the split (${JSON.stringify({ reasons: sh.reasons, info: sh.info, free: sh.shed.free, serving: sh.shed.serving })})`);
+  ok(sh.thresholds.stallMs === 5000 && Array.isArray(sh.recentStalls) && sh.stallCulprits && Array.isArray(sh.stallCulprits.routes) && Array.isArray(sh.stallCulprits.jobs), `serving health carries the single-stall threshold, the stall ring and the culprit names (${JSON.stringify({ stallMs: sh.thresholds.stallMs, culprits: sh.stallCulprits })})`);
+  ok(Array.isArray(perf.recentStalls) && Array.isArray(perf.activeJobs), "perf.json carries the stall ring and the running jobs");
   const unauth = await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5"));
   ok(unauth.status === 404, "serving health is operator-only");
 } finally { proc.kill("SIGKILL"); }
@@ -172,6 +174,11 @@ try {
   ok(/REASONS=.*\.reasons/.test(step) && !/REASONS=.*responses1h/.test(step), "the reasons variable reads the reason words and nothing counted");
   ok(!/REASONS=.*\.info/.test(step) && /STATUS=\$\(echo "\$J" \| jq -r '\.status/.test(step) && /if \[ "\$STATUS" = "degraded" \]/.test(step), "the alarm pages on .status alone; informational words never open an issue");
   ok(/info=\\\(\(\.info \/\/ \[\]\)\|join\(","\)\)/.test(step), "the informational words reach the run log");
+  // A long stall's alarm names what it was running: route keys and job names
+  // from .stallCulprits, never a figure, so the issue says where to look.
+  ok(/CULPRITS=\$\(echo "\$J" \| jq -r '.*\.stallCulprits\.routes.*\.stallCulprits\.jobs/.test(step) && !/CULPRITS=.*(responses1h|recentStalls|\.ms\b|Ms\b)/.test(step), "the culprit variable reads the route and job names and nothing counted");
+  ok(bodies.filter((b) => /\$\{CULPRIT_NOTE\}/.test(b)).length === 2, "the opening issue and its still-degraded comment both name the culprits");
+  ok(/CULPRIT_NOTE=" Running during the long stalls: \$CULPRITS\."/.test(step), "the culprit note is a sentence of names");
 }
 
 console.log(`test-load-shed: ${n} passed`);

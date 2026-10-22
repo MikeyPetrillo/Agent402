@@ -20,6 +20,7 @@
 // for N ms and see how late it actually fires. Lateness IS the lag.
 
 import { monitorEventLoopDelay, PerformanceObserver, constants as perfConstants } from "node:perf_hooks";
+import { jobsDuring } from "./active-jobs.js";
 
 const TICK_MS = Number(process.env.LOOP_LAG_TICK_MS) || 500;
 const WARN_MS = Number(process.env.LOOP_LAG_WARN_MS) || 1000;
@@ -46,6 +47,52 @@ export function stallsInWindow(windowMs = 3600_000, now = Date.now()) {
   while (stallTimes.length && now - stallTimes[0][0] > 3600_000) stallTimes.shift();
   const rows = stallTimes.filter(([at]) => now - at <= windowMs);
   return { count: rows.length, maxMs: rows.reduce((m, [, ms]) => Math.max(m, ms), 0) };
+}
+// The last STALL_RING stalls in full (time, ms, gc ms, in-flight routes with
+// their ages, background jobs), newest last, for the operator reads and the
+// serving-health culprit names. Route keys are already value-free.
+const STALL_RING = 50;
+const stallRing = [];
+/** Record one stall (the monitor calls this; tests feed it directly). */
+export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [] } = {}) {
+  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String) };
+  stallTimes.push([at, row.ms]); if (stallTimes.length > 1000) stallTimes.shift();
+  stallRing.push(row); if (stallRing.length > STALL_RING) stallRing.shift();
+  return row;
+}
+/** The last stalls, newest first (copies, without the internal epoch field). */
+export function recentStalls() {
+  return stallRing.slice().reverse().map(({ atMs, ...r }) => ({ ...r, inFlight: [...r.inFlight], jobs: [...r.jobs] }));
+}
+/**
+ * ALERT_STALL_MS: one stall at least this long in the last hour degrades
+ * serving health. Default 5000; "off" (or 0) disables the single-stall alarm.
+ */
+export function stallAlarmMsFromEnv(raw = process.env.ALERT_STALL_MS) {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "off" || v === "0") return 0;
+  const n = Number(v);
+  return v && Number.isFinite(n) && n > 0 ? n : 5000;
+}
+/**
+ * The single-long-stall verdict over the last `windowMs`: whether any stall
+ * reached `thresholdMs`, and the routes and jobs named by those stalls (route
+ * keys without their ages), so an alarm says what to look at.
+ */
+export function longStallVerdict(thresholdMs, windowMs = 3600_000, now = Date.now()) {
+  const { maxMs } = stallsInWindow(windowMs, now);
+  const on = thresholdMs > 0;
+  const routes = [], jobs = [];
+  let long = 0;
+  if (on) {
+    for (const r of stallRing) {
+      if (now - r.atMs > windowMs || r.ms < thresholdMs) continue;
+      long++;
+      for (const f of r.inFlight) { const k = f.replace(/\s+\d+ms$/, ""); if (!routes.includes(k)) routes.push(k); }
+      for (const j of r.jobs) if (!jobs.includes(j)) jobs.push(j);
+    }
+  }
+  return { degraded: on && maxMs >= thresholdMs, thresholdMs, worstMs: maxMs, longStalls: long, culprits: { routes: routes.slice(0, 10), jobs: jobs.slice(0, 10) } };
 }
 export function recentLagMs() { return Math.round(lagEwma); }
 /** How many of the last RECENT_TICKS ticks ran at least `ms` late. */
@@ -146,14 +193,17 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
     if (late >= COUNT_MS) { minute.blocks200++; minute.blockedMs += late; }
     if (late >= warnMs) {
       state.stalls++; state.lastStallMs = late; state.lastStallAt = new Date(now).toISOString();
-      stallTimes.push([now, Math.round(late)]); if (stallTimes.length > 1000) stallTimes.shift();
       // One line, with the number, so it can be correlated against a payment
-      // failure by timestamp. The in-flight list names what was being served;
-      // the stall profiler (src/stall-profiler.js) names the code.
-      let ctx = "";
-      try { const c = stallContext ? stallContext() : null; if (c && c.length) ctx = ` in-flight: ${c.join(", ")}`; } catch { /* context is best-effort */ }
+      // failure by timestamp. The in-flight list names what was being served,
+      // the jobs list the background work running (or ending) inside the
+      // stall; the stall profiler (src/stall-profiler.js) names the code.
+      let inFlight = [], jobs = [], gcMs = 0;
+      try { const c = stallContext ? stallContext() : null; if (Array.isArray(c)) inFlight = c; } catch { /* context is best-effort */ }
+      try { jobs = jobsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
       let gc = "";
-      try { gc = gcPhrase(late, now); } catch { /* attribution is best-effort */ }
+      try { gc = gcPhrase(late, now); gcMs = gcDuring(now - late - 50, now).ms; } catch { /* attribution is best-effort */ }
+      try { recordStall({ at: now, ms: late, gcMs, inFlight, jobs }); } catch { stallTimes.push([now, Math.round(late)]); }
+      const ctx = `${inFlight.length ? ` in-flight: ${inFlight.join(", ")}` : ""}${jobs.length ? ` jobs: ${jobs.join(", ")}` : ""}`;
       log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls})${gc} - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
     }
   }, tickMs);
