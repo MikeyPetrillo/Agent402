@@ -66,6 +66,18 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     const sliced = await x.allIndexedToolsAsync(args);
     ok(isDeepStrictEqual(sliced, whole) && whole.matched > 0, `the sliced search answers as the whole pass (${JSON.stringify(args)}: ${whole.matched} matched)`);
   }
+  {
+    // Counted from the rows themselves, not from the pass under test.
+    const narrow = await x.allIndexedToolsAsync({ search: "offload-stalls-marker", limit: 500 });
+    ok(narrow.matched === narrow.results.length && narrow.results.every((t) => /offload-stalls-marker/i.test(`${t.name} ${t.description}`)), `a search keeps only matching rows (${narrow.matched})`);
+    ok(narrow.described === narrow.results.filter((t) => t.described).length, `described counts the matched rows that carry a description (${narrow.described})`);
+  }
+  {
+    // The caller path: both directory routes await the sliced search.
+    const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const route = (p) => srv.slice(srv.indexOf(`app.get("${p}"`), srv.indexOf(`app.get("${p}"`) + 900);
+    ok(["/marketplace/tools", "/api/index/tools"].every((p) => /await allIndexedToolsAsync\(\{/.test(route(p))) && !/[^.\w]allIndexedTools\(/.test(srv), "the directory routes run the search in slices, never the whole pass");
+  }
 }
 
 // --- 1b. the router's per-tool records stay hidden, and the heap stays bounded
