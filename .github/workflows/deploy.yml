@@ -2747,6 +2747,8 @@ jobs:
           t node scripts/test-index-ndjson-warmstart.js
           t node scripts/test-stall-profiler.js
           t node scripts/test-offload-stalls.js
+          # Ledger and index figures behind the stalled routes build across turns: same answers as the one-turn reads, first request after a production-sized boot under the bound (boots the server; offline)
+          t node scripts/test-stall-routes.js
           t node scripts/test-manifest-input-schema.js
           t node scripts/test-request-timing.js
           t node scripts/test-surface-memo.js
