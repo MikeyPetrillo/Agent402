@@ -284,10 +284,11 @@ import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
-import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware } from "./cdn-sync-window.js";
+import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
+import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
@@ -9010,6 +9011,19 @@ app.use(progressMiddleware());
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
 if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
+// A paid call to a slow route sent without Prefer: respond-async (or a Prefer:
+// wait that covers the run budget) runs as a job when the client follows a 202
+// on its own, and is refused before any gate otherwise, so a client that gives
+// up early is never charged for an answer it cannot collect
+// (src/slow-sync-window.js). Our own loopbacks pass: an async job's replay
+// (its marker, from a local socket; the async middleware below verifies it)
+// and the MCP connector's paid replay.
+{
+  const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+  const isInternalReplay = (req) => isMcpLoopback(req)
+    || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOCAL.has(String(req.socket?.remoteAddress || "")));
+  app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
+}
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 

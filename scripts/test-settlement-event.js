@@ -83,7 +83,9 @@ globalThis.fetch = function (input, init) {
 };
 `);
 proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  // The slow-route sync window (src/slow-sync-window.js) is off: this suite
+  // drives slow routes synchronously; test-slow-sync-window.js covers the window.
+  env: { ...process.env, SLOW_SYNC_WINDOW_SECONDS: "off", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
     POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1",

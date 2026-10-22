@@ -172,6 +172,9 @@ const bootPaid = async (extraEnv) => {
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
       OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "",
       OPENROUTER_STUB_URL: `http://127.0.0.1:${UP_PORT}`, OPENROUTER_FLEX: "off",
+      // The direct-path sync window (src/slow-sync-window.js) is off here so
+      // the CDN bound is measured alone; test-slow-sync-window.js covers it.
+      SLOW_SYNC_WINDOW_SECONDS: "off",
       CDN_SYNC_MAX_SECONDS: "8", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", AGENT402_OPERATOR_TOKEN: OP,
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"), AGENT402_MCP_TASK_TTL_MS: "", ...extraEnv },

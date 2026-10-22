@@ -61,8 +61,10 @@ const facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
+// The slow-route sync window (src/slow-sync-window.js) is off: this suite
+// drives slow routes synchronously; test-slow-sync-window.js covers the window.
 const bootBaseEnv = {
-  ...process.env, PORT: String(PORT), FREE_MODE: "",
+  ...process.env, SLOW_SYNC_WINDOW_SECONDS: "off", PORT: String(PORT), FREE_MODE: "",
   WALLET_ADDRESS: TREASURY, NETWORK: "base",
   FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
   MPP_SECRET_KEY: SECRET,

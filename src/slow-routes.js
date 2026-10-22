@@ -8,6 +8,11 @@
 // routes say so and with what numbers, so the 402, /api/pricing,
 // /openapi.json, /llms.txt, the tool pages and the clients cannot disagree.
 //
+// A slow route whose run budget is past the sync window
+// (src/slow-sync-window.js, SLOW_SYNC_WINDOW_SECONDS) also says that a paid
+// call needs Prefer: respond-async or Prefer: wait=<maxSeconds>, and that one
+// with neither is answered 400 before any payment is taken.
+//
 // TWO KINDS OF ROUTE:
 //   - slow: the run budget (EVM_RUN_SECONDS, sized from measured settled
 //     runs) is past SLOW_ADVISE_SECONDS. Advertised everywhere with its
@@ -23,9 +28,11 @@
 // recorded below; maxSeconds is the run budget. Both are seconds of handler
 // time, not counting the payment round trip.
 import { EVM_RUN_SECONDS } from "./evm-validity.js";
+import { needsAsyncOrWait, SLOW_ADVISE_SECONDS } from "./slow-sync-window.js";
 
-/** A route whose run budget is past this many seconds is advertised as slow. */
-export const SLOW_ADVISE_SECONDS = 20;
+/** A route whose run budget is past this many seconds is advertised as slow
+ *  (defined beside the sync window, which evm-validity.js also reads). */
+export { SLOW_ADVISE_SECONDS };
 
 // Typical run, seconds, from measured settled runs (tool_call latency, 60 days
 // to 2026-09-28; see src/evm-validity.js): the report composites finished in
@@ -77,6 +84,9 @@ export const ASYNC_RECOMMENDED_HEADER = "X-Async-Recommended";
 export function asyncAdvice(def) {
   const p = def?.asyncProfile ?? asyncProfileOf(def);
   if (!p) return null;
+  // Past the sync window (src/slow-sync-window.js), a paid call needs one of
+  // the two headers; without either it is refused before payment.
+  const gated = needsAsyncOrWait(p);
   return {
     recommended: p.slow,
     ...(p.expectedSeconds != null ? { expectedSeconds: p.expectedSeconds } : {}),
@@ -84,8 +94,10 @@ export function asyncAdvice(def) {
     prefer: "respond-async",
     accepted: 202,
     statusUrl: ASYNC_STATUS_PATH,
+    ...(gated ? { preferWait: `wait=${p.maxSeconds}`, withoutPrefer: 400 } : {}),
     how: p.slow
       ? "This route is slow. Send the paid call with the header Prefer: respond-async: it answers 202 with a Location job link at once. Poll GET /api/jobs/{id} (free), waiting Retry-After seconds between polls, until status is completed or failed (state: queued, running, succeeded, failed). Payment settles only on a delivered result."
+        + (gated ? ` To wait on the connection instead, send Prefer: wait=${p.maxSeconds} and keep it open for at least ${p.maxSeconds + 30} seconds. A paid call with neither header is answered 400 before any payment is taken.` : "")
       : "Send the paid call with the header Prefer: respond-async to get 202 and a job link instead of waiting on the connection, then poll GET /api/jobs/{id} (free) until status is completed or failed. Payment settles only on a delivered result.",
   };
 }
@@ -101,7 +113,8 @@ export function asyncRecommendedHeader(def) {
 export function slowRouteMarker(def) {
   const p = def?.asyncProfile ?? asyncProfileOf(def);
   if (!p || !p.slow) return "";
-  return ` (slow: ${p.expectedSeconds != null ? `about ${p.expectedSeconds} s, ` : ""}up to ${p.maxSeconds} s; send Prefer: respond-async for a job link)`;
+  const wait = needsAsyncOrWait(p) ? `, or Prefer: wait=${p.maxSeconds} to wait on the connection` : "";
+  return ` (slow: ${p.expectedSeconds != null ? `about ${p.expectedSeconds} s, ` : ""}up to ${p.maxSeconds} s; send Prefer: respond-async for a job link${wait})`;
 }
 
 /**
