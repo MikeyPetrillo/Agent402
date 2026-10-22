@@ -820,6 +820,35 @@ jobs:
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
 
+      # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
+      # counted by src/tool-failure-monitor.js): one word on
+      # /api/gateway-status. degraded pages, ok closes, unknown does neither.
+      # The issue is public: its body carries the word and the operator
+      # endpoint only; slugs and reasons stay on /__operator/tool-failures.json.
+      # The status Worker runs the same check under the same title.
+      - name: Tool answer shape check (alarm on empty or error-shaped 200s)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.toolAnswers.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "toolAnswers: $WORD"
+          TITLE="toolAnswers: a tool is answering empty or error-shaped 200s"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            degraded)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports toolAnswers.status=degraded. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: toolAnswers reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Money writes (sales, refund debts, card report records, subscription
       # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on
