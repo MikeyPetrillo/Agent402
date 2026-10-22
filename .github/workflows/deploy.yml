@@ -2758,6 +2758,8 @@ jobs:
           t node scripts/test-surface-memo.js
           t node scripts/test-load-shed.js
           t node scripts/test-stall-alarm.js
+          # A paid call whose handler runs past its bound pages, slugs only; declared-slow routes use their own budget (offline)
+          t node scripts/test-slow-paid-alarm.js
           t node scripts/test-perf-budget.js
           # Crawl cadence copy is derived (served pages cannot advertise a cadence we do not run — offline)
           t node scripts/test-crawl-cadence.js

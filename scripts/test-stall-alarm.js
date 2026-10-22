@@ -45,6 +45,36 @@ ok(fn(lag.stallAlarmMsFromEnv) && lag.stallAlarmMsFromEnv("junk") === 5000, "an 
   ok(fn(L.longStallVerdict) && L.longStallVerdict(5000, 3600_000, now + 3_700_000).degraded === false, "a long stall older than an hour no longer degrades");
 }
 
+// --- a stall that was mostly garbage collection says so, and still alarms ---------
+{
+  const L = await tryImport("../src/loop-lag.js?gc");
+  const now = Date.now();
+  const gcRow = fn(L.recordStall) ? L.recordStall({ at: now - 50_000, ms: 14_600, gcMs: 9_000, inFlight: [], jobs: [] }) : {};
+  ok(gcRow.mostlyGc === true, "a stall whose GC time is at least half of it is marked mostly GC");
+  ok(fn(L.recordStall) && L.recordStall({ at: now - 400_000, ms: 1000, gcMs: 500 }).mostlyGc === true, "exactly half counts as mostly GC");
+  ok(fn(L.recordStall) && L.recordStall({ at: now - 400_000, ms: 1000, gcMs: 499 }).mostlyGc === false, "under half does not");
+  const v = fn(L.longStallVerdict) ? L.longStallVerdict(5000, 3600_000, now) : {};
+  ok(v.degraded === true, "a long GC-dominated stall still degrades: it froze buyers all the same");
+  ok(v.cause === "gc" && v.gcStalls === 1, `the verdict says the long stalls were mostly garbage collection (${v.cause})`);
+  if (fn(L.recordStall)) L.recordStall({ at: now - 20_000, ms: 8000, gcMs: 100, inFlight: [], jobs: [] });
+  ok(fn(L.longStallVerdict) && L.longStallVerdict(5000, 3600_000, now).cause === "mixed", "a GC stall beside a code stall reads mixed");
+  ok(fn(L.longStallVerdict) && L.longStallVerdict(5000, 3600_000, now + 3_700_000).cause === null, "no long stall in the window: no cause");
+  const L2 = await tryImport("../src/loop-lag.js?code");
+  if (fn(L2.recordStall)) L2.recordStall({ at: now - 20_000, ms: 8000, gcMs: 100 });
+  ok(fn(L2.longStallVerdict) && L2.longStallVerdict(5000, 3600_000, now).cause === "code", "a long stall with little GC reads code");
+  ok(fn(L.recentStalls) && L.recentStalls().some((r) => r.mostlyGc === true), "the stall ring rows carry the mostly-GC flag");
+  const src = readFileSync(new URL("../src/loop-lag.js", import.meta.url), "utf8");
+  ok(/\(mostly garbage collection\)/.test(src.slice(src.indexOf("log(`[loop-lag]"))), "the [loop-lag] line says when a stall was mostly garbage collection");
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = srv.indexOf("function servingHealth()");
+  ok(/stallCause: longStall\.cause/.test(srv.slice(at, srv.indexOf("\n}\n", at))), "serving-health.json carries the stall cause");
+  const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const sAt = yml.indexOf("- name: Serving health check");
+  const step = yml.slice(sAt, yml.indexOf("\n      - name:", sAt + 10));
+  ok(/STALL_CAUSE=\$\(echo "\$J" \| jq -r '\.stallCause/.test(step) && /gc\) CULPRIT_NOTE="\$\{CULPRIT_NOTE\} The long stalls were mostly garbage collection\."/.test(step), "the heartbeat issue says when the long stalls were mostly garbage collection");
+  ok(/mixed\) CULPRIT_NOTE="\$\{CULPRIT_NOTE\} Some of the long stalls were mostly garbage collection\."/.test(step), "...and when some of them were");
+}
+
 // --- the ring stays bounded -----------------------------------------------------
 {
   const L = await tryImport("../src/loop-lag.js?ring");
