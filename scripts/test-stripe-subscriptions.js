@@ -1,10 +1,13 @@
 // Subscription engine test with a stubbed Stripe. Proves: subscription checkout
 // creation + validation, paid-session provisioning, webhook signature discipline
 // (refuses without a secret; verifies with one) and lifecycle transitions.
-// Offline, in CI.
-import { createStripeSubscriptions, MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
+// Offline, in CI. The store under test is the file at STORE, so a
+// STATE_DATABASE_URL in the caller's shell is dropped before the module loads
+// (with it set, the store would be the database row, read asynchronously).
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+delete process.env.STATE_DATABASE_URL;
+const { createStripeSubscriptions, MONITOR_PRODUCTS } = await import("../src/stripe-subscriptions.js");
 
 const STORE = join("/tmp", `test-subs-${process.pid}.json`);
 try { rmSync(STORE); } catch { /* first run */ }
