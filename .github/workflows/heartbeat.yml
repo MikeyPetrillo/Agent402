@@ -820,6 +820,35 @@ jobs:
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
 
+      # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
+      # counted by src/tool-failure-monitor.js): one word on
+      # /api/gateway-status. degraded pages, ok closes, unknown does neither.
+      # The issue is public: its body carries the word and the operator
+      # endpoint only; slugs and reasons stay on /__operator/tool-failures.json.
+      # The status Worker runs the same check under the same title.
+      - name: Tool answer shape check (alarm on empty or error-shaped 200s)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.toolAnswers.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "toolAnswers: $WORD"
+          TITLE="toolAnswers: a tool is answering empty or error-shaped 200s"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            degraded)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports toolAnswers.status=degraded. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: toolAnswers reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Money writes (sales, refund debts, card report records, subscription
       # records, decide writes) kept on the container's local disk because the
       # state database has not taken them (src/ledger-mirror.js): one word on
@@ -961,7 +990,7 @@ jobs:
       # is an .info word and reaches the run log. Two readings 30 s apart must
       # agree, because a reading taken while a deploy swaps containers can be
       # bad on its own.
-      - name: Serving health check (alarm on stalls, paid-call errors, 5xx or shedding)
+      - name: Serving health check (alarm on stalls, slow or failing paid calls, 5xx or shedding)
         if: always()
         continue-on-error: true
         env:
@@ -975,14 +1004,31 @@ jobs:
           # The run log keeps the figures; the issue (public) carries the reason words only.
           SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) info=\((.info // [])|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed) shedServing=\(.shed.serving) shedFree=\(.shed.free)"' 2>/dev/null || echo "unreadable")
           REASONS=$(echo "$J" | jq -r '(.reasons // []) | join(", ")' 2>/dev/null || echo "unreadable")
+          # What the long stalls were running: route keys and background job
+          # names only (never a value, a payer or a figure), so the issue says
+          # where to look without anyone reading the log.
+          CULPRITS=$(echo "$J" | jq -r '((.stallCulprits.routes // []) + (.stallCulprits.jobs // [] | map("job " + .))) | map(gsub("[^A-Za-z0-9 /:*()._-]"; "") | .[0:60]) | .[0:8] | join(", ")' 2>/dev/null || echo "")
+          if [ -n "$CULPRITS" ]; then CULPRIT_NOTE=" Running during the long stalls: $CULPRITS."; else CULPRIT_NOTE=""; fi
+          # Whether the long stalls were mostly garbage collection (a word, never a figure).
+          STALL_CAUSE=$(echo "$J" | jq -r '.stallCause // ""' 2>/dev/null || echo "")
+          case "$STALL_CAUSE" in
+            gc) CULPRIT_NOTE="${CULPRIT_NOTE} The long stalls were mostly garbage collection." ;;
+            mixed) CULPRIT_NOTE="${CULPRIT_NOTE} Some of the long stalls were mostly garbage collection." ;;
+          esac
+          # Paid calls whose handler ran past its bound: tool names only, safe
+          # characters, never a payer or an amount.
+          SLOW_SLUGS=$(echo "$J" | jq -r '(.slowPaid.slugs // []) | map(gsub("[^A-Za-z0-9._-]"; "") | .[0:60]) | map(select(length > 0)) | .[0:8] | join(", ")' 2>/dev/null || echo "")
+          if [ -n "$SLOW_SLUGS" ]; then CULPRIT_NOTE="${CULPRIT_NOTE} Slow paid calls: $SLOW_SLUGS."; fi
           echo "serving health: $STATUS ($SUMMARY)"
+          echo "stall culprits: ${CULPRITS:-none named} cause: ${STALL_CAUSE:-none}"
+          echo "slow paid calls: ${SLOW_SLUGS:-none}"
           TITLE="Serving health DEGRADED"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}). The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}).${CULPRIT_NOTE} The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag], [stall-profile] and [paid-timing] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given})." >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given}).${CULPRIT_NOTE}" >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true

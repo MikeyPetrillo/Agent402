@@ -7,18 +7,15 @@
 // route excused from the shape check can never promise a shape in the spec.
 export { SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
 import { SHAPE_HAPPY_PATH_ONLY as SKIP } from "../src/openapi-schema.js";
+// The grading itself is shared with production's answer classifier
+// (src/answer-shape.js); this file keeps the sweeps' path-keyed excuses.
+import { missingExampleKeys, emptyExampleArrays } from "../src/answer-shape.js";
 
 /** Documented top-level keys of the 200 example that the body lacks ([] when
  *  there is nothing to compare: no example, non-object body, opted-out path). */
 export function missingDocumentedKeys(path, op, body) {
   if (SKIP.has(path)) return [];
-  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
-  const example = op?.responses?.["200"]?.content?.["application/json"]?.example;
-  if (!example || typeof example !== "object" || Array.isArray(example)) return [];
-  const expected = Object.keys(example);
-  if (!expected.length) return [];
-  const actual = Object.keys(body);
-  return expected.filter((k) => !actual.includes(k));
+  return missingExampleKeys(op?.responses?.["200"]?.content?.["application/json"]?.example, body);
 }
 
 // A documented example that returns NOTHING teaches an agent the tool is broken.
@@ -84,12 +81,6 @@ export const EMPTY_ARRAY_OK = new Map([
  *  narrower one (scripts/catalog-buy.js), because the cold-boot excuses do not
  *  hold where the index and the ledger are warm. */
 export function emptyPromisedArrays(path, op, body, excuses = EMPTY_ARRAY_OK) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
-  const example = op?.responses?.["200"]?.content?.["application/json"]?.example;
-  if (!example || typeof example !== "object" || Array.isArray(example)) return [];
   const excused = new Set((excuses.get(path) || "").split(",").filter(Boolean));
-  return Object.entries(example)
-    .filter(([k, v]) => Array.isArray(v) && v.length > 0 && !excused.has(k))
-    .filter(([k]) => Array.isArray(body[k]) && body[k].length === 0)
-    .map(([k]) => k);
+  return emptyExampleArrays(op?.responses?.["200"]?.content?.["application/json"]?.example, body, excused);
 }

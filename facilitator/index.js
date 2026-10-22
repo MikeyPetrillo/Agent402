@@ -20,7 +20,7 @@ import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
 import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
 import { installSignerReread } from "./signer-reread.js";
-import { installSettleDeadline, newSettleContext, settleJob } from "./settle-deadline.js";
+import { installSettleDeadline, newSettleContext, payerOfPayload, settleJob } from "./settle-deadline.js";
 import { installPollClamp } from "./settle-poll.js";
 import { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched } from "./fee-bid.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -219,16 +219,12 @@ function safeMessage(err) {
 // nothing. Without this, src/stellar-confirm.js's settlePayerOf(res) reads
 // undefined and its whole "ask the chain before believing a failure" check
 // silently no-ops - exactly the class of quietly-dead safety net this
-// codebase has hit before (see its own header comment). verify() is
-// read-only simulation, so calling it again here has no side effects and no
-// cost on the (far more common) non-error path.
-async function bestEffortPayer(paymentPayload, paymentRequirements) {
-  try {
-    const v = await withTimeout(facilitator.verify(paymentPayload, paymentRequirements), 10_000, "payer_recovery_verify");
-    return typeof v?.payer === "string" && v.payer.trim() ? v.payer.trim() : null;
-  } catch {
-    return null;
-  }
+// codebase has hit before (see its own header comment). The payer is read
+// from the payload's envelope (payerOfPayload, the field verify reports)
+// with no RPC call, so this answer never waits on a node past the settle
+// deadline: the whole /settle answer stays inside SETTLE_TIMEOUT_MS.
+function bestEffortPayer(paymentPayload, paymentRequirements) {
+  return payerOfPayload(paymentPayload, paymentRequirements);
 }
 
 // Auth failure is an access-control rejection, not a business outcome, so it
@@ -323,20 +319,19 @@ app.post("/settle", requireAuth, async (req, res) => {
   } catch (err) {
     const ctx = settleCtxOf(err);
     const reason = err?.code === "FACILITATOR_TIMEOUT" ? "settle_timed_out" : "facilitator_dispatch_error";
-    // The underlying settle may already have submitted, or may yet submit in
-    // the background (see the comment above) - either way this response is
+    // The underlying settle may already have submitted, or may have a
+    // submission still in flight (see the comment above) - either way this response is
     // reporting failure without knowing that for certain, so the calling
     // side needs `payer` to be able to check the chain itself. Best-effort:
     // if this also fails, the response is no worse than it was before this
     // fix, just still missing payer.
-    const payer = await bestEffortPayer(paymentPayload, paymentRequirements);
+    const payer = bestEffortPayer(paymentPayload, paymentRequirements);
     // The hash of whatever was submitted before the RESPONSE rides along, so the
-    // caller's on-chain confirmation can check that exact transaction. Read
-    // after the payer await, and logged there too: the underlying settle keeps
-    // running past the bound, and on @x402 2.26 it submits inside that await
-    // often enough that a log line written before it said "nothing submitted"
-    // for a body that carried the hash.
-    const txHash = ctx?.txHash || "";
+    // caller's on-chain confirmation can check that exact transaction: the
+    // polled hash, or, for a submission still in flight at the deadline, the
+    // hash recorded as it was sent (settle-deadline.js). That one may yet
+    // land, so the caller is handed it to confirm rather than a bare failure.
+    const txHash = ctx?.txHash || ctx?.sentHash || "";
     console.error(`[/settle] dispatch error${txHash ? ` (submitted ${txHash.slice(0, 12)}... before the response)` : " (nothing submitted before the response)"}:`, err);
     res.status(200).json({ ...invalidSettle(reason, paymentRequirements.network, safeMessage(err)), payer, ...(txHash ? { transaction: txHash } : {}) });
   }

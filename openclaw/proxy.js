@@ -140,6 +140,12 @@ export function refusalAsAnthropicError(status, doc) {
 // body, any model id the gateway lists (dated Claude ids resolve to the live one).
 export const MESSAGES_UPSTREAM_PATH = "/v1/metered/messages";
 
+// Each client wire's own error shapes: mapRefusal turns an upstream refusal
+// that carries an offer into the wire's error; error(type, message) is an
+// error the proxy makes itself (a refused redirect, an unreachable upstream).
+const OPENAI_WIRE = { mapRefusal: refusalAsOpenAIError, error: (type, message) => ({ error: { message, type } }) };
+const ANTHROPIC_WIRE = { mapRefusal: refusalAsAnthropicError, error: (type, message) => ({ type: "error", error: { type, message } }) };
+
 const json = (res, status, obj, headers = {}) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
   res.end(JSON.stringify(obj));
@@ -168,8 +174,8 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
 
   // Pays and forwards one call. Streams pass through byte for byte; a refused
   // paid call's offer-carrying JSON body is answered in the client wire's own
-  // error shape (mapRefusal); every other upstream body is relayed as sent.
-  async function forward(req, res, endpoint, outbound, extraHeaders, mapRefusal) {
+  // error shape (wire.mapRefusal); every other upstream body is relayed as sent.
+  async function forward(req, res, endpoint, outbound, extraHeaders, wire) {
     const clientIdem = typeof req.headers["idempotency-key"] === "string" && /^[\w.:-]{8,128}$/.test(req.headers["idempotency-key"]) ? req.headers["idempotency-key"] : null;
     const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": `agent402-openclaw/${PKG_VERSION}`, ...extraHeaders };
     if (key) headers.authorization = `Bearer ${key}`;
@@ -180,7 +186,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
       stats.errors++;
       const loc = up.headers.get("location");
       const to = loc ? new URL(loc, `${upstream}${endpoint}`).href : null;
-      return json(res, 502, { error: { message: `refused to follow a redirect on a paid call: ${upstream}${endpoint} answered HTTP ${up.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set the upstream to ${new URL(to).origin}` : ""}.`, type: "upstream_redirect_refused" } });
+      return json(res, 502, wire.error("upstream_redirect_refused", `refused to follow a redirect on a paid call: ${upstream}${endpoint} answered HTTP ${up.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set the upstream to ${new URL(to).origin}` : ""}.`));
     }
     stats.forwarded++;
     const passthrough = {};
@@ -191,7 +197,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
       const raw = await up.text();
       let doc = null;
       try { doc = JSON.parse(raw); } catch { /* not JSON after all: relayed as sent */ }
-      const mapped = mapRefusal(up.status, doc);
+      const mapped = wire.mapRefusal(up.status, doc);
       if (mapped) {
         const { "content-type": _ct, ...rest } = passthrough;
         return json(res, up.status, mapped, rest);
@@ -207,6 +213,9 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
     return res.end();
   }
 
+  // forward() is awaited inside the try below, so a payment fetch that throws
+  // (an unreachable upstream, a refused signature) answers a 502 in the wire's
+  // own shape instead of escaping as an unhandled rejection.
   const server = createServer(async (req, res) => {
     stats.requests++;
     const url = new URL(req.url, "http://localhost");
@@ -238,7 +247,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
         }
         const outbound = { ...body };
         if (requested === AUTO_ID) delete outbound.model; else outbound.model = route.id;
-        return forward(req, res, route.endpoint, outbound, {}, refusalAsOpenAIError);
+        return await forward(req, res, route.endpoint, outbound, {}, OPENAI_WIRE);
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         const raw = await readBody(req);
@@ -253,13 +262,14 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
         const outbound = { ...body, model: body.model.trim().replace(/^agent402\//, "") };
         const extra = {};
         for (const h of ["anthropic-version", "anthropic-beta"]) { const v = req.headers[h]; if (typeof v === "string" && v.length <= 512) extra[h] = v; }
-        return forward(req, res, MESSAGES_UPSTREAM_PATH, outbound, extra, refusalAsAnthropicError);
+        return await forward(req, res, MESSAGES_UPSTREAM_PATH, outbound, extra, ANTHROPIC_WIRE);
       }
       return json(res, 404, { error: { message: `No route for ${req.method} ${url.pathname}`, type: "invalid_request_error" } });
     } catch (e) {
       stats.errors++;
       log(`[agent402-openclaw] ${req.method} ${url.pathname}: ${e?.message || e}`);
-      if (!res.headersSent) return json(res, 502, { error: { message: `Upstream error: ${String(e?.message || e).slice(0, 200)}`, type: "upstream_error" } });
+      const wire = url.pathname === "/v1/messages" ? ANTHROPIC_WIRE : OPENAI_WIRE;
+      if (!res.headersSent) return json(res, 502, wire.error("upstream_error", `Upstream error: ${String(e?.message || e).slice(0, 200)}`));
       try { res.end(); } catch { /* ignore */ }
     }
   });

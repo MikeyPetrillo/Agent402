@@ -16,7 +16,7 @@
 //      in-flight request count past a threshold sheds any request that is not
 //      protected - see isProtected - with 503 + Retry-After, before parsing.
 //
-// Protected (never shed): /health, /__operator/*, the MCP connector's
+// Protected (never shed): /health, /health/ready, /__operator/*, the MCP connector's
 // loopback replay, the Stripe webhook, every priced catalog route and the /v1
 // gateway, paid or unpaid - the unpaid 402 is the first step of a purchase.
 
@@ -71,17 +71,21 @@ export const FREE_SHED_COUNTERS = ["discoveryBudget", "discoveryInflight", "disc
 // that queued behind it are served, not refused - on 2026-09-25 a one-off
 // stall refused a /revenue refresh because the old test read only the most
 // recent tick, which is the stall itself for every request queued behind it.
-// Boot runs several blocking steps back to back (x402 init, warm starts), so
-// lag does not shed during a warm-up either. The in-flight ceiling still
-// applies from the start. A new container keeps stalling on its own boot
-// work for well past its first request (index warm-up, lazy loads), so the
-// warm-up spans that: lag shedding sooner refused ordinary page reads.
+// Boot runs several blocking steps back to back (x402 init, warm starts), and
+// a new container keeps stalling on its own boot work for well past its first
+// request (index warm-up, lazy loads): lag shedding on lag alone in that
+// window refused ordinary page reads. So during the warm-up a saturated loop
+// sheds only while requests are also backed up (WARMUP_LAG_INFLIGHT in
+// flight): boot work saturates the loop with few requests waiting, a flood
+// saturates it with many. The in-flight ceiling applies from the start.
 const STARTED_AT = Date.now();
 const LAG_WARMUP_MS = Number(process.env.SHED_LAG_WARMUP_MS ?? 60_000);
+const WARMUP_LAG_INFLIGHT = Number(process.env.SHED_WARMUP_LAG_INFLIGHT) || Math.max(1, Math.round(INFLIGHT_SHED / 4));
 const LATE_TICKS_TO_SHED = 3;
 export function shouldShedFree({ inFlight = 0, lagMs = recentLagMs(), lateTicks = lateTicksRecent(LAG_SHED_MS / 2), now = Date.now() } = {}) {
   if (String(process.env.LOAD_SHED || "").toLowerCase() === "off") return null;
-  if (now - STARTED_AT >= LAG_WARMUP_MS && lagMs >= LAG_SHED_MS && lateTicks >= LATE_TICKS_TO_SHED) return "lag";
+  const saturated = lagMs >= LAG_SHED_MS && lateTicks >= LATE_TICKS_TO_SHED;
+  if (saturated && (now - STARTED_AT >= LAG_WARMUP_MS || inFlight >= WARMUP_LAG_INFLIGHT)) return "lag";
   if (inFlight >= INFLIGHT_SHED) return "inflight";
   return null;
 }
@@ -96,7 +100,7 @@ export function noteShed(kind) {
  *  `serving` split `shed` by FREE_SHED_COUNTERS; they always sum to it. */
 export function shedStatus() {
   const free = FREE_SHED_COUNTERS.reduce((n, k) => n + counters[k], 0);
-  return { ...counters, free, serving: counters.shed - free, lagShedMs: LAG_SHED_MS, inFlightShed: INFLIGHT_SHED };
+  return { ...counters, free, serving: counters.shed - free, lagShedMs: LAG_SHED_MS, inFlightShed: INFLIGHT_SHED, warmupLagInFlight: WARMUP_LAG_INFLIGHT };
 }
 
 /** The serving-health words for shedding. `shedding` (degrades) when the

@@ -99,7 +99,10 @@ export function requestTimingMiddleware(keyOf, isPaid = () => false) {
     let paid = false;
     try { paid = !!isPaid(req); } catch { /* keep false */ }
     const end = () => {
+      const row = inflight.get(id);
       if (!inflight.delete(id)) return;
+      ended.push({ key: row.key, at: row.at, endedAt: Date.now() });
+      if (ended.length > ENDED_RING) ended.shift();
       recordTiming(key, performance.now() - t0, store.upstreamMs, reserved);
       noteResponse(res.headersSent ? res.statusCode : 499, paid, Date.now(), !!res.locals?.shed);
     };
@@ -137,7 +140,22 @@ export function oldestInFlight(n = 3) {
   return [...inflight.values()].sort((a, b) => a.at - b.at).slice(0, n).map((x) => `${x.key} ${now - x.at}ms`);
 }
 
+// Requests that finished recently. A handler that blocks the loop in its last
+// synchronous stretch has already answered by the time the lag timer fires, so
+// a stall must also name the requests that ENDED inside its window.
+const ENDED_RING = 64;
+const ended = []; // [{ key, at, endedAt }], oldest first
+
+/** The stall log's request list: the oldest in flight, then the longest that
+ *  ended inside [fromMs, now], marked "done" with their total duration. */
+export function requestsDuring(fromMs, n = 3) {
+  const live = oldestInFlight(n);
+  if (!Number.isFinite(fromMs)) return live;
+  const done = ended.filter((x) => x.endedAt >= fromMs).sort((a, b) => (b.endedAt - b.at) - (a.endedAt - a.at)).slice(0, n).map((x) => `${x.key} ${x.endedAt - x.at}ms done`);
+  return [...live, ...done];
+}
+
 export function inFlightCount() { return inflight.size; }
 
 /** Test hook. */
-export function __resetTimingForTest() { routes.clear(); inflight.clear(); for (const b of minuteBuckets) b.at = 0; }
+export function __resetTimingForTest() { routes.clear(); inflight.clear(); ended.length = 0; for (const b of minuteBuckets) b.at = 0; }

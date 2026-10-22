@@ -89,7 +89,7 @@ process.env.BACKUP_DATA_DIR = dataDir;
 process.env.BACKUP_KEEP_DAYS = "14";
 
 process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(32); // 32-byte test key built at runtime (no key-shaped literal in the tree for the secret scanner)
-const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, decryptBackupBuffer, parseEncKey, retryDelayMs, isBucketPushback } = await import("../src/backup.js");
+const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, adoptNewerStatus, decryptBackupBuffer, parseEncKey, retryDelayMs, isBucketPushback } = await import("../src/backup.js");
 ok(backupAlarmStatus() === "stale", `configured with no successful run yet: the alarm word is stale (${backupAlarmStatus()})`);
 
 // --- plan ------------------------------------------------------------------
@@ -233,6 +233,16 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   objects.delete("backups/2026-08-01/huge.bin.gz");
   sizeOverride.clear();
   delete process.env.BACKUP_MAX_TOTAL_GB;
+}
+
+// --- another replica's later run is adopted; an older stored status is not ---
+{
+  ok(backupAlarmStatus() === "failed", "this process last saw a failed run");
+  const mine = backupStatus().lastAttempt;
+  const older = { ...backupStatus(), lastAttempt: new Date(Date.parse(mine) - 60_000).toISOString(), lastResult: "ok", lastError: null, lastSuccess: new Date().toISOString() };
+  ok(adoptNewerStatus(older) === false && backupAlarmStatus() === "failed", "a stored status older than this process's run is not adopted");
+  const later = { ...backupStatus(), lastAttempt: new Date(Date.parse(mine) + 60_000).toISOString(), lastResult: "ok", lastError: null, lastSuccess: new Date(Date.parse(mine) + 90_000).toISOString(), lastUploaded: [{ name: "x" }] };
+  ok(adoptNewerStatus(later) === true && backupAlarmStatus() === "ok" && backupStatus().lastError === null, `another replica's later successful run is adopted, so every replica reads ok (${backupAlarmStatus()})`);
 }
 
 // --- not-configured mode: zero network, plan still works -------------------

@@ -96,7 +96,7 @@ const CASES = [
   { slug: "meta", method: "GET", path: "/api/meta", query: { url: "https://github.com" }, check: (b) => !!b.title, show: (b) => b.title },
   { slug: "render", method: "POST", path: "/api/render", body: { url: "https://react.dev" }, check: (b) => b.rendered === true && b.wordCount > 50, show: (b) => `rendered "${b.title}" (${b.wordCount} words)` },
   { slug: "screenshot", method: "GET", path: "/api/screenshot", query: { url: "https://example.com" }, binary: true, check: PNG_MAGIC, show: (b) => `${b.byteLength} bytes, PNG` },
-  { slug: "pdf", method: "POST", path: "/api/pdf", body: { url: "https://arxiv.org/pdf/1706.03762" }, check: (b) => b.pages === 15, show: (b) => `${b.pages} pages, ${b.wordCount} words` },
+  { slug: "pdf", method: "POST", path: "/api/pdf", body: { url: "https://agent402.tools/fixtures/sample-report.pdf" }, check: (b) => b.pages === 3 && b.wordCount > 100, show: (b) => `${b.pages} pages, ${b.wordCount} words` },
   // --- Agent memory (2) ---
   { slug: "memory-write", method: "POST", path: "/api/memory", body: { key: "e2e", value: { stamp } }, check: (b) => b.key === "e2e", show: () => `stored "e2e"` },
   { slug: "memory-read", method: "GET", path: "/api/memory", query: { key: "e2e" }, check: (b) => b.value?.stamp === stamp, show: () => "wallet-keyed round-trip ✓" },
@@ -158,9 +158,9 @@ const CASES = [
   { slug: "card-validate", method: "POST", path: "/api/card-validate", body: { number: "4242 4242 4242 4242" }, check: (b) => b.valid === true && b.brand === "visa", show: (b) => b.brand },
   // --- New money-makers (5) ---
   { slug: "search", method: "GET", path: "/api/search", query: { q: "x402 payment protocol", count: "3" }, check: (b) => b.count >= 1 && !!b.results[0].url, show: (b) => b.results[0].url },
-  { slug: "pdf-to-markdown", method: "POST", path: "/api/pdf-to-markdown", body: { url: "https://arxiv.org/pdf/1706.03762" }, check: (b) => b.pages === 15 && b.markdown.length > 1000, show: (b) => `${b.pages}p → ${b.markdown.length} chars of markdown` },
-  { slug: "media-info", method: "POST", path: "/api/media-info", body: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }, check: (b) => b.durationSec > 1 && b.streams?.[0]?.type === "audio", show: (b) => `${b.formatName} ${b.durationSec}s` },
-  { slug: "audio-convert", method: "POST", path: "/api/audio-convert", body: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }, check: (b) => b.bytes > 1000 && !!b.mp3Base64, show: (b) => `mp3 ${b.bytes} bytes` },
+  { slug: "pdf-to-markdown", method: "POST", path: "/api/pdf-to-markdown", body: { url: "https://agent402.tools/fixtures/sample-report.pdf" }, check: (b) => b.pages === 3 && b.markdown.length > 1000, show: (b) => `${b.pages}p → ${b.markdown.length} chars of markdown` },
+  { slug: "media-info", method: "POST", path: "/api/media-info", body: { url: "https://agent402.tools/fixtures/sample-audio.wav" }, check: (b) => b.durationSec > 1 && b.streams?.[0]?.type === "audio", show: (b) => `${b.formatName} ${b.durationSec}s` },
+  { slug: "audio-convert", method: "POST", path: "/api/audio-convert", body: { url: "https://agent402.tools/fixtures/sample-audio.wav" }, check: (b) => b.bytes > 1000 && !!b.mp3Base64, show: (b) => `mp3 ${b.bytes} bytes` },
   // --- Premium skill packs (must score ALL steps) ---
   { slug: "skill/domain-intel", method: "POST", path: "/api/skill/domain-intel", body: { domain: "stripe.com" }, check: (b) => b.pack === "domain-intel" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
   { slug: "skill/company-dossier", method: "POST", path: "/api/skill/company-dossier", body: { ticker: "AAPL" }, check: (b) => b.pack === "company-dossier" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },

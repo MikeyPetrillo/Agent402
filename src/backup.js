@@ -360,6 +360,33 @@ function loadStatus() {
   // (merged over the stored one) once the row arrives.
   if (d.backend === "pg") statusReady = trackStoreReady(d.load(null, { onLoad: (saved) => { absorbStatus(saved); if (statusDirty) { statusDirty = false; saveStatus(); } } }).then(() => {}, () => {}));
 }
+// Another replica's run: each process reads the stored status once at boot, so
+// a replica that did not run the latest backup kept the earlier result and the
+// alarm word differed by which replica answered. A read at most every
+// STATUS_REFRESH_MS adopts the stored status when it records a later attempt.
+const STATUS_REFRESH_MS = 60_000;
+let statusRefreshedAt = 0;
+let statusRefreshing = null;
+export function adoptNewerStatus(saved) {
+  if (!saved || typeof saved !== "object" || running) return false;
+  const theirs = Date.parse(saved.lastAttempt || "");
+  const ours = Date.parse(status.lastAttempt || "");
+  if (!Number.isFinite(theirs) || (Number.isFinite(ours) && theirs <= ours)) return false;
+  for (const k of Object.keys(status)) if (k in saved) status[k] = saved[k];
+  if (saved.encrypted !== undefined) status.encrypted = saved.encrypted;
+  return true;
+}
+function refreshStatus(now = Date.now()) {
+  const d = statusStore();
+  if (d.backend !== "pg" || statusRefreshing || now - statusRefreshedAt < STATUS_REFRESH_MS) return statusRefreshing;
+  statusRefreshedAt = now;
+  statusRefreshing = d.read({ quiet: true })
+    .then((r) => { if (r?.ok && r.exists) adoptNewerStatus(r.body); }, () => {})
+    .finally(() => { statusRefreshing = null; });
+  return statusRefreshing;
+}
+/** Re-read the stored status now (another replica may have run since boot). */
+export const backupStatusRefresh = () => { loadStatus(); statusRefreshedAt = 0; return refreshStatus() || Promise.resolve(); };
 /** True while the database copy of the status has not been read (the word is unknown, not stale). */
 function statusUnread() {
   const d = statusStore();
@@ -372,7 +399,7 @@ function saveStatus() {
   if (statusUnread()) { statusDirty = true; return; } // saved once the stored status is read
   void statusStore().save(status); // best-effort; a failed save is re-sent by the document
 }
-export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
+export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...status, configured: backupConfigured() }; };
 
 // The backup alarm as one word, never a number (/api/gateway-status; the
 // heartbeat pages on held / failed / stale):
@@ -387,6 +414,7 @@ export const backupStatus = () => { loadStatus(); return { ...status, configured
 export function backupAlarmStatus(now = Date.now()) {
   if (!backupConfigured()) return "off";
   loadStatus();
+  refreshStatus(now);
   if (statusUnread() && !status.lastAttempt) return "unknown";
   const result = status.lastResult || (status.lastAttempt ? (status.lastError ? "failed" : "ok") : null);
   if (result === "failed" || result === "held") return result;
@@ -740,7 +768,7 @@ export function startBackupScheduler({ log = console.log } = {}) {
     lastDay = day;
     await runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
   });
-  const timer = setInterval(() => { nightly().catch(() => {}); }, 10 * 60 * 1000);
+  const timer = setInterval(() => { refreshStatus(); nightly().catch(() => {}); }, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
   log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;

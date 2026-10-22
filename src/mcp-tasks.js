@@ -91,7 +91,18 @@ export const newTaskId = () => randomBytes(TASK_ID_BYTES).toString("hex");
 // whose run died with that process - pid alone can be recycled across restarts.
 const BOOT_ID = randomBytes(8).toString("hex");
 
-const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
+// The directory the file-backed stores live under: AGENT402_TASK_DATA_DIR when
+// set, else the volume (/data), else /tmp. A file store's boot sweep resolves
+// every working record another boot owns as failed (its run died with that
+// process), so two live processes must never share one: each container has its
+// own /tmp, and a local process that runs beside others (a test server) sets
+// its own directory here. The state-database backend is unaffected: it keys
+// orphans on renewed boot leases, not on the directory.
+const DATA_ROOT = () => {
+  const own = String(process.env.AGENT402_TASK_DATA_DIR || "").trim();
+  if (own) return own;
+  return existsSync("/data") ? "/data" : "/tmp";
+};
 const DEFAULT_DIR = () => join(DATA_ROOT(), "mcp-tasks");
 /** A sibling store directory on the same volume (the HTTP async jobs use "async-jobs"). */
 export const taskDataDir = (name) => join(DATA_ROOT(), name);

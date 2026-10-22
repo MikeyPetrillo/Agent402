@@ -102,6 +102,33 @@ export function serialQueue() {
 }
 
 /**
+ * One mirror pull in flight per process. `run()` is the timer's call: it
+ * starts a pull, or returns null while one is running. `fresh()` is for a
+ * caller that needs rows written before it asked: with nothing running it
+ * starts a pull; with one running (it may have read the table before the
+ * caller's row landed) it waits for that pull, then joins the one follow-up
+ * pull every concurrent waiter shares. Nothing here adds a timeout; each
+ * query is bounded by the pool's own timeouts.
+ */
+export function singleFlight(fn) {
+  let inflight = null, followUp = null;
+  const start = () => {
+    const p = Promise.resolve().then(fn).finally(() => { if (inflight === p) inflight = null; });
+    inflight = p;
+    return p;
+  };
+  return {
+    run: () => (inflight ? null : start()),
+    fresh() {
+      if (!inflight) return start();
+      if (!followUp) followUp = inflight.then(() => {}, () => {}).then(() => { followUp = null; return inflight || start(); });
+      return followUp;
+    },
+    busy: () => !!inflight,
+  };
+}
+
+/**
  * Multi-row INSERT in batches. `columns` are the Postgres column names (an
  * identifier each); each row is an object keyed by them. `conflict` is the
  * ON CONFLICT clause (the import uses `ON CONFLICT DO NOTHING`, so two

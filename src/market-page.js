@@ -466,7 +466,7 @@ ${rowControls ? `  <script src="/js/market-filter-bar.js"></script>` : ""}`;
 }
 
   // Dispatch badge, rendered ONLY when the handler labelled the seller
-// (src/dispatch-eligibility.js via server.js withDispatchSnapshot); an
+// (src/dispatch-eligibility.js via server.js labelledSnapshotAsync); an
 // unlabelled snapshot renders no badge rather than a guessed one.
 // On a chain the router spends on, the badge reads that chain's own verdict.
 // Anywhere else (a chain it cannot pay on, or the all-chains view) an
@@ -1106,8 +1106,36 @@ function economyStripHtml(economySnap) {
 // rationale + honest-disclosure pattern as x402-index.js's INDEX_ROW_CAP.
 const ALL_ROW_CAP = 100;
 
-function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = false, wallet, host = null, routerChains = null, chainsOffered = null, tempo = false } = {}) {
+// The all-chains page walks every seller several times (the leaderboard join,
+// the sort, the roster, one seller count per chain), and ?all=1 renders a row
+// for each. It is written as steps: marketPage runs them back to back, and
+// marketPageAsync runs them across event-loop turns of at most PAGE_SLICE_MS,
+// so a rebuild never holds the loop for the whole page. One generator, so the
+// two runs cannot render different bytes.
+const PAGE_SLICE_MS = 8;
+const PAGE_YIELD_ROWS = 250;
+function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
+async function runSlicedAsync(gen) {
+  let until = performance.now() + PAGE_SLICE_MS;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await new Promise((ok) => setImmediate(ok)); until = performance.now() + PAGE_SLICE_MS; }
+    r = gen.next();
+  }
+  return r.value;
+}
+/** marketPage across event-loop turns (same bytes). The all-chains view is
+ *  sliced; a chain view renders in one call, as marketPage does. */
+export async function marketPageAsync(chainKey, baseUrl, opts = {}) {
+  if (chainKey == null) return runSlicedAsync(marketPageAllSteps(baseUrl, opts));
+  return marketPage(chainKey, baseUrl, opts);
+}
+function marketPageAll(baseUrl, opts) { return runSteps(marketPageAllSteps(baseUrl, opts)); }
+/** Test hook: the all-chains page's steps, to time each one. */
+export function _marketPageAllStepsForTest(baseUrl, opts) { return marketPageAllSteps(baseUrl, opts); }
+function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, all = false, wallet, host = null, routerChains = null, chainsOffered = null, tempo = false } = {}) {
   const sellers = marketSellersAll(snapshot);
+  yield;
   const hostOf = (u) => { try { return new URL(u).host; } catch { return ""; } };
 
   // Leaderboard join, same shape as marketPage's statByWallet: gid = the
@@ -1125,7 +1153,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // THIS HOST joins by the route-supplied wallet: the same on-chain reading as
   // every other row, which for our wallet includes our own canary and volume
   // runs. The row is pinned, never ranked, and its figure says so (ownTx).
-  const sellerStat = (s) => {
+  const statOfSeller = (s) => {
     if (!s) return null;
     if (s.local) return wallet ? statByWallet.get(String(wallet).toLowerCase()) || null : null;
     for (const addr of Object.values(s.payToByNetwork || {})) {
@@ -1134,6 +1162,14 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     }
     return null;
   };
+  // Each seller's stat is read once (in slices), not once per comparison of
+  // the sort below; the value is the same pure join either way.
+  const statMemo = new Map();
+  for (let i = 0; i < sellers.length; i++) {
+    statMemo.set(sellers[i], statOfSeller(sellers[i]));
+    if (i % PAGE_YIELD_ROWS === PAGE_YIELD_ROWS - 1) yield;
+  }
+  const sellerStat = (s) => (statMemo.has(s) ? statMemo.get(s) : statOfSeller(s));
   const txSuffix = (s) => { const st = sellerStat(s); return st && st.calls > 0 ? ` &middot; ${Number(st.calls).toLocaleString("en-US")} tx${s.local ? OWN_RUNS_TAG : ""}` : ""; };
   // "42 tools · 21 paid" when the seller's document distinguishes paid from
   // free: total surface stays honest (x402scan parity) without letting a
@@ -1149,6 +1185,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     if (!!a.routable !== !!b.routable) return a.routable ? -1 : 1;
     return (b.toolCount || 0) - (a.toolCount || 0);
   });
+  yield;
 
   // Collapse hosts settling to the SAME leaderboard group into one row (see
   // marketPage's identical rationale) so a group's tx total isn't repeated.
@@ -1162,7 +1199,9 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const extraByGid = new Map();
   const primaryByGid = new Map();
   const rosterSellers = [];
+  let walked = 0;
   for (const s of sellers) {
+    if (++walked % PAGE_YIELD_ROWS === 0) yield;
     const gid = s.local ? null : sellerStat(s)?.gid;
     if (!gid) { rosterSellers.push(s); continue; }
     const cur = primaryByGid.get(gid);
@@ -1224,10 +1263,11 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // this row's primary link is the seller's OWN site (safeHref(s.homepage)),
   // not an internal activity view, so only the name text is a link, same
   // interaction model the old table had.
-  const rows = visibleSellers.map((s) => {
+  const rowParts = [];
+  for (const s of visibleSellers) {
     const health = s.local ? "live" : (s.routable ? "healthy" : "unreachable");
     const good = s.local || s.routable;
-    return `
+    rowParts.push(`
     <div${rowData(s)} class="mlr-row ml-roster-compact"${s.local ? ' style="background:var(--card-zebra);"' : ""}>
       <div>
         <a href="${safeHref(s.homepage)}" rel="noopener"${apiOriginTitle(s)} style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(s.displayName)}</a>${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}
@@ -1236,8 +1276,11 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);">${chainCell(s)}</span>
       <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
       <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s, null)}
-    </div>`;
-  }).join("");
+    </div>`);
+    if (rowParts.length % PAGE_YIELD_ROWS === 0) yield;
+  }
+  const rows = rowParts.join("");
+  yield;
 
   const honesty = rosterSellers.length === 1 && rosterSellers[0]?.local
     ? `<p style="color:var(--muted);font-size:var(--fs-md);">1 seller live - discovery is open, and external sellers are added automatically the moment their x402 challenges are crawled, on any supported chain.</p>`
@@ -1265,10 +1308,11 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // origins indexed" and "tool listings" are one figure on every surface.
   const standingCounts = standingCountsExcludingHost(snapshot);
   const totalToolListings = standingCounts.listings;
+  const sellersListed = yield* marketOperatorCountSteps(null, snapshot, leaderboardSnap);
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${sellersListed.toLocaleString("en-US")}</div><div class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin:2px 0 0;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">from other sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:var(--fs-2xl);font-weight:800;">${Number.isFinite(Number(chainsOffered)) && chainsOffered !== null ? Number(chainsOffered) : Object.keys(CHAIN_PAGES).length}</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);margin-top:2px;">x402${tempo ? " + Tempo" : ""}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);letter-spacing:.06em;">OUR TOOLS</div><div style="font-size:var(--fs-2xl);font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
@@ -1277,7 +1321,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // "Sellers on Base" for the hero subhead - live, not the design's frozen
   // snapshot figure (which would be wrong the moment it shipped and only
   // get worse from there).
-  const baseSellerCount = marketOperatorCount("base", { sellers }, leaderboardSnap);
+  const baseSellerCount = yield* marketOperatorCountSteps("base", { sellers }, leaderboardSnap);
 
   const headerHtml = `
   <div>
@@ -1320,16 +1364,20 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       <span style="display:block;margin-bottom:12px;font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);">Every rail</span>
       <span style="display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);">how to pay on each chain &rarr;</span>
     </a>` : "");
-  const chainGridHtml = CHAIN_ORDER.map(([slug, name]) => {
+  const chainCards = [];
+  for (const [slug, name] of CHAIN_ORDER) {
+    yield;
     const chainSellers = marketSellers(slug, { sellers });
-    const sellerCount = marketOperatorCount(slug, { sellers }, leaderboardSnap);
+    const sellerCount = yield* marketOperatorCountSteps(slug, { sellers }, leaderboardSnap);
     const toolCount = chainSellers.reduce((sum, s) => sum + (Number(s.toolCount) || 0), 0);
     const asset = CHAIN_PAGES[slug]?.asset || "USDC";
-    return `<a href="/${slug}" title="${esc(name)} x402 marketplace" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
+    chainCards.push(`<a href="/${slug}" title="${esc(name)} x402 marketplace" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
       <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
       <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:var(--fs-sm);flex-wrap:wrap;"><span style="color:var(--ok);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">tool${toolCount === 1 ? "" : "s"}</span></span>
-    </a>`;
-  }).join("") + chainGridFiller(CHAIN_ORDER.length);
+    </a>`);
+  }
+  const chainGridHtml = chainCards.join("") + chainGridFiller(CHAIN_ORDER.length);
+  yield;
 
   const chainGridSection = `
   <h2 style="font-size:var(--fs-xl);font-weight:700;margin:48px 0 4px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Markets by chain</h2>
@@ -1437,6 +1485,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     },
   ];
 
+  yield;
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
   <section>${headerHtml}</section>
@@ -1478,8 +1527,12 @@ ${ledgerFooterCompact()}`;
  *  leaderboard measures Base wallets. Every other chain page lists one row
  *  per origin, and this count is that row count. `chainKey` null = the
  *  all-chains view. */
-export function marketOperatorCount(chainKey, snapshot, leaderboardSnap) {
+export function marketOperatorCount(chainKey, snapshot, leaderboardSnap) { return runSteps(marketOperatorCountSteps(chainKey, snapshot, leaderboardSnap)); }
+// The count as steps, for the sliced all-chains page (one pass, yielding
+// every PAGE_YIELD_ROWS sellers).
+function* marketOperatorCountSteps(chainKey, snapshot, leaderboardSnap) {
   const sellers = (chainKey ? marketSellers(chainKey, snapshot) : marketSellersAll(snapshot)).filter((s) => !s.local);
+  yield;
   const merges = !chainKey || chainKey === LEADERBOARD_CHAIN;
   if (!merges) return sellers.length;
   const gidByWallet = new Map();
@@ -1496,7 +1549,9 @@ export function marketOperatorCount(chainKey, snapshot, leaderboardSnap) {
   };
   const seen = new Set();
   let count = 0;
+  let walked = 0;
   for (const s of sellers) {
+    if (++walked % PAGE_YIELD_ROWS === 0) yield;
     const gid = gidOf(s);
     if (!gid) { count++; continue; }
     if (!seen.has(gid)) { seen.add(gid); count++; }

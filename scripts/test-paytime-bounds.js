@@ -661,7 +661,9 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // key prefix, so state the unit sections above wrote (and a fire-and-forget
 // write that lands after their reset) is not this server's.
 proc = spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
-  env: { ...process.env, SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  // The slow-route sync window (src/slow-sync-window.js) is off: this suite
+  // drives slow routes synchronously; test-slow-sync-window.js covers the window.
+  env: { ...process.env, SLOW_SYNC_WINDOW_SECONDS: "off", SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",

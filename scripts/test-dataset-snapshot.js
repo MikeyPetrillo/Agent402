@@ -17,7 +17,7 @@ import { gunzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import {
   buildTables, serializeTable, manifestFor, columnFill,
-  runDatasetSnapshot, EXCLUDED_THIRD_PARTY, UNFILLABLE_HERE, DATASET_PREFIX, DATASET_VERSION, PRICE_OUTLIER_USD } from "../src/dataset-snapshot.js";
+  runDatasetSnapshot, datasetRecorded, EXCLUDED_THIRD_PARTY, UNFILLABLE_HERE, DATASET_PREFIX, DATASET_VERSION, PRICE_OUTLIER_USD } from "../src/dataset-snapshot.js";
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -230,6 +230,22 @@ const exists = async (key) => bucket.has(key);
   // Serialization bound: an empty table is valid and tiny, not a crash.
   const body = serializeTable([]);
   eq(gunzipSync(body).toString("utf8"), "", "an empty table serializes to an empty document");
+}
+
+// --- recorded days: a rejected credential is an error, not an empty record ---
+{
+  const now = Date.parse("2026-09-12T12:00:00Z");
+  const key = `${DATASET_PREFIX}/dt=2026-09-11/manifest.json`;
+  const manifestBody = Buffer.from(JSON.stringify({ day: "2026-09-11", writtenAt: "2026-09-11T05:00:00Z", tables: { routes: { rows: 1, columnFill: { route: 1 } } } }));
+  const denied = async () => { throw new Error("list failed: HTTP 403 SignatureDoesNotMatch"); };
+  const r1 = await datasetRecorded({ now, exists: denied, get: async () => null });
+  ok(r1.error && /403/.test(r1.error) && r1.newest === null, `a rejected credential reads as an error, not "no day recorded" (${JSON.stringify(r1)})`);
+  const r2 = await datasetRecorded({ now, exists: async () => false, get: async () => null });
+  ok(!r2.error && r2.newest === null && r2.days.length === 0, "an empty bucket reads as no day recorded, with no error");
+  const r3 = await datasetRecorded({ now, exists: async (k) => k === key, get: async (k) => (k === key ? manifestBody : null) });
+  ok(!r3.error && r3.newest?.day === "2026-09-11" && r3.days.length === 1, "a recorded day is found by listing, then read");
+  const r4 = await datasetRecorded({ now, exists: async (k) => k === key, get: async () => null });
+  ok(r4.error && /could not be read/.test(r4.error), "a listed manifest that will not read is an error");
 }
 
 // --- pinned from source ------------------------------------------------------

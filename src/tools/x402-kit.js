@@ -279,7 +279,7 @@ export const X402_TOOLS = [
         const selfIdx = ranked.findIndex((r) => r.isSelf);
         if (selfIdx >= 0) topProviders.push({ rank: selfIdx + 1, outsideTop: true, ...ranked[selfIdx] });
       }
-      const market = ecosystemMarket({ limit: 12 });
+      const market = await ecosystemMarket({ limit: 12 });
       return {
         asOf: lb?.asOf || null,
         window: lb?.windowLabel || "last 24h",

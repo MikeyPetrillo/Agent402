@@ -47,7 +47,7 @@ import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -228,7 +228,6 @@ const saleRowOf = (r) => cleanRow({
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
 let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
 let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
-let refreshing = false;
 const warnOnce = makeWarnOnce("sales-ledger");
 const enqueue = serialQueue();
 function applySale(r) { mirrorSale.run(saleRowOf(r)); }
@@ -425,20 +424,19 @@ async function pullAll() {
  * the newest stamp seen, so rows sharing one stamp range (an import of 55k
  * sales) are not pulled again on every refresh. Returns the rows pulled.
  */
-async function refresh() {
-  if (refreshing) return 0;
-  refreshing = true;
-  try {
-    const now = await pgNowMs(stateQuery);
-    const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
-    if (s.rows.length) applySales(s.rows);
-    const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
-    if (f.rows.length) applyFeedbacks(f.rows);
-    writer.answered();
-    watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
-    return s.rows.length + f.rows.length;
-  } finally { refreshing = false; }
+async function pullNewer() {
+  const now = await pgNowMs(stateQuery);
+  const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
+  if (s.rows.length) applySales(s.rows);
+  const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
+  if (f.rows.length) applyFeedbacks(f.rows);
+  writer.answered();
+  watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
+  return s.rows.length + f.rows.length;
 }
+// One pull in flight per process; the timer skips while one runs.
+const puller = singleFlight(pullNewer);
+function refresh() { return puller.run() || Promise.resolve(0); }
 async function firstLoad() {
   await withSchemaLock((c) => c.query(PG_DDL())); // two boots at once never race on the catalog
   await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
@@ -602,7 +600,9 @@ export function saleByTx(tx) {
 export async function saleByTxFresh(tx, { force = false } = {}) {
   const hit = saleByTx(tx);
   if ((hit && !force) || !USE_PG) return hit;
-  try { await readyP(); await refresh(); } catch { /* the database is unreachable: answer from the mirror */ }
+  // puller.fresh(): a pull already running may have read the table before
+  // this sale landed, so wait for it and share one follow-up pull.
+  try { await readyP(); await puller.fresh(); } catch { /* the database is unreachable: answer from the mirror */ }
   return saleByTx(tx);
 }
 
@@ -815,11 +815,15 @@ const qExternalByNetworkPayers = db.prepare(`
   SELECT DISTINCT network, payer
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function externalByNetwork({ days = 30 } = {}) {
+export function externalByNetwork({ days = 30 } = {}) { return runSteps(externalByNetworkSteps({ days })); }
+/** externalByNetwork, one query per event-loop turn (same answer). */
+export function externalByNetworkAsync({ days = 30 } = {}) { return runStepsAsync(externalByNetworkSteps({ days })); }
+function* externalByNetworkSteps({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const out = {};
   const row = (key) => out[key] || (out[key] = { settlements: 0, buyers: 0 });
   for (const r of qExternalByNetwork.all(since)) row(canonRail(r.network)).settlements += r.n;
+  yield;
   const payersByRail = new Map();
   for (const r of qExternalByNetworkPayers.all(since)) {
     const key = canonRail(r.network);
@@ -1067,6 +1071,23 @@ export function externalSlugWindow(sinceMs, untilMs) {
   return qExtSlugWindow.all(sinceMs, untilMs);
 }
 
+/**
+ * Per slug over [sinceMs, untilMs): external sales that recorded a response
+ * digest, how many distinct digests they returned and how many distinct
+ * payers bought. Counts only (no digest, no payer leaves this function); the
+ * operator's identical-answer read (src/tool-failure-monitor.js) flags a
+ * live-data slug whose many sales all returned one body.
+ */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+let qAnswerDigests = null;
+export function answerDigestWindow(sinceMs, untilMs = Date.now()) {
+  qAnswerDigests ||= db.prepare(`
+    SELECT slug, COUNT(*) AS sales, COUNT(DISTINCT response_sha256) AS distinctAnswers, COUNT(DISTINCT payer) AS payers
+    FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND response_sha256 IS NOT NULL AND ts >= ? AND ts < ?
+    GROUP BY slug`);
+  return qAnswerDigests.all(Number(sinceMs) || 0, Number(untilMs) || Date.now());
+}
+
 /** When the ledger recorded its first row (unix ms), or null when empty. */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function firstRecordedTs() {
@@ -1307,7 +1328,20 @@ export function externalDailyRevenue({ days = 60 } = {}) {
 }
 
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function salesSummary({ days = 30, detailed = false } = {}) {
+// Each summary is a few full passes over the ledger window. The steps below
+// run them one per yield, so the sync export runs them back to back and the
+// Async export puts each on its own event-loop turn: a reader that builds a
+// shared figure in the background never holds the loop for all of them.
+function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
+async function runStepsAsync(gen) {
+  let r = gen.next();
+  while (!r.done) { await new Promise((ok) => setImmediate(ok)); r = gen.next(); }
+  return r.value;
+}
+export function salesSummary({ days = 30, detailed = false } = {}) { return runSteps(salesSummarySteps({ days, detailed })); }
+/** salesSummary, one query per event-loop turn (same answer). */
+export function salesSummaryAsync({ days = 30, detailed = false } = {}) { return runStepsAsync(salesSummarySteps({ days, detailed })); }
+function* salesSummarySteps({ days = 30, detailed = false } = {}) {
   const since = Date.now() - days * 86_400_000;
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
   for (const r of qTotals.all(since)) {
@@ -1325,18 +1359,19 @@ export function salesSummary({ days = 30, detailed = false } = {}) {
   }
   totals.external.revenueUsd = +totals.external.revenueUsd.toFixed(4);
   totals.internal.revenueUsd = +totals.internal.revenueUsd.toFixed(4);
-  const byPayer = qExtByPayer.all(since);
-  const base = {
-    days,
-    persistent: salesPersistent,
-    recordingSince: qFirstTs.get()?.ts ?? null,
-    totals,
-    // Counts, never rosters or rankings: enough to show the market is real
-    // without naming a single buyer or ranking a single tool.
-    distinctExternalBuyers: qExtDistinctPayers.get(since)?.n ?? 0,
-    distinctToolsSoldExternal: qExtDistinctSlugs.get(since)?.n ?? 0,
-  };
+  yield;
+  const recordingSince = qFirstTs.get()?.ts ?? null;
+  // Counts, never rosters or rankings: enough to show the market is real
+  // without naming a single buyer or ranking a single tool.
+  const distinctExternalBuyers = qExtDistinctPayers.get(since)?.n ?? 0;
+  yield;
+  const distinctToolsSoldExternal = qExtDistinctSlugs.get(since)?.n ?? 0;
+  const base = { days, persistent: salesPersistent, recordingSince, totals, distinctExternalBuyers, distinctToolsSoldExternal };
   if (!detailed) return base;
+  // The payer ranking is read only for the detailed view that shows it.
+  yield;
+  const byPayer = qExtByPayer.all(since);
+  yield;
   return {
     ...base,
     // The weekly number: external buyers on the metered route (counts only).

@@ -3191,7 +3191,13 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   const declaredRoutes = new Set();
   for (const t of byKey.values()) if (!t.methodInferred && t.route) declaredRoutes.add(String(t.route));
   for (const [k, t] of [...byKey.entries()]) {
-    if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) byKey.delete(k);
+    if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) {
+      // The dropped row's probe example moves to the declared rows on its
+      // route that publish none, so the example survives the key change.
+      const ex = exampleByKey && exampleByKey.get(k);
+      if (ex) for (const [dk, d] of byKey) if (!d.methodInferred && String(d.route) === String(t.route) && !exampleByKey.has(dk)) exampleByKey.set(dk, ex);
+      byKey.delete(k);
+    }
   }
   if (exampleByKey) for (const [k, t] of byKey) { const ex = exampleByKey.get(k); if (ex) exampleOf.set(t, ex); }
   return [...byKey.values()];
@@ -5815,7 +5821,7 @@ const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
 // The full tool contract + payees of one entry, memoized by identity. Built
-// here rather than inside computeAliasOriginsBase so the route index can
+// here rather than inside computeAliasOriginsBaseSteps so the route index can
 // prime it in the background as each re-crawled entry lands.
 function exactServiceKeyOf(v) {
   if (!v || typeof v !== "object") return null;
@@ -5844,7 +5850,13 @@ function exactServiceKeyOf(v) {
 // depend on the successions map as well and are folded in fresh on each call.
 let aliasBaseMemo = { version: -1, base: null, at: 0 };
 const ALIAS_CRAWL_STALE_MS = 60_000;
-export function computeAliasOrigins(cacheMap) {
+export function computeAliasOrigins(cacheMap) { return runSteps(computeAliasOriginsSteps(cacheMap)); }
+// The same set as steps (the snapshot builder runs them across turns): the
+// walks read the entries as they stood when the steps began, and the memo is
+// stamped with that version, so a cache that moved meanwhile is walked again
+// by the next reader.
+const ALIAS_YIELD_ENTRIES = 500;
+function* computeAliasOriginsSteps(cacheMap) {
   let base;
   // While a crawl runs, every cache.set bumps the version and would force a
   // full walk per reader; the last set (at most ALIAS_CRAWL_STALE_MS old) is
@@ -5852,8 +5864,9 @@ export function computeAliasOrigins(cacheMap) {
   const fresh = aliasBaseMemo.base && cacheMap === cache && (aliasBaseMemo.version === cacheVersion || (crawlInFlight && Date.now() - aliasBaseMemo.at < ALIAS_CRAWL_STALE_MS));
   if (fresh) base = aliasBaseMemo.base;
   else {
-    base = computeAliasOriginsBase(cacheMap);
-    if (cacheMap === cache) aliasBaseMemo = { version: cacheVersion, base, at: Date.now() };
+    const version = cacheVersion;
+    base = yield* computeAliasOriginsBaseSteps([...cacheMap]);
+    if (cacheMap === cache) aliasBaseMemo = { version, base, at: Date.now() };
   }
   const aliases = new Set(base);
   // A superseded origin hides for the same reason a redirect alias does: it is
@@ -5863,9 +5876,11 @@ export function computeAliasOrigins(cacheMap) {
   for (const o of supersededOrigins(cacheMap)) aliases.add(o);
   return aliases;
 }
-function computeAliasOriginsBase(cacheMap) {
+function* computeAliasOriginsBaseSteps(entries) {
   const byHost = new Map(); // canonical host -> { origin, v }
-  for (const [origin, v] of cacheMap) {
+  let walked = 0;
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     // A path seller shares its host with other sellers, so it is never the
     // host's primary, and never folded into one by host (see the loop below).
     if (sellerPrefixOf(origin)) continue;
@@ -5879,7 +5894,8 @@ function computeAliasOriginsBase(cacheMap) {
     return m;
   };
   const aliases = new Set();
-  for (const [origin, v] of cacheMap) {
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (sellerPrefixOf(origin)) continue;
     const ownHost = canonicalHost(origin);
     // A manifest served from another origin by permanent redirect is stronger
@@ -5912,7 +5928,8 @@ function computeAliasOriginsBase(cacheMap) {
     catch { return false; }
   };
   const exactGroups = new Map();
-  for (const [origin, v] of cacheMap) {
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (v?.error || aliases.has(origin)) continue;
     const key = exactServiceKey(v);
     if (!key) continue;
@@ -6661,6 +6678,34 @@ function persistedEntries() {
   }
   return out;
 }
+// The background persist and pull walk every origin's tool array (about 200k
+// tools in production), which held the event loop for a second at a time when
+// done in one turn or in fixed counts of origins (one large catalogue outweighs
+// fifty small ones). They yield on elapsed time instead: at most
+// PERSIST_SLICE_MS of work per turn, whatever the origins weigh.
+const PERSIST_SLICE_MS = 20;
+function sliceClock(ms = PERSIST_SLICE_MS) {
+  let start = performance.now();
+  return async () => {
+    if (performance.now() - start < ms) return;
+    await new Promise((r) => setImmediate(r));
+    start = performance.now();
+  };
+}
+/** persistedEntries, projected across turns: the origins are taken in one
+ *  pass (the same set and order the synchronous walk reads), then each is
+ *  projected with a yield whenever a slice is spent. */
+async function persistedEntriesSliced() {
+  const held = [...cache.entries()];
+  const tick = sliceClock();
+  const out = [];
+  for (const [origin, v] of held) {
+    const e = persistedEntryOf(v);
+    if (e) out.push([origin, e]);
+    await tick();
+  }
+  return out;
+}
 function persistedEntryOf(v) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
@@ -6713,13 +6758,12 @@ export async function persistOriginToStateDb(origin) {
 }
 
 /** Async persist for the crawler's own cycle. Each origin is stringified ONCE,
- *  in batches with an event-loop turn between them, and both files are built
+ *  in time slices with an event-loop turn between them, and both files are built
  *  from those lines: the whole-cache stringify, a second stringify per origin
  *  to size the log line and a third for the NDJSON lines used to run as one
  *  synchronous block (~220 ms for 52 MB locally, seconds on the production
  *  container). Overlapping cycles never write twice. */
 let persistInFlight = false;
-const PERSIST_BATCH = 50;
 export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
   if (persistInFlight) return false;
   persistInFlight = true;
@@ -6727,14 +6771,15 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     // The other container's removals and newer entries first (no-op without a database).
     await pullIndexChanges();
     if (cache.size === 0) return false;
-    const entries = persistedEntries();
+    const entries = await persistedEntriesSliced();
     if (!entries.length) return false;
     const savedAt = Date.now();
     const t0 = performance.now();
     const lines = new Array(entries.length);
+    const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       lines[i] = JSON.stringify(entries[i]);
-      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+      await tick();
     }
     const ms = Math.round(performance.now() - t0);
     const bytes = lines.reduce((n, l) => n + l.length + 1, 0);
@@ -6819,7 +6864,12 @@ export const entryRev = (e) => { const u = Number(e?.updatedAt); return Math.max
 const nextRev = (e, now = Date.now()) => Math.max(now, entryRev(e) + 1);
 /** The persisted hash of an origin's entry as a save would write it. */
 const persistedHashOf = (origin, v) => { const e = persistedEntryOf(v); return e ? lineHash(JSON.stringify([origin, e])) : null; };
+// The pull's cursor is (stamp, id), not the stamp alone: one save writes up
+// to PG_ROWS_PER_BATCH rows in one statement, and they share its timestamp, so
+// a page that ended inside such a batch and resumed at `updated_at > stamp`
+// skipped the rest of the batch.
 let pullWatermark = null;
+let pullWatermarkId = "";
 let pullInFlight = null;
 export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) {
   if (!stateDbEnabled()) return 0;
@@ -6835,16 +6885,23 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
       // the warm start already read everything older.
       const r = await stateQuery("SELECT (now() - interval '10 minutes')::text AS t");
       pullWatermark = r.rows[0].t;
+      pullWatermarkId = "";
     }
+    const tick = sliceClock();
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
         // The stamp travels as text: a JS Date drops the microseconds, and the
         // last row of every pull would then be read again forever.
-        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND updated_at > $2::timestamptz ORDER BY updated_at, id LIMIT $3`,
-        [INDEX_RECORDS, pullWatermark, pageSize],
+        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
+        [INDEX_RECORDS, pullWatermark, pullWatermarkId, pageSize],
       );
       for (const { id, body, stamp } of r.rows) {
+        // Each folded row is projected, stringified and hashed: a page of
+        // large catalogues is seconds of work, so it is spread over turns.
+        // The cache is read per row below, after any yield.
+        await tick();
         pullWatermark = stamp;
+        pullWatermarkId = String(id);
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
         if (held && entryRev(held) >= entryRev(body)) continue;
@@ -6897,12 +6954,13 @@ async function persistIndexCacheToStateDb(entries, lines) {
   try {
     const held = new Set();
     const changed = new Map(); // origin -> hash, applied once its batch is stored
+    const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       const origin = entries[i][0];
       held.add(origin);
       const h = lineHash(lines[i]);
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
-      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+      await tick();
     }
     // The body is the entry alone: the line is `[origin, entry]`, and the
     // entry starts after the origin string and its comma.
@@ -7030,6 +7088,7 @@ async function warmStartIndexOnce() {
     throw e;
   } finally {
     warmStartInProgress = false;
+    warmShared = null;
   }
   warmStartLastCount = n;
   console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
@@ -7047,7 +7106,10 @@ async function warmStartIndexOnce() {
 let warmLoader = null;
 export function startStateDbWarmStart({ onSettled = null } = {}) {
   if (warmLoader) return warmLoader;
-  warmLoader = retryingLoad("[x402-index] warm start", warmStartIndexOnce, { log: (m) => console.warn(m), onLoaded: () => { try { onSettled?.(); } catch { /* never throws */ } } });
+  warmLoader = retryingLoad("[x402-index] warm start", warmStartIndexOnce, { log: (m) => console.warn(m), onLoaded: () => {
+    try { onSettled?.(); } catch { /* never throws */ }
+    ecosystemMarket().catch(() => {}); // build the market picture before a buyer asks for it
+  } });
   trackStoreReady(warmLoader.eventually, "x402-index warm start");
   warmLoader.ready().catch(() => { try { onSettled?.(); } catch { /* never throws */ } });
   return warmLoader;
@@ -7118,6 +7180,7 @@ export async function loadPersistedIndexCacheAsync(file = INDEX_CACHE_NDJSON_FIL
     }
   } finally {
     warmStartInProgress = false;
+    warmShared = null;
   }
   console.log(`[x402-index] warm-started ${n} sellers from ${file} in ${Math.round(performance.now() - t0)}ms (longest turn ${Math.round(maxTurnMs)}ms${bad ? `, ${bad} unreadable line(s)` : ""})`);
   return n;
@@ -7165,6 +7228,8 @@ export function startCrawler(opts = {}) {
   // synchronous parse. The first crawl is deferred below, so the fill has
   // finished long before anything re-crawls.
   const scheduleRouteIndexWarm = () => {
+    // The caller's own warmers (the tool directory) run once the cache is in.
+    try { opts.onWarmed?.(); } catch { /* a warmer never breaks the crawler */ }
     const t = setTimeout(() => {
       try { const t0 = Date.now(); const n = warmRouteIndex(); console.log(`[x402-index] route index warmed: ${n} tools in ${Date.now() - t0} ms (off the first buyer's query)`); }
       catch (e) { console.warn(`[x402-index] route index warm failed (the first query builds it instead): ${String(e?.message || e).slice(0, 120)}`); }
@@ -7358,6 +7423,22 @@ export function classifyEcosystemCategory(t) {
 // uncapped total is still reported as `toolsIndexed` — nothing is hidden.
 const MAX_TOOLS_PER_SELLER_PER_CATEGORY = 50;
 
+// One crawl entry's tool count per category. Classifying is the expensive part
+// (every tool's text against every rule), and an entry's tools change only when
+// the crawler replaces the entry object, so the counts are kept per object.
+const entryCategories = new WeakMap();
+function entryCategoryCounts(v) {
+  let perCat = entryCategories.get(v);
+  if (perCat) return perCat;
+  perCat = new Map();
+  for (const t of v.tools) {
+    const c = classifyEcosystemCategory(t);
+    perCat.set(c, (perCat.get(c) || 0) + 1);
+  }
+  entryCategories.set(v, perCat);
+  return perCat;
+}
+
 /**
  * Pure aggregation of the supply mix from a list of crawl-cache entries. Kept
  * separate from `ecosystemMarket` (which reads the module-private cache) so it
@@ -7373,11 +7454,7 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
     if (v.error || !Array.isArray(v.tools) || !v.tools.length) continue;
     sellers++;
     tools += v.tools.length; // true, uncapped
-    const perCat = new Map();
-    for (const t of v.tools) {
-      const c = classifyEcosystemCategory(t);
-      perCat.set(c, (perCat.get(c) || 0) + 1);
-    }
+    const perCat = entryCategoryCounts(v);
     for (const [c, n] of perCat) {
       catTools.set(c, (catTools.get(c) || 0) + Math.min(n, capPerSeller));
       catSellers.set(c, (catSellers.get(c) || 0) + 1);
@@ -7401,56 +7478,60 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
  * on-chain leaderboard).
  */
 // The aggregate walks every crawled origin and classifies every one of its
-// tools with regexes, synchronously on the event loop, and the walk grows
-// with the index. It is a market picture, not a per-call read, so it is
-// memoized: the first caller computes it once, later
-// callers get the memo, and past MARKET_MEMO_TTL_MS one caller starts a
-// chunked recompute in the background (a slice of origins per tick, so the
-// loop is never held) while everyone keeps reading the last picture.
+// tools with regexes, and the walk grows with the index. It is a market
+// picture, not a per-call read, so it is memoized and never computed on the
+// caller's turn of the event loop: the build classifies in slices of at most
+// MARKET_SLICE_MS (by tool, so one giant catalogue is spread over many turns),
+// concurrent callers share one build, and past MARKET_MEMO_TTL_MS the last
+// picture is served while one rebuild runs. Per-entry counts are kept
+// (entryCategoryCounts), so a rebuild classifies only re-crawled sellers. The
+// boot builds it once the warm start lands, so no buyer waits for the first.
 const MARKET_MEMO_TTL_MS = 15 * 60_000;
-const MARKET_CHUNK = 50;
+const MARKET_SLICE_MS = 20;
+export const MARKET_DEFAULT_LIMIT = 12;
 let marketMemo = { at: 0, limit: null, value: null, version: -1 };
-let marketRefresh = null;
+const marketRefresh = new Map(); // limit -> the build running for it
 let marketTtlMs = MARKET_MEMO_TTL_MS;
 /** Test hook: shorten (or reset) the memo TTL; clears the memo. */
-export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms >= 0 ? ms : MARKET_MEMO_TTL_MS; marketMemo = { at: 0, limit: null, value: null, version: -1 }; marketRefresh = null; }
+export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms >= 0 ? ms : MARKET_MEMO_TTL_MS; marketMemo = { at: 0, limit: null, value: null, version: -1 }; marketRefresh.clear(); }
 async function refreshEcosystemMarket(limit) {
   const entries = [...cache.values()];
   const version = cacheVersion;
-  const parts = [];
-  for (let i = 0; i < entries.length; i += MARKET_CHUNK) {
-    parts.push(aggregateEcosystemSupply(entries.slice(i, i + MARKET_CHUNK), { limit: Infinity }));
-    await new Promise((r) => setImmediate(r));
-  }
-  // Merge the per-slice aggregates: sellers and tools add, categories add per
-  // name, and the limit is applied once at the end, the same as one pass.
-  const catSellers = new Map(), catTools = new Map();
-  let sellers = 0, tools = 0;
-  for (const p of parts) {
-    sellers += p.sellers; tools += p.tools;
-    for (const c of p.categories) {
-      catSellers.set(c.category, (catSellers.get(c.category) || 0) + c.sellersOffering);
-      catTools.set(c.category, (catTools.get(c.category) || 0) + c.tools);
+  let turnStart = performance.now();
+  const yieldDue = () => performance.now() - turnStart >= MARKET_SLICE_MS;
+  const nextTurn = async () => { await new Promise((r) => setImmediate(r)); turnStart = performance.now(); };
+  for (const v of entries) {
+    if (v.error || !Array.isArray(v.tools) || !v.tools.length || entryCategories.has(v)) continue;
+    const perCat = new Map();
+    for (const t of v.tools) {
+      const c = classifyEcosystemCategory(t);
+      perCat.set(c, (perCat.get(c) || 0) + 1);
+      if (yieldDue()) await nextTurn();
     }
+    entryCategories.set(v, perCat);
   }
-  const categories = [...catSellers.keys()]
-    .map((category) => ({ category, sellersOffering: catSellers.get(category), tools: catTools.get(category) || 0 }))
-    .sort((a, b) => b.sellersOffering - a.sellersOffering || b.tools - a.tools)
-    .slice(0, limit);
-  marketMemo = { at: Date.now(), limit, version, value: { sellers, tools, categories, toolsCapPerSeller: MAX_TOOLS_PER_SELLER_PER_CATEGORY } };
-}
-export function ecosystemMarket({ limit = 12 } = {}) {
-  const fresh = marketMemo.value && marketMemo.limit === limit && Date.now() - marketMemo.at < marketTtlMs;
-  if (fresh) return marketMemo.value;
-  if (marketMemo.value && marketMemo.limit === limit) {
-    // Stale: hand back the last picture now, refresh once in the background.
-    if (!marketRefresh) marketRefresh = refreshEcosystemMarket(limit).catch(() => {}).finally(() => { marketRefresh = null; });
-    return marketMemo.value;
-  }
-  // Nothing memoized for this limit yet: one synchronous pass, then memoized.
-  const value = aggregateEcosystemSupply([...cache.values()], { limit });
-  marketMemo = { at: Date.now(), limit, version: cacheVersion, value };
+  // Every entry is classified now, so the one pass below only adds counts.
+  const value = aggregateEcosystemSupply(entries, { limit });
+  marketMemo = { at: Date.now(), limit, version, value };
   return value;
+}
+function startMarketRefresh(limit) {
+  let build = marketRefresh.get(limit);
+  if (!build) { build = refreshEcosystemMarket(limit).finally(() => { marketRefresh.delete(limit); }); marketRefresh.set(limit, build); }
+  return build;
+}
+export async function ecosystemMarket({ limit = MARKET_DEFAULT_LIMIT } = {}) {
+  const held = marketMemo.value && marketMemo.limit === limit;
+  if (held && Date.now() - marketMemo.at < marketTtlMs) return marketMemo.value;
+  if (held) {
+    // Stale: hand back the last picture now, rebuild once in the background.
+    const last = marketMemo.value;
+    startMarketRefresh(limit).catch(() => {});
+    return last;
+  }
+  // Nothing memoized for this limit yet: wait for the shared build, which
+  // yields between slices, so other requests keep being served meanwhile.
+  return startMarketRefresh(limit);
 }
 
 /**
@@ -7564,10 +7645,30 @@ export function routableSellerSummaries() {
   return routableSummaryMemo.out;
 }
 export function __resetRoutableSummaryMemoForTest() { routableSummaryMemo = null; }
-function buildRoutableSellerSummaries() {
+// One seller's summary row depends only on its origin and its crawl entry, and
+// the crawler replaces an entry object rather than editing it, so the row is
+// kept per entry: a rebuild projects only the sellers re-crawled since the
+// last one (the projection walks every tool's payTo).
+const routableRowByEntry = new WeakMap(); // entry -> { origin, row }
+let routableRowBuilds = 0;
+/** How many seller summary rows have been projected (a rebuild over unchanged entries projects none). */
+export function _routableRowBuildsForTest() { return routableRowBuilds; }
+function buildRoutableSellerSummaries() { return runSteps(routableSummarySteps()); }
+/** Build the seller summaries in slices and memoize them: the boot's warm,
+ *  so the first search does not project every seller in its own turn. */
+export async function warmRoutableSellerSummaries() {
+  if (!removalsKnown()) return;
+  const size = cache.size;
+  const out = await runSlicedAsync(routableSummarySteps());
+  if (cache.size === size) routableSummaryMemo = { at: Date.now(), size, out: Object.freeze(out) };
+}
+function* routableSummarySteps() {
   const out = [];
   const aliasOrigins = computeAliasOrigins(cache);
-  for (const [origin, v] of cache.entries()) {
+  yield;
+  let walked = 0;
+  for (const [origin, v] of [...cache.entries()]) {
+    if (++walked % SNAPSHOT_YIELD_SELLERS === 0) yield;
     if (v?.error || !isRoutable(v) || aliasOrigins.has(origin)) continue;
     // The crawler can discover and cache the real, publicly-registered
     // agent402.tools origin regardless of what BASE_URL this instance is
@@ -7579,9 +7680,11 @@ function buildRoutableSellerSummaries() {
     // well-known domain only (the scenario that's actually been observed),
     // not a dynamic instance-specific one.
     if (origin.replace(/\/+$/, "").toLowerCase() === "https://agent402.tools") continue;
+    const kept = v && typeof v === "object" ? routableRowByEntry.get(v) : undefined;
+    if (kept && kept.origin === origin) { out.push(kept.row); continue; }
     let host = "";
     try { host = new URL(origin).host.toLowerCase(); } catch { continue; }
-    out.push({
+    const row = {
       origin,
       host,
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -7609,7 +7712,10 @@ function buildRoutableSellerSummaries() {
       // Every advertised payTo, not just the first (see allPayTosByNetwork).
       payTosByNetwork: allPayTosByNetwork(v.tools),
       evmDomainByNetwork: evmDomainUnion(v.tools),
-    });
+    };
+    routableRowBuilds++;
+    if (v && typeof v === "object") routableRowByEntry.set(v, { origin, row });
+    out.push(row);
   }
   return out;
 }
@@ -7836,7 +7942,44 @@ export function screenSellerDetailForServe(d) {
  * Snapshot for the /index page. Always includes the local catalog (instant,
  * zero-network) plus whatever the crawler has accumulated.
  */
-export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, walletName }) {
+export function indexSnapshot(ctx) { return runSteps(indexSnapshotSteps(ctx)); }
+/**
+ * indexSnapshot spread over event-loop turns of at most DIRECTORY_SLICE_MS
+ * (same value): the projection walks every seller and every seller's tools,
+ * and the server rebuilds the snapshot whenever the crawl has changed it.
+ */
+export function indexSnapshotAsync(ctx) { return runSlicedAsync(indexSnapshotSteps(ctx)); }
+// While a warm start folds entries in, the server does not pin a snapshot (a
+// half-loaded ecosystem must not be kept), and every page and the nav strip
+// used to build their own, each in one turn, each a walk of every seller
+// loaded so far. They now share one: readers of one cache version get the
+// same snapshot, and a reader after the version moved gets the last one while
+// a single rebuild runs in slices. Only the first reader builds in line.
+let warmShared = null; // { version, value }
+let warmSharedBuild = null;
+let snapshotBuilds = 0;
+/** How many snapshots have been built (sync or sliced), for the tests. */
+export function _indexSnapshotBuildsForTest() { return snapshotBuilds; }
+/** The snapshot every reader shares while indexWarmStartInProgress(). */
+export function warmStartSnapshot(ctx) {
+  const version = cacheVersion;
+  if (warmShared && warmShared.version === version) return warmShared.value;
+  if (warmShared) {
+    if (!warmSharedBuild) {
+      // Started on a turn of its own: even the first slice is not the reader's.
+      warmSharedBuild = new Promise((r) => setImmediate(r)).then(() => indexSnapshotAsync(ctx))
+        .then((value) => { if (warmStartInProgress && (!warmShared || warmShared.version < version)) warmShared = { version, value }; }, () => {})
+        .finally(() => { warmSharedBuild = null; });
+    }
+    return warmShared.value;
+  }
+  const value = indexSnapshot(ctx);
+  warmShared = { version, value };
+  return value;
+}
+const SNAPSHOT_YIELD_SELLERS = 50;
+function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, walletName }) {
+  snapshotBuilds++;
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
   // Exclude the crawled self-entry two ways: the caller's own baseUrl (works
   // whenever this instance's BASE_URL matches what was crawled - true in
@@ -7856,8 +7999,13 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   // homepage names, another listed seller) was hidden from the route pool but
   // still rendered as its own seller on every listing - two rows for one
   // service, the retired one still advertising its old chain (2026-09-10).
-  const aliasOrigins = computeAliasOrigins(cache);
-  const remote = [...cache.entries()].filter(([origin]) => !isSelfOrigin(origin) && !aliasOrigins.has(origin)).map(([origin, v]) => ({
+  const aliasOrigins = yield* computeAliasOriginsSteps(cache);
+  yield;
+  const remote = [];
+  for (const [origin, v] of [...cache.entries()]) {
+    if (isSelfOrigin(origin) || aliasOrigins.has(origin)) continue;
+    if (remote.length % SNAPSHOT_YIELD_SELLERS === SNAPSHOT_YIELD_SELLERS - 1) yield;
+    remote.push({
     origin,
     ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
@@ -7927,7 +8075,9 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     payToByNetwork: sellerPayToByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     payTosByNetwork: allPayTosByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-  }));
+    });
+  }
+  yield;
   // Collapse http/https duplicates of the same host into one seller. A registry
   // can list the same origin under both schemes (one origin appeared as
   // both http:// and https://), which crawled as two cache entries and rendered
@@ -9333,7 +9483,7 @@ function directoryHayOf(t) {
 }
 /** How many row search texts have been built (a repeat search builds none). */
 export function _directoryHayBuildsForTest() { return directoryHayBuilds; }
-export function allIndexedTools({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
+export function allIndexedTools(args = {}) {
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
   // the third-party index this page exists to show, which would read as a
@@ -9343,6 +9493,12 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   // help anyone choose. `excludeOrigin` still drops our crawled self-listing
   // (we publish to the Bazaar, so the crawler finds us) so ours appear exactly
   // once, from the authoritative catalog rather than a stale crawl of it.
+  return runSteps(indexedToolsSteps(args));
+}
+/** allIndexedTools, the filter run across turns of at most DIRECTORY_SLICE_MS
+ *  (a search is one pass over the whole directory). Same answer. */
+export function allIndexedToolsAsync(args = {}) { return runSlicedAsync(indexedToolsSteps(args)); }
+function* indexedToolsSteps({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
   const rows = interleavedIndexRows(ourTools, excludeOrigin);
   const q = String(search || "").trim().toLowerCase();
   const terms = q ? queryTerms(q, { max: 8 }) : [];
@@ -9350,7 +9506,7 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   const net = String(network || "").trim().toLowerCase();
 
   const src = String(source || "").trim().toLowerCase();
-  const filtered = !terms.length && !cat && !net && !src ? rows : rows.filter((t) => {
+  const keep = (t) => {
     if (src === "ours" && !t.ours) return false;
     if (src === "third-party" && t.ours) return false;
     if (cat && String(t.category || "").toLowerCase() !== cat) return false;
@@ -9358,7 +9514,14 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
     if (!terms.length) return true;
     const hay = directoryHayOf(t);
     return terms.every((term) => hay.includes(term));
-  });
+  };
+  let filtered = rows;
+  if (terms.length || cat || net || src) {
+    filtered = [];
+    for (let i = 0; i < rows.length; i++) { if (keep(rows[i])) filtered.push(rows[i]); if (i % 1000 === 999) yield; }
+  }
+  let described = 0;
+  for (let i = 0; i < filtered.length; i++) { if (filtered[i].described) described++; if (i % 5000 === 4999) yield; }
 
   const off = Math.max(0, parseInt(offset, 10) || 0);
   const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
@@ -9369,7 +9532,7 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
     matched: filtered.length,
     offset: off,
     limit: lim,
-    described: filtered.filter((t) => t.described).length,
+    described,
     results: filtered.slice(off, off + lim),
   };
 }
@@ -9386,36 +9549,85 @@ let indexRowsMemo = { key: null, at: 0, rows: null };
 // 1.5-1.8 s of one synchronous turn, 2026-09-25).
 const INDEX_ROWS_INLINE_MAX = 20000;
 let indexRowsRebuild = null;
+// A rebuild, flatten to interleave to each row's search text, run in slices of
+// at most DIRECTORY_SLICE_MS: the interleave (a sort per seller and a
+// round-robin over every row) and the first search's text build were each one
+// synchronous turn over the whole directory.
+const DIRECTORY_SLICE_MS = 8;
+function startIndexRowsBuild(ourTools, excludeOrigin, key) {
+  if (indexRowsRebuild) return indexRowsRebuild;
+  const m = indexRowsMemo;
+  const version = cacheVersion;
+  indexRowsRebuild = (async () => {
+    try {
+      const flat = await flattenedThirdPartyToolsAsync(excludeOrigin);
+      await yieldTurn();
+      const rows = await runSlicedAsync(interleaveSteps([...ourTools, ...flat]));
+      rows.oursCount = rows.filter((t) => t.ours).length;
+      await runSlicedAsync(directoryHaySteps(rows));
+      if (indexRowsMemo === m) indexRowsMemo = { key, at: Date.now(), rows, version };
+    } catch (e) {
+      console.warn(`[x402-index] directory rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
+    } finally { indexRowsRebuild = null; }
+  })();
+  return indexRowsRebuild;
+}
+function indexRowsFresh(m, key, now = Date.now()) {
+  // Unchanged cache: reuse for up to 5 min (Bazaar rows can change without a
+  // cache write). Mid-crawl: reuse for up to 2 min whatever the version says.
+  return Boolean(m.rows && m.key === key && ((m.version === cacheVersion && now - m.at < 300_000) || (crawlInFlight && now - m.at < 120_000)));
+}
 function interleavedIndexRows(ourTools, excludeOrigin) {
   const now = Date.now();
   const key = `${excludeOrigin}|${ourTools.length}`;
   const m = indexRowsMemo;
-  // Unchanged cache: reuse for up to 5 min (Bazaar rows can change without a
-  // cache write). Mid-crawl: reuse for up to 2 min whatever the version says.
-  if (m.rows && m.key === key && ((m.version === cacheVersion && now - m.at < 300_000) || (crawlInFlight && now - m.at < 120_000))) return m.rows;
+  if (indexRowsFresh(m, key, now)) return m.rows;
   if (m.rows && m.key === key && m.rows.length > INDEX_ROWS_INLINE_MAX) {
-    if (!indexRowsRebuild) {
-      const version = cacheVersion;
-      indexRowsRebuild = (async () => {
-        try {
-          const flat = await flattenedThirdPartyToolsAsync(excludeOrigin);
-          await yieldTurn();
-          const rows = interleaveBySeller([...ourTools, ...flat]);
-          rows.oursCount = rows.filter((t) => t.ours).length;
-          if (indexRowsMemo === m) indexRowsMemo = { key, at: Date.now(), rows, version };
-        } catch (e) {
-          console.warn(`[x402-index] directory rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
-        } finally { indexRowsRebuild = null; }
-      })();
-    }
+    startIndexRowsBuild(ourTools, excludeOrigin, key);
     return m.rows;
   }
-  const rows = interleaveBySeller([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]);
+  const rows = runSteps(interleaveSteps([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]));
   rows.oursCount = rows.filter((t) => t.ours).length;
   indexRowsMemo = { key, at: now, rows, version: cacheVersion };
   return rows;
 }
+/**
+ * Resolves once allIndexedTools can answer from a built directory for these
+ * arguments. With none built yet (the first read after a boot) the build runs
+ * in slices and the caller waits for it instead of building the whole
+ * directory in its own turn; with one built it resolves at once (a stale one
+ * is served while it rebuilds, as before). The server also calls it at boot,
+ * so a visitor rarely waits at all.
+ */
+export async function indexRowsReady({ ourTools = [], excludeOrigin = "" } = {}) {
+  const key = `${excludeOrigin}|${ourTools.length}`;
+  if (indexRowsMemo.rows && indexRowsMemo.key === key) return;
+  // A cache this small builds in line, as before.
+  if (cache.size < 200) return;
+  while (!(indexRowsMemo.rows && indexRowsMemo.key === key)) {
+    const pending = indexRowsRebuild || startIndexRowsBuild(ourTools, excludeOrigin, key);
+    const before = indexRowsMemo;
+    await pending;
+    if (indexRowsMemo === before) return; // the build failed: the caller builds in line
+  }
+}
 const yieldTurn = () => new Promise((r) => setImmediate(r));
+// A step generator run to completion in one turn, or across turns at most
+// DIRECTORY_SLICE_MS each. One generator per computation, so the two runs
+// cannot drift apart.
+function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
+async function runSlicedAsync(gen) {
+  let until = performance.now() + DIRECTORY_SLICE_MS;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + DIRECTORY_SLICE_MS; }
+    r = gen.next();
+  }
+  return r.value;
+}
+function* directoryHaySteps(rows) {
+  for (let i = 0; i < rows.length; i++) { directoryHayOf(rows[i]); if (i % 1000 === 999) yield; }
+}
 /** Test hook: wait for an in-flight background directory rebuild. */
 export async function _indexRowsSettledForTest() { while (indexRowsRebuild || flatRebuild) await (indexRowsRebuild || flatRebuild); }
 
@@ -9433,17 +9645,24 @@ export async function _indexRowsSettledForTest() { while (indexRowsRebuild || fl
 // One collator instead of String#localeCompare per comparison: same order,
 // a fraction of the cost on a 100k-row sort.
 const collate = new Intl.Collator().compare;
-function interleaveBySeller(rows) {
-  const pass = (subset) => {
+// Yields between units of work (a seller's sort, a slice of the round-robin);
+// run whole by runSteps or across turns by runSlicedAsync.
+function* interleaveSteps(rows) {
+  function* pass(subset) {
     const bySeller = new Map();
     for (const r of subset) {
       const k = r.sellerName || r.seller;
       if (!bySeller.has(k)) bySeller.set(k, []);
       bySeller.get(k).push(r);
     }
-    const groups = [...bySeller.entries()]
-      .sort((a, b) => collate(String(a[0]), String(b[0])))
-      .map(([, list]) => list.sort((a, b) => collate(String(a.route), String(b.route))));
+    yield;
+    const entries = [...bySeller.entries()].sort((a, b) => collate(String(a[0]), String(b[0])));
+    yield;
+    const groups = [];
+    for (const [, list] of entries) {
+      groups.push(list.sort((a, b) => collate(String(a.route), String(b.route))));
+      yield;
+    }
     const out = [];
     for (let i = 0; out.length < subset.length; i++) {
       let moved = false;
@@ -9451,10 +9670,13 @@ function interleaveBySeller(rows) {
         if (i < g.length) { out.push(g[i]); moved = true; }
       }
       if (!moved) break; // defensive: never spin if a group shrinks underneath us
+      yield;
     }
     return out;
-  };
-  return [...pass(rows.filter((r) => r.described)), ...pass(rows.filter((r) => !r.described))];
+  }
+  const described = yield* pass(rows.filter((r) => r.described));
+  const rest = yield* pass(rows.filter((r) => !r.described));
+  return [...described, ...rest];
 }
 
 function flatRowsForEntry(origin, v, self, seen, out) {
@@ -9598,10 +9820,17 @@ function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
 
 
 /** Category rollup for the catalog's filter chips. */
+// Counted once per flattened row set (a walk of every third-party row), not
+// once per page view.
+let categoriesMemo = { rows: null, value: null };
 export function indexedToolCategories(excludeOrigin = "") {
+  const rows = flattenedThirdPartyTools(excludeOrigin);
+  if (categoriesMemo.rows === rows) return categoriesMemo.value.map((c) => ({ ...c }));
   const counts = new Map();
-  for (const t of flattenedThirdPartyTools(excludeOrigin)) counts.set(t.category, (counts.get(t.category) || 0) + 1);
-  return [...counts.entries()].map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+  for (const t of rows) counts.set(t.category, (counts.get(t.category) || 0) + 1);
+  const value = [...counts.entries()].map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+  categoriesMemo = { rows, value };
+  return value.map((c) => ({ ...c }));
 }
 
 export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; }

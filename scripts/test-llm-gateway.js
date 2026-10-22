@@ -1666,6 +1666,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     K.setRetiringClockForTest(null);
     ok(validateRequest({ model: "openai/gpt-4o-2024-08-06", messages: m1 }, "v1-chat-pro").model === "openai/gpt-4o-2024-08-06", "before the date a dated snapshot is served as asked");
   }
+  // Claude Sonnet 4.5 retires 2026-11-30: a stock Anthropic client's dated id
+  // is served as itself until the day, then by claude-sonnet-5.5, the swap named.
+  {
+    const id = "anthropic/claude-sonnet-4.5", use = "anthropic/claude-sonnet-5.5", m1 = [{ role: "user", content: "hi" }];
+    ok(RETIRING_MODELS[id]?.until === "2026-11-30" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true, `${id}: scheduled to retire 2026-11-30, successor ${use}`);
+    const home = tierFor(use);
+    K.setRetiringClockForTest(() => Date.parse("2026-11-29T23:59:59Z"));
+    const before = validateRequest({ model: "claude-sonnet-4-5-20250929", messages: m1 }, home);
+    ok(!retiringModel("claude-sonnet-4-5-20250929") && before.model === id && before.__substitutedFrom === undefined, `the day before, the dated Anthropic id is served as ${id} (${before.model})`);
+    K.setRetiringClockForTest(() => Date.parse("2026-11-30T00:00:00Z"));
+    const after = validateRequest({ model: "claude-sonnet-4-5-20250929", messages: m1 }, home);
+    ok(after.model === use && after.__substitutedFrom === id, `from 2026-11-30 the dated Anthropic id is served as ${use}, the swap named (${after.model}, from ${after.__substitutedFrom})`);
+    K.setRetiringClockForTest(null);
+  }
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
   // and wire, the successor live on a tier we serve, gone from flex and pricing.
   for (const id of ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]) {

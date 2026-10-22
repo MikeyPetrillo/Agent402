@@ -29,6 +29,7 @@
 import { performance } from "node:perf_hooks";
 import { railOf } from "./payment-rail.js";
 import { clientGoneBeforeFirstByte } from "./hangup-settlement.js";
+import { noteSlowPaidCall } from "./slow-paid-calls.js";
 
 const KEY = "__a402Phases";
 const windowSize = () => { const n = Number(process.env.PAID_TIMING_WINDOW); return Number.isInteger(n) && n > 0 ? Math.min(n, 5000) : 200; };
@@ -138,6 +139,14 @@ function recordPaidCall(req, res, s) {
   ring.push(row);
   while (ring.length > windowSize()) ring.shift();
   rings.set(rail, ring);
+  // A handler past its bound feeds the slow-paid alarm (src/slow-paid-calls.js):
+  // slug, time and status only, never the payer.
+  try {
+    // An unfinished handler (no end mark when the call is recorded) counts
+    // with the time it had run so far.
+    const endPerf = s.handlerEnd ?? now();
+    noteSlowPaidCall({ slug: row.slug, handlerMs: row.handlerMs, elapsedMs: ms(s.handlerStart, endPerf), endEpochMs: Math.round(performance.timeOrigin + endPerf), status: row.status, synthetic: row.synthetic });
+  } catch { /* the alarm must never touch a payment */ }
   if (logOn()) {
     const f = (v) => (v == null ? "-" : `${v}ms`);
     console.log(`[paid-timing] ${row.slug} rail=${row.rail} net=${row.network || "-"} payer=${row.payer || "-"} synthetic=${row.synthetic} status=${row.status} verify=${f(row.verifyMs)} handler=${f(row.handlerMs)} settle=${f(row.settleMs)} gate=${f(row.gateMs)} after=${f(row.afterMs)} total=${f(row.totalMs)} gone=${row.gone}`);

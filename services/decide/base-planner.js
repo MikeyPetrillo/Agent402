@@ -21,6 +21,13 @@ import { opaqueInputs } from "../../src/decide/tool-rows.js";
 const DEFAULT_LATENCY_MS = { firstParty: 1500, thirdParty: 4000 };
 const WHOLE_TASK_FIT = 0.85;
 const GAP_FIT = 0.5; // a candidate must fit better than this to cover a step
+// Comparable: a judged fit within LEAD_FIT_MARGIN of the step's best fit and a
+// score within LEAD_SCORE_MARGIN of the leader's. Among comparable tools a step
+// leads with one execute can buy, then with one at most LEAD_PRICE_RATIO of
+// the leader's price.
+const LEAD_FIT_MARGIN = 0.05;
+const LEAD_SCORE_MARGIN = 0.05;
+const LEAD_PRICE_RATIO = 0.5;
 
 /** Resolve to null once `ms` passes, whatever the promise does. */
 function within(promise, ms) {
@@ -350,7 +357,9 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
       const pick = chosen.has(i) ? viable.find((x) => x.row.id === chosen.get(i)) : null;
       const overrode = pick && pick !== viable[0] ? viable[0] : null;
       if (overrode) viable = [pick, ...viable.filter((x) => x !== pick)];
-      S.rankingLog.push({ step: i + 1, retrieved: s.candidates.length, retrievedFirstParty: s.candidates.filter((c) => c.row.firstParty).length, top: scored.slice(0, 5).map((x) => ({ id: x.row.id, score: x.score, parts: x.parts })), ...(chosen.has(i) ? { packChoice: chosen.get(i), overrode: overrode?.row.id || null } : {}) });
+      const lead = pick ? null : leadOf(viable);
+      if (lead) viable = [lead.x, ...viable.filter((x) => x !== lead.x)];
+      S.rankingLog.push({ step: i + 1, retrieved: s.candidates.length, retrievedFirstParty: s.candidates.filter((c) => c.row.firstParty).length, top: scored.slice(0, 5).map((x) => ({ id: x.row.id, score: x.score, parts: x.parts })), ...(chosen.has(i) ? { packChoice: chosen.get(i), overrode: overrode?.row.id || null } : {}), ...(lead ? { lead: lead.x.row.id, over: lead.over.row.id, leadReason: lead.reason } : {}) });
       if (!viable.length) { S.gaps.push(s.purpose); continue; }
       newStepOf[i + 1] = S.plan.length + 1;
       const primary = viable[0];
@@ -358,7 +367,7 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
       const { fallbacks } = selectFallbacks(viable, primary, maxFallbacks);
       S.plan.push({
         step: S.plan.length + 1, purpose: s.purpose,
-        tool: view(primary.row), why: `fit ${primary.fit.toFixed(2)}, score ${primary.score.toFixed(3)}${overrode ? `; chosen over ${overrode.row.slug || overrode.row.name} for covering the step` : ""}`,
+        tool: view(primary.row), why: `fit ${primary.fit.toFixed(2)}, score ${primary.score.toFixed(3)}${overrode ? `; chosen over ${overrode.row.slug || overrode.row.name} for covering the step` : ""}${lead ? `; leads over ${lead.over.row.slug || lead.over.row.name} at a comparable fit, ${lead.reason === "price" ? "for a lower price" : "because execute can buy it"}` : ""}`,
         score: primary.score,
         fallbacks: fallbacks.map((f) => ({ ...view(f.row), score: f.score })),
         dependsOn: s.dependsOn.map((d) => newStepOf[d]).filter((d) => Number.isInteger(d)),
@@ -458,6 +467,24 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
     ctx.plan = plan;
     planner.dependencyWiring(ctx, plan, slots);
     const openOf = (params) => Object.entries(params || {}).filter(([, v]) => isPlaceholder(v)).map(([k]) => k);
+    // One answer per tool and required input across the plan: whether the
+    // task gives a value is a fact about the task, so a tool the plan says
+    // needs an input in one step does not run with a written value for it in
+    // another. Only a value the filler wrote itself is cleared: a step
+    // reference, an identifier, or a phrase the task itself contains stands
+    // (the caller gave it), so one tool used in two steps keeps a query the
+    // task spelled out.
+    const openFor = new Set();
+    for (const sl of slots) for (const name of [...(sl.needs || []), ...openOf(sl.target.exampleParams)]) openFor.add(`${sl.row.id}\u0000${name}`);
+    for (const sl of slots) {
+      for (const name of sl.row.inputSchema?.required || []) {
+        const v = sl.target.exampleParams?.[name];
+        if (!openFor.has(`${sl.row.id}\u0000${name}`) || v === undefined || isPlaceholder(v)) continue;
+        if (typeof v === "string" && (STEP_REF_N.test(v) || verbatimIdentifier(v, task) || taskPhrase(v, task))) continue;
+        sl.target.exampleParams[name] = `<${name}>`;
+        (sl.needs ||= []).push(name);
+      }
+    }
     for (const sl of slots) {
       const need = [...new Set([...(sl.needs || []), ...openOf(sl.target.exampleParams)])];
       if (need.length) sl.target.exampleParamsNeedInput = need;
@@ -469,7 +496,10 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
     //     next in line, needed nothing). The ranking stays in the plan's "why".
     for (const p of plan) {
       if (!openOf(p.tool.exampleParams).length) continue;
-      const j = p.fallbacks.findIndex((f) => !openOf(f.exampleParams).length && f.exampleParams && (Object.keys(f.exampleParams).length || !(f.inputSchema?.required || []).length));
+      const complete = (f) => !openOf(f.exampleParams).length && f.exampleParams && (Object.keys(f.exampleParams).length || !(f.inputSchema?.required || []).length);
+      // A complete backup execute can buy before one it cannot.
+      let j = p.fallbacks.findIndex((f, k) => complete(f) && buyable(p._fbRows[k]));
+      if (j < 0) j = p.fallbacks.findIndex(complete);
       if (j < 0) continue;
       const prev = { tool: p.tool, row: p._row, score: p.score };
       const next = p.fallbacks[j];
@@ -519,6 +549,33 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
   if (depth === "full") out.compiledPrompt = compilePrompt(out);
   // Each step's primary row, in plan order, for the router's plan measures.
   return { out, snapshots, rows: plan.map((p) => p._row) };
+}
+
+/** Whether POST /api/decide/execute can buy the row. Read from the row's own
+ *  `executable` verdict only (every row carries one), never from who sells it. */
+const buyable = (row) => row?.executable !== false;
+
+/** The tool a step leads with when it is not the score leader, or null.
+ *  Comparable tools (fit and score within the margins above) are considered:
+ *  one execute can buy leads over a leader it cannot, and then the cheapest
+ *  comparable tool leads when it costs at most LEAD_PRICE_RATIO of the
+ *  leader's price. A price that is only a floor never undercuts. Seller-blind:
+ *  reads fit, score, price and the executable verdict, never firstParty or
+ *  seller. Module-level, like selectFallbacks: no planner can change it. */
+export function leadOf(viable) {
+  const top = viable?.[0];
+  if (!top) return null;
+  const bestFit = Math.max(...viable.map((x) => x.fit));
+  const near = viable.filter((x) => x.fit >= bestFit - LEAD_FIT_MARGIN - 1e-9 && x.score >= top.score - LEAD_SCORE_MARGIN - 1e-9);
+  let lead = top, reason = null;
+  if (!buyable(top.row)) {
+    const ex = near.find((x) => buyable(x.row));
+    if (ex) { lead = ex; reason = "executable"; }
+  }
+  const pool = near.filter((x) => buyable(x.row) === buyable(lead.row) && !x.row.pricedByQuote);
+  const cheapest = pool.reduce((a, x) => (x.row.priceUsd < a.row.priceUsd ? x : a), lead);
+  if (cheapest !== lead && cheapest.row.priceUsd <= lead.row.priceUsd * LEAD_PRICE_RATIO) { lead = cheapest; reason = reason || "price"; }
+  return lead === top ? null : { x: lead, over: top, reason };
 }
 
 /** Backups for a step, in ranked order: up to `max`, preferring a second
@@ -594,15 +651,29 @@ export function urlOfTaskDomain(v, task) {
 
 export function verbatimIdentifier(v, task) {
   const t = String(v || "").trim();
+  if (t.length >= 6 && t.length <= 200 && taskWorded(t, task)) return true; // a query in the task's own words
+  return taskIdentifier(t, task);
+}
+
+/** An address, hash, URL or domain that appears verbatim in the task (or the
+ *  plain URL of a domain it names): the caller's own data, whatever the input. */
+/** A phrase of two or more words that the task contains verbatim (case and
+ *  spacing aside): the caller's own words, whatever the input. */
+export function taskPhrase(v, task) {
+  const norm = (x) => String(x || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const t = norm(v);
+  return t.length >= 6 && t.length <= 200 && t.includes(" ") && norm(task).includes(t);
+}
+
+export function taskIdentifier(v, task) {
+  const t = String(v || "").trim();
   if (urlOfTaskDomain(t, task)) return true;
   if (t.length < 6 || t.length > 200) return false;
-  if (taskWorded(t, task)) return true;
   if (!String(task || "").includes(t)) return false;
   return /^0x[0-9a-fA-F]{8,}$/.test(t)                       // EVM address, tx hash
     || /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(t)                 // base58 (Solana etc.)
     || /^https?:\/\/\S+$/i.test(t)                               // URL
-    || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t)      // domain
-    || taskWorded(t, task);                                       // a query in the task's own words
+    || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t);     // domain
 }
 
 // Four or more words, every one of them the task's (a query reordered or

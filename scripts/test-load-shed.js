@@ -85,6 +85,9 @@ try {
   let up = false;
   for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
   ok(up, "server booted (/health is never shed)");
+  const ready = await fetch(`${base}/health/ready`, from("203.0.113.5"));
+  const readyQ = await fetch(`${base}/health?ready=1`, from("203.0.113.5"));
+  ok(ready.status === 200 && readyQ.status === 200, `the readiness check (/health/ready, /health?ready=1) is never shed (${ready.status}, ${readyQ.status})`);
   const free = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5"));
   ok(free.status === 503 && free.headers.get("retry-after") === "2" && /paid calls keep flowing/.test((await free.json()).error), `a free request past the ceiling is shed with 503 + Retry-After (${free.status})`);
   const paid = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", "payment-signature": "x".repeat(40) }), body: JSON.stringify({ text: "a" }) });
@@ -108,6 +111,10 @@ try {
   await fetch(`${base}/tools/some-tool-slug`, from("203.0.113.5"));
   const keys2 = (await (await fetch(`${base}/__operator/perf.json?min=1&top=200`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json()).routes.map((r) => r.route);
   ok(keys2.includes("GET /tools/*") && !keys2.some((k) => k.includes("some-tool-slug")), "a page outside /api and /v1 collapses to its first segment");
+  await fetch(`${base}/www.caller-chosen.example`, from("203.0.113.5"));
+  await fetch(`${base}/api/0xAbCdEf0123456789abcdef0123456789abcdef01`, from("203.0.113.5"));
+  const keys3 = (await (await fetch(`${base}/__operator/perf.json?min=1&top=200`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json()).routes.map((r) => r.route);
+  ok(keys3.includes("GET /(other)") && keys3.includes("GET /api/(other)") && !keys3.some((k) => /caller-chosen|0xAbCd/i.test(k)), `a path no route serves never reaches a timing key, a stall line or the public issue text (${keys3.filter((k) => k.includes("other")).join(", ")})`);
   const unpaidPriced = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json" }), body: JSON.stringify({ text: "a" }) });
   ok(unpaidPriced.status !== 503, `an UNPAID call to a priced route is not shed either: the 402 is the first step of a purchase (${unpaidPriced.status})`);
   const op = await fetch(`${base}/__operator/perf.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }));
@@ -117,6 +124,8 @@ try {
   ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
   ok(Array.isArray(sh.reasons) && sh.thresholds && sh.loop && "stalls1h" in sh.loop, "the verdict carries its reasons, thresholds and loop counts");
   ok(Array.isArray(sh.info) && !sh.reasons.includes("free-shedding") && typeof sh.shed.free === "number" && typeof sh.shed.serving === "number", `informational words are apart from the reasons, and the shed counts carry the split (${JSON.stringify({ reasons: sh.reasons, info: sh.info, free: sh.shed.free, serving: sh.shed.serving })})`);
+  ok(sh.thresholds.stallMs === 5000 && Array.isArray(sh.recentStalls) && sh.stallCulprits && Array.isArray(sh.stallCulprits.routes) && Array.isArray(sh.stallCulprits.jobs), `serving health carries the single-stall threshold, the stall ring and the culprit names (${JSON.stringify({ stallMs: sh.thresholds.stallMs, culprits: sh.stallCulprits })})`);
+  ok(Array.isArray(perf.recentStalls) && Array.isArray(perf.activeJobs), "perf.json carries the stall ring and the running jobs");
   const unauth = await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5"));
   ok(unauth.status === 404, "serving health is operator-only");
 } finally { proc.kill("SIGKILL"); }
@@ -169,6 +178,11 @@ try {
   ok(/REASONS=.*\.reasons/.test(step) && !/REASONS=.*responses1h/.test(step), "the reasons variable reads the reason words and nothing counted");
   ok(!/REASONS=.*\.info/.test(step) && /STATUS=\$\(echo "\$J" \| jq -r '\.status/.test(step) && /if \[ "\$STATUS" = "degraded" \]/.test(step), "the alarm pages on .status alone; informational words never open an issue");
   ok(/info=\\\(\(\.info \/\/ \[\]\)\|join\(","\)\)/.test(step), "the informational words reach the run log");
+  // A long stall's alarm names what it was running: route keys and job names
+  // from .stallCulprits, never a figure, so the issue says where to look.
+  ok(/CULPRITS=\$\(echo "\$J" \| jq -r '.*\.stallCulprits\.routes.*\.stallCulprits\.jobs/.test(step) && !/CULPRITS=.*(responses1h|recentStalls|\.ms\b|Ms\b)/.test(step), "the culprit variable reads the route and job names and nothing counted");
+  ok(bodies.filter((b) => /\$\{CULPRIT_NOTE\}/.test(b)).length === 2, "the opening issue and its still-degraded comment both name the culprits");
+  ok(/CULPRIT_NOTE=" Running during the long stalls: \$CULPRITS\."/.test(step), "the culprit note is a sentence of names");
 }
 
 console.log(`test-load-shed: ${n} passed`);

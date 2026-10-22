@@ -36,9 +36,11 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // is a TIMER firing, so a blocked loop is indistinguishable from an unreachable
 // upstream - which is what seven CDP verify failures looked like on 2026-08-30
 // while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
-import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow } from "./loop-lag.js";
-import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
-import { toolFailureMonitor } from "./tool-failure-monitor.js";
+import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentStalls, longStallVerdict, stallAlarmMsFromEnv } from "./loop-lag.js";
+import { runAsJob, activeJobs } from "./active-jobs.js";
+import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
+import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
+import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
@@ -282,12 +284,14 @@ import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
+import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
-import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware } from "./cdn-sync-window.js";
+import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
+import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
@@ -362,7 +366,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -590,10 +594,10 @@ import { ledgerPricingPage } from "./ledger-pricing.js";
 import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
-import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
+import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDaily, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
@@ -616,7 +620,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -705,7 +709,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -1433,9 +1437,9 @@ function spendChainsConfigured() {
 // deliver keeps `routerDispatchEligible: true` and `executeViaCallableNow:
 // true` on every public row until its settlement count decays, which it never
 // does. Null when nothing is recorded, which is the ordinary case.
-function deliveryFailingByChain(origin) {
+function deliveryFailingByChain(origin, spendChains = spendChainsConfigured()) {
   const out = {};
-  for (const c of spendChainsConfigured()) {
+  for (const c of spendChains) {
     const f = sellerDeliveryFailingRecently(origin, c);
     if (f) out[c] = { at: new Date(f.at).toISOString(), status: f.status ?? null, ms: f.ms ?? null };
   }
@@ -1446,6 +1450,9 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   const ev = dispatchEvidence();
   const origin = norm(row.seller || row.origin || "");
   const networks = Array.isArray(row.networks) ? row.networks : [];
+  // Read once per row (each read is a few environment lookups, and a page
+  // labels every seller).
+  const spendChains = spendChainsConfigured();
   const verdict = dispatchEligibility({
     local,
     routable: local ? true : (row.routable !== undefined ? !!row.routable : true),
@@ -1455,7 +1462,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     // A route row is also judged on what it sells (src/route-category.js);
     // a seller-level verdict is not, since no one route's category decides it.
     ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate, routeText: row } : {}),
-    spendChains: spendChainsConfigured(),
+    spendChains,
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
     // Inherited (shared-wallet) evidence is bound to its wallet: at label time
@@ -1470,7 +1477,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     usdcDomain: row.evmDomainByNetwork?.["eip155:8453"] || null,
     // The last paid call we made to this seller on each chain, when it did not
     // deliver. Outranks the settlement gate: history cannot see an outage.
-    deliveryFailing: local ? null : deliveryFailingByChain(origin),
+    deliveryFailing: local ? null : deliveryFailingByChain(origin, spendChains),
   });
   // `executeVia` names the route-execute tier that covers this row's price. On
   // a row the router will NOT pay right now it read as a callable affordance
@@ -1511,9 +1518,53 @@ function sellerToolVerdicts(detail) {
     return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
   });
 }
-function withDispatchSnapshot(snapshot) {
+// One seller row of a page's snapshot, labelled (the host's own row is not).
+const labelSeller = (sel) => (sel?.local ? sel : withDispatchFields(sel));
+// The labelled snapshot is the same object for /marketplace (both views) and
+// every chain page: labelling walks every seller, and each page used to do it
+// on its own rebuild. It is kept while everything a label reads is unchanged:
+// the snapshot (replaced, never mutated), the dispatch evidence (rebuilt at
+// most once a DISPATCH_EVIDENCE_TTL_MS), the spend chains and the set of
+// sellers whose paid calls are failing. Built in slices, so a rebuild never
+// labels every seller in one turn; each row is labelSeller's.
+const LABEL_YIELD_SELLERS = 200;
+let labelledMemo = null; // { snapshot, ev, chains, delivery, value }
+let labelledBuild = null; // { snapshot, ev, chains, delivery, promise }
+function labelInputs(snapshot) {
+  return { snapshot, ev: dispatchEvidence(), chains: spendChainsConfigured().join(","), delivery: sellerDeliveryFailingStamp() };
+}
+const sameLabelInputs = (a, b) => !!a && a.snapshot === b.snapshot && a.ev === b.ev && a.chains === b.chains && a.delivery === b.delivery;
+async function labelledSnapshotAsync(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.sellers)) return snapshot;
-  return { ...snapshot, sellers: snapshot.sellers.map((sel) => (sel?.local ? sel : withDispatchFields(sel))) };
+  const key = labelInputs(snapshot);
+  if (sameLabelInputs(labelledMemo, key)) return labelledMemo.value;
+  if (sameLabelInputs(labelledBuild, key)) return labelledBuild.promise;
+  const promise = (async () => {
+    // Labelled across turns from one set of inputs: when the evidence or the
+    // failing set moves between two slices, the pass starts again, so no
+    // answer mixes rows labelled from two readings.
+    for (let attempt = 0; ; attempt++) {
+      const inputs = attempt ? labelInputs(snapshot) : key;
+      const sellers = [];
+      let until = performance.now() + 8;
+      let moved = false;
+      for (const sel of snapshot.sellers) {
+        if (sellers.length % LABEL_YIELD_SELLERS === 0 && performance.now() >= until) {
+          await new Promise((r) => setImmediate(r));
+          until = performance.now() + 8;
+          if (attempt < 2 && !sameLabelInputs(labelInputs(snapshot), inputs)) { moved = true; break; }
+        }
+        sellers.push(labelSeller(sel));
+      }
+      if (moved) continue;
+      const value = { ...snapshot, sellers };
+      labelledMemo = { ...inputs, value };
+      return value;
+    }
+  })();
+  labelledBuild = { ...key, promise };
+  promise.finally(() => { if (labelledBuild?.promise === promise) labelledBuild = null; }).catch(() => {});
+  return promise;
 }
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
@@ -2299,6 +2350,11 @@ installEgressMeter();
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
   setEgressOutcomeObserver((host, p, init) => { monitor.observeFetch(host, p, init, originNow()); });
+  // Identical answers (operator detail): live-data slugs only. A pure-CPU
+  // tool answers the same bytes to the same input by design, and the memory
+  // and identity-bound reads answer each payer from its own store.
+  const liveSlugs = new Set(Object.values(CATALOG).filter((d) => d?.slug && !isComputePayable(d) && d.category !== "memory" && !d.identityBound).map((d) => d.slug));
+  setIdenticalAnswerReader(({ sinceMs, untilMs }) => answerDigestWindow(sinceMs, untilMs).filter((r) => liveSlugs.has(r.slug)));
   monitor.start();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
@@ -2393,7 +2449,7 @@ function memoSurface(key, ttlMs, build) {
   if (hit) {
     if (!hit.rebuilding) {
       hit.rebuilding = true;
-      setImmediate(() => {
+      setImmediate(() => runAsJob(surfaceJobName(key), () => {
         try {
           const partial = !stateStoresLoaded();
           const built = build();
@@ -2402,7 +2458,7 @@ function memoSurface(key, ttlMs, build) {
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
         } finally { hit.rebuilding = false; }
-      });
+      }));
     }
     return hit.value;
   }
@@ -2418,6 +2474,9 @@ function memoSurface(key, ttlMs, build) {
 // fresh value instead of taking the stale one. A built value that says it is
 // partial (it read a partial memo) is stored as partial.
 const surfaceBuilds = new Map();
+// A rebuild runs as a named background job (src/active-jobs.js) so a stall
+// line names it; the name is the key's first two segments, never a value.
+function surfaceJobName(key) { return `surface:${String(key).split(":").slice(0, 2).join(":")}`; }
 async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false } = {}) {
   const hit = surfaceMemo.get(key);
   const now = Date.now();
@@ -2427,7 +2486,7 @@ async function memoSurfaceAsync(key, ttlMs, buildAsync, { awaitRebuild = false }
     pending = (async () => {
       try {
         const loading = !stateStoresLoaded();
-        const built = await buildAsync();
+        const built = await runAsJob(surfaceJobName(key), buildAsync);
         const partial = loading || built?.partial === true;
         const value = partial ? markPartialState(built) : built;
         surfaceMemo.set(key, { at: Date.now(), value, partial });
@@ -2462,20 +2521,42 @@ app.use(requestTimingMiddleware((req) => {
   for (const [re, k] of BEARER_PATH_KEYS) if (re.test(path)) return `${method} ${k}`;
   // Outside /api and /v1, collapse to the first segment: /tools/<slug> alone is
   // 600 pages and filled the key table within ten minutes on production.
+  // A segment no registered route starts with reads "(other)": the key reaches
+  // the stall alarm's public issue text, so a caller's own path never does.
   const segs = path.split("/").filter(Boolean);
-  if (segs[0] === "api" || segs[0] === "v1") return `${method} /${segs.slice(0, 2).join("/")}`;
-  return `${method} /${segs[0] || ""}${segs.length > 1 ? "/*" : ""}`;
+  const known = knownRouteSegments();
+  if (segs[0] === "api" || segs[0] === "v1") return `${method} /${segs[0]}/${segs[1] == null ? "" : known.has(`${segs[0]}/${segs[1]}`) ? segs[1] : "(other)"}`;
+  if (!segs.length) return `${method} /`;
+  return `${method} /${known.has(segs[0]) ? segs[0] : "(other)"}${segs.length > 1 ? "/*" : ""}`;
 }, carriesPaidCredential));
-setStallContext(() => oldestInFlight(3));
+// First path segments (and "api/<x>", "v1/<x>") that some registered route or
+// catalog entry starts with, read once from the router after the routes exist.
+let knownSegs = null;
+function knownRouteSegments() {
+  if (knownSegs && knownSegs.size) return knownSegs;
+  const set = new Set();
+  const addPath = (p) => {
+    if (typeof p !== "string") return;
+    const parts = p.split("/").filter(Boolean);
+    if (!parts.length || /^[:*(]/.test(parts[0])) return;
+    set.add(parts[0]);
+    if ((parts[0] === "api" || parts[0] === "v1") && parts[1] && !/^[:*(]/.test(parts[1])) set.add(`${parts[0]}/${parts[1]}`);
+  };
+  try { for (const layer of app.router?.stack || app._router?.stack || []) { const rp = layer?.route?.path; for (const p of Array.isArray(rp) ? rp : [rp]) addPath(p); } } catch { /* best effort */ }
+  for (const k of Object.keys(CATALOG)) addPath(k.slice(k.indexOf(" ") + 1));
+  knownSegs = set;
+  return set;
+}
+setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it
 // is parsed, so the thread stays free for payment verification and paid
-// handlers. Protected: /health, /__operator, the MCP connector's loopback
+// handlers. Protected: /health and /health/ready, /__operator, the MCP connector's loopback
 // replay, the Stripe webhook, every priced catalog route and the /v1
 // gateway (paid or not: the unpaid 402 is the first step of a purchase).
 app.use((req, res, next) => {
   const path = String(req.path || "/");
-  if (path === "/health" || path.startsWith("/__operator") || path === "/api/stripe/webhook") return next();
+  if (path === "/health" || path === "/health/ready" || path.startsWith("/__operator") || path === "/api/stripe/webhook") return next();
   const why = shouldShedFree({ inFlight: inFlightCount() });
   if (!why) return next();
   // The MCP connector's paid replay (its marker header AND a local socket).
@@ -3570,7 +3651,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // billing settle refusal inside the hour) / demoted (a facilitator in its
     // settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" } }))),
+    // toolAnswers reads ok / degraded: one slug's outside 200s were empty
+    // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -3809,8 +3892,9 @@ const revenueWallets = () => ({
 // cache has actually gone stale. Best-effort, unref'd; skipped when the crawler
 // is off (offline tests) to keep them from hitting live RPCs.
 if (process.env.X402_INDEX_CRAWL !== "off" && process.env.X402_SYNC_ON_START !== "false") {
-  setTimeout(() => { revenueSnapshot(revenueWallets()).catch(() => {}); }, 4_000).unref();
-  setInterval(() => { revenueSnapshot(revenueWallets()).catch(() => {}); }, 5 * 60_000).unref();
+  const revenueTick = () => { runAsJob("revenue-snapshot", () => revenueSnapshot(revenueWallets())).catch(() => {}); };
+  setTimeout(revenueTick, 4_000).unref();
+  setInterval(revenueTick, 5 * 60_000).unref();
 }
 
 // Stealth-model availability probe (v1-chat-ox / stealth/ox-alpha). ONE
@@ -3843,8 +3927,8 @@ app.get("/__operator/revenue.json", revenueApi.operatorHandler);
 // rebuild they held the loop past a second.
 const revenueTurn = () => new Promise((r) => setImmediate(r));
 const revenueAllTime = ({ awaitRebuild = false } = {}) => memoSurfaceAsync("revenue:allTime", 60_000, async () => {
-  const allTime = ledgerSummary(revenueWallets()); await revenueTurn();
-  const sales = salesSummary(); await revenueTurn();
+  const allTime = await ledgerSummaryAsync(revenueWallets()); await revenueTurn();
+  const sales = await salesSummaryAsync(); await revenueTurn();
   const mpp = mppSales({ detailed: false });
   return { allTime, sales, mpp };
 }, { awaitRebuild });
@@ -3869,8 +3953,8 @@ const REVENUE_DAY_COUNTS = Symbol("revenue-day-counts");
 async function buildRevenueDaily() {
   const turn = () => new Promise((r) => setImmediate(r));
   const w = revenueWallets();
-  const daily = ledgerDaily(w, mppTxHashes(), { withScope: true }); await turn();
-  const events = externalPaymentEventsFor(w); await turn();
+  const daily = await ledgerDailyAsync(w, mppTxHashes(), { withScope: true }); await turn();
+  const events = await externalPaymentEventsForAsync(w); await turn();
   const buyers = ledgerBuyersDaily(w, { events }); await turn();
   const buyersWeekly = ledgerBuyersWeekly(w, { events }); await turn();
   const buyersMonthly = ledgerBuyersMonthly(w, { events }); await turn();
@@ -4575,9 +4659,11 @@ app.post("/__operator/monitors/run", (req, res) => {
 // ranking (see salesSummary's contract in src/sales-ledger.js for why each of
 // those three came out). The itemized view is operator-only, below; the
 // analyzed per-tool layer is the paid bestsellers tool.
-app.get("/api/sales", (_req, res) => {
+// Its own 60 s reading, not the shared page figures: a settled sale shows here
+// within the minute, and the summary is still built one query per turn.
+app.get("/api/sales", async (_req, res) => {
   try {
-    res.set("Cache-Control", "public, max-age=60").json(memoSurface("sales:summary", 60_000, () => salesSummary()));
+    res.set("Cache-Control", "public, max-age=60").json(await memoSurfaceAsync("sales:summary", 60_000, () => salesSummaryAsync({ days: 30 })));
   } catch (err) {
     // Public route: a SQLite failure message names the ledger's absolute
     // path — log it, answer generically (leak audit 2026-08-18).
@@ -5364,6 +5450,13 @@ const SERVING = {
   s5xxRate: Number(process.env.ALERT_5XX_RATE) || 0.05,
   totalMin: 100,
   shed1h: Number(process.env.ALERT_SHED_PER_HOUR) || 200,
+  // One stall at least this long in the last hour degrades on its own
+  // ("stall"), whatever the count; ALERT_STALL_MS=off disables it (0 here).
+  stallMs: stallAlarmMsFromEnv(process.env.ALERT_STALL_MS),
+  // One paid call whose handler ran this long in the last hour degrades
+  // ("slow-paid"); a route declared slow is held to its own run budget
+  // instead (src/slow-paid-calls.js). ALERT_SLOW_PAID_MS=off disables it.
+  slowPaidMs: slowPaidMsFromEnv(process.env.ALERT_SLOW_PAID_MS),
 };
 function servingHealth() {
   const loop = loopLagStatus();
@@ -5373,13 +5466,20 @@ function servingHealth() {
   const reasons = [];
   if ((loop.lastMinute?.p99 ?? 0) > SERVING.loopP99Ms) reasons.push("loop-p99");
   if (stalls.count > SERVING.stalls1h) reasons.push("stalls");
+  // The routes and jobs named by the long stalls: names only, never a value.
+  const longStall = longStallVerdict(SERVING.stallMs, 3600_000);
+  if (longStall.degraded) reasons.push("stall");
+  // Paid calls whose handler ran past its bound while the loop may have been
+  // fine: slugs only, never a payer or an amount.
+  const slowPaid = slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs);
+  if (slowPaid.degraded) reasons.push("slow-paid");
   if (counts.paid >= SERVING.paidMin && counts.paid5xx / counts.paid > SERVING.paidErrorRate) reasons.push("paid-errors");
   if (counts.total >= SERVING.totalMin && counts.s5xx / counts.total > SERVING.s5xxRate) reasons.push("5xx");
   const shedWords = shedVerdict(shed, SERVING.shed1h);
   reasons.push(...shedWords.reasons);
   const paidRoutes = routeTimings({ top: 200, minSamples: 5 }).filter((r) => Object.prototype.hasOwnProperty.call(CATALOG, r.route)).sort((a, b) => b.count - a.count).slice(0, 10)
     .map((r) => ({ route: r.route, count: r.count, p95Ms: r.totalMs.p95, computeP95Ms: r.computeMs.p95 }));
-  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes };
+  return { status: reasons.length ? "degraded" : "ok", reasons, info: shedWords.info, thresholds: SERVING, loop: { p99LastMinuteMs: loop.lastMinute?.p99 ?? null, maxLastMinuteMs: loop.lastMinute?.max ?? null, stalls1h: stalls.count, maxStall1hMs: stalls.maxMs }, responses1h: counts, shed, paidRoutes, stallCulprits: longStall.culprits, stallCause: longStall.cause, slowPaid, recentStalls: recentStalls(), recentSlowPaid: recentSlowPaidCalls() };
 }
 // The shed counter is cumulative since boot; reset hourly so "shed in the last
 // hour" means that.
@@ -5402,7 +5502,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -6748,11 +6848,13 @@ function indexSnapshotStale() {
 function refreshIndexSnapshotInBackground() {
   if (indexSnapshotRefreshing) return;
   indexSnapshotRefreshing = true;
-  // setImmediate so the current request returns before we recompute.
-  setImmediate(() => {
+  // setImmediate so the current request returns before we recompute; the
+  // build itself runs in slices (indexSnapshotAsync), never one long turn.
+  setImmediate(async () => {
     try {
       const version = indexCacheVersion();
-      indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()), version };
+      const value = await indexSnapshotAsync(indexCtx());
+      indexSnapshotCache = { at: Date.now(), value, version };
     } catch (e) {
       // Don't poison the cache on a transient error — leave the prior value.
     } finally {
@@ -6777,7 +6879,7 @@ function settlementRailCount() {
 function leaderboardSelfFigures() {
   return memoSurface("leaderboard:self", 60_000, () => {
     try {
-      const rails = railsWithOutsideSettlements(externalByNetwork({ days: 36_500 }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
+      const rails = railsWithOutsideSettlements(sharedByNetwork({ days: HOST_ALL_TIME_DAYS }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
       return { railsWithOutside: rails.withOutside, railsOffered: rails.offered, mppExternal: Number(mppSales({ detailed: false }).externalCount) || 0 };
     } catch { return null; }
   });
@@ -6794,9 +6896,10 @@ function getIndexSnapshot() {
     // Cold start — block once so the first response isn't empty.
     // While the incremental warm-start is still filling the cache (~2 s after
     // boot), serve a fresh snapshot but do NOT start the 30 s TTL on it: a
-    // half-loaded ecosystem must never be pinned for half a minute.
+    // half-loaded ecosystem must never be pinned for half a minute. Readers
+    // during the warm start share one snapshot (warmStartSnapshot).
+    if (indexWarmStartInProgress()) return warmStartSnapshot(indexCtx());
     const value = indexSnapshot(indexCtx());
-    if (indexWarmStartInProgress()) return value;
     indexSnapshotCache = { at: Date.now(), value, version: indexCacheVersion() };
     return indexSnapshotCache.value;
   }
@@ -6816,32 +6919,51 @@ function getIndexSnapshot() {
 let navChainsMemo = { snapshot: null, board: null, value: null };
 // A gated rail joining the live offer adds a chain page: rebuild the strip.
 onGatedRailOffered(() => { navChainsMemo = { snapshot: null, board: null, value: null }; });
+function navChainEntry(chainKey, snapshot, board) {
+  const label = chainKey, href = `/${chainKey}`;
+  try {
+    // sellers = operator count (matches the roster). tools = catalog depth
+    // on that chain, summed over the chain's sellers (unique origins — tools
+    // are per-endpoint, so no operator-collapse here). Both are the numbers
+    // an agent picks a chain on: how many sellers, how much to buy.
+    const tools = marketSellers(chainKey, snapshot).reduce((s, x) => s + (x.toolCount || 0), 0);
+    return { label, href, sellers: marketOperatorCount(chainKey, snapshot, board), tools, healthy: true };
+  } catch {
+    return { label, href, sellers: null, tools: null, healthy: false };
+  }
+}
+const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null);
+// A chain that failed to count is retried on the next render, not pinned.
+function keepNavChains(snapshot, board, value) {
+  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+}
 setNavIndexProvider(() => {
   const snapshot = getIndexSnapshot();
   const board = getLeaderboardSnapshot();
-  if (navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null)) return navChainsMemo.value;
-  const chain = (label, href, chainKey) => {
-    try {
-      // sellers = operator count (matches the roster). tools = catalog depth
-      // on that chain, summed over the chain's sellers (unique origins — tools
-      // are per-endpoint, so no operator-collapse here). Both are the numbers
-      // an agent picks a chain on: how many sellers, how much to buy.
-      const tools = marketSellers(chainKey, snapshot).reduce((s, x) => s + (x.toolCount || 0), 0);
-      return { label, href, sellers: marketOperatorCount(chainKey, snapshot, board), tools, healthy: true };
-    } catch {
-      return { label, href, sellers: null, tools: null, healthy: false };
-    }
-  };
+  if (navChainsFresh(snapshot, board)) return navChainsMemo.value;
   // Iterates CHAIN_PAGES so a third chain page joins the nav/footer strip
   // with zero server.js edits — add the entry in market-page.js and it
   // appears here automatically.
   const value = {
-    chains: Object.keys(CHAIN_PAGES).map((key) => chain(key, `/${key}`, key)),
+    chains: Object.keys(CHAIN_PAGES).map((key) => navChainEntry(key, snapshot, board)),
   };
-  // A chain that failed to count is retried on the next render, not pinned.
-  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+  keepNavChains(snapshot, board, value);
   return value;
 });
+// The same strip, one chain per event-loop turn: an async page builder warms
+// it before it renders, so the render's nav reads the memo instead of counting
+// every chain's sellers in its own turn.
+async function warmNavChains() {
+  const snapshot = getIndexSnapshot();
+  const board = getLeaderboardSnapshot();
+  if (navChainsFresh(snapshot, board)) return;
+  const chains = [];
+  for (const key of Object.keys(CHAIN_PAGES)) {
+    await new Promise((r) => setImmediate(r));
+    chains.push(navChainEntry(key, snapshot, board));
+  }
+  if (getIndexSnapshot() === snapshot && (getLeaderboardSnapshot()?.leaderboard || null) === (board?.leaderboard || null)) keepNavChains(snapshot, board, { chains });
+}
 // /index — legacy surface, merged into /marketplace (301 keeps SEO equity).
 app.get("/index", (_req, res) => res.redirect(301, "/marketplace"));
 // /stellar's receipt strip reuses stellarRail with the same 60s cache
@@ -6918,7 +7040,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: await labelledSnapshotAsync(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -7012,7 +7134,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: await labelledSnapshotAsync(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -7235,7 +7357,8 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
+  const labelled = await labelledSnapshotAsync(snapshot);
+  return marketPage(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
@@ -7363,12 +7486,15 @@ function ourToolsAsIndexRows() {
     networks: publicNetworks(),
   }));
 }
-app.get("/marketplace/tools", (req, res) => {
+app.get("/marketplace/tools", async (req, res) => {
+  // A directory not built yet is built in slices while this request waits.
+  const ourTools = ourToolsAsIndexRows();
+  await indexRowsReady({ ourTools, excludeOrigin: BASE_URL });
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const search = String(req.query.q || req.query.search || "").slice(0, 120);
   const category = String(req.query.category || "").slice(0, 60);
   const source = String(req.query.source || "").slice(0, 20);
-  const data = allIndexedTools({
+  const data = await allIndexedToolsAsync({
     search,
     category,
     source,
@@ -7376,13 +7502,15 @@ app.get("/marketplace/tools", (req, res) => {
     offset: (page - 1) * INDEX_TOOLS_PAGE_SIZE,
     limit: INDEX_TOOLS_PAGE_SIZE,
     excludeOrigin: BASE_URL,
-    ourTools: ourToolsAsIndexRows(),
+    ourTools,
   });
   htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, indexedToolCategories(BASE_URL), { search, category, source, page }));
 });
 // Machine-readable twin. Free, like every other discovery surface here.
-app.get("/api/index/tools", (req, res) => {
-  const data = allIndexedTools({
+app.get("/api/index/tools", async (req, res) => {
+  const ourTools = ourToolsAsIndexRows();
+  await indexRowsReady({ ourTools, excludeOrigin: BASE_URL });
+  const data = await allIndexedToolsAsync({
     search: String(req.query.q || req.query.search || "").slice(0, 120),
     category: String(req.query.category || "").slice(0, 60),
     network: String(req.query.network || "").slice(0, 40),
@@ -7390,7 +7518,7 @@ app.get("/api/index/tools", (req, res) => {
     offset: req.query.offset,
     limit: req.query.limit,
     excludeOrigin: BASE_URL,
-    ourTools: ourToolsAsIndexRows(),
+    ourTools,
   });
   // The machine twin of the listing page, and partial in the same two ways its
   // sibling /api/index was: `results` is one window of `matched`, and `matched`
@@ -7421,13 +7549,21 @@ app.get("/api/index/tools", (req, res) => {
     ...data,
   });
 });
-app.get("/marketplace", async (req, res) => {
+// Built across event-loop turns (labelling, the nav strip and the page itself
+// are each sliced) and served from the memo while the next one builds.
+async function buildMarketplacePage(all) {
   const snapshot = getIndexSnapshot();
   let leaderboardSnap = null;
   try { leaderboardSnap = getLeaderboardSnapshot(); } catch { /* directory still renders */ }
   let economySnap = null;
   try { economySnap = await x402EconomySnapshot(); } catch { /* strip omitted */ }
-  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() })));
+  const labelled = await labelledSnapshotAsync(snapshot);
+  await warmNavChains();
+  return marketPageAsync(null, BASE_URL, { snapshot: labelled, leaderboardSnap, economySnap, all, wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() });
+}
+app.get("/marketplace", async (req, res) => {
+  const all = req.query.all === "1";
+  htmlCache(res, 120, 600).send(await memoSurfaceAsync(`market:all:${all}`, 60_000, () => buildMarketplacePage(all)));
 });
 // The host's own entry for the discovery surfaces: external-only ledger
 // figures, rendered outside every ranking and count (src/host-entry.js).
@@ -7439,6 +7575,8 @@ app.get("/marketplace", async (req, res) => {
 // doctrine as the economy snapshot: serve the cached value, rebuild past the
 // window, never block a visitor on the ledger.
 const HOST_FIGURES_TTL_MS = Number(process.env.HOST_FIGURES_TTL_MS) || 60_000;
+// The "recorded" window hostFigures reads (src/host-entry.js ALL_TIME_DAYS).
+const HOST_ALL_TIME_DAYS = 36_500;
 const hostFiguresCache = new Map(); // chainKey|"" -> { at, value }
 // What a chain page needs beyond its snapshot: the settlement premium the 402
 // adds on that chain (the same NETWORK_PRICE_PREMIUMS map the accepts builder
@@ -7453,15 +7591,56 @@ function chainPageExtras(chainKey) {
   const caip2 = CHAIN_PAGES[chainKey]?.caip2;
   return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, routerChains: spendChainsConfigured() };
 }
+// The ledger reads behind every host entry are the same four whichever page
+// asks: the 30-day and recorded summaries and the per-network split over the
+// same two windows. Each is a full pass over the ledger window, and every
+// chain page, /marketplace and /leaderboard read them under its own cache
+// key, so a minute of page traffic ran them once per page, each set in one
+// synchronous turn. They are now one shared reading: built in the background
+// one query per event-loop turn, served stale while the next one builds,
+// refreshed past HOST_FIGURES_TTL_MS, and built at boot. A page then only
+// picks its network's row out of it.
+const LEDGER_FIGURE_WINDOWS = [30, HOST_ALL_TIME_DAYS];
+let ledgerFigures = null; // { at, summary: Map(days -> salesSummary), byNetwork: Map(days -> externalByNetwork) }
+let ledgerFiguresBuild = null;
+function refreshLedgerFigures() {
+  if (!ledgerFiguresBuild) {
+    ledgerFiguresBuild = (async () => {
+      const summary = new Map(), byNetwork = new Map();
+      for (const days of LEDGER_FIGURE_WINDOWS) summary.set(days, await salesSummaryAsync({ days }));
+      for (const days of LEDGER_FIGURE_WINDOWS) byNetwork.set(days, await externalByNetworkAsync({ days }));
+      ledgerFigures = { at: Date.now(), summary, byNetwork };
+      return ledgerFigures;
+    })().finally(() => { ledgerFiguresBuild = null; });
+  }
+  return ledgerFiguresBuild;
+}
+// The shared reading, never older than the TTL plus one background build. Cold
+// (before the boot build lands) it is read once in line, as the per-page read
+// always was, and shared from then on.
+function currentLedgerFigures() {
+  const f = ledgerFigures;
+  if (f) {
+    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch((e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
+    return f;
+  }
+  const summary = new Map(), byNetwork = new Map();
+  for (const days of LEDGER_FIGURE_WINDOWS) { summary.set(days, salesSummary({ days })); byNetwork.set(days, externalByNetwork({ days })); }
+  ledgerFigures = { at: Date.now(), summary, byNetwork };
+  return ledgerFigures;
+}
+setImmediate(() => { salesLedgerReady().then(() => refreshLedgerFigures()).catch(() => { /* the first page read builds it */ }); });
+const sharedSummary = ({ days = 30 } = {}) => currentLedgerFigures().summary.get(days) ?? salesSummary({ days });
+const sharedByNetwork = ({ days = 30 } = {}) => currentLedgerFigures().byNetwork.get(days) ?? externalByNetwork({ days });
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
-  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS) return hit.value;
+  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS && hit.figures === ledgerFigures) return hit.value;
   let value = null;
   try {
-    value = hostFigures({ summaryFn: salesSummary, byNetworkFn: externalByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
+    value = hostFigures({ summaryFn: sharedSummary, byNetworkFn: sharedByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
   } catch { value = hit ? hit.value : null; } // a failed rebuild keeps the last good figures
-  hostFiguresCache.set(key, { at: Date.now(), value });
+  hostFiguresCache.set(key, { at: Date.now(), value, figures: ledgerFigures });
   return value;
 }
 // The MPP page's host row: outside settlements on Tempo, MPP's native rail,
@@ -9010,6 +9189,19 @@ app.use(progressMiddleware());
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
 if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
+// A paid call to a slow route sent without Prefer: respond-async (or a Prefer:
+// wait that covers the run budget) runs as a job when the client follows a 202
+// on its own, and is refused before any gate otherwise, so a client that gives
+// up early is never charged for an answer it cannot collect
+// (src/slow-sync-window.js). Our own loopbacks pass: an async job's replay
+// (its marker, from a local socket; the async middleware below verifies it)
+// and the MCP connector's paid replay.
+{
+  const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+  const isInternalReplay = (req) => isMcpLoopback(req)
+    || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOCAL.has(String(req.socket?.remoteAddress || "")));
+  app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
+}
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
@@ -10065,7 +10257,7 @@ if (!FREE_MODE) {
     // Every catalog answer past the gates is counted by its final status
     // (src/tool-failure-monitor.js); our own probes, canaries and wallets
     // count on their own lane.
-    if (def) noteToolOutcomeOnClose(req, res, def.slug);
+    if (def) noteToolOutcomeOnClose(req, res, def.slug, def);
     if (!def || res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     if (!(quotedPriceUsd(def, req) > 0)) return next();
     req.__a402Dispatched = true;
@@ -10125,15 +10317,32 @@ function callIsOurs(req) {
   if (isSyntheticRequest(req)) return true;
   try { return isOwnWallet(paidCallPayer(req)); } catch { return false; }
 }
-function noteToolOutcomeOnClose(req, res, slug) {
+// The checkable contract of each catalog tool's 200 (src/answer-shape.js),
+// built once per tool on its first answer. A pure-CPU tool's empty answer is
+// its input's answer, so only its error shape is read.
+const answerContracts = new WeakMap();
+function answerContractFor(def) {
+  let c = answerContracts.get(def);
+  if (!c) { c = answerContractOf(def, { deterministic: isComputePayable(def) }); answerContracts.set(def, c); }
+  return c;
+}
+function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
   const synthetic = callIsOurs(req);
   if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
+  // The JSON body handed to res.json, held by reference (nothing is copied or
+  // serialized) and read only after the response closed, so classifying it
+  // never delays, changes or bills the answer.
+  const answer = def ? observeJsonAnswer(res) : null;
   res.once("close", () => {
     try {
       const status = res.headersSent ? res.statusCode : 499;
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted });
+      if (answer && status === 200) {
+        const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
+        toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
+      }
     } catch { /* bookkeeping only */ }
   });
 }
@@ -10836,6 +11045,9 @@ setUnloadedStoresProbe(unloadedStores);
   if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
   else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
+// The all-time ledger totals behind the home page count and /revenue are built
+// now, across turns, so the first visitor's request does not read them in line.
+revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
@@ -10909,7 +11121,20 @@ if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
-  startCrawler({ selfOrigin: BASE_URL });
+  // Once the warm start is in, the index snapshot, the seller summaries and
+  // the tool directory are built in slices, so the first page, search or
+  // /marketplace/tools visitor does not build one in its own turn.
+  startCrawler({ selfOrigin: BASE_URL, onWarmed: () => {
+    (async () => {
+      if (!indexSnapshotCache.value) {
+        const version = indexCacheVersion();
+        const value = await indexSnapshotAsync(indexCtx());
+        if (!indexSnapshotCache.value) indexSnapshotCache = { at: Date.now(), value, version };
+      }
+      await warmRoutableSellerSummaries();
+      await indexRowsReady({ ourTools: ourToolsAsIndexRows(), excludeOrigin: BASE_URL });
+    })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
+  } });
 }
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them

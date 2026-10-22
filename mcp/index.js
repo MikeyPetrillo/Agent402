@@ -358,7 +358,10 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   const init = { method: tool.method, headers: { Accept: "application/json" } };
   // A slow route runs as a job (./async-job.js): the paid call asks for one,
   // and the job link is polled (free) until the answer is ready.
-  const asyncHeaders = shouldRequestAsync(tool.async, ASYNC_MODE) ? { Prefer: "respond-async" } : {};
+  // With async off, a route that needs a header either way says how long to
+  // wait (async.preferWait), so the call waits on the connection instead.
+  const asyncHeaders = shouldRequestAsync(tool.async, ASYNC_MODE) ? { Prefer: "respond-async" }
+    : typeof tool.async?.preferWait === "string" && /^wait=\d+$/.test(tool.async.preferWait) ? { Prefer: tool.async.preferWait } : {};
   const collect = (r) => awaitJob(r, { baseUrl: BASE, fetchImpl: ownFetch, timeoutMs: ASYNC_TIMEOUT_MS, onProgress, slug: tool.slug });
   if (tool.method === "GET") {
     for (const [k, v] of Object.entries(args)) {

@@ -542,6 +542,14 @@ Auto-closes when the word is ok.`;
     body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
   },
   {
+    // Paid 200s whose body is empty or error-shaped (toolAnswers,
+    // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
+    // Title matches heartbeat.yml's.
+    title: "toolAnswers: a tool is answering empty or error-shaped 200s",
+    verdict: ({ gateway: b }) => wordVerdict(b.toolAnswers?.status, ["degraded"], ["ok"]),
+    body: () => failureWordBody("toolAnswers", "degraded"),
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does

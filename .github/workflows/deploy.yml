@@ -1413,6 +1413,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
+          t node scripts/test-index-persist-slices-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
           t node scripts/test-index-reprice-replicas-pg.js
           # Index side stores merge per key and fold the other container's changes on the pull
@@ -1582,6 +1584,10 @@ jobs:
           t node scripts/test-async-jobs.js
           # Through the CDN proxy: a paid call to a route that outlasts its wait runs as a job (a 202-following SDK) or is refused before any gate; LLM and image waits end inside the bound; 402s and paid answers are never cacheable (paid-mode boot vs stub facilitator and upstream - offline)
           t node scripts/test-cdn-sync-window.js
+          # A paid call to a slow route without Prefer: respond-async runs as a job (a 202-following SDK) or is refused before any gate; Prefer: wait keeps it synchronous; a job settles once on its result and never on a failure (paid-mode boot vs stub facilitator and upstream - offline)
+          t node scripts/test-slow-sync-window.js
+          # A file job store's boot sweep fails other boots' running jobs, so each server takes its own directory (AGENT402_TASK_DATA_DIR); two servers on one store reproduce it, two stores do not (paid-mode boots vs stub facilitator and upstream - offline)
+          t node scripts/test-task-store-isolation.js
           # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
           t node scripts/test-async-jobs-body-loss.js
           # Slow routes advertise their duration and async advice; job progress (queued/running/stage/ETA), sinks keyed in-process only, throttled writes, terminal records never updated (offline)
@@ -1592,6 +1598,8 @@ jobs:
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
+          # The market pulse's supply picture builds and rebuilds in slices at production scale.
+          t node scripts/test-market-pulse-slices.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
           t node scripts/test-cache-hygiene.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
@@ -2743,10 +2751,15 @@ jobs:
           t node scripts/test-index-ndjson-warmstart.js
           t node scripts/test-stall-profiler.js
           t node scripts/test-offload-stalls.js
+          # Ledger and index figures behind the stalled routes build across turns: same answers as the one-turn reads, first request after a production-sized boot under the bound (boots the server; offline)
+          t node scripts/test-stall-routes.js
           t node scripts/test-manifest-input-schema.js
           t node scripts/test-request-timing.js
           t node scripts/test-surface-memo.js
           t node scripts/test-load-shed.js
+          t node scripts/test-stall-alarm.js
+          # A paid call whose handler runs past its bound pages, slugs only; declared-slow routes use their own budget (offline)
+          t node scripts/test-slow-paid-alarm.js
           t node scripts/test-perf-budget.js
           # Crawl cadence copy is derived (served pages cannot advertise a cadence we do not run — offline)
           t node scripts/test-crawl-cadence.js
@@ -2947,6 +2960,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports
+          t node scripts/test-answer-shape.js
           t node scripts/test-charged-failure-leg.js
           # 402 Index price sync (reprices only our own priced listings that drifted; other hosts, unpriced and unsold rows untouched - offline)
           t node scripts/test-index402-sync.js
@@ -3147,6 +3162,8 @@ jobs:
           # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
           t node scripts/test-mpp-agents-weekly.js
           t node scripts/test-attest-kit.js
+          # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
+          t node scripts/test-single-flight.js
           # Repo-wide: no count-named field is the length of a LIMITed query result (source scan, offline)
           t node scripts/test-capped-counts.js
           # Every published figure carries its own scope: a capped, sampled, windowed or filtered

@@ -69,9 +69,9 @@
     },
     {
       "slug": "audio-convert",
-      "name": "ogg to mp3 at 64k",
+      "name": "speech wav to mp3 at 64k",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+        "url": "https://agent402.tools/fixtures/sample-speech.wav",
         "bitrate": "64k"
       },
       "expect": {
@@ -90,7 +90,7 @@
       "slug": "audio-normalize",
       "name": "target -16 lufs",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+        "url": "https://agent402.tools/fixtures/sample-speech.wav",
         "targetLufs": -16
       },
       "expect": {
@@ -212,7 +212,7 @@
       "slug": "image-crop",
       "name": "rotate and flip",
       "input": {
-        "url": "https://raw.githubusercontent.com/ianare/exif-samples/master/jpg/Canon_40D.jpg",
+        "url": "https://agent402.tools/fixtures/sample-image.png",
         "left": 0,
         "top": 0,
         "width": 40,
@@ -235,7 +235,7 @@
       "slug": "image-dominant-color",
       "name": "one colour",
       "input": {
-        "url": "https://raw.githubusercontent.com/ianare/exif-samples/master/jpg/Canon_40D.jpg",
+        "url": "https://agent402.tools/fixtures/sample-image.png",
         "colors": 1
       },
       "expect": {
@@ -252,7 +252,7 @@
       "slug": "image-exif",
       "name": "a png with no exif is hasExif:false, not a 500",
       "input": {
-        "url": "https://tesseract.projectnaptha.com/img/eng_bw.png"
+        "url": "https://agent402.tools/fixtures/sample-text.png"
       },
       "expect": {
         "equals": {
@@ -269,7 +269,7 @@
       "name": "one image",
       "input": {
         "urls": [
-          "https://tesseract.projectnaptha.com/img/eng_bw.png"
+          "https://agent402.tools/fixtures/sample-text.png"
         ]
       },
       "expect": {
@@ -285,7 +285,7 @@
       "slug": "media-info",
       "name": "duration of the sample",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
+        "url": "https://agent402.tools/fixtures/sample-speech.wav"
       },
       "expect": {
         "gt": {
@@ -299,16 +299,16 @@
     },
     {
       "slug": "pdf",
-      "name": "W-9 text",
+      "name": "report text",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "gte": {
           "pages": 3
         },
         "matches": {
-          "text": "Taxpayer"
+          "text": "Paying for Tools per Request"
         }
       }
     },
@@ -317,8 +317,8 @@
       "name": "two small pdfs",
       "input": {
         "urls": [
-          "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
-          "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+          "https://agent402.tools/fixtures/sample-report.pdf",
+          "https://agent402.tools/fixtures/sample-report.pdf"
         ]
       },
       "expect": {
@@ -334,7 +334,7 @@
       "slug": "pdf-rotate",
       "name": "rotate one page 180",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "degrees": 180,
         "pages": "1"
       },
@@ -351,7 +351,7 @@
       "slug": "pdf-rotate",
       "name": "bad degrees is a 400",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "degrees": 45
       },
       "expect": {
@@ -676,7 +676,7 @@
       "slug": "skill-document-brief",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-invoice.pdf"
       },
       "expect": {
         "equals": {
@@ -691,7 +691,7 @@
       "slug": "skill-document-intel",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "equals": {
@@ -992,7 +992,7 @@
       "slug": "skill-media-pipeline",
       "name": "a second image",
       "input": {
-        "uploadPath": "https://tesseract.projectnaptha.com/img/eng_bw.png"
+        "uploadPath": "https://agent402.tools/fixtures/sample-text.png"
       },
       "expect": {
         "equals": {
@@ -1021,9 +1021,9 @@
     },
     {
       "slug": "skill-openapi-audit",
-      "name": "the petstore spec",
+      "name": "the openapi fixture",
       "input": {
-        "url": "https://petstore3.swagger.io/api/v3/openapi.json"
+        "url": "https://agent402.tools/fixtures/sample-openapi.json"
       },
       "expect": {
         "equals": {
@@ -1070,7 +1070,7 @@
       "slug": "skill-pdf-pipeline",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "equals": {
@@ -1487,7 +1487,7 @@
       "slug": "skill-subtitle-pipeline",
       "name": "srt output",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg",
+        "url": "https://agent402.tools/fixtures/sample-speech.wav",
         "format": "srt"
       },
       "expect": {

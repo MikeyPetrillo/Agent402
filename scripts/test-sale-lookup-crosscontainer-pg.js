@@ -41,6 +41,40 @@ try {
   const fresh = await sl.saleByTxFresh(TX);
   ok(fresh && fresh.payer?.toLowerCase() === BUYER && fresh.slug === "uuid", `saleByTxFresh finds the other container's sale on a miss (${JSON.stringify(fresh && { slug: fresh.slug, payer: fresh.payer })})`);
   ok((await sl.saleByTxFresh("0x" + "d5".repeat(32))) === null, "a transaction nobody recorded is still a miss");
+  // A miss while a pull is already running: that pull read the sales table
+  // before the other container's row landed, so the lookup must wait for it
+  // and pull again, not take its answer. The running pull is held on a lock
+  // over sale_feedback (it reads sales first, then sale_feedback).
+  {
+    const TX2 = "0x" + "c6".repeat(32);
+    const S = process.env.STATE_DB_SCHEMA;
+    const { default: pg } = await import("pg");
+    const holder = new pg.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    const other = new pg.Client({ connectionString: process.env.STATE_DATABASE_URL });
+    await holder.connect(); await other.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`LOCK TABLE ${S}.sale_feedback IN ACCESS EXCLUSIVE MODE`);
+      const running = sl.salesLedgerRefresh();
+      let waiting = false;
+      for (let i = 0; i < 200 && !waiting; i++) {
+        const r = await other.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%sale_feedback%'");
+        waiting = r.rows[0].n > 0;
+        if (!waiting) await new Promise((r2) => setTimeout(r2, 25));
+      }
+      ok(waiting, "a pull is running, past its read of the sales table");
+      await other.query(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES ($1, 'uuid', 0.001, 'usdc', 'base', $2, $3, 0, 'x402')`, [Date.now(), BUYER, TX2]);
+      const lookup = sl.saleByTxFresh(TX2);
+      await new Promise((r) => setTimeout(r, 100));
+      await holder.query("COMMIT");
+      await running;
+      const got = await lookup;
+      ok(got && got.payer?.toLowerCase() === BUYER, `a miss during a running pull waits for it and pulls again (${JSON.stringify(got && { slug: got.slug })})`);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      await holder.end().catch(() => {}); await other.end().catch(() => {});
+    }
+  }
   for (const f of ["src/tools/attest-kit.js", "src/tools/feedback-kit.js"]) {
     const src = readFileSync(join(ROOT, f), "utf8");
     ok(/deps\.saleByTx \|\| saleByTxFresh/.test(src) && /const sale = await lookup\(tx\)/.test(src), `${f.split("/").pop()} looks sales up with saleByTxFresh`);

@@ -450,6 +450,20 @@ await p.close();
   ok(["x402Version", "resource", "accepts", "extensions"].every((k) => !(k in rf.j)), "...and the payment offer is not relayed to the client");
   const pl = await viaRefusal("plain-400");
   ok(pl.status === 400 && pl.j.error === "bad input", "an upstream error with no offer is relayed as sent");
+
+  // An upstream the payment fetch cannot reach answers a 502 in each wire's
+  // own error shape: Anthropic on /v1/messages, OpenAI on chat completions.
+  const down = await startProxy({ upstream, payFetch: async () => { throw new Error("connect ECONNREFUSED"); }, port: 0 });
+  try {
+    const am = await fetch(`${down.baseUrl}/v1/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-5", messages: [] }) });
+    const aj = await am.json();
+    ok(am.status === 502 && aj.type === "error" && aj.error?.type === "upstream_error" && /ECONNREFUSED/.test(aj.error.message) && Object.keys(aj).sort().join() === "error,type",
+      `an unreachable upstream answers a Messages call with a 502 in the Anthropic error shape (${am.status} ${JSON.stringify(aj).slice(0, 160)})`);
+    const oc = await fetch(`${down.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "auto", messages: [] }) });
+    const oj = await oc.json();
+    ok(oc.status === 502 && !("type" in oj) && oj.error?.type === "upstream_error" && /ECONNREFUSED/.test(oj.error.message),
+      `...and a chat completions call with a 502 in the OpenAI error shape (${oc.status} ${JSON.stringify(oj).slice(0, 160)})`);
+  } finally { await down.close(); }
 }
 
 stub.close();

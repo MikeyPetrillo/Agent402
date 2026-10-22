@@ -83,13 +83,15 @@ globalThis.fetch = function (input, init) {
 };
 `);
 proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  // The slow-route sync window (src/slow-sync-window.js) is off: this suite
+  // drives slow routes synchronously; test-slow-sync-window.js covers the window.
+  env: { ...process.env, SLOW_SYNC_WINDOW_SECONDS: "off", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
     POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+    AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     // No forgiveness: a buyer who leaves before the first byte is settled and
     // booked as owed, the path whose settlement had no event.
     HANGUP_FORGIVE: "off",

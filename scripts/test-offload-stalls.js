@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -58,6 +59,25 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   x._resetFlatCacheForTest(); x._resetIndexRowsForTest();
   const sync = digest(x.allIndexedTools({ limit: 300, offset: 40_000 }));
   ok(bg === sync, "background and synchronous builds produce the same rows in the same order");
+  // A search is one pass over every row: the routes run it in slices, with
+  // the same answer as the whole pass.
+  for (const args of [{ search: "json", limit: 50, offset: 20 }, { category: "data", limit: 100 }, { source: "third-party", search: "price", limit: 10, offset: 300 }]) {
+    const whole = x.allIndexedTools(args);
+    const sliced = await x.allIndexedToolsAsync(args);
+    ok(isDeepStrictEqual(sliced, whole) && whole.matched > 0, `the sliced search answers as the whole pass (${JSON.stringify(args)}: ${whole.matched} matched)`);
+  }
+  {
+    // Counted from the rows themselves, not from the pass under test.
+    const narrow = await x.allIndexedToolsAsync({ search: "offload-stalls-marker", limit: 500 });
+    ok(narrow.matched === narrow.results.length && narrow.results.every((t) => /offload-stalls-marker/i.test(`${t.name} ${t.description}`)), `a search keeps only matching rows (${narrow.matched})`);
+    ok(narrow.described === narrow.results.filter((t) => t.described).length, `described counts the matched rows that carry a description (${narrow.described})`);
+  }
+  {
+    // The caller path: both directory routes await the sliced search.
+    const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const route = (p) => srv.slice(srv.indexOf(`app.get("${p}"`), srv.indexOf(`app.get("${p}"`) + 900);
+    ok(["/marketplace/tools", "/api/index/tools"].every((p) => /await allIndexedToolsAsync\(\{/.test(route(p))) && !/[^.\w]allIndexedTools\(/.test(srv), "the directory routes run the search in slices, never the whole pass");
+  }
 }
 
 // --- 1b. the router's per-tool records stay hidden, and the heap stays bounded
@@ -86,7 +106,7 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const fn = srv.slice(srv.indexOf("async function buildRevenueDaily()"), srv.indexOf("// Daily revenue series for the /revenue chart"));
   ok((fn.match(/await turn\(\)/g) || []).length >= 5, "the /revenue series yields the event loop between each figure");
   ok(/memoSurfaceAsync\("revenue:daily"/.test(srv), "the /revenue series is served stale while it rebuilds");
-  ok(/const events = externalPaymentEventsFor\(w\)/.test(fn) && (fn.match(/\{ events \}/g) || []).length === 6, "the six buyer figures share one read of the payment history");
+  ok(/const events = await externalPaymentEventsForAsync\(w\)/.test(fn) && (fn.match(/\{ events \}/g) || []).length === 6, "the six buyer figures share one read of the payment history");
   ok(/app\.get\("\/__operator\/heap\.json"[\s\S]{0,120}operatorAuthed\(req\)/.test(srv), "the heap read is operator-authed");
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
   ok(/enumerable: false/.test(idx) && !/toolHome: new WeakMap/.test(idx), "per-tool router records are hidden properties, not WeakMap entries");

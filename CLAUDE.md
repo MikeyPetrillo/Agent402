@@ -51,6 +51,9 @@ LLC: credit the entity, never a personal name.
   `docs/`: ecosystem-listing copy.
 
 ## Conventions
+- **Every change raises user, developer and agent experience together** (UX, DX, AX) and
+  breaks none of them: a page, an API answer and an agent-facing surface (MCP, llms.txt,
+  openapi, 402 bodies) are judged as one product.
 - **UI work reads `DESIGN.md` first** (tokens, type scale, components, voice); page modules use
   its `var(--token)` and `var(--fs-*)` values, never raw hex or literal sizes
   (`scripts/test-design-tokens.js`).
@@ -245,7 +248,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
   query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
-- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`, and `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer

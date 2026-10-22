@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
-import { recordTiming, routeTimings, installRequestTimingFetch, requestTimingMiddleware, oldestInFlight, inFlightCount, __resetTimingForTest } from "../src/request-timing.js";
+import { recordTiming, routeTimings, installRequestTimingFetch, requestTimingMiddleware, oldestInFlight, inFlightCount, requestsDuring, __resetTimingForTest } from "../src/request-timing.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -53,6 +53,21 @@ await new Promise((r) => setTimeout(r, 60));
 stop();
 ok(lines.some((l) => /\[loop-lag\] event loop blocked \d+ms .* in-flight: POST \/api\/x 900ms/.test(l)), `a stall line names the in-flight requests (${lines.find((l) => l.includes("loop-lag"))})`);
 ok(loopLagStatus().stalls >= 1, "the stall is counted");
+
+// A handler that blocks the loop and answers at the end of the block has left
+// the in-flight list before the lag timer fires: the stall still names it.
+const app2 = express();
+app2.use(requestTimingMiddleware((req) => `${req.method} ${req.path}`));
+app2.get("/hog", (_q, res) => { const u = Date.now() + 250; while (Date.now() < u); res.json({ ok: true }); });
+const srv2 = app2.listen(0); await new Promise((r) => srv2.once("listening", r));
+const lines2 = [];
+setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
+const stop3 = startLoopLagMonitor({ tickMs: 20, warnMs: 100, log: (l) => lines2.push(l), statsLog: () => {} });
+await new Promise((r) => setTimeout(r, 40));
+await fetch(`http://127.0.0.1:${srv2.address().port}/hog`);
+await new Promise((r) => setTimeout(r, 60));
+stop3(); srv2.close();
+ok(lines2.some((l) => /\[loop-lag\] event loop blocked \d+ms .* in-flight: GET \/hog \d+ms done/.test(l)), `a request that finished inside the stall is named (${lines2.find((l) => l.includes("loop-lag"))})`);
 const statLines = [];
 const stop2 = startLoopLagMonitor({ tickMs: 20, statsMs: 100, log: () => {}, statsLog: (l) => statLines.push(l) });
 await new Promise((r) => setTimeout(r, 260));

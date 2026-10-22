@@ -541,15 +541,20 @@
     },
     {
       "slug": "image-ocr",
-      "name": "a second sample image",
+      "name": "the text fixture read line by line",
       "input": {
-        "url": "https://tesseract.projectnaptha.com/img/eng_bw.png",
+        "url": "https://agent402.tools/fixtures/sample-text.png",
         "lang": "eng"
       },
       "expect": {
+        "equals": {
+          "lineCount": 2
+        },
         "gt": {
-          "lineCount": 2,
           "confidence": 50
+        },
+        "matches": {
+          "lines[1].text": "Invoice 402-0001 total 12\\.34 USD"
         },
         "populated": [
           "text"

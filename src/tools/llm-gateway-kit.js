@@ -757,6 +757,11 @@ export const RETIRING_MODELS = Object.freeze({
   // family prefix still admits the id; its successor is the same family's
   // current model, priced below it.
   "anthropic/claude-sonnet-4": { until: "2026-10-15", use: "anthropic/claude-sonnet-5.5" },
+  // Claude Sonnet 4.5 retires 2026-11-30 (Anthropic's model deprecations page,
+  // replacement claude-sonnet-5-5). SCHEDULED: served as itself until that
+  // day, then by the family's current model. Anthropic's dated id
+  // (claude-sonnet-4-5-20250929, a stock SDK default) resolves to this entry.
+  "anthropic/claude-sonnet-4.5": { until: "2026-11-30", use: "anthropic/claude-sonnet-5.5", asItselfUntil: true },
   // Qwen 3.5 9B (OpenRouter expiration_date 2026-10-21). The base tier admits
   // the qwen/ family; its successor is the family's current flash model,
   // priced below it and inside the tier's max_price.

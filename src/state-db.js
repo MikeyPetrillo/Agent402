@@ -25,6 +25,7 @@ import pg from "pg";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, createHash } from "node:crypto";
 import { dbSsl } from "./db-ssl.js";
+import { runAsJob } from "./active-jobs.js";
 
 const { Pool } = pg;
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,40}$/;
@@ -848,7 +849,7 @@ export async function withLease(name, opts = {}, fn) {
     failOpen: failOpenOpt = false, singleton = false, acquireTimeoutMs = stateDbTimeouts().leaseAcquireMs,
   } = opts || {};
   const failOpen = leaseMayFailOpen(name, { failOpen: failOpenOpt, singleton });
-  if (!stateDbEnabled()) return { ran: true, result: await fn(TRIVIAL_CTX) };
+  if (!stateDbEnabled()) return { ran: true, result: await runAsJob(name, () => fn(TRIVIAL_CTX)) };
   if (leasesStopped) return { ran: false, reason: "shutdown" };
   const key = leaseKey(owner, String(name));
   if (heldLeases.has(key)) return { ran: false, reason: "busy" };
@@ -867,7 +868,7 @@ export async function withLease(name, opts = {}, fn) {
       if (failOpen && uptimeMs >= leaseFailOpenMs()) {
         log(`[state-db] lease ${name}: acquire failed (${why}); running without it as the only container (up ${Math.round(uptimeMs / 60_000)} min)`);
         entry.failOpen = true;
-        return { ran: true, result: await fn(ctx), reason: "db-failopen" };
+        return { ran: true, result: await runAsJob(name, () => fn(ctx)), reason: "db-failopen" };
       }
       log(`[state-db] lease ${name}: acquire failed (${why}); this tick is skipped${failOpen ? ` (container up ${Math.round(uptimeMs / 1000)} s, under the fail-open age)` : failOpenOpt ? " (a singleton with more than one replica configured fails closed)" : ""}`);
       return { ran: false, reason: "db" };
@@ -890,7 +891,7 @@ export async function withLease(name, opts = {}, fn) {
     }, Math.max(250, Math.floor(entry.ttlMs / 3)));
     beat.unref?.();
     try {
-      const result = await fn(ctx);
+      const result = await runAsJob(name, () => fn(ctx));
       if (!entry.lost && !entry.released && Date.now() >= entry.confirmedAt + entry.ttlMs) markLeaseLost(entry, "the ttl passed with no renew");
       return entry.lost ? { ran: true, result, lost: true } : { ran: true, result };
     } finally {
@@ -1146,7 +1147,8 @@ export async function importOnce(name, { source = "", run }) {
  * (`reason: "busy"`), or the database could not say; fn's own result
  * otherwise. Without a database it is fn. `failOpen: true` only for loops
  * with no external effects (see withLease). Inside fn, `leaseStillHeld(name)`
- * is the fencing check before an external effect.
+ * is the fencing check before an external effect. While fn runs its name is
+ * an active job (src/active-jobs.js), so a [loop-lag] stall line names it.
  */
 export function leased(name, { ttlMs = 120_000, log = console.warn, failOpen = false, singleton = false, uptimeMs } = {}, fn) {
   if (typeof fn !== "function") throw new Error("leased needs a function");
