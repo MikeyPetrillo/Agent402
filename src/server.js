@@ -364,7 +364,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -592,7 +592,7 @@ import { ledgerPricingPage } from "./ledger-pricing.js";
 import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
-import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
+import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
 import { setPayerDustFloorUsd, externalPaymentEventsFor, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDaily, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
@@ -707,7 +707,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -1435,9 +1435,9 @@ function spendChainsConfigured() {
 // deliver keeps `routerDispatchEligible: true` and `executeViaCallableNow:
 // true` on every public row until its settlement count decays, which it never
 // does. Null when nothing is recorded, which is the ordinary case.
-function deliveryFailingByChain(origin) {
+function deliveryFailingByChain(origin, spendChains = spendChainsConfigured()) {
   const out = {};
-  for (const c of spendChainsConfigured()) {
+  for (const c of spendChains) {
     const f = sellerDeliveryFailingRecently(origin, c);
     if (f) out[c] = { at: new Date(f.at).toISOString(), status: f.status ?? null, ms: f.ms ?? null };
   }
@@ -1448,6 +1448,9 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   const ev = dispatchEvidence();
   const origin = norm(row.seller || row.origin || "");
   const networks = Array.isArray(row.networks) ? row.networks : [];
+  // Read once per row (each read is a few environment lookups, and a page
+  // labels every seller).
+  const spendChains = spendChainsConfigured();
   const verdict = dispatchEligibility({
     local,
     routable: local ? true : (row.routable !== undefined ? !!row.routable : true),
@@ -1457,7 +1460,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     // A route row is also judged on what it sells (src/route-category.js);
     // a seller-level verdict is not, since no one route's category decides it.
     ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate, routeText: row } : {}),
-    spendChains: spendChainsConfigured(),
+    spendChains,
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
     // Inherited (shared-wallet) evidence is bound to its wallet: at label time
@@ -1472,7 +1475,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     usdcDomain: row.evmDomainByNetwork?.["eip155:8453"] || null,
     // The last paid call we made to this seller on each chain, when it did not
     // deliver. Outranks the settlement gate: history cannot see an outage.
-    deliveryFailing: local ? null : deliveryFailingByChain(origin),
+    deliveryFailing: local ? null : deliveryFailingByChain(origin, spendChains),
   });
   // `executeVia` names the route-execute tier that covers this row's price. On
   // a row the router will NOT pay right now it read as a callable affordance
@@ -1513,9 +1516,53 @@ function sellerToolVerdicts(detail) {
     return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
   });
 }
-function withDispatchSnapshot(snapshot) {
+// One seller row of a page's snapshot, labelled (the host's own row is not).
+const labelSeller = (sel) => (sel?.local ? sel : withDispatchFields(sel));
+// The labelled snapshot is the same object for /marketplace (both views) and
+// every chain page: labelling walks every seller, and each page used to do it
+// on its own rebuild. It is kept while everything a label reads is unchanged:
+// the snapshot (replaced, never mutated), the dispatch evidence (rebuilt at
+// most once a DISPATCH_EVIDENCE_TTL_MS), the spend chains and the set of
+// sellers whose paid calls are failing. Built in slices, so a rebuild never
+// labels every seller in one turn; each row is labelSeller's.
+const LABEL_YIELD_SELLERS = 200;
+let labelledMemo = null; // { snapshot, ev, chains, delivery, value }
+let labelledBuild = null; // { snapshot, ev, chains, delivery, promise }
+function labelInputs(snapshot) {
+  return { snapshot, ev: dispatchEvidence(), chains: spendChainsConfigured().join(","), delivery: sellerDeliveryFailingStamp() };
+}
+const sameLabelInputs = (a, b) => !!a && a.snapshot === b.snapshot && a.ev === b.ev && a.chains === b.chains && a.delivery === b.delivery;
+async function labelledSnapshotAsync(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.sellers)) return snapshot;
-  return { ...snapshot, sellers: snapshot.sellers.map((sel) => (sel?.local ? sel : withDispatchFields(sel))) };
+  const key = labelInputs(snapshot);
+  if (sameLabelInputs(labelledMemo, key)) return labelledMemo.value;
+  if (sameLabelInputs(labelledBuild, key)) return labelledBuild.promise;
+  const promise = (async () => {
+    // Labelled across turns from one set of inputs: when the evidence or the
+    // failing set moves between two slices, the pass starts again, so no
+    // answer mixes rows labelled from two readings.
+    for (let attempt = 0; ; attempt++) {
+      const inputs = attempt ? labelInputs(snapshot) : key;
+      const sellers = [];
+      let until = performance.now() + 8;
+      let moved = false;
+      for (const sel of snapshot.sellers) {
+        if (sellers.length % LABEL_YIELD_SELLERS === 0 && performance.now() >= until) {
+          await new Promise((r) => setImmediate(r));
+          until = performance.now() + 8;
+          if (attempt < 2 && !sameLabelInputs(labelInputs(snapshot), inputs)) { moved = true; break; }
+        }
+        sellers.push(labelSeller(sel));
+      }
+      if (moved) continue;
+      const value = { ...snapshot, sellers };
+      labelledMemo = { ...inputs, value };
+      return value;
+    }
+  })();
+  labelledBuild = { ...key, promise };
+  promise.finally(() => { if (labelledBuild?.promise === promise) labelledBuild = null; }).catch(() => {});
+  return promise;
 }
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
@@ -6808,9 +6855,10 @@ function getIndexSnapshot() {
     // Cold start — block once so the first response isn't empty.
     // While the incremental warm-start is still filling the cache (~2 s after
     // boot), serve a fresh snapshot but do NOT start the 30 s TTL on it: a
-    // half-loaded ecosystem must never be pinned for half a minute.
+    // half-loaded ecosystem must never be pinned for half a minute. Readers
+    // during the warm start share one snapshot (warmStartSnapshot).
+    if (indexWarmStartInProgress()) return warmStartSnapshot(indexCtx());
     const value = indexSnapshot(indexCtx());
-    if (indexWarmStartInProgress()) return value;
     indexSnapshotCache = { at: Date.now(), value, version: indexCacheVersion() };
     return indexSnapshotCache.value;
   }
@@ -6830,32 +6878,51 @@ function getIndexSnapshot() {
 let navChainsMemo = { snapshot: null, board: null, value: null };
 // A gated rail joining the live offer adds a chain page: rebuild the strip.
 onGatedRailOffered(() => { navChainsMemo = { snapshot: null, board: null, value: null }; });
+function navChainEntry(chainKey, snapshot, board) {
+  const label = chainKey, href = `/${chainKey}`;
+  try {
+    // sellers = operator count (matches the roster). tools = catalog depth
+    // on that chain, summed over the chain's sellers (unique origins — tools
+    // are per-endpoint, so no operator-collapse here). Both are the numbers
+    // an agent picks a chain on: how many sellers, how much to buy.
+    const tools = marketSellers(chainKey, snapshot).reduce((s, x) => s + (x.toolCount || 0), 0);
+    return { label, href, sellers: marketOperatorCount(chainKey, snapshot, board), tools, healthy: true };
+  } catch {
+    return { label, href, sellers: null, tools: null, healthy: false };
+  }
+}
+const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null);
+// A chain that failed to count is retried on the next render, not pinned.
+function keepNavChains(snapshot, board, value) {
+  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+}
 setNavIndexProvider(() => {
   const snapshot = getIndexSnapshot();
   const board = getLeaderboardSnapshot();
-  if (navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null)) return navChainsMemo.value;
-  const chain = (label, href, chainKey) => {
-    try {
-      // sellers = operator count (matches the roster). tools = catalog depth
-      // on that chain, summed over the chain's sellers (unique origins — tools
-      // are per-endpoint, so no operator-collapse here). Both are the numbers
-      // an agent picks a chain on: how many sellers, how much to buy.
-      const tools = marketSellers(chainKey, snapshot).reduce((s, x) => s + (x.toolCount || 0), 0);
-      return { label, href, sellers: marketOperatorCount(chainKey, snapshot, board), tools, healthy: true };
-    } catch {
-      return { label, href, sellers: null, tools: null, healthy: false };
-    }
-  };
+  if (navChainsFresh(snapshot, board)) return navChainsMemo.value;
   // Iterates CHAIN_PAGES so a third chain page joins the nav/footer strip
   // with zero server.js edits — add the entry in market-page.js and it
   // appears here automatically.
   const value = {
-    chains: Object.keys(CHAIN_PAGES).map((key) => chain(key, `/${key}`, key)),
+    chains: Object.keys(CHAIN_PAGES).map((key) => navChainEntry(key, snapshot, board)),
   };
-  // A chain that failed to count is retried on the next render, not pinned.
-  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+  keepNavChains(snapshot, board, value);
   return value;
 });
+// The same strip, one chain per event-loop turn: an async page builder warms
+// it before it renders, so the render's nav reads the memo instead of counting
+// every chain's sellers in its own turn.
+async function warmNavChains() {
+  const snapshot = getIndexSnapshot();
+  const board = getLeaderboardSnapshot();
+  if (navChainsFresh(snapshot, board)) return;
+  const chains = [];
+  for (const key of Object.keys(CHAIN_PAGES)) {
+    await new Promise((r) => setImmediate(r));
+    chains.push(navChainEntry(key, snapshot, board));
+  }
+  if (getIndexSnapshot() === snapshot && (getLeaderboardSnapshot()?.leaderboard || null) === (board?.leaderboard || null)) keepNavChains(snapshot, board, { chains });
+}
 // /index — legacy surface, merged into /marketplace (301 keeps SEO equity).
 app.get("/index", (_req, res) => res.redirect(301, "/marketplace"));
 // /stellar's receipt strip reuses stellarRail with the same 60s cache
@@ -6932,7 +6999,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot: await labelledSnapshotAsync(snapshot), rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar"), ...chainPageExtras("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -7026,7 +7093,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot: await labelledSnapshotAsync(snapshot), rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand"), ...chainPageExtras("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -7249,7 +7316,8 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
+  const labelled = await labelledSnapshotAsync(snapshot);
+  return marketPage(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
@@ -7440,13 +7508,21 @@ app.get("/api/index/tools", async (req, res) => {
     ...data,
   });
 });
-app.get("/marketplace", async (req, res) => {
+// Built across event-loop turns (labelling, the nav strip and the page itself
+// are each sliced) and served from the memo while the next one builds.
+async function buildMarketplacePage(all) {
   const snapshot = getIndexSnapshot();
   let leaderboardSnap = null;
   try { leaderboardSnap = getLeaderboardSnapshot(); } catch { /* directory still renders */ }
   let economySnap = null;
   try { economySnap = await x402EconomySnapshot(); } catch { /* strip omitted */ }
-  htmlCache(res, 120, 600).send(memoSurface(`market:all:${req.query.all === "1"}`, 60_000, () => marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() })));
+  const labelled = await labelledSnapshotAsync(snapshot);
+  await warmNavChains();
+  return marketPageAsync(null, BASE_URL, { snapshot: labelled, leaderboardSnap, economySnap, all, wallet: WALLET_ADDRESS, host: hostEntryFigures(), routerChains: spendChainsConfigured(), chainsOffered: offeredChainCount(), tempo: tempoEnabled() });
+}
+app.get("/marketplace", async (req, res) => {
+  const all = req.query.all === "1";
+  htmlCache(res, 120, 600).send(await memoSurfaceAsync(`market:all:${all}`, 60_000, () => buildMarketplacePage(all)));
 });
 // The host's own entry for the discovery surfaces: external-only ledger
 // figures, rendered outside every ranking and count (src/host-entry.js).

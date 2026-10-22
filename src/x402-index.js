@@ -5821,7 +5821,7 @@ const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
 // The full tool contract + payees of one entry, memoized by identity. Built
-// here rather than inside computeAliasOriginsBase so the route index can
+// here rather than inside computeAliasOriginsBaseSteps so the route index can
 // prime it in the background as each re-crawled entry lands.
 function exactServiceKeyOf(v) {
   if (!v || typeof v !== "object") return null;
@@ -5850,7 +5850,13 @@ function exactServiceKeyOf(v) {
 // depend on the successions map as well and are folded in fresh on each call.
 let aliasBaseMemo = { version: -1, base: null, at: 0 };
 const ALIAS_CRAWL_STALE_MS = 60_000;
-export function computeAliasOrigins(cacheMap) {
+export function computeAliasOrigins(cacheMap) { return runSteps(computeAliasOriginsSteps(cacheMap)); }
+// The same set as steps (the snapshot builder runs them across turns): the
+// walks read the entries as they stood when the steps began, and the memo is
+// stamped with that version, so a cache that moved meanwhile is walked again
+// by the next reader.
+const ALIAS_YIELD_ENTRIES = 500;
+function* computeAliasOriginsSteps(cacheMap) {
   let base;
   // While a crawl runs, every cache.set bumps the version and would force a
   // full walk per reader; the last set (at most ALIAS_CRAWL_STALE_MS old) is
@@ -5858,8 +5864,9 @@ export function computeAliasOrigins(cacheMap) {
   const fresh = aliasBaseMemo.base && cacheMap === cache && (aliasBaseMemo.version === cacheVersion || (crawlInFlight && Date.now() - aliasBaseMemo.at < ALIAS_CRAWL_STALE_MS));
   if (fresh) base = aliasBaseMemo.base;
   else {
-    base = computeAliasOriginsBase(cacheMap);
-    if (cacheMap === cache) aliasBaseMemo = { version: cacheVersion, base, at: Date.now() };
+    const version = cacheVersion;
+    base = yield* computeAliasOriginsBaseSteps([...cacheMap]);
+    if (cacheMap === cache) aliasBaseMemo = { version, base, at: Date.now() };
   }
   const aliases = new Set(base);
   // A superseded origin hides for the same reason a redirect alias does: it is
@@ -5869,9 +5876,11 @@ export function computeAliasOrigins(cacheMap) {
   for (const o of supersededOrigins(cacheMap)) aliases.add(o);
   return aliases;
 }
-function computeAliasOriginsBase(cacheMap) {
+function* computeAliasOriginsBaseSteps(entries) {
   const byHost = new Map(); // canonical host -> { origin, v }
-  for (const [origin, v] of cacheMap) {
+  let walked = 0;
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     // A path seller shares its host with other sellers, so it is never the
     // host's primary, and never folded into one by host (see the loop below).
     if (sellerPrefixOf(origin)) continue;
@@ -5885,7 +5894,8 @@ function computeAliasOriginsBase(cacheMap) {
     return m;
   };
   const aliases = new Set();
-  for (const [origin, v] of cacheMap) {
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (sellerPrefixOf(origin)) continue;
     const ownHost = canonicalHost(origin);
     // A manifest served from another origin by permanent redirect is stronger
@@ -5918,7 +5928,8 @@ function computeAliasOriginsBase(cacheMap) {
     catch { return false; }
   };
   const exactGroups = new Map();
-  for (const [origin, v] of cacheMap) {
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (v?.error || aliases.has(origin)) continue;
     const key = exactServiceKey(v);
     if (!key) continue;
@@ -7077,6 +7088,7 @@ async function warmStartIndexOnce() {
     throw e;
   } finally {
     warmStartInProgress = false;
+    warmShared = null;
   }
   warmStartLastCount = n;
   console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
@@ -7168,6 +7180,7 @@ export async function loadPersistedIndexCacheAsync(file = INDEX_CACHE_NDJSON_FIL
     }
   } finally {
     warmStartInProgress = false;
+    warmShared = null;
   }
   console.log(`[x402-index] warm-started ${n} sellers from ${file} in ${Math.round(performance.now() - t0)}ms (longest turn ${Math.round(maxTurnMs)}ms${bad ? `, ${bad} unreadable line(s)` : ""})`);
   return n;
@@ -7935,8 +7948,37 @@ export function indexSnapshot(ctx) { return runSteps(indexSnapshotSteps(ctx)); }
  * and the server rebuilds the snapshot whenever the crawl has changed it.
  */
 export function indexSnapshotAsync(ctx) { return runSlicedAsync(indexSnapshotSteps(ctx)); }
+// While a warm start folds entries in, the server does not pin a snapshot (a
+// half-loaded ecosystem must not be kept), and every page and the nav strip
+// used to build their own, each in one turn, each a walk of every seller
+// loaded so far. They now share one: readers of one cache version get the
+// same snapshot, and a reader after the version moved gets the last one while
+// a single rebuild runs in slices. Only the first reader builds in line.
+let warmShared = null; // { version, value }
+let warmSharedBuild = null;
+let snapshotBuilds = 0;
+/** How many snapshots have been built (sync or sliced), for the tests. */
+export function _indexSnapshotBuildsForTest() { return snapshotBuilds; }
+/** The snapshot every reader shares while indexWarmStartInProgress(). */
+export function warmStartSnapshot(ctx) {
+  const version = cacheVersion;
+  if (warmShared && warmShared.version === version) return warmShared.value;
+  if (warmShared) {
+    if (!warmSharedBuild) {
+      // Started on a turn of its own: even the first slice is not the reader's.
+      warmSharedBuild = new Promise((r) => setImmediate(r)).then(() => indexSnapshotAsync(ctx))
+        .then((value) => { if (warmStartInProgress && (!warmShared || warmShared.version < version)) warmShared = { version, value }; }, () => {})
+        .finally(() => { warmSharedBuild = null; });
+    }
+    return warmShared.value;
+  }
+  const value = indexSnapshot(ctx);
+  warmShared = { version, value };
+  return value;
+}
 const SNAPSHOT_YIELD_SELLERS = 50;
 function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, walletName }) {
+  snapshotBuilds++;
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
   // Exclude the crawled self-entry two ways: the caller's own baseUrl (works
   // whenever this instance's BASE_URL matches what was crawled - true in
@@ -7956,7 +7998,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   // homepage names, another listed seller) was hidden from the route pool but
   // still rendered as its own seller on every listing - two rows for one
   // service, the retired one still advertising its old chain (2026-09-10).
-  const aliasOrigins = computeAliasOrigins(cache);
+  const aliasOrigins = yield* computeAliasOriginsSteps(cache);
   yield;
   const remote = [];
   for (const [origin, v] of [...cache.entries()]) {
