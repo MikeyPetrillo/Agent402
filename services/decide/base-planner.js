@@ -470,16 +470,17 @@ export async function runPlan(planner, { task, constraints, depth }, deps, { res
     // One answer per tool and required input across the plan: whether the
     // task gives a value is a fact about the task, so a tool the plan says
     // needs an input in one step does not run with a written value for it in
-    // another. A step reference or an identifier copied verbatim from the task
-    // stands; words taken from the task do not, since the same words were
-    // judged not to be the input in the other step.
+    // another. Only a value the filler wrote itself is cleared: a step
+    // reference, an identifier, or a phrase the task itself contains stands
+    // (the caller gave it), so one tool used in two steps keeps a query the
+    // task spelled out.
     const openFor = new Set();
     for (const sl of slots) for (const name of [...(sl.needs || []), ...openOf(sl.target.exampleParams)]) openFor.add(`${sl.row.id}\u0000${name}`);
     for (const sl of slots) {
       for (const name of sl.row.inputSchema?.required || []) {
         const v = sl.target.exampleParams?.[name];
         if (!openFor.has(`${sl.row.id}\u0000${name}`) || v === undefined || isPlaceholder(v)) continue;
-        if (typeof v === "string" && (STEP_REF_N.test(v) || taskIdentifier(v, task))) continue;
+        if (typeof v === "string" && (STEP_REF_N.test(v) || verbatimIdentifier(v, task) || taskPhrase(v, task))) continue;
         sl.target.exampleParams[name] = `<${name}>`;
         (sl.needs ||= []).push(name);
       }
@@ -656,6 +657,14 @@ export function verbatimIdentifier(v, task) {
 
 /** An address, hash, URL or domain that appears verbatim in the task (or the
  *  plain URL of a domain it names): the caller's own data, whatever the input. */
+/** A phrase of two or more words that the task contains verbatim (case and
+ *  spacing aside): the caller's own words, whatever the input. */
+export function taskPhrase(v, task) {
+  const norm = (x) => String(x || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const t = norm(v);
+  return t.length >= 6 && t.length <= 200 && t.includes(" ") && norm(task).includes(t);
+}
+
 export function taskIdentifier(v, task) {
   const t = String(v || "").trim();
   if (urlOfTaskDomain(t, task)) return true;

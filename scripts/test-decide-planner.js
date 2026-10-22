@@ -655,8 +655,16 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
     if (typeof v === "string" && /^<[^<>]*>$/.test(v)) e[1] = true; else if (v !== undefined) e[0] = true;
     said.set(k, e);
   }
-  const both = [...said].filter(([, [g, o]]) => g && o).map(([k]) => k);
-  ok(!both.length, `no tool is given an input in one step that the plan says the task does not give in another (${both.join(", ") || "none"})`);
+  // A tool may carry a value in one step and a blank in another only when the
+  // value is the task's own words: an invented value never sits beside a blank.
+  const taskWords = new Set(TASK.toLowerCase().match(/[a-z0-9-]+/g));
+  const invented = [];
+  for (const p of d.plan) for (const t of [p.tool, ...p.fallbacks]) for (const name of t.inputSchema?.required || []) {
+    const v = t.exampleParams?.[name];
+    if (!said.get(`${t.id}:${name}`)?.[1] || typeof v !== "string" || /^<[^<>]*>$/.test(v)) continue;
+    if (!(v.toLowerCase().match(/[a-z0-9-]+/g) || []).every((w) => taskWords.has(w))) invented.push(`${t.slug}:${name}=${v}`);
+  }
+  ok(!invented.length, `a tool given a value in one step and a blank in another holds only the task's own words (${invented.join(", ") || "none"})`);
   ok(d.plan.some((p) => [p.tool, ...p.fallbacks].some((t) => t.id === sector.id)), "the tool that needs more input stays in the plan as a backup");
   // Neutral: who sells the cheaper tool changes nothing.
   const d2 = await run([sector, aiact, { ...search, firstParty: true, seller: "agent402" }, answer]);
@@ -669,6 +677,36 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   ok(leadOf([{ row: row("a", 0.2), fit: 0.9, score: 0.9 }, { row: row("b", 0.15), fit: 0.9, score: 0.89 }]) === null, "a slightly cheaper comparable tool does not reorder the ranking");
   ok(leadOf([{ row: row("a", 0.2), fit: 0.9, score: 0.9 }, { row: row("b", 0.01, { pricedByQuote: true }), fit: 0.9, score: 0.89 }]) === null, "a floor price never undercuts");
   ok(leadOf([{ row: row("a", 0.01, { executable: false }), fit: 0.9, score: 0.9 }, { row: row("b", 0.05), fit: 0.88, score: 0.87 }])?.x.row.id === "b", "a buyable comparable tool leads over one execute cannot buy");
+}
+
+// ---- one tool in two steps keeps a query the task gives ----
+// "find X, then look up each X": the same search tool leads step 1 with the
+// task's own query and backs up step 2 with a blank. Step 1 keeps its query.
+{
+  const TASK = "Search the web for the largest stablecoin issuers, then search recent news about each of them";
+  const web = remoteToolRow(
+    { seller: "https://search-e.example", route: "/search", method: "GET", name: "Web search", description: "search the web for any query: largest stablecoin issuers, recent news, companies", price: 0.01, networks: ["eip155:8453"], health: 1 },
+    { requestContract: { state: "declared", required: { query: ["q"] } }, lastLiveAt: NOW - 600_000, executable: true });
+  const news = remoteToolRow(
+    { seller: "https://news-f.example", route: "/news", method: "GET", name: "News search", description: "search recent news articles about each stablecoin issuer or company", price: 0.01, networks: ["eip155:8453"], health: 1 },
+    { requestContract: { state: "declared", required: { query: ["topic"] } }, lastLiveAt: NOW - 600_000, executable: true });
+  const idx = new ToolIndex(); idx.upsert(web); idx.upsert(news);
+  const llm = stubLlm([
+    { steps: [{ purpose: "search the web for the largest stablecoin issuers", query: "largest stablecoin issuers", dependsOn: [] }, { purpose: "search recent news about each issuer", query: "recent news stablecoin issuer", dependsOn: [1] }] },
+    (system, user) => { const fits = {}; keysFor(user).forEach((st, si) => st.candidates.forEach((c) => { fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.4 : si === 0 ? (c.name === "Web search" ? 0.9 : 0.3) : (c.name === "News search" ? 0.9 : 0.86); })); return { fits }; },
+    (system, user) => {
+      const out = {};
+      for (const e of keysFor(user)) {
+        const s1 = e.key.split(".")[0] === "1";
+        if (e.name === "Web search") out[e.key] = { q: s1 ? "largest stablecoin issuers" : "<q>" };
+        if (e.name === "News search") out[e.key] = { topic: "{{step 1}}" };
+      }
+      return { params: out };
+    },
+  ]);
+  const d = await buildDecision({ task: TASK, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const s1 = d.plan[0]?.tool;
+  ok(s1?.name === "Web search" && s1.exampleParams?.q === "largest stablecoin issuers" && !s1.exampleParamsNeedInput, `a query in the task's own words stays when the same tool is blank in another step (${JSON.stringify(s1?.exampleParams)} ${JSON.stringify(s1?.exampleParamsNeedInput)})`);
 }
 
 console.log(`\ntest-decide-planner: ${pass} passed, ${fail} failed`);
