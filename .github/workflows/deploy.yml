@@ -1413,6 +1413,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
+          t node scripts/test-index-persist-slices-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
           t node scripts/test-index-reprice-replicas-pg.js
           # Index side stores merge per key and fold the other container's changes on the pull
@@ -1596,6 +1598,8 @@ jobs:
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
+          # The market pulse's supply picture builds and rebuilds in slices at production scale.
+          t node scripts/test-market-pulse-slices.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
           t node scripts/test-cache-hygiene.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"

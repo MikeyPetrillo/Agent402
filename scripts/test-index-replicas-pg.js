@@ -83,6 +83,19 @@ try {
   ok((await sdb.records.get(COLLECTION, Y)) == null, "B's save does not bring Y's row back");
   ok(!served(B).has(Y), "B no longer serves Y");
   ok(B.isRemovedOrigin(Y), "B knows Y is removed");
+
+  // ---- a page that ends inside one save's batch -------------------------------
+  // A save writes up to 40 rows per statement and they share its timestamp.
+  // B pulls in pages of 7: every page boundary falls inside a batch.
+  await B.pullIndexChanges();
+  const many = Array.from({ length: 30 }, (_, i) => `https://batch-${String(i).padStart(2, "0")}.example`);
+  A.__testSeedCache(many.map((o, i) => [o, entry(`/b${i}`, 20_000 + i)]));
+  await A.persistIndexCacheAsync();
+  const stamps = await sdb.stateQuery(`SELECT count(DISTINCT updated_at)::int AS n FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id LIKE 'https://batch-%'`, [COLLECTION]);
+  ok(stamps.rows[0].n < many.length, `the batch rows share timestamps (${stamps.rows[0].n} distinct for ${many.length} rows)`);
+  const got = await B.pullIndexChanges({ pageSize: 7, maxPages: 20 });
+  const missing = many.filter((o) => !served(B).has(o));
+  ok(got >= many.length && missing.length === 0, `B pulls every row of the batch across page boundaries (${got} folded, ${missing.length} missing)`);
   A.stopCrawler?.(); B.stopCrawler?.();
 } catch (e) {
   fail++; console.error("FAIL - threw:", e?.stack || e);
