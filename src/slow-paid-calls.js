@@ -37,13 +37,21 @@ export function safeSlug(slug) {
 
 /**
  * The handler bound that applies to `slug`: its run budget when the route is
- * declared slow, the shared bound otherwise; 0 when the alarm is off.
+ * declared slow, the larger of the shared bound and its own ceiling when it
+ * can run as a job, the shared bound otherwise; 0 when the alarm is off.
  */
+// SOR_EXTERNAL_DEADLINE_MS's default in src/tools/route-execute.js.
+const ASYNC_CAPABLE_BOUND_MS = 240_000;
+
 export function slowPaidBoundMs(slug, sharedMs = slowPaidMsFromEnv()) {
   if (!(sharedMs > 0)) return 0;
   let profile = null;
   try { profile = asyncProfileOf({ slug }); } catch { profile = null; }
   if (profile?.slow && profile.maxSeconds > 0) return profile.maxSeconds * 1000;
+  // A route that can run as a job but is not declared slow (the router tiers
+  // wait on outside sellers; the image tiers on a model) is held to its own
+  // ceiling when it has one, else to the router's outside-seller deadline.
+  if (profile) return Math.max(sharedMs, profile.maxSeconds > 0 ? profile.maxSeconds * 1000 : ASYNC_CAPABLE_BOUND_MS);
   return sharedMs;
 }
 

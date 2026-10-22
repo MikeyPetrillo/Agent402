@@ -56,6 +56,9 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
   const budgetMs = (p?.maxSeconds || 0) * 1000;
   ok(fn(S.slowPaidBoundMs) && S.slowPaidBoundMs("v1-videos", 20000) === budgetMs, "a declared-slow route's bound is its run budget");
   ok(fn(S.slowPaidBoundMs) && S.slowPaidBoundMs("v1-chat-nano", 20000) === 20000, "an ordinary route's bound is the shared one");
+  ok(S.slowPaidBoundMs("route-execute", 20000) === 240000, "a job-capable router tier is held to the outside-seller deadline, not the shared bound");
+  ok(S.slowPaidBoundMs("seller-payability", 20000) === 55000, "a job-capable route with its own ceiling is held to that ceiling");
+  ok(S.slowPaidBoundMs("seller-payability", 90000) === 90000, "a shared bound above a route's ceiling still applies");
   if (fn(S._resetSlowPaidCalls)) S._resetSlowPaidCalls();
   const within = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "v1-videos", handlerMs: Math.round(budgetMs / 2), endEpochMs: Date.now(), status: 200 }) : undefined;
   ok(within === null, "a declared-slow route past the shared bound but within its budget is not listed");
