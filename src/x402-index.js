@@ -7053,7 +7053,10 @@ async function warmStartIndexOnce() {
 let warmLoader = null;
 export function startStateDbWarmStart({ onSettled = null } = {}) {
   if (warmLoader) return warmLoader;
-  warmLoader = retryingLoad("[x402-index] warm start", warmStartIndexOnce, { log: (m) => console.warn(m), onLoaded: () => { try { onSettled?.(); } catch { /* never throws */ } } });
+  warmLoader = retryingLoad("[x402-index] warm start", warmStartIndexOnce, { log: (m) => console.warn(m), onLoaded: () => {
+    try { onSettled?.(); } catch { /* never throws */ }
+    ecosystemMarket().catch(() => {}); // build the market picture before a buyer asks for it
+  } });
   trackStoreReady(warmLoader.eventually, "x402-index warm start");
   warmLoader.ready().catch(() => { try { onSettled?.(); } catch { /* never throws */ } });
   return warmLoader;
@@ -7364,6 +7367,22 @@ export function classifyEcosystemCategory(t) {
 // uncapped total is still reported as `toolsIndexed` — nothing is hidden.
 const MAX_TOOLS_PER_SELLER_PER_CATEGORY = 50;
 
+// One crawl entry's tool count per category. Classifying is the expensive part
+// (every tool's text against every rule), and an entry's tools change only when
+// the crawler replaces the entry object, so the counts are kept per object.
+const entryCategories = new WeakMap();
+function entryCategoryCounts(v) {
+  let perCat = entryCategories.get(v);
+  if (perCat) return perCat;
+  perCat = new Map();
+  for (const t of v.tools) {
+    const c = classifyEcosystemCategory(t);
+    perCat.set(c, (perCat.get(c) || 0) + 1);
+  }
+  entryCategories.set(v, perCat);
+  return perCat;
+}
+
 /**
  * Pure aggregation of the supply mix from a list of crawl-cache entries. Kept
  * separate from `ecosystemMarket` (which reads the module-private cache) so it
@@ -7379,11 +7398,7 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
     if (v.error || !Array.isArray(v.tools) || !v.tools.length) continue;
     sellers++;
     tools += v.tools.length; // true, uncapped
-    const perCat = new Map();
-    for (const t of v.tools) {
-      const c = classifyEcosystemCategory(t);
-      perCat.set(c, (perCat.get(c) || 0) + 1);
-    }
+    const perCat = entryCategoryCounts(v);
     for (const [c, n] of perCat) {
       catTools.set(c, (catTools.get(c) || 0) + Math.min(n, capPerSeller));
       catSellers.set(c, (catSellers.get(c) || 0) + 1);
@@ -7407,14 +7422,17 @@ export function aggregateEcosystemSupply(entries, { limit = 12, capPerSeller = M
  * on-chain leaderboard).
  */
 // The aggregate walks every crawled origin and classifies every one of its
-// tools with regexes, synchronously on the event loop, and the walk grows
-// with the index. It is a market picture, not a per-call read, so it is
-// memoized: the first caller computes it once, later
-// callers get the memo, and past MARKET_MEMO_TTL_MS one caller starts a
-// chunked recompute in the background (a slice of origins per tick, so the
-// loop is never held) while everyone keeps reading the last picture.
+// tools with regexes, and the walk grows with the index. It is a market
+// picture, not a per-call read, so it is memoized and never computed on the
+// caller's turn of the event loop: the build classifies in slices of at most
+// MARKET_SLICE_MS (by tool, so one giant catalogue is spread over many turns),
+// concurrent callers share one build, and past MARKET_MEMO_TTL_MS the last
+// picture is served while one rebuild runs. Per-entry counts are kept
+// (entryCategoryCounts), so a rebuild classifies only re-crawled sellers. The
+// boot builds it once the warm start lands, so no buyer waits for the first.
 const MARKET_MEMO_TTL_MS = 15 * 60_000;
-const MARKET_CHUNK = 50;
+const MARKET_SLICE_MS = 20;
+export const MARKET_DEFAULT_LIMIT = 12;
 let marketMemo = { at: 0, limit: null, value: null, version: -1 };
 let marketRefresh = null;
 let marketTtlMs = MARKET_MEMO_TTL_MS;
@@ -7423,40 +7441,40 @@ export function __setMarketMemoTtl(ms) { marketTtlMs = Number.isFinite(ms) && ms
 async function refreshEcosystemMarket(limit) {
   const entries = [...cache.values()];
   const version = cacheVersion;
-  const parts = [];
-  for (let i = 0; i < entries.length; i += MARKET_CHUNK) {
-    parts.push(aggregateEcosystemSupply(entries.slice(i, i + MARKET_CHUNK), { limit: Infinity }));
-    await new Promise((r) => setImmediate(r));
-  }
-  // Merge the per-slice aggregates: sellers and tools add, categories add per
-  // name, and the limit is applied once at the end, the same as one pass.
-  const catSellers = new Map(), catTools = new Map();
-  let sellers = 0, tools = 0;
-  for (const p of parts) {
-    sellers += p.sellers; tools += p.tools;
-    for (const c of p.categories) {
-      catSellers.set(c.category, (catSellers.get(c.category) || 0) + c.sellersOffering);
-      catTools.set(c.category, (catTools.get(c.category) || 0) + c.tools);
+  let turnStart = performance.now();
+  const yieldDue = () => performance.now() - turnStart >= MARKET_SLICE_MS;
+  const nextTurn = async () => { await new Promise((r) => setImmediate(r)); turnStart = performance.now(); };
+  for (const v of entries) {
+    if (v.error || !Array.isArray(v.tools) || !v.tools.length || entryCategories.has(v)) continue;
+    const perCat = new Map();
+    for (const t of v.tools) {
+      const c = classifyEcosystemCategory(t);
+      perCat.set(c, (perCat.get(c) || 0) + 1);
+      if (yieldDue()) await nextTurn();
     }
+    entryCategories.set(v, perCat);
   }
-  const categories = [...catSellers.keys()]
-    .map((category) => ({ category, sellersOffering: catSellers.get(category), tools: catTools.get(category) || 0 }))
-    .sort((a, b) => b.sellersOffering - a.sellersOffering || b.tools - a.tools)
-    .slice(0, limit);
-  marketMemo = { at: Date.now(), limit, version, value: { sellers, tools, categories, toolsCapPerSeller: MAX_TOOLS_PER_SELLER_PER_CATEGORY } };
-}
-export function ecosystemMarket({ limit = 12 } = {}) {
-  const fresh = marketMemo.value && marketMemo.limit === limit && Date.now() - marketMemo.at < marketTtlMs;
-  if (fresh) return marketMemo.value;
-  if (marketMemo.value && marketMemo.limit === limit) {
-    // Stale: hand back the last picture now, refresh once in the background.
-    if (!marketRefresh) marketRefresh = refreshEcosystemMarket(limit).catch(() => {}).finally(() => { marketRefresh = null; });
-    return marketMemo.value;
-  }
-  // Nothing memoized for this limit yet: one synchronous pass, then memoized.
-  const value = aggregateEcosystemSupply([...cache.values()], { limit });
-  marketMemo = { at: Date.now(), limit, version: cacheVersion, value };
+  // Every entry is classified now, so the one pass below only adds counts.
+  const value = aggregateEcosystemSupply(entries, { limit });
+  marketMemo = { at: Date.now(), limit, version, value };
   return value;
+}
+function startMarketRefresh(limit) {
+  if (!marketRefresh) marketRefresh = refreshEcosystemMarket(limit).finally(() => { marketRefresh = null; });
+  return marketRefresh;
+}
+export async function ecosystemMarket({ limit = MARKET_DEFAULT_LIMIT } = {}) {
+  const held = marketMemo.value && marketMemo.limit === limit;
+  if (held && Date.now() - marketMemo.at < marketTtlMs) return marketMemo.value;
+  if (held) {
+    // Stale: hand back the last picture now, rebuild once in the background.
+    const last = marketMemo.value;
+    startMarketRefresh(limit).catch(() => {});
+    return last;
+  }
+  // Nothing memoized for this limit yet: wait for the shared build, which
+  // yields between slices, so other requests keep being served meanwhile.
+  return startMarketRefresh(limit);
 }
 
 /**

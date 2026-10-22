@@ -49,27 +49,45 @@ assert.strictEqual(big.tools, 200, "but true total stays 200");
 console.log("ecosystem-supply cap: all assertions passed");
 
 // ecosystemMarket is memoized: the same picture comes back without a second
-// walk while fresh; past the TTL the stale picture is served and a chunked
-// background refresh replaces it with the same figures a fresh pass gives.
+// walk while fresh; past the TTL the stale picture is served and a background
+// rebuild replaces it with the same figures a fresh pass gives. The first build
+// never holds the event loop: it yields between slices, and callers share it.
 __testSeedCache(entries.map((e, i) => [`https://seller-${i}.example`, e]));
+// One giant catalogue (heavier than one slice) so the build must yield inside it.
+// Unmatched text walks every rule, the slow path, so this build spans many slices.
+const giant = { tools: Array.from({ length: 100000 }, (_, i) => ({ name: `zz thing ${i}`, description: "a generic utility that does assorted tasks for users and agents with some long description text here", route: `/v1/x/${i}` })) };
+__testSeedCache([["https://giant.example", giant]]);
 __setMarketMemoTtl(60_000);
-const m1 = ecosystemMarket({ limit: 12 });
-const m2 = ecosystemMarket({ limit: 12 });
-assert.strictEqual(m1, m2, "a fresh memo is returned as the same object (no second walk)");
-assert.strictEqual(m1.tools, 10016, "the memo carries the true uncapped total");
+let ticks = 0, maxGap = 0, last = performance.now();
+const timer = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; ticks++; }, 1);
+const pA = ecosystemMarket({ limit: 12 });
+const pB = ecosystemMarket({ limit: 12 });
+assert.ok(pA instanceof Promise, "a cold call answers with a promise, not a synchronous walk");
+const [m1, m2] = await Promise.all([pA, pB]);
+clearInterval(timer);
+assert.strictEqual(m1, m2, "concurrent cold callers share one build");
+assert.ok(ticks > 5, `other work ran while the first build classified (${ticks} timer ticks)`);
+assert.ok(maxGap < 250, `the build never held the event loop past a slice (longest gap ${Math.round(maxGap)} ms)`);
+assert.strictEqual(m1.tools, 10016 + 100000, "the memo carries the true uncapped total");
+assert.strictEqual(await ecosystemMarket({ limit: 12 }), m1, "a fresh memo is returned as the same object (no second walk)");
 await new Promise((r) => setTimeout(r, 50));
-assert.strictEqual(ecosystemMarket({ limit: 12 }), m1, "a fresh memo starts no background refresh (the object is unchanged after a tick)");
+assert.strictEqual(await ecosystemMarket({ limit: 12 }), m1, "a fresh memo starts no background refresh (the object is unchanged after a tick)");
 __setMarketMemoTtl(0);
-const first = ecosystemMarket({ limit: 12 });          // nothing memoized after the reset: one synchronous pass
-const stale = ecosystemMarket({ limit: 12 });          // TTL 0: stale, served now, refresh starts in the background
+const first = await ecosystemMarket({ limit: 12 });    // nothing memoized after the reset: one shared build
+const stale = await ecosystemMarket({ limit: 12 });    // TTL 0: stale, served now, refresh starts in the background
 assert.strictEqual(first, stale, "a stale memo is served immediately while the refresh runs");
 await new Promise((r) => setTimeout(r, 50));
-const refreshed = ecosystemMarket({ limit: 12 });
+const refreshed = await ecosystemMarket({ limit: 12 });
 assert.notStrictEqual(refreshed, first, "the background refresh replaced the memo");
 assert.deepStrictEqual(
   { sellers: refreshed.sellers, tools: refreshed.tools, categories: refreshed.categories },
   { sellers: first.sellers, tools: first.tools, categories: first.categories },
-  "the chunked refresh produces the same figures as one pass",
+  "the rebuild produces the same figures as the first pass",
+);
+assert.deepStrictEqual(
+  { sellers: first.sellers, tools: first.tools, categories: first.categories },
+  (({ sellers, tools, categories }) => ({ sellers, tools, categories }))(aggregateEcosystemSupply([...entries, giant], { limit: 12 })),
+  "the sliced build matches the pure one-pass aggregate",
 );
 __setMarketMemoTtl();
 console.log("ecosystem market memo: ok");
