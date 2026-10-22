@@ -164,13 +164,14 @@ try {
   }
 
   // 2. Paid, no Prefer, a client that follows a 202: a job, settled once on the delivered result.
-  {
+  try {
     const c = counts();
     const t0 = Date.now();
     const r = await post({ "user-agent": FOLLOWER, "x-forwarded-for": "10.8.0.3", "payment-signature": credential(wallet(3)) });
     const j = await r.json();
     ok(r.status === 202 && Date.now() - t0 < up.delayMs && /^[0-9a-f]{48}$/.test(j.jobId || "") && r.headers.get("location") === `/api/jobs/${j.jobId}` && Number(r.headers.get("retry-after")) >= 1 && j.statusUrl === `/api/jobs/${j.jobId}`, `a following client gets 202, Location and Retry-After before the run finishes (${r.status} in ${Date.now() - t0} ms)`);
     ok(fac.settle === c.s, `the 202 settles nothing (settle +${fac.settle - c.s})`);
+    if (r.status !== 202) throw new Error("no job to follow");
     await waitFor(async () => (await job(j.statusUrl)).state === "running" || up.calls > c.u);
     ok(fac.settle === c.s, "nothing settles while the job is running");
     await final(j.statusUrl);
@@ -179,7 +180,7 @@ try {
     ok(fac.settle === c.s + 1, `settled exactly once, after the result was ready (settle +${fac.settle - c.s})`);
     await job(j.statusUrl);
     ok(fac.settle === c.s + 1, "collecting the result again settles nothing more");
-  }
+  } catch (e) { ok(false, `the following client's call ran as a job (${e.message})`); }
 
   // 4. A run that fails after the 202: the job fails, nothing settles.
   {
@@ -188,10 +189,13 @@ try {
     const r = await post({ "user-agent": FOLLOWER, "x-forwarded-for": "10.8.0.4", "payment-signature": credential(wallet(4)) });
     const j = await r.json();
     ok(r.status === 202, `a following client's call is accepted as a job (got ${r.status})`);
+    if (r.status !== 202) ok(fac.settle === c.s, `a failed synchronous run settles nothing (settle +${fac.settle - c.s})`);
+    else {
     await final(j.statusUrl);
     const g = await job(j.statusUrl);
     ok(g.state === "failed" && g.error?.httpStatus >= 500 && /nothing was charged/.test(g.message || ""), `a failed run ends the job failed (state ${g.state}, error HTTP ${g.error?.httpStatus}, ${g.message || ""})`);
     ok(fac.settle === c.s, `a failed run after the 202 settles nothing (settle +${fac.settle - c.s})`);
+    }
   }
 
   // 3. Controls, exactly as before.
