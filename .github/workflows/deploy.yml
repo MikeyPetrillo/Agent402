@@ -1598,6 +1598,8 @@ jobs:
           t node scripts/test-settlement-event.js
           # x402-market-pulse supply-mix per-seller tool cap
           t node scripts/test-ecosystem-supply.js
+          # The market pulse's supply picture builds and rebuilds in slices at production scale.
+          t node scripts/test-market-pulse-slices.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
           t node scripts/test-cache-hygiene.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
