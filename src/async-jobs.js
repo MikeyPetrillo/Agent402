@@ -116,14 +116,14 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     // Async is for a call that is ready to pay, so a job is never created for
     // a request that could not settle anything.
     if (!carriesPaymentAttempt(req)) return next();
-    if (store.atCapacity()) return res.status(503).set("Retry-After", "30").json({ error: "async_capacity", hint: "Too many jobs are running right now. Retry in a minute, or send the call without Prefer: respond-async to wait for the answer on this connection. Nothing was charged." });
+    if (store.atCapacity()) return res.status(503).set("Retry-After", "30").json({ error: "async_capacity", hint: "Too many jobs are running right now. Retry in a minute, or send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait for the answer on this connection. Nothing was charged." });
     const ip = String(req.ip || "");
     if ((perIp.get(ip) || 0) >= maxPerIp) return res.status(429).set("Retry-After", "30").json({ error: "async_jobs_per_client", hint: `At most ${maxPerIp} jobs may run at once per client. Collect a finished one first. Nothing was charged.` });
 
     const ctl = new AbortController();
     let rec = null;
     try { rec = await store.create({ slug: def.slug, controller: ctl }); } catch { rec = null; }
-    if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call without Prefer: respond-async. Nothing was charged." });
+    if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait on this connection. Nothing was charged." });
     perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
     const headers = {};

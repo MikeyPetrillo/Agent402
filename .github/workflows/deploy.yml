@@ -1582,6 +1582,10 @@ jobs:
           t node scripts/test-async-jobs.js
           # Through the CDN proxy: a paid call to a route that outlasts its wait runs as a job (a 202-following SDK) or is refused before any gate; LLM and image waits end inside the bound; 402s and paid answers are never cacheable (paid-mode boot vs stub facilitator and upstream - offline)
           t node scripts/test-cdn-sync-window.js
+          # A paid call to a slow route without Prefer: respond-async runs as a job (a 202-following SDK) or is refused before any gate; Prefer: wait keeps it synchronous; a job settles once on its result and never on a failure (paid-mode boot vs stub facilitator and upstream - offline)
+          t node scripts/test-slow-sync-window.js
+          # A file job store's boot sweep fails other boots' running jobs, so each server takes its own directory (AGENT402_TASK_DATA_DIR); two servers on one store reproduce it, two stores do not (paid-mode boots vs stub facilitator and upstream - offline)
+          t node scripts/test-task-store-isolation.js
           # A settled async-job 200 whose body is lost is booked as owed, and the job says only what was done (offline)
           t node scripts/test-async-jobs-body-loss.js
           # Slow routes advertise their duration and async advice; job progress (queued/running/stage/ETA), sinks keyed in-process only, throttled writes, terminal records never updated (offline)

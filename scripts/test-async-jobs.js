@@ -91,7 +91,7 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+    AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     AGENT402_MCP_TASK_TTL_MS: "" },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -190,10 +190,12 @@ try {
   ok(g3.status === "failed" && g3.error?.httpStatus === 402 && /payment was not accepted/i.test(g3.message || ""), `a refused payment ends the job failed with the 402 (error HTTP ${g3.error?.httpStatus})`);
   ok(fac.settle === s3 && up.calls === calls3, "a refused payment settles nothing and never reaches the upstream");
 
-  // 4. No header: served synchronously as before.
+  // 4. Without respond-async, Prefer: wait covering the run budget is served
+  // synchronously as before (with neither header the slow route is refused
+  // before payment: scripts/test-slow-sync-window.js).
   const s4 = fac.settle;
-  const r4 = await post({ "x-forwarded-for": "10.9.0.5", "payment-signature": credential(wallet(4)) });
-  ok(r4.status === 200 && fac.settle === s4 + 1, `without the header the call is synchronous and settles once (got ${r4.status})`);
+  const r4 = await post({ prefer: "wait=75", "x-forwarded-for": "10.9.0.5", "payment-signature": credential(wallet(4)) });
+  ok(r4.status === 200 && fac.settle === s4 + 1, `with Prefer: wait the call is synchronous and settles once (got ${r4.status})`);
 
   // 5. A forged loopback marker from outside is stripped: synchronous, no job.
   const s5 = fac.settle;
