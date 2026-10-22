@@ -1020,7 +1020,114 @@ export function ledgerSyncState() {
     .sort((a, b) => a.chain.localeCompare(b.chain) || a.wallet.localeCompare(b.wallet));
 }
 
-export function ledgerSummary(wallets) {
+// ---------------------------------------------------------------------------
+// Sliced reads. The all-time summary, the daily series and the buyer events
+// each read every transfer a wallet has, and on a long history each read was
+// one synchronous turn of the event loop (the summary alone is refreshed every
+// minute for the home page count). Each is written once, as a generator that
+// asks for one wallet's rows at a time (a PairRead) and may yield between
+// rows; runLedgerSteps answers the reads with one query each, back to back,
+// exactly as before, and runLedgerStepsSliced answers them a page of rows at a
+// time and spreads the whole computation over turns of at most
+// LEDGER_SLICE_MS. Same generator, same arithmetic, same row order, so the two
+// runs return the same value.
+const LEDGER_SLICE_MS = 20;
+const LEDGER_PAGE_ROWS = 2000;
+const ROW_YIELD_EVERY = 2000;
+const PAIR_ROW_COLS = "chain, wallet, block, when_ts, payer, usd, asset, external, tx_hash";
+const qPairRows = db.prepare(`SELECT ${PAIR_ROW_COLS} FROM transfers WHERE chain = ? AND wallet = ?`);
+// The same rows' ids, in the same order (the same WHERE, answered from the
+// same index), then the rows themselves fetched by id a page at a time.
+const qPairRowids = db.prepare("SELECT rowid FROM transfers WHERE chain = ? AND wallet = ?").pluck();
+const qRowsByRowid = db.prepare(`SELECT rowid AS rid, ${PAIR_ROW_COLS} FROM transfers WHERE rowid IN (SELECT value FROM json_each(?))`);
+/** A request for one wallet's transfer rows; `agg` asks for the summary sums instead. */
+const pairRead = (chain, wallet, agg = false) => ({ pairRead: true, chain, wallet, agg });
+function sliceClock() {
+  let until = performance.now() + LEDGER_SLICE_MS;
+  return async () => {
+    if (performance.now() < until) return;
+    await new Promise((r) => setImmediate(r));
+    until = performance.now() + LEDGER_SLICE_MS;
+  };
+}
+async function pairRowsSliced(chain, wallet, tick) {
+  const ids = qPairRowids.all(chain, wallet);
+  await tick();
+  const pos = new Map();
+  for (let i = 0; i < ids.length; i++) pos.set(ids[i], i);
+  await tick();
+  const out = new Array(ids.length);
+  for (let i = 0; i < ids.length; i += LEDGER_PAGE_ROWS) {
+    for (const r of qRowsByRowid.all(JSON.stringify(ids.slice(i, i + LEDGER_PAGE_ROWS)))) {
+      const at = pos.get(r.rid);
+      if (at !== undefined && r.chain === chain && r.wallet === wallet) out[at] = r;
+    }
+    await tick();
+  }
+  // A row removed between the id read and its page is simply not there.
+  return out.filter(Boolean);
+}
+// SQLite's own SUM over REAL values (Kahan-Babuska-Neumaier, SQLite 3.43+),
+// so a sum taken here over the same rows in the same order is the number the
+// summary's SQL returns.
+function kbnSum() {
+  let sum = 0, err = 0, any = false;
+  return {
+    add(r) {
+      any = true;
+      const t = sum + r;
+      if (Math.abs(sum) > Math.abs(r)) err += (sum - t) + r; else err += (r - t) + sum;
+      sum = t;
+    },
+    value() { return any ? sum + err : 0; },
+  };
+}
+async function summaryAggSliced(chain, wallet, tick) {
+  const rows = await pairRowsSliced(chain, wallet, tick);
+  const usd = kbnSum(), extUsd = kbnSum();
+  let n = 0, extN = 0;
+  for (const t of rows) {
+    n++; usd.add(t.usd);
+    if (t.external === 1 && t.usd + DUST_EPSILON >= payerDustFloorUsd) { extUsd.add(t.usd); extN++; }
+    if (n % ROW_YIELD_EVERY === 0) await tick();
+  }
+  return { n, usd: usd.value(), extUsd: extUsd.value(), extN };
+}
+const qSummaryAgg = () => db.prepare(`SELECT
+      COUNT(*) AS n, COALESCE(SUM(usd), 0) AS usd,
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN usd END), 0) AS extUsd,
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN 1 ELSE 0 END), 0) AS extN
+    FROM transfers WHERE chain = ? AND wallet = ?`);
+function runLedgerSteps(gen) {
+  let q = null;
+  let r = gen.next();
+  while (!r.done) {
+    const v = r.value;
+    let answer;
+    if (v?.pairRead && v.agg) answer = (q || (q = qSummaryAgg())).get(payerDustFloorUsd, payerDustFloorUsd, v.chain, v.wallet);
+    else if (v?.pairRead) answer = qPairRows.all(v.chain, v.wallet);
+    r = gen.next(answer);
+  }
+  return r.value;
+}
+async function runLedgerStepsSliced(gen) {
+  const tick = sliceClock();
+  let r = gen.next();
+  while (!r.done) {
+    const v = r.value;
+    let answer;
+    if (v?.pairRead && v.agg) answer = await summaryAggSliced(v.chain, v.wallet, tick);
+    else if (v?.pairRead) answer = await pairRowsSliced(v.chain, v.wallet, tick);
+    else await tick();
+    r = gen.next(answer);
+  }
+  return r.value;
+}
+
+export function ledgerSummary(wallets) { return runLedgerSteps(ledgerSummarySteps(wallets)); }
+/** ledgerSummary spread over event-loop turns (same value). */
+export function ledgerSummaryAsync(wallets) { return runLedgerStepsSliced(ledgerSummarySteps(wallets)); }
+function* ledgerSummarySteps(wallets) {
   const per = {};
   let allTimeExternalUsd = 0;
   let allTimeExternalCount = 0;
@@ -1028,15 +1135,10 @@ export function ledgerSummary(wallets) {
   let allTimeInboundCount = 0;
   // External = classified external AND at least the dust floor (a transfer
   // under the cheapest catalog price paid for no call). Inbound keeps every
-  // transfer: it is throughput, ours and dust included.
-  const q = db.prepare(`SELECT
-      COUNT(*) AS n, COALESCE(SUM(usd), 0) AS usd,
-      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN usd END), 0) AS extUsd,
-      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN 1 ELSE 0 END), 0) AS extN
-    FROM transfers WHERE chain = ? AND wallet = ?`);
+  // transfer: it is throughput, ours and dust included (qSummaryAgg).
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
-    const t = q.get(payerDustFloorUsd, payerDustFloorUsd, chain, wallet);
+    const t = yield pairRead(chain, wallet, true);
     const cur = getCursor.get(chain, wallet);
     // Two wallets on one chain (treasury + spending) ACCUMULATE into one row.
     const p = per[chain] || (per[chain] = { externalUsd: 0, externalCount: 0, inboundUsd: 0, inboundCount: 0, caughtUp: true, syncedAt: null });
@@ -1055,6 +1157,7 @@ export function ledgerSummary(wallets) {
   // sales ledger (deduped against the transfers above). The on-chain figures
   // keep their meaning; the combined pair is what /revenue headlines.
   let tempoCount = 0, tempoUsd = 0;
+  yield;
   for (const r of tempoExternalRows()) { tempoCount++; tempoUsd += r.usd; }
   return {
     allTimeExternalUsd: Number(allTimeExternalUsd.toFixed(6)),
@@ -1103,7 +1206,10 @@ let loopStarted = false;
 // /api/sales) carry recordingSince; this one was the odd one out, so anyone
 // reconciling us found two of our own numbers disagreeing by $92.89 with
 // nothing in either response to explain it.
-export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
+export function ledgerDaily(wallets, mppTx = null, opts = {}) { return runLedgerSteps(ledgerDailySteps(wallets, mppTx, opts)); }
+/** ledgerDaily spread over event-loop turns (same value). */
+export function ledgerDailyAsync(wallets, mppTx = null, opts = {}) { return runLedgerStepsSliced(ledgerDailySteps(wallets, mppTx, opts)); }
+function* ledgerDailySteps(wallets, mppTx = null, { withScope = false } = {}) {
   // Counted while filtering, never re-derived: a disclosure computed from a
   // second pass can drift from the filter it describes.
   let droppedUndateable = 0;
@@ -1113,7 +1219,6 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
     if (!mppTx || !mppTx.size || !h) return false;
     return mppTx.has(h) || (/^0x[0-9a-fA-F]+$/.test(h) && mppTx.has(h.toLowerCase()));
   };
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, usd, external, tx_hash FROM transfers WHERE chain = ? AND wallet = ?");
   const chains = walletPairs(wallets);
   // Settled-to split: rows received by the SOR spending wallet (self-funding
   // slugs: the route-execute tiers) vs the treasury. On-chain
@@ -1127,7 +1232,9 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
   for (const [chain, wallet] of chains) {
     if (!wallet) continue;
     const dateOf = undatedRowDater(chain, wallet);
-    for (const t of rows.all(chain, wallet)) {
+    let seen = 0;
+    for (const t of yield pairRead(chain, wallet)) {
+      if (++seen % ROW_YIELD_EVERY === 0) yield;
       if (t.chain !== chain) continue;
       let ms = t.when_ts ? t.when_ts * 1000 : null;
       if (ms == null) ms = dateOf(t.block);
@@ -1327,14 +1434,18 @@ export function getPayerDustFloorUsd() { return payerDustFloorUsd; }
 const belowDust = (usd) => payerDustFloorUsd > 0 && !(Number(usd) + DUST_EPSILON >= payerDustFloorUsd);
 
 export function externalPaymentEventsFor(wallets) { return readExternalPaymentEvents(wallets); }
+/** externalPaymentEventsFor spread over event-loop turns (same events, same order). */
+export function externalPaymentEventsForAsync(wallets) { return runLedgerStepsSliced(externalPaymentEventSteps(wallets)); }
 function externalPaymentEvents(wallets, events) { return events || readExternalPaymentEvents(wallets); }
-function readExternalPaymentEvents(wallets) {
+function readExternalPaymentEvents(wallets) { return runLedgerSteps(externalPaymentEventSteps(wallets)); }
+function* externalPaymentEventSteps(wallets) {
   const out = [];
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer, usd FROM transfers WHERE chain = ? AND wallet = ?");
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
     const dateOf = undatedRowDater(chain, wallet);
-    for (const t of rows.all(chain, wallet)) {
+    let seen = 0;
+    for (const t of yield pairRead(chain, wallet)) {
+      if (++seen % ROW_YIELD_EVERY === 0) yield;
       if (t.chain !== chain || !t.external) continue;
       // Under the cheapest catalog price: not a payment for a call (see the
       // dust floor above), so not a paying agent.
@@ -1345,6 +1456,7 @@ function readExternalPaymentEvents(wallets) {
       out.push({ day: new Date(ms).toISOString().slice(0, 10), payer: buyerKey(t.payer || null) });
     }
   }
+  yield;
   for (const r of tempoExternalRows()) {
     if (!Number.isFinite(r.ts)) continue;
     out.push({ day: new Date(r.ts).toISOString().slice(0, 10), payer: tempoPayerKey(r.payer) });

@@ -16,7 +16,7 @@ const TOKEN = "surface-memo-operator-token-0123456789";
 
 // --- from source
 const ledger = readFileSync(new URL("../src/revenue-ledger.js", import.meta.url), "utf8");
-ok(!/FROM transfers WHERE wallet = \?"/.test(ledger) && (ledger.match(/rows\.all\(chain, wallet\)/g) || []).length === 2, "ledger series read one chain's rows at a time (was every EVM row once per chain)");
+ok(!/FROM transfers WHERE wallet = \?"/.test(ledger) && (ledger.match(/yield pairRead\(chain, wallet\)/g) || []).length === 2 && /FROM transfers WHERE chain = \? AND wallet = \?`\)/.test(ledger), "ledger series read one chain's rows at a time (was every EVM row once per chain)");
 const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
 ok(/settledHostsMemo\.get\(rows\)/.test(idx) && /settledHostsOf\(getLeaderboardSnapshot\(\)\)\.has\(host\)/.test(idx), "originHasSettled is a set lookup memoized on the leaderboard rows array");
 

@@ -314,7 +314,7 @@ rmSync(dir, { recursive: true, force: true });
 // under both limits and pass either way - which is exactly why nothing caught it.
 {
   const src = await readFile(new URL("../src/sales-ledger.js", import.meta.url), "utf8");
-  const summary = src.slice(src.indexOf("distinctExternalBuyers:"), src.indexOf("distinctExternalBuyers:") + 400);
+  const summary = src.slice(src.indexOf("const distinctExternalBuyers ="), src.indexOf("const distinctExternalBuyers =") + 400);
   ok(!/\.all\([^)]*\)\.length/.test(summary),
     "neither published count is the .length of a query result list");
   ok(/qExtDistinctPayers\.get\(/.test(summary) && /qExtDistinctSlugs\.get\(/.test(summary),

@@ -363,7 +363,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -594,7 +594,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerBuyerRepeat7, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDaily, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
@@ -617,7 +617,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { recordSale, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3844,8 +3844,8 @@ app.get("/__operator/revenue.json", revenueApi.operatorHandler);
 // rebuild they held the loop past a second.
 const revenueTurn = () => new Promise((r) => setImmediate(r));
 const revenueAllTime = ({ awaitRebuild = false } = {}) => memoSurfaceAsync("revenue:allTime", 60_000, async () => {
-  const allTime = ledgerSummary(revenueWallets()); await revenueTurn();
-  const sales = salesSummary(); await revenueTurn();
+  const allTime = await ledgerSummaryAsync(revenueWallets()); await revenueTurn();
+  const sales = await salesSummaryAsync(); await revenueTurn();
   const mpp = mppSales({ detailed: false });
   return { allTime, sales, mpp };
 }, { awaitRebuild });
@@ -3870,8 +3870,8 @@ const REVENUE_DAY_COUNTS = Symbol("revenue-day-counts");
 async function buildRevenueDaily() {
   const turn = () => new Promise((r) => setImmediate(r));
   const w = revenueWallets();
-  const daily = ledgerDaily(w, mppTxHashes(), { withScope: true }); await turn();
-  const events = externalPaymentEventsFor(w); await turn();
+  const daily = await ledgerDailyAsync(w, mppTxHashes(), { withScope: true }); await turn();
+  const events = await externalPaymentEventsForAsync(w); await turn();
   const buyers = ledgerBuyersDaily(w, { events }); await turn();
   const buyersWeekly = ledgerBuyersWeekly(w, { events }); await turn();
   const buyersMonthly = ledgerBuyersMonthly(w, { events }); await turn();
@@ -4578,7 +4578,7 @@ app.post("/__operator/monitors/run", (req, res) => {
 // analyzed per-tool layer is the paid bestsellers tool.
 app.get("/api/sales", (_req, res) => {
   try {
-    res.set("Cache-Control", "public, max-age=60").json(memoSurface("sales:summary", 60_000, () => salesSummary()));
+    res.set("Cache-Control", "public, max-age=60").json(memoSurface("sales:summary", 60_000, () => sharedSummary({ days: 30 })));
   } catch (err) {
     // Public route: a SQLite failure message names the ledger's absolute
     // path — log it, answer generically (leak audit 2026-08-18).
@@ -6749,11 +6749,13 @@ function indexSnapshotStale() {
 function refreshIndexSnapshotInBackground() {
   if (indexSnapshotRefreshing) return;
   indexSnapshotRefreshing = true;
-  // setImmediate so the current request returns before we recompute.
-  setImmediate(() => {
+  // setImmediate so the current request returns before we recompute; the
+  // build itself runs in slices (indexSnapshotAsync), never one long turn.
+  setImmediate(async () => {
     try {
       const version = indexCacheVersion();
-      indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()), version };
+      const value = await indexSnapshotAsync(indexCtx());
+      indexSnapshotCache = { at: Date.now(), value, version };
     } catch (e) {
       // Don't poison the cache on a transient error — leave the prior value.
     } finally {
@@ -6778,7 +6780,7 @@ function settlementRailCount() {
 function leaderboardSelfFigures() {
   return memoSurface("leaderboard:self", 60_000, () => {
     try {
-      const rails = railsWithOutsideSettlements(externalByNetwork({ days: 36_500 }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
+      const rails = railsWithOutsideSettlements(sharedByNetwork({ days: HOST_ALL_TIME_DAYS }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
       return { railsWithOutside: rails.withOutside, railsOffered: rails.offered, mppExternal: Number(mppSales({ detailed: false }).externalCount) || 0 };
     } catch { return null; }
   });
@@ -7364,7 +7366,10 @@ function ourToolsAsIndexRows() {
     networks: publicNetworks(),
   }));
 }
-app.get("/marketplace/tools", (req, res) => {
+app.get("/marketplace/tools", async (req, res) => {
+  // A directory not built yet is built in slices while this request waits.
+  const ourTools = ourToolsAsIndexRows();
+  await indexRowsReady({ ourTools, excludeOrigin: BASE_URL });
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const search = String(req.query.q || req.query.search || "").slice(0, 120);
   const category = String(req.query.category || "").slice(0, 60);
@@ -7377,12 +7382,14 @@ app.get("/marketplace/tools", (req, res) => {
     offset: (page - 1) * INDEX_TOOLS_PAGE_SIZE,
     limit: INDEX_TOOLS_PAGE_SIZE,
     excludeOrigin: BASE_URL,
-    ourTools: ourToolsAsIndexRows(),
+    ourTools,
   });
   htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, indexedToolCategories(BASE_URL), { search, category, source, page }));
 });
 // Machine-readable twin. Free, like every other discovery surface here.
-app.get("/api/index/tools", (req, res) => {
+app.get("/api/index/tools", async (req, res) => {
+  const ourTools = ourToolsAsIndexRows();
+  await indexRowsReady({ ourTools, excludeOrigin: BASE_URL });
   const data = allIndexedTools({
     search: String(req.query.q || req.query.search || "").slice(0, 120),
     category: String(req.query.category || "").slice(0, 60),
@@ -7391,7 +7398,7 @@ app.get("/api/index/tools", (req, res) => {
     offset: req.query.offset,
     limit: req.query.limit,
     excludeOrigin: BASE_URL,
-    ourTools: ourToolsAsIndexRows(),
+    ourTools,
   });
   // The machine twin of the listing page, and partial in the same two ways its
   // sibling /api/index was: `results` is one window of `matched`, and `matched`
@@ -7440,6 +7447,8 @@ app.get("/marketplace", async (req, res) => {
 // doctrine as the economy snapshot: serve the cached value, rebuild past the
 // window, never block a visitor on the ledger.
 const HOST_FIGURES_TTL_MS = Number(process.env.HOST_FIGURES_TTL_MS) || 60_000;
+// The "recorded" window hostFigures reads (src/host-entry.js ALL_TIME_DAYS).
+const HOST_ALL_TIME_DAYS = 36_500;
 const hostFiguresCache = new Map(); // chainKey|"" -> { at, value }
 // What a chain page needs beyond its snapshot: the settlement premium the 402
 // adds on that chain (the same NETWORK_PRICE_PREMIUMS map the accepts builder
@@ -7454,15 +7463,56 @@ function chainPageExtras(chainKey) {
   const caip2 = CHAIN_PAGES[chainKey]?.caip2;
   return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, routerChains: spendChainsConfigured() };
 }
+// The ledger reads behind every host entry are the same four whichever page
+// asks: the 30-day and recorded summaries and the per-network split over the
+// same two windows. Each is a full pass over the ledger window, and every
+// chain page, /marketplace and /leaderboard read them under its own cache
+// key, so a minute of page traffic ran them once per page, each set in one
+// synchronous turn. They are now one shared reading: built in the background
+// one query per event-loop turn, served stale while the next one builds,
+// refreshed past HOST_FIGURES_TTL_MS, and built at boot. A page then only
+// picks its network's row out of it.
+const LEDGER_FIGURE_WINDOWS = [30, HOST_ALL_TIME_DAYS];
+let ledgerFigures = null; // { at, summary: Map(days -> salesSummary), byNetwork: Map(days -> externalByNetwork) }
+let ledgerFiguresBuild = null;
+function refreshLedgerFigures() {
+  if (!ledgerFiguresBuild) {
+    ledgerFiguresBuild = (async () => {
+      const summary = new Map(), byNetwork = new Map();
+      for (const days of LEDGER_FIGURE_WINDOWS) summary.set(days, await salesSummaryAsync({ days }));
+      for (const days of LEDGER_FIGURE_WINDOWS) byNetwork.set(days, await externalByNetworkAsync({ days }));
+      ledgerFigures = { at: Date.now(), summary, byNetwork };
+      return ledgerFigures;
+    })().finally(() => { ledgerFiguresBuild = null; });
+  }
+  return ledgerFiguresBuild;
+}
+// The shared reading, never older than the TTL plus one background build. Cold
+// (before the boot build lands) it is read once in line, as the per-page read
+// always was, and shared from then on.
+function currentLedgerFigures() {
+  const f = ledgerFigures;
+  if (f) {
+    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch((e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
+    return f;
+  }
+  const summary = new Map(), byNetwork = new Map();
+  for (const days of LEDGER_FIGURE_WINDOWS) { summary.set(days, salesSummary({ days })); byNetwork.set(days, externalByNetwork({ days })); }
+  ledgerFigures = { at: Date.now(), summary, byNetwork };
+  return ledgerFigures;
+}
+setImmediate(() => { salesLedgerReady().then(() => refreshLedgerFigures()).catch(() => { /* the first page read builds it */ }); });
+const sharedSummary = ({ days = 30 } = {}) => currentLedgerFigures().summary.get(days) ?? salesSummary({ days });
+const sharedByNetwork = ({ days = 30 } = {}) => currentLedgerFigures().byNetwork.get(days) ?? externalByNetwork({ days });
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
-  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS) return hit.value;
+  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS && hit.figures === ledgerFigures) return hit.value;
   let value = null;
   try {
-    value = hostFigures({ summaryFn: salesSummary, byNetworkFn: externalByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
+    value = hostFigures({ summaryFn: sharedSummary, byNetworkFn: sharedByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
   } catch { value = hit ? hit.value : null; } // a failed rebuild keeps the last good figures
-  hostFiguresCache.set(key, { at: Date.now(), value });
+  hostFiguresCache.set(key, { at: Date.now(), value, figures: ledgerFigures });
   return value;
 }
 // The MPP page's host row: outside settlements on Tempo, MPP's native rail,
@@ -10850,6 +10900,9 @@ setUnloadedStoresProbe(unloadedStores);
   if (r !== "ready") console.warn(`[state-db] stores not ready after ${Date.now() - t0}ms (${r}); serving with what has loaded (still loading: ${unloadedStateStores().slice(0, 12).join(", ") || "none named"})`);
   else if (stateDbEnabled()) console.log(`[state-db] stores loaded in ${Date.now() - t0}ms; listening`);
 }
+// The all-time ledger totals behind the home page count and /revenue are built
+// now, across turns, so the first visitor's request does not read them in line.
+revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
@@ -10923,7 +10976,9 @@ if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
-  startCrawler({ selfOrigin: BASE_URL });
+  // The tool directory is built in slices once the warm start is in, so the
+  // first /marketplace/tools visitor does not build it.
+  startCrawler({ selfOrigin: BASE_URL, onWarmed: () => { indexRowsReady({ ourTools: ourToolsAsIndexRows(), excludeOrigin: BASE_URL }).catch(() => {}); } });
 }
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
