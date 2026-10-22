@@ -4,7 +4,8 @@
 //                     (100 req/min/IP upstream + shared Railway egress IP →
 //                     serve-stale cache below)
 //   fx-rate           Frankfurter (European Central Bank reference rates),
-//                     open.er-api.com as a diverse keyless fallback
+//                     open.er-api.com as a diverse keyless fallback, then
+//                     allratestoday.com (keyless ECB table) as a third
 //   weather-forecast  api.weather.gov (US gov, public domain) — US only
 //   public-holidays   Nager.Date (open source, MIT) — holidays by country+year
 //                     (community-run, self-documented flapping → serve-stale
@@ -196,9 +197,21 @@ export const DATA_TOOLS = [
         console.warn(`[fx-rate] frankfurter failed (${e.message}) - falling back to open.er-api.com`);
         // Identity branch mirrors the Frankfurter one: touch the upstream (USD
         // table) purely so `date` is upstream-sourced, never `new Date()`.
-        const j2 = await getJson(`https://open.er-api.com/v6/latest/${from === to ? "USD" : from}`);
-        if (j2?.result !== "success" || !j2.rates || !j2.time_last_update_unix) {
-          throw bad(`fx upstreams unavailable - frankfurter: ${e.message}; er-api: ${j2?.["error-type"] || "unexpected shape"}`, 502);
+        const tableBase = from === to ? "USD" : from;
+        const usable = (t) => t?.result === "success" && t.rates && t.time_last_update_unix;
+        let erError = null;
+        let j2 = await getJson(`https://open.er-api.com/v6/latest/${tableBase}`).catch((e2) => { erError = e2; return null; });
+        if (!usable(j2)) {
+          // Third publisher: AllRatesToday's keyless open endpoint serves the
+          // ECB reference table (the same ~30 codes Frankfurter accepts) in
+          // ER-API's response shape, so the cross-rate code below is shared.
+          const erReason = erError?.message || j2?.["error-type"] || "unexpected shape";
+          console.warn(`[fx-rate] open.er-api.com failed (${erReason}) - falling back to allratestoday.com`);
+          const j3 = await getJson(`https://allratestoday.com/api/open/latest/${tableBase}`).catch((e3) => ({ "error-type": e3.message }));
+          if (!usable(j3)) {
+            throw bad(`fx upstreams unavailable - frankfurter: ${e.message}; er-api: ${erReason}; allratestoday: ${j3?.["error-type"] || "unexpected shape"}`, 502);
+          }
+          j2 = j3;
         }
         const date = new Date(j2.time_last_update_unix * 1000).toISOString().slice(0, 10);
         if (from === to) return { from, to, amount, rate: 1, result: amount, date };

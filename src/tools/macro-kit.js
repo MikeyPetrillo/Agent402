@@ -527,11 +527,25 @@ export const MACRO_TOOLS = [
         }
       }
       if (!j) {
+        // Third publisher: AllRatesToday's keyless open endpoint serves the ECB
+        // reference table in ER-API's shape (result, rates, time_last_update_*),
+        // from infrastructure shared with neither host above.
+        try {
+          const alt = await getJson("https://allratestoday.com/api/open/latest/USD");
+          if (alt?.result === "success" && alt?.rates) {
+            j = { date: alt.date || String(alt.time_last_update_utc || "").slice(0, 16) || null, rates: alt.rates };
+            source = "ECB via AllRatesToday (open data; Frankfurter and Open ER-API unavailable)";
+          }
+        } catch (e3) {
+          console.warn(`[fx-dashboard] allratestoday.com also failed (${String(e3?.message || e3).slice(0, 80)})`);
+        }
+      }
+      if (!j) {
         // Both hosts down: a marked same-day-ish snapshot beats a 504.
         if (fxDashCache && Date.now() - fxDashCache.at < FX_DASH_STALE_MS) {
           return { ...fxDashCache.value, stale: true, asOf: new Date(fxDashCache.at).toISOString() };
         }
-        throw bad("FX upstreams unavailable (Frankfurter and Open ER-API)", 502);
+        throw bad("FX upstreams unavailable (Frankfurter, Open ER-API and AllRatesToday)", 502);
       }
       const rates = j?.rates ?? {};
       const have = G10.filter((c) => typeof rates[c] === "number");
