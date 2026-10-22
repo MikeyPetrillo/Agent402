@@ -106,7 +106,7 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     // The default window (20 s) against the premium image route's 75 s budget.
     SLOW_SYNC_WINDOW_SECONDS: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+    AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     AGENT402_MCP_TASK_TTL_MS: "" },
   stdio: ["ignore", "pipe", "pipe"],
 });

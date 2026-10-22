@@ -120,7 +120,7 @@ const boot = async (port, storeFile) => {
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", TEMPO_RELAY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", AGENT402_OPERATOR_TOKEN: "payer-screen-test-operator-token-0123456789",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, `sales-${port}.db`), HANGUP_FORGIVE_FILE: join(TMP, `hangup-${port}.json`),
+    AGENT402_TASK_DATA_DIR: join(TMP, `tasks-${port}`), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, `sales-${port}.db`), HANGUP_FORGIVE_FILE: join(TMP, `hangup-${port}.json`),
     MEMORY_DB_FILE: join(TMP, "memory.db"),
     SANCTIONS_SCREEN_FILE: storeFile, SANCTIONS_LIST_URL: `${FAC}/SDN.XML` };
   proc = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });

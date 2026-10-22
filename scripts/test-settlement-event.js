@@ -91,7 +91,7 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+    AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     // No forgiveness: a buyer who leaves before the first byte is settled and
     // booked as owed, the path whose settlement had no event.
     HANGUP_FORGIVE: "off",

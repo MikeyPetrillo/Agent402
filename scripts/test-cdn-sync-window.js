@@ -177,7 +177,7 @@ const bootPaid = async (extraEnv) => {
       SLOW_SYNC_WINDOW_SECONDS: "off",
       CDN_SYNC_MAX_SECONDS: "8", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", AGENT402_OPERATOR_TOKEN: OP,
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-      REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"), AGENT402_MCP_TASK_TTL_MS: "", ...extraEnv },
+      AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"), AGENT402_MCP_TASK_TTL_MS: "", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
