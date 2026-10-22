@@ -17,8 +17,8 @@
 // Install before rpc-failover.js, so the failover's own attempts and the
 // hedged reads, which call the method it captured, pass this check too. A
 // refusal is not a transport failure, so it is never retried elsewhere.
-// Calls with no settle context (verify, health, payer recovery) are untouched.
-import { rpc } from "@stellar/stellar-sdk";
+// Calls with no settle context (verify, health) are untouched.
+import { Address, Networks, rpc, scValToNative, Transaction } from "@stellar/stellar-sdk";
 import { TimeoutError, withTimeout } from "./timeout.js";
 
 export const PRE_SUBMIT_METHODS = ["simulateTransaction", "getLatestLedger", "getAccount", "getLedgerEntries", "sendTransaction"];
@@ -45,6 +45,12 @@ export function installSettleDeadline(getContext, {
         if (name === "sendTransaction") log("[settle-deadline] past the settle deadline: transaction NOT submitted");
         return Promise.reject(new SettleDeadlineError(name));
       }
+      // The hash of what is being sent, recorded before the bytes leave: a
+      // submission still in flight at the deadline may land, so the
+      // timed-out answer names it and the caller confirms it on chain.
+      if (ctx && name === "sendTransaction") {
+        try { ctx.sentHash = args[0].hash().toString("hex"); } catch { /* not a Transaction: nothing to name */ }
+      }
       return original.apply(this, args);
     };
     wrapped.__settleDeadline = true;
@@ -61,7 +67,7 @@ export function installSettleDeadline(getContext, {
 // the same payment through another facilitator.
 export function newSettleContext(timeoutMs, now = Date.now) {
   const startedAt = now();
-  return { txHash: "", startedAt, deadline: startedAt + Number(timeoutMs), deadlineRefused: false, lateStart: false };
+  return { txHash: "", startedAt, deadline: startedAt + Number(timeoutMs), sentHash: "", deadlineRefused: false, lateStart: false };
 }
 
 // The /settle queue job. A job whose request is already past its deadline,
@@ -81,4 +87,31 @@ export function settleJob(ctx, { run = (c, fn) => fn(), settle, clientClosed = (
     hold(work);
     return withTimeout(work, left, "settle");
   });
+}
+
+// The payer of a /settle payload, read from its envelope with no RPC call:
+// the "from" argument of the one transfer() it invokes on the requirements'
+// asset, which is where the vendor's verify reads the payer it returns. A
+// settle that ran out its deadline is answered with this at once, so the
+// answer, payer included, never waits on a node past the deadline. A payload
+// of any other shape names no payer (null), as verify would refuse it too.
+const PASSPHRASES = { "stellar:pubnet": Networks.PUBLIC, "stellar:testnet": Networks.TESTNET };
+export function payerOfPayload(paymentPayload, paymentRequirements) {
+  try {
+    const passphrase = PASSPHRASES[paymentRequirements?.network];
+    const xdrB64 = paymentPayload?.payload?.transaction;
+    if (!passphrase || typeof xdrB64 !== "string") return null;
+    const ops = new Transaction(xdrB64, passphrase).operations;
+    if (ops.length !== 1 || ops[0].type !== "invokeHostFunction") return null;
+    const fn = ops[0].func;
+    if (fn?.switch().name !== "hostFunctionTypeInvokeContract") return null;
+    const call = fn.invokeContract();
+    if (Address.fromScAddress(call.contractAddress()).toString() !== paymentRequirements.asset) return null;
+    const args = call.args();
+    if (call.functionName().toString() !== "transfer" || args.length !== 3) return null;
+    const from = scValToNative(args[0]);
+    return typeof from === "string" && from.trim() ? from.trim() : null;
+  } catch {
+    return null;
+  }
 }

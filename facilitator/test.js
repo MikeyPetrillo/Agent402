@@ -580,6 +580,21 @@ const sorobanRpc = getRpcClient(NETWORK);
   const normalCtx = newSettleContext(SETTLE_MS);
   const normal = await enqueue(job(normalCtx, () => {}));
   ok(normal?.status === "PENDING" && hits.sendTransaction === 1 && !normalCtx.deadlineRefused, "settle deadline: a settle inside its deadline submits exactly as before");
+  ok(normalCtx.sentHash === tx.hash().toString("hex"), "settle deadline: the hash of what is sent is recorded as it is sent, so an answer at the deadline can name it");
+
+  // (a2) a submission in flight when the deadline passes: the answer comes at
+  //      the deadline and the context names the hash that may still land
+  {
+    const hangSubmit = createServer(() => { /* accept, never answer */ });
+    await new Promise((r) => hangSubmit.listen(0, "127.0.0.1", r));
+    const hangServer = new GuardedServer(`http://127.0.0.1:${hangSubmit.address().port}`, { allowHttp: true });
+    const q = createSerialQueue({ holdMaxMs: 300, log: () => {} });
+    const inflightCtx = newSettleContext(SETTLE_MS);
+    let inflightErr = null;
+    try { await q(settleJob(inflightCtx, { run: (c, fn) => als.run(c, fn), settle: () => hangServer.sendTransaction(tx) })); } catch (e) { inflightErr = e; }
+    ok(inflightErr?.code === "FACILITATOR_TIMEOUT" && inflightCtx.sentHash === tx.hash().toString("hex") && !inflightCtx.deadlineRefused, "settle deadline: a submission in flight at the deadline is answered at the deadline with its hash on the context");
+    hangSubmit.closeAllConnections?.(); hangSubmit.close();
+  }
 
   // (b) pre-submit steps outlast the deadline: the caller is answered at the
   //     deadline, sendTransaction never reaches the node, and the next settle
@@ -675,6 +690,83 @@ const sorobanRpc = getRpcClient(NETWORK);
     ok(threw?.message === "boom" && (await q2(() => "after")) === "after", "queue: a throwing job still rejects its own caller and never poisons the chain");
   }
   console.log("settle-deadline.js unit tests ✓");
+}
+
+// ---------------------------------------------------------------------------
+// One deadline for the whole /settle answer. The real server, with its
+// primary and fallback RPC nodes both accepting connections and never
+// answering (the TLS handshake hangs): the answer, payer included, must come
+// back at FACILITATOR_SETTLE_TIMEOUT_MS, not after a further RPC round-trip
+// made to recover the payer once the bound has passed.
+// ---------------------------------------------------------------------------
+{
+  const net = await import("node:net");
+  const { Account, Address, StrKey, nativeToScVal } = await import("@stellar/stellar-sdk");
+  const held = new Set();
+  const hangingNode = () => net.createServer((s) => { held.add(s); s.on("error", () => {}); /* never answer */ });
+  const nodeA = hangingNode();
+  const nodeB = hangingNode();
+  await Promise.all([nodeA, nodeB].map((n) => new Promise((r) => n.listen(0, "127.0.0.1", r))));
+  const freePort = await new Promise((r) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const SETTLE_MS = 1_500;
+  const token = "hang-test-token";
+  const child = spawn(process.execPath, [join(ROOT, "index.js")], {
+    env: {
+      ...process.env,
+      FACILITATOR_NETWORK: "pubnet",
+      FACILITATOR_STELLAR_SECRET: Keypair.random().secret(),
+      FACILITATOR_MAINNET_RPC_URL: `https://127.0.0.1:${nodeA.address().port}`,
+      FACILITATOR_RPC_FALLBACK_URLS: `https://127.0.0.1:${nodeB.address().port}`,
+      FACILITATOR_AUTH_TOKEN: token,
+      FACILITATOR_SETTLE_TIMEOUT_MS: String(SETTLE_MS),
+      PORT: String(freePort),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let childOut = "";
+  child.stdout.on("data", (d) => { childOut += d; });
+  child.stderr.on("data", (d) => { childOut += d; });
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      up = await fetch(`http://127.0.0.1:${freePort}/supported`, { headers: { authorization: `Bearer ${token}` } }).then((r) => r.ok, () => false);
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    ok(up, `hanging nodes: the facilitator boots against them (${childOut.slice(-300)})`);
+    const payer = Keypair.random().publicKey();
+    const payTo = Keypair.random().publicKey();
+    const asset = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const amount = "10000";
+    const tx = new TransactionBuilder(new Account(payer, "1"), { fee: BASE_FEE, networkPassphrase: Networks.PUBLIC })
+      .addOperation(Operation.invokeContractFunction({
+        contract: asset, function: "transfer",
+        args: [new Address(payer).toScVal(), new Address(payTo).toScVal(), nativeToScVal(BigInt(amount), { type: "i128" })],
+      })).setTimeout(60).build();
+    const requirements = { scheme: "exact", network: "stellar:pubnet", asset, amount, payTo, maxTimeoutSeconds: 60, extra: { areFeesSponsored: true } };
+    const { payerOfPayload } = await import("./settle-deadline.js");
+    const envelope = { payload: { transaction: tx.toXDR() } };
+    ok(payerOfPayload(envelope, requirements) === payer, "payerOfPayload: the transfer's from address, read offline");
+    ok(payerOfPayload(envelope, { ...requirements, asset: StrKey.encodeContract(Buffer.alloc(32, 9)) }) === null, "payerOfPayload: a transfer on another asset names no payer");
+    ok(payerOfPayload({ payload: { transaction: "not-xdr" } }, requirements) === null && payerOfPayload(envelope, { ...requirements, network: "eip155:8453" }) === null && payerOfPayload(undefined, undefined) === null, "payerOfPayload: junk, another network or nothing names no payer");
+    const t0 = Date.now();
+    const r = await fetch(`http://127.0.0.1:${freePort}/settle`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ paymentPayload: { x402Version: 2, accepted: requirements, payload: { transaction: tx.toXDR() } }, paymentRequirements: requirements }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = await r.json();
+    const took = Date.now() - t0;
+    ok(body.success === false && body.errorReason === "settle_timed_out", `hanging nodes: /settle answers settle_timed_out (${JSON.stringify(body)})`);
+    ok(took < SETTLE_MS + 1_000, `hanging nodes: the whole /settle answer is bounded by the settle deadline (${took}ms, deadline ${SETTLE_MS}ms)`);
+    ok(body.payer === payer, `hanging nodes: the timed-out answer still names the payer, read with no RPC call (got ${body.payer})`);
+    ok(!body.transaction, "hanging nodes: nothing was submitted, so no transaction is named");
+  } finally {
+    child.kill("SIGKILL");
+    for (const s of held) s.destroy();
+    nodeA.close(); nodeB.close();
+  }
+  console.log("settle whole-answer deadline tests ✓");
 }
 
 // Everything above is offline and deterministic; everything below needs
