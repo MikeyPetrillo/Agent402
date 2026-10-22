@@ -3191,7 +3191,13 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   const declaredRoutes = new Set();
   for (const t of byKey.values()) if (!t.methodInferred && t.route) declaredRoutes.add(String(t.route));
   for (const [k, t] of [...byKey.entries()]) {
-    if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) byKey.delete(k);
+    if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) {
+      // The dropped row's probe example moves to the declared rows on its
+      // route that publish none, so the example survives the key change.
+      const ex = exampleByKey && exampleByKey.get(k);
+      if (ex) for (const [dk, d] of byKey) if (!d.methodInferred && String(d.route) === String(t.route) && !exampleByKey.has(dk)) exampleByKey.set(dk, ex);
+      byKey.delete(k);
+    }
   }
   if (exampleByKey) for (const [k, t] of byKey) { const ex = exampleByKey.get(k); if (ex) exampleOf.set(t, ex); }
   return [...byKey.values()];

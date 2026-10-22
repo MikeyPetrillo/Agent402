@@ -174,6 +174,25 @@ const pathsManifest = (origin, extra = {}) => ({
   ok(probeExampleFor(v, "POST", "/v1/y?p=b") === '{"p":"b"}' && probeExampleFor(v, "POST", "/v1/y?p=a") === '{"p":"a"}', "an exact route still wins over the shared path");
   ok(probeExampleFor(v, "POST", "/v1/y") === '{"p":"a"}', "the bare path takes the first variant's example");
 
+  // An entry naming no verb carries the example while another entry declares
+  // POST for the same route: the inferred row is dropped, its example is not.
+  {
+    const o = "https://seller.example";
+    const doc = { x402Version: 2,
+      resources: [{ resource: `${o}/v1/inf`, exampleRequest: { intent: MARK } }],
+      endpoints: [{ path: "/v1/inf", method: "POST", description: "Declared." }] };
+    const got = new Map();
+    const rows = normaliseManifestTools(doc, o, { examples: got });
+    ok(rows.length === 1 && rows[0].method === "POST", `the declared POST row is the one kept (${JSON.stringify(rows.map((r) => r.method))})`);
+    ok(probeExampleFor(got, "POST", "/v1/inf") === JSON.stringify({ intent: MARK }), "the dropped inferred row's example is found for the declared POST");
+    const own = { x402Version: 2,
+      resources: [{ resource: `${o}/v1/own`, exampleRequest: { intent: "inferred" } }],
+      endpoints: [{ path: "/v1/own", method: "POST", exampleRequest: { intent: "declared" } }] };
+    const got2 = new Map();
+    normaliseManifestTools(own, o, { examples: got2 });
+    ok(probeExampleFor(got2, "POST", "/v1/own") === JSON.stringify({ intent: "declared" }), "a declared row's own example wins over the inferred one");
+  }
+
   // The cap counts examples (routes), not keys: each example also holds a
   // path alias, and MAX_EXAMPLES routes all stay findable.
   {
