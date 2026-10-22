@@ -14,9 +14,13 @@
 //
 // Rules, each one tested in scripts/test-leaderboard-log-cache.js:
 //   * The cursor advances only when every head read of the scan succeeded,
-//     and only to `latest - reorgMarginBlocks`: the newest blocks are read
-//     and folded every scan but never kept, so a reorganized head block is
-//     never folded twice or kept stale.
+//     and only to `latest - reorg margin`: the newest blocks are read and
+//     folded every scan but never kept, so a reorganized head block is
+//     never folded twice or kept stale. The margin is wall-clock time
+//     (reorgMarginSeconds, ten minutes) counted in blocks at the chain's
+//     live block time when the scan runs (src/chain-block-time.js), so it
+//     stays ten minutes when the block time changes;
+//     LEADERBOARD_LOG_CACHE_REORG_BLOCKS pins a block count instead.
 //   * A new wallet is kept (covered) only when every read of its batch
 //     succeeded; otherwise it is read again next scan. Its earlier rows (a
 //     wallet that left and came back) are dropped before its new rows go in.
@@ -41,11 +45,15 @@ import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
 import { documents, stateDbEnabled } from "./state-db.js";
 import { posOf } from "./seller-funding.js";
+import { blocksForSeconds } from "./chain-block-time.js";
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : d; };
 export const LOG_CACHE_DEFAULTS = Object.freeze({
   segmentBlocks: num(process.env.LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS, 18_000),
-  reorgMarginBlocks: num(process.env.LEADERBOARD_LOG_CACHE_REORG_BLOCKS, 300),
+  // A pinned block count; unset, the seconds below are counted at the live
+  // block time on every scan.
+  reorgMarginBlocks: String(process.env.LEADERBOARD_LOG_CACHE_REORG_BLOCKS ?? "").trim() === "" ? null : num(process.env.LEADERBOARD_LOG_CACHE_REORG_BLOCKS, null),
+  reorgMarginSeconds: 600,
   maxRows: num(process.env.LEADERBOARD_LOG_CACHE_MAX_ROWS, 2_000_000),
   saveTimeoutMs: 20_000,
 });
@@ -208,7 +216,10 @@ const storedDigestOf = (body) => digestOf({ v: body.v, start: body.start, wallet
  *   store            createLogCacheStore(...) (or a test double)
  *   token            the token contract; a cache read for another token is discarded
  */
-export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_DEFAULTS.segmentBlocks, reorgMarginBlocks = LOG_CACHE_DEFAULTS.reorgMarginBlocks, maxRows = LOG_CACHE_DEFAULTS.maxRows } = {}) {
+export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_DEFAULTS.segmentBlocks, reorgMarginBlocks = LOG_CACHE_DEFAULTS.reorgMarginBlocks, reorgMarginSeconds = LOG_CACHE_DEFAULTS.reorgMarginSeconds, chain = "base", maxRows = LOG_CACHE_DEFAULTS.maxRows } = {}) {
+  // This scan's reorg margin in blocks: a pinned count, else the margin's
+  // seconds at the chain's block time now.
+  const marginBlocks = () => (Number.isFinite(reorgMarginBlocks) ? reorgMarginBlocks : blocksForSeconds(chain, reorgMarginSeconds));
   let state = null;          // { cursor, covered: Map(wallet -> fromBlock), segs: Map(start -> seg) }
   let loaded = false;
   const deleted = new Set(); // segment keys to delete on the next persist
@@ -367,7 +378,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     // Keep what this scan read in full.
     if (cold) {
       if (!head.failed) {
-        const settled = Math.max(start - 1, latest - reorgMarginBlocks);
+        const settled = Math.max(start - 1, latest - marginBlocks());
         for (const t of head.out) if (t.block <= settled) addRow(t);
         for (const w of ws) state.covered.set(w, start);
         state.cursor = settled;
@@ -383,7 +394,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
         for (const w of done) state.covered.set(w, start);
       }
       if (!head.failed) {
-        const settled = Math.max(cursor, latest - reorgMarginBlocks);
+        const settled = Math.max(cursor, latest - marginBlocks());
         for (const t of head.out) {
           if (t.block <= cursor || t.block > settled) continue;
           // A wallet not covered yet keeps no head rows: its backfill comes
