@@ -47,7 +47,7 @@ import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_
 import { normalizePayerAddress } from "./payer.js";
 import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
-import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
+import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -228,7 +228,6 @@ const saleRowOf = (r) => cleanRow({
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
 let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
 let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
-let refreshing = false;
 const warnOnce = makeWarnOnce("sales-ledger");
 const enqueue = serialQueue();
 function applySale(r) { mirrorSale.run(saleRowOf(r)); }
@@ -425,20 +424,19 @@ async function pullAll() {
  * the newest stamp seen, so rows sharing one stamp range (an import of 55k
  * sales) are not pulled again on every refresh. Returns the rows pulled.
  */
-async function refresh() {
-  if (refreshing) return 0;
-  refreshing = true;
-  try {
-    const now = await pgNowMs(stateQuery);
-    const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
-    if (s.rows.length) applySales(s.rows);
-    const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
-    if (f.rows.length) applyFeedbacks(f.rows);
-    writer.answered();
-    watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
-    return s.rows.length + f.rows.length;
-  } finally { refreshing = false; }
+async function pullNewer() {
+  const now = await pgNowMs(stateQuery);
+  const s = await stateQuery(`SELECT * FROM ${T("sales")} WHERE updated_at > $1 ORDER BY updated_at, id`, [Math.max(0, watermark)]);
+  if (s.rows.length) applySales(s.rows);
+  const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} WHERE updated_at > $1 ORDER BY updated_at`, [Math.max(0, watermark)]);
+  if (f.rows.length) applyFeedbacks(f.rows);
+  writer.answered();
+  watermark = Math.max(watermark, now - REFRESH_MARGIN_MS);
+  return s.rows.length + f.rows.length;
 }
+// One pull in flight per process; the timer skips while one runs.
+const puller = singleFlight(pullNewer);
+function refresh() { return puller.run() || Promise.resolve(0); }
 async function firstLoad() {
   await withSchemaLock((c) => c.query(PG_DDL())); // two boots at once never race on the catalog
   await importOnce(IMPORT_NAME, { source: DB_PATH, run: importFile });
@@ -602,7 +600,9 @@ export function saleByTx(tx) {
 export async function saleByTxFresh(tx, { force = false } = {}) {
   const hit = saleByTx(tx);
   if ((hit && !force) || !USE_PG) return hit;
-  try { await readyP(); await refresh(); } catch { /* the database is unreachable: answer from the mirror */ }
+  // puller.fresh(): a pull already running may have read the table before
+  // this sale landed, so wait for it and share one follow-up pull.
+  try { await readyP(); await puller.fresh(); } catch { /* the database is unreachable: answer from the mirror */ }
   return saleByTx(tx);
 }
 

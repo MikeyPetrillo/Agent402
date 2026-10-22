@@ -3151,6 +3151,8 @@ jobs:
           # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
           t node scripts/test-mpp-agents-weekly.js
           t node scripts/test-attest-kit.js
+          # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
+          t node scripts/test-single-flight.js
           # Repo-wide: no count-named field is the length of a LIMITed query result (source scan, offline)
           t node scripts/test-capped-counts.js
           # Every published figure carries its own scope: a capped, sampled, windowed or filtered
