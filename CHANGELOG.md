@@ -25,7 +25,8 @@ carries its own version on npm.
   wait on the connection. A paid call with neither is answered `400` before
   any payment is taken, so a client that would hang up first is never
   charged for an answer it did not receive. `agent402-client` 0.8.16 and
-  later is run as a job on its own.
+  later is run as a job on its own, and `agent402-mcp` 0.13.18 with
+  `AGENT402_ASYNC=off` sends `Prefer: wait`.
 
 ### 2026-10-20
 - New tool `dub` (`POST /api/dub`): translates a text into a target language
