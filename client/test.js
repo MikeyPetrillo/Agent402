@@ -433,6 +433,21 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         ok(Math.abs(spent - 0.002) < 1e-9, `${label}: the signed-then-redirected payment counts against the caps beside the paid control ($${spent})`);
       }
     }
+    // Caps with a pre-wrapped fetch and no x402Client: the client cannot see
+    // what was signed, so a redirect on the unpaid preflight must stop the
+    // call before anything is reserved, not book the list price as spent.
+    {
+      const xc = new x402Client();
+      xc.setSpendControls?.(false);
+      registerExactEvmScheme(xc, { signer: account });
+      const c = new Agent402({ baseUrl: SELLER, cache: false, tlsDistrust: false, fetch: wrapFetchWithPayment(fetch, xc), maxPerCallUsd: 0.01, dailyLimitUsd: 0.002 });
+      c._catalog = new Map([["first", { method: "POST", path: "/first", computePayable: false, price: "$0.001" }]]);
+      let last = null;
+      for (let i = 0; i < 3; i++) { try { await c.call("first", { q: i }); } catch (err) { last = err; } }
+      ok(last instanceof PaymentRedirectError, `unguarded caps: every redirected call is refused as a redirect, never as a spent cap (${last?.name}: ${last?.message})`);
+      ok(c._spend.log.length === 0, `unguarded caps: a refused redirect books no spend (${c._spend.log.length} entries)`);
+      ok(elsewhereSeen.unpaid === 0 && elsewhereSeen.signed === 0, "unguarded caps: the other origin got no request");
+    }
   } finally { seller.close(); elsewhere.close(); }
 }
 

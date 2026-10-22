@@ -659,7 +659,11 @@ export class Agent402 {
       const pre = await send();
       if (pre?.status !== 402) return listUsd;
       q = quoteOf(await challengeAccepts(pre));
-    } catch { return listUsd; /* no readable 402: the advertised price */ }
+    } catch (e) {
+      // A redirect is refused here, before anything is reserved or signed.
+      if (e instanceof PaymentRedirectError) throw e;
+      return listUsd; /* no readable 402: the advertised price */
+    }
     if (!q) return listUsd;
     if (q.max == null || (mode === "wallet" && q.unknown > 0)) {
       if (mode === "credits") return listUsd;
