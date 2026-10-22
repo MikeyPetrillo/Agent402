@@ -3754,6 +3754,8 @@ jobs:
           ( cd examples/agentkit-data-to-deploy && npm i --no-save --ignore-scripts --no-audit --no-fund --silent solc@0.8.28 && node contracts/compile.js && rm -rf node_modules )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
+          # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)
+          node scripts/test-adapter-paid-redirects.js
           # Python adapter (agent402-langchain): requests-only keeps CI lean; the
           # test skips the langchain-native path gracefully without langchain-core,
           # so this locks the spec + free proof-of-work call behavior.

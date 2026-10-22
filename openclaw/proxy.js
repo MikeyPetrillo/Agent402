@@ -173,7 +173,15 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
     const clientIdem = typeof req.headers["idempotency-key"] === "string" && /^[\w.:-]{8,128}$/.test(req.headers["idempotency-key"]) ? req.headers["idempotency-key"] : null;
     const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": `agent402-openclaw/${PKG_VERSION}`, ...extraHeaders };
     if (key) headers.authorization = `Bearer ${key}`;
-    const up = await paid(`${upstream}${endpoint}`, { method: "POST", headers, body: JSON.stringify(outbound), signal: AbortSignal.timeout(300_000) });
+    // A paid request never follows a redirect: followed, it would pay another
+    // origin's 402 or carry a signature (or the credits key) to another host.
+    const up = await paid(`${upstream}${endpoint}`, { method: "POST", headers, body: JSON.stringify(outbound), redirect: "manual", signal: AbortSignal.timeout(300_000) });
+    if (up.type === "opaqueredirect" || (up.status >= 300 && up.status < 400)) {
+      stats.errors++;
+      const loc = up.headers.get("location");
+      const to = loc ? new URL(loc, `${upstream}${endpoint}`).href : null;
+      return json(res, 502, { error: { message: `refused to follow a redirect on a paid call: ${upstream}${endpoint} answered HTTP ${up.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, set the upstream to ${new URL(to).origin}` : ""}.`, type: "upstream_redirect_refused" } });
+    }
     stats.forwarded++;
     const passthrough = {};
     // payment-response / x-payment-response carry the x402 settlement receipt

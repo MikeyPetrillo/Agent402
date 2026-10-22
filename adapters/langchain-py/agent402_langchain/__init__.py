@@ -30,12 +30,13 @@ rather not depend on langchain-core.
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import urljoin, urlsplit
 import json as _json
 from typing import Any, Callable, Optional
 
 import requests
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 DEFAULT_BASE = "https://agent402.tools"
 _TIMEOUT = 60
 
@@ -105,10 +106,22 @@ class _Client:
                 headers.update(extra_headers)
             url = f"{self.base}{path}"
             if fetch is not None:
-                # user-supplied x402 fetch: (method, url, **kwargs) -> Response
+                # user-supplied x402 fetch: (method, url, **kwargs) -> Response.
+                # A paid request never follows a redirect: followed, it would pay
+                # another origin's 402 or carry a signature to another host.
                 if method == "GET":
-                    return fetch("GET", url, params=_flatten(params), headers=headers, timeout=_TIMEOUT)
-                return fetch("POST", url, json=params, headers={**headers, "Content-Type": "application/json"}, timeout=_TIMEOUT)
+                    r = fetch("GET", url, params=_flatten(params), headers=headers, timeout=_TIMEOUT, allow_redirects=False)
+                else:
+                    r = fetch("POST", url, json=params, headers={**headers, "Content-Type": "application/json"}, timeout=_TIMEOUT, allow_redirects=False)
+                if 300 <= r.status_code < 400:
+                    loc = r.headers.get("Location")
+                    to = urljoin(url, loc) if loc else None
+                    hint = f"; if that is the address you meant, use {urlsplit(to).scheme}://{urlsplit(to).netloc} as base_url" if to else ""
+                    raise RuntimeError(
+                        f'refusing to follow a redirect on a paid call to "{slug}": {url} answered HTTP {r.status_code}'
+                        f'{" pointing to " + to if to else ""}. Paid requests never follow redirects{hint}.'
+                    )
+                return r
             if method == "GET":
                 return requests.get(url, params=_flatten(params), headers=headers, timeout=_TIMEOUT)
             headers["Content-Type"] = "application/json"

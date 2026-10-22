@@ -174,10 +174,13 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
   if (!entry) throw new Error(`unknown tool "${slug}": use agent402_find or agent402_route to discover one`);
 
   const idem = `a402aisdk-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
-  const send = (extraHeaders = {}, useFetch = fetchImpl) => {
+  const send = async (extraHeaders = {}, useFetch = fetchImpl) => {
     const headers = { "Idempotency-Key": idem, ...extraHeaders };
     let url = `${base}${entry.path}`;
-    const init = { method: entry.method, headers };
+    // A request through the payment fetch never follows a redirect: followed,
+    // it would pay another origin's 402 or carry a signature to another host.
+    const paid = Boolean(payFetch) && useFetch === payFetch;
+    const init = paid ? { method: entry.method, headers, redirect: "manual" } : { method: entry.method, headers };
     if (entry.method === "GET") {
       const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
       if (qs) url += `?${qs}`;
@@ -185,7 +188,13 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(params);
     }
-    return useFetch(url, init);
+    const r = await useFetch(url, init);
+    if (paid && (r?.type === "opaqueredirect" || (r?.status >= 300 && r?.status < 400))) {
+      const loc = r.headers?.get?.("location");
+      const to = loc ? new URL(loc, url).href : null;
+      throw new Error(`refusing to follow a redirect on a paid call to "${slug}": ${url} answered HTTP ${r.status || "redirect"}${to ? ` pointing to ${to}` : ""}. Paid requests never follow redirects${to ? `; if that is the address you meant, use ${new URL(to).origin} as the base URL` : ""}.`);
+    }
+    return r;
   };
 
   // Wallet-only tool: route through the user's x402 fetch.
