@@ -2958,6 +2958,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports
+          t node scripts/test-answer-shape.js
           t node scripts/test-charged-failure-leg.js
           # 402 Index price sync (reprices only our own priced listings that drifted; other hosts, unpriced and unsold rows untouched - offline)
           t node scripts/test-index402-sync.js
