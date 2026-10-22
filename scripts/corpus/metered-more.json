@@ -1294,9 +1294,9 @@
     },
     {
       "slug": "pdf-summarize",
-      "name": "the W-9 in 60 words",
+      "name": "the report in 60 words",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "maxWords": 60
       },
       "requires": "OPENAI_API_KEY",

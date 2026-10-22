@@ -61,16 +61,16 @@
     },
     {
       "slug": "pdf-info",
-      "name": "a small government pdf",
+      "name": "the multi-page report",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "gte": {
           "pages": 3
         },
         "gt": {
-          "bytes": 10000
+          "bytes": 3000
         },
         "equals": {
           "encrypted": false
@@ -89,27 +89,27 @@
     },
     {
       "slug": "pdf-to-markdown",
-      "name": "W-9 text",
+      "name": "report text",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "gte": {
           "pages": 3
         },
         "gt": {
-          "wordCount": 500
+          "wordCount": 200
         },
         "matches": {
-          "markdown": "Taxpayer Identification"
+          "markdown": "Paying for Tools per Request"
         }
       }
     },
     {
       "slug": "pdf-extract-pages",
-      "name": "last page only",
+      "name": "the middle page only",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "pages": "2"
       },
       "expect": {
@@ -128,7 +128,7 @@
       "slug": "pdf-extract-pages",
       "name": "page out of range is a 400",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "pages": "900-901"
       },
       "expect": {

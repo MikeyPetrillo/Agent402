@@ -299,16 +299,16 @@
     },
     {
       "slug": "pdf",
-      "name": "W-9 text",
+      "name": "report text",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "gte": {
           "pages": 3
         },
         "matches": {
-          "text": "Taxpayer"
+          "text": "Paying for Tools per Request"
         }
       }
     },
@@ -317,8 +317,8 @@
       "name": "two small pdfs",
       "input": {
         "urls": [
-          "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
-          "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+          "https://agent402.tools/fixtures/sample-report.pdf",
+          "https://agent402.tools/fixtures/sample-report.pdf"
         ]
       },
       "expect": {
@@ -334,7 +334,7 @@
       "slug": "pdf-rotate",
       "name": "rotate one page 180",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "degrees": 180,
         "pages": "1"
       },
@@ -351,7 +351,7 @@
       "slug": "pdf-rotate",
       "name": "bad degrees is a 400",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
+        "url": "https://agent402.tools/fixtures/sample-report.pdf",
         "degrees": 45
       },
       "expect": {
@@ -676,7 +676,7 @@
       "slug": "skill-document-brief",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-invoice.pdf"
       },
       "expect": {
         "equals": {
@@ -691,7 +691,7 @@
       "slug": "skill-document-intel",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "equals": {
@@ -1070,7 +1070,7 @@
       "slug": "skill-pdf-pipeline",
       "name": "a second pdf",
       "input": {
-        "url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf"
+        "url": "https://agent402.tools/fixtures/sample-report.pdf"
       },
       "expect": {
         "equals": {
