@@ -7215,6 +7215,8 @@ export function startCrawler(opts = {}) {
   // synchronous parse. The first crawl is deferred below, so the fill has
   // finished long before anything re-crawls.
   const scheduleRouteIndexWarm = () => {
+    // The caller's own warmers (the tool directory) run once the cache is in.
+    try { opts.onWarmed?.(); } catch { /* a warmer never breaks the crawler */ }
     const t = setTimeout(() => {
       try { const t0 = Date.now(); const n = warmRouteIndex(); console.log(`[x402-index] route index warmed: ${n} tools in ${Date.now() - t0} ms (off the first buyer's query)`); }
       catch (e) { console.warn(`[x402-index] route index warm failed (the first query builds it instead): ${String(e?.message || e).slice(0, 120)}`); }
@@ -7629,10 +7631,30 @@ export function routableSellerSummaries() {
   return routableSummaryMemo.out;
 }
 export function __resetRoutableSummaryMemoForTest() { routableSummaryMemo = null; }
-function buildRoutableSellerSummaries() {
+// One seller's summary row depends only on its origin and its crawl entry, and
+// the crawler replaces an entry object rather than editing it, so the row is
+// kept per entry: a rebuild projects only the sellers re-crawled since the
+// last one (the projection walks every tool's payTo).
+const routableRowByEntry = new WeakMap(); // entry -> { origin, row }
+let routableRowBuilds = 0;
+/** How many seller summary rows have been projected (a rebuild over unchanged entries projects none). */
+export function _routableRowBuildsForTest() { return routableRowBuilds; }
+function buildRoutableSellerSummaries() { return runSteps(routableSummarySteps()); }
+/** Build the seller summaries in slices and memoize them: the boot's warm,
+ *  so the first search does not project every seller in its own turn. */
+export async function warmRoutableSellerSummaries() {
+  if (!removalsKnown()) return;
+  const size = cache.size;
+  const out = await runSlicedAsync(routableSummarySteps());
+  if (cache.size === size) routableSummaryMemo = { at: Date.now(), size, out: Object.freeze(out) };
+}
+function* routableSummarySteps() {
   const out = [];
   const aliasOrigins = computeAliasOrigins(cache);
-  for (const [origin, v] of cache.entries()) {
+  yield;
+  let walked = 0;
+  for (const [origin, v] of [...cache.entries()]) {
+    if (++walked % SNAPSHOT_YIELD_SELLERS === 0) yield;
     if (v?.error || !isRoutable(v) || aliasOrigins.has(origin)) continue;
     // The crawler can discover and cache the real, publicly-registered
     // agent402.tools origin regardless of what BASE_URL this instance is
@@ -7644,9 +7666,11 @@ function buildRoutableSellerSummaries() {
     // well-known domain only (the scenario that's actually been observed),
     // not a dynamic instance-specific one.
     if (origin.replace(/\/+$/, "").toLowerCase() === "https://agent402.tools") continue;
+    const kept = v && typeof v === "object" ? routableRowByEntry.get(v) : undefined;
+    if (kept && kept.origin === origin) { out.push(kept.row); continue; }
     let host = "";
     try { host = new URL(origin).host.toLowerCase(); } catch { continue; }
-    out.push({
+    const row = {
       origin,
       host,
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -7674,7 +7698,10 @@ function buildRoutableSellerSummaries() {
       // Every advertised payTo, not just the first (see allPayTosByNetwork).
       payTosByNetwork: allPayTosByNetwork(v.tools),
       evmDomainByNetwork: evmDomainUnion(v.tools),
-    });
+    };
+    routableRowBuilds++;
+    if (v && typeof v === "object") routableRowByEntry.set(v, { origin, row });
+    out.push(row);
   }
   return out;
 }
@@ -7901,7 +7928,15 @@ export function screenSellerDetailForServe(d) {
  * Snapshot for the /index page. Always includes the local catalog (instant,
  * zero-network) plus whatever the crawler has accumulated.
  */
-export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, walletName }) {
+export function indexSnapshot(ctx) { return runSteps(indexSnapshotSteps(ctx)); }
+/**
+ * indexSnapshot spread over event-loop turns of at most DIRECTORY_SLICE_MS
+ * (same value): the projection walks every seller and every seller's tools,
+ * and the server rebuilds the snapshot whenever the crawl has changed it.
+ */
+export function indexSnapshotAsync(ctx) { return runSlicedAsync(indexSnapshotSteps(ctx)); }
+const SNAPSHOT_YIELD_SELLERS = 50;
+function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, walletName }) {
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
   // Exclude the crawled self-entry two ways: the caller's own baseUrl (works
   // whenever this instance's BASE_URL matches what was crawled - true in
@@ -7922,7 +7957,12 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   // still rendered as its own seller on every listing - two rows for one
   // service, the retired one still advertising its old chain (2026-09-10).
   const aliasOrigins = computeAliasOrigins(cache);
-  const remote = [...cache.entries()].filter(([origin]) => !isSelfOrigin(origin) && !aliasOrigins.has(origin)).map(([origin, v]) => ({
+  yield;
+  const remote = [];
+  for (const [origin, v] of [...cache.entries()]) {
+    if (isSelfOrigin(origin) || aliasOrigins.has(origin)) continue;
+    if (remote.length % SNAPSHOT_YIELD_SELLERS === SNAPSHOT_YIELD_SELLERS - 1) yield;
+    remote.push({
     origin,
     ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
@@ -7992,7 +8032,9 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     payToByNetwork: sellerPayToByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     payTosByNetwork: allPayTosByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
     evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-  }));
+    });
+  }
+  yield;
   // Collapse http/https duplicates of the same host into one seller. A registry
   // can list the same origin under both schemes (one origin appeared as
   // both http:// and https://), which crawled as two cache entries and rendered
@@ -9451,36 +9493,85 @@ let indexRowsMemo = { key: null, at: 0, rows: null };
 // 1.5-1.8 s of one synchronous turn, 2026-09-25).
 const INDEX_ROWS_INLINE_MAX = 20000;
 let indexRowsRebuild = null;
+// A rebuild, flatten to interleave to each row's search text, run in slices of
+// at most DIRECTORY_SLICE_MS: the interleave (a sort per seller and a
+// round-robin over every row) and the first search's text build were each one
+// synchronous turn over the whole directory.
+const DIRECTORY_SLICE_MS = 8;
+function startIndexRowsBuild(ourTools, excludeOrigin, key) {
+  if (indexRowsRebuild) return indexRowsRebuild;
+  const m = indexRowsMemo;
+  const version = cacheVersion;
+  indexRowsRebuild = (async () => {
+    try {
+      const flat = await flattenedThirdPartyToolsAsync(excludeOrigin);
+      await yieldTurn();
+      const rows = await runSlicedAsync(interleaveSteps([...ourTools, ...flat]));
+      rows.oursCount = rows.filter((t) => t.ours).length;
+      await runSlicedAsync(directoryHaySteps(rows));
+      if (indexRowsMemo === m) indexRowsMemo = { key, at: Date.now(), rows, version };
+    } catch (e) {
+      console.warn(`[x402-index] directory rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
+    } finally { indexRowsRebuild = null; }
+  })();
+  return indexRowsRebuild;
+}
+function indexRowsFresh(m, key, now = Date.now()) {
+  // Unchanged cache: reuse for up to 5 min (Bazaar rows can change without a
+  // cache write). Mid-crawl: reuse for up to 2 min whatever the version says.
+  return Boolean(m.rows && m.key === key && ((m.version === cacheVersion && now - m.at < 300_000) || (crawlInFlight && now - m.at < 120_000)));
+}
 function interleavedIndexRows(ourTools, excludeOrigin) {
   const now = Date.now();
   const key = `${excludeOrigin}|${ourTools.length}`;
   const m = indexRowsMemo;
-  // Unchanged cache: reuse for up to 5 min (Bazaar rows can change without a
-  // cache write). Mid-crawl: reuse for up to 2 min whatever the version says.
-  if (m.rows && m.key === key && ((m.version === cacheVersion && now - m.at < 300_000) || (crawlInFlight && now - m.at < 120_000))) return m.rows;
+  if (indexRowsFresh(m, key, now)) return m.rows;
   if (m.rows && m.key === key && m.rows.length > INDEX_ROWS_INLINE_MAX) {
-    if (!indexRowsRebuild) {
-      const version = cacheVersion;
-      indexRowsRebuild = (async () => {
-        try {
-          const flat = await flattenedThirdPartyToolsAsync(excludeOrigin);
-          await yieldTurn();
-          const rows = interleaveBySeller([...ourTools, ...flat]);
-          rows.oursCount = rows.filter((t) => t.ours).length;
-          if (indexRowsMemo === m) indexRowsMemo = { key, at: Date.now(), rows, version };
-        } catch (e) {
-          console.warn(`[x402-index] directory rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
-        } finally { indexRowsRebuild = null; }
-      })();
-    }
+    startIndexRowsBuild(ourTools, excludeOrigin, key);
     return m.rows;
   }
-  const rows = interleaveBySeller([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]);
+  const rows = runSteps(interleaveSteps([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]));
   rows.oursCount = rows.filter((t) => t.ours).length;
   indexRowsMemo = { key, at: now, rows, version: cacheVersion };
   return rows;
 }
+/**
+ * Resolves once allIndexedTools can answer from a built directory for these
+ * arguments. With none built yet (the first read after a boot) the build runs
+ * in slices and the caller waits for it instead of building the whole
+ * directory in its own turn; with one built it resolves at once (a stale one
+ * is served while it rebuilds, as before). The server also calls it at boot,
+ * so a visitor rarely waits at all.
+ */
+export async function indexRowsReady({ ourTools = [], excludeOrigin = "" } = {}) {
+  const key = `${excludeOrigin}|${ourTools.length}`;
+  if (indexRowsMemo.rows && indexRowsMemo.key === key) return;
+  // A cache this small builds in line, as before.
+  if (cache.size < 200) return;
+  while (!(indexRowsMemo.rows && indexRowsMemo.key === key)) {
+    const pending = indexRowsRebuild || startIndexRowsBuild(ourTools, excludeOrigin, key);
+    const before = indexRowsMemo;
+    await pending;
+    if (indexRowsMemo === before) return; // the build failed: the caller builds in line
+  }
+}
 const yieldTurn = () => new Promise((r) => setImmediate(r));
+// A step generator run to completion in one turn, or across turns at most
+// DIRECTORY_SLICE_MS each. One generator per computation, so the two runs
+// cannot drift apart.
+function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
+async function runSlicedAsync(gen) {
+  let until = performance.now() + DIRECTORY_SLICE_MS;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + DIRECTORY_SLICE_MS; }
+    r = gen.next();
+  }
+  return r.value;
+}
+function* directoryHaySteps(rows) {
+  for (let i = 0; i < rows.length; i++) { directoryHayOf(rows[i]); if (i % 1000 === 999) yield; }
+}
 /** Test hook: wait for an in-flight background directory rebuild. */
 export async function _indexRowsSettledForTest() { while (indexRowsRebuild || flatRebuild) await (indexRowsRebuild || flatRebuild); }
 
@@ -9498,17 +9589,24 @@ export async function _indexRowsSettledForTest() { while (indexRowsRebuild || fl
 // One collator instead of String#localeCompare per comparison: same order,
 // a fraction of the cost on a 100k-row sort.
 const collate = new Intl.Collator().compare;
-function interleaveBySeller(rows) {
-  const pass = (subset) => {
+// Yields between units of work (a seller's sort, a slice of the round-robin);
+// run whole by runSteps or across turns by runSlicedAsync.
+function* interleaveSteps(rows) {
+  function* pass(subset) {
     const bySeller = new Map();
     for (const r of subset) {
       const k = r.sellerName || r.seller;
       if (!bySeller.has(k)) bySeller.set(k, []);
       bySeller.get(k).push(r);
     }
-    const groups = [...bySeller.entries()]
-      .sort((a, b) => collate(String(a[0]), String(b[0])))
-      .map(([, list]) => list.sort((a, b) => collate(String(a.route), String(b.route))));
+    yield;
+    const entries = [...bySeller.entries()].sort((a, b) => collate(String(a[0]), String(b[0])));
+    yield;
+    const groups = [];
+    for (const [, list] of entries) {
+      groups.push(list.sort((a, b) => collate(String(a.route), String(b.route))));
+      yield;
+    }
     const out = [];
     for (let i = 0; out.length < subset.length; i++) {
       let moved = false;
@@ -9516,10 +9614,13 @@ function interleaveBySeller(rows) {
         if (i < g.length) { out.push(g[i]); moved = true; }
       }
       if (!moved) break; // defensive: never spin if a group shrinks underneath us
+      yield;
     }
     return out;
-  };
-  return [...pass(rows.filter((r) => r.described)), ...pass(rows.filter((r) => !r.described))];
+  }
+  const described = yield* pass(rows.filter((r) => r.described));
+  const rest = yield* pass(rows.filter((r) => !r.described));
+  return [...described, ...rest];
 }
 
 function flatRowsForEntry(origin, v, self, seen, out) {
@@ -9663,10 +9764,17 @@ function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
 
 
 /** Category rollup for the catalog's filter chips. */
+// Counted once per flattened row set (a walk of every third-party row), not
+// once per page view.
+let categoriesMemo = { rows: null, value: null };
 export function indexedToolCategories(excludeOrigin = "") {
+  const rows = flattenedThirdPartyTools(excludeOrigin);
+  if (categoriesMemo.rows === rows) return categoriesMemo.value.map((c) => ({ ...c }));
   const counts = new Map();
-  for (const t of flattenedThirdPartyTools(excludeOrigin)) counts.set(t.category, (counts.get(t.category) || 0) + 1);
-  return [...counts.entries()].map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+  for (const t of rows) counts.set(t.category, (counts.get(t.category) || 0) + 1);
+  const value = [...counts.entries()].map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+  categoriesMemo = { rows, value };
+  return value.map((c) => ({ ...c }));
 }
 
 export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; }

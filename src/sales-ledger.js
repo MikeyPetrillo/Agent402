@@ -815,11 +815,15 @@ const qExternalByNetworkPayers = db.prepare(`
   SELECT DISTINCT network, payer
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function externalByNetwork({ days = 30 } = {}) {
+export function externalByNetwork({ days = 30 } = {}) { return runSteps(externalByNetworkSteps({ days })); }
+/** externalByNetwork, one query per event-loop turn (same answer). */
+export function externalByNetworkAsync({ days = 30 } = {}) { return runStepsAsync(externalByNetworkSteps({ days })); }
+function* externalByNetworkSteps({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const out = {};
   const row = (key) => out[key] || (out[key] = { settlements: 0, buyers: 0 });
   for (const r of qExternalByNetwork.all(since)) row(canonRail(r.network)).settlements += r.n;
+  yield;
   const payersByRail = new Map();
   for (const r of qExternalByNetworkPayers.all(since)) {
     const key = canonRail(r.network);
@@ -1307,7 +1311,20 @@ export function externalDailyRevenue({ days = 60 } = {}) {
 }
 
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function salesSummary({ days = 30, detailed = false } = {}) {
+// Each summary is a few full passes over the ledger window. The steps below
+// run them one per yield, so the sync export runs them back to back and the
+// Async export puts each on its own event-loop turn: a reader that builds a
+// shared figure in the background never holds the loop for all of them.
+function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
+async function runStepsAsync(gen) {
+  let r = gen.next();
+  while (!r.done) { await new Promise((ok) => setImmediate(ok)); r = gen.next(); }
+  return r.value;
+}
+export function salesSummary({ days = 30, detailed = false } = {}) { return runSteps(salesSummarySteps({ days, detailed })); }
+/** salesSummary, one query per event-loop turn (same answer). */
+export function salesSummaryAsync({ days = 30, detailed = false } = {}) { return runStepsAsync(salesSummarySteps({ days, detailed })); }
+function* salesSummarySteps({ days = 30, detailed = false } = {}) {
   const since = Date.now() - days * 86_400_000;
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
   for (const r of qTotals.all(since)) {
@@ -1325,18 +1342,19 @@ export function salesSummary({ days = 30, detailed = false } = {}) {
   }
   totals.external.revenueUsd = +totals.external.revenueUsd.toFixed(4);
   totals.internal.revenueUsd = +totals.internal.revenueUsd.toFixed(4);
-  const byPayer = qExtByPayer.all(since);
-  const base = {
-    days,
-    persistent: salesPersistent,
-    recordingSince: qFirstTs.get()?.ts ?? null,
-    totals,
-    // Counts, never rosters or rankings: enough to show the market is real
-    // without naming a single buyer or ranking a single tool.
-    distinctExternalBuyers: qExtDistinctPayers.get(since)?.n ?? 0,
-    distinctToolsSoldExternal: qExtDistinctSlugs.get(since)?.n ?? 0,
-  };
+  yield;
+  const recordingSince = qFirstTs.get()?.ts ?? null;
+  // Counts, never rosters or rankings: enough to show the market is real
+  // without naming a single buyer or ranking a single tool.
+  const distinctExternalBuyers = qExtDistinctPayers.get(since)?.n ?? 0;
+  yield;
+  const distinctToolsSoldExternal = qExtDistinctSlugs.get(since)?.n ?? 0;
+  const base = { days, persistent: salesPersistent, recordingSince, totals, distinctExternalBuyers, distinctToolsSoldExternal };
   if (!detailed) return base;
+  // The payer ranking is read only for the detailed view that shows it.
+  yield;
+  const byPayer = qExtByPayer.all(since);
+  yield;
   return {
     ...base,
     // The weekly number: external buyers on the metered route (counts only).
