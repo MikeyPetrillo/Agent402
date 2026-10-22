@@ -304,7 +304,10 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   ok(/^\s*if \(failing\) \{/m.test(after) && after.includes("continue; }"), "...and a hit SKIPS the candidate - the verdict is acted on, not logged");
   ok(fn.indexOf("const failing = sellerDeliveryFailingRecently(r.seller, chain);") < fn.indexOf("await probePublicUrl(r.url"),
      "...BEFORE the live probe, so a failing seller costs no round trip at all");
-  ok(/deliveryFailing: local \? null : deliveryFailingByChain\(origin\)/.test(server),
+  // The row reads its spend chains once and hands the same list to the verdict
+  // and to the label.
+  const labelFn = server.slice(server.indexOf("function withDispatchFields("), server.indexOf("function withDispatchFields(") + 3000);
+  ok(/deliveryFailing: local \? null : deliveryFailingByChain\(origin, spendChains\)/.test(labelFn) && /const spendChains = spendChainsConfigured\(\);/.test(labelFn) && /^\s*spendChains,$/m.test(labelFn),
      "and every public row is labelled from the same memo, so the label and the routing decision cannot drift");
   ok(/function deliveryFailingByChain[\s\S]{0,600}spendChainsConfigured\(\)/.test(server),
      "the label covers every chain this host can actually spend on, not just Base");

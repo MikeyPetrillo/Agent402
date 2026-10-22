@@ -147,13 +147,18 @@ export function gcPhrase(late, now = Date.now()) {
   if (!g.count) return " gc: none";
   return ` gc: ${g.ms}ms over ${g.count} pause${g.count === 1 ? "" : "s"}${g.majorMs ? ` (major ${g.majorMs}ms)` : ""}`;
 }
-const state = { worstMs: 0, worstAt: null, stalls: 0, lastStallMs: 0, lastStallAt: null, startedAt: null };
+const state = { worstMs: 0, worstAt: null, worstWindow: null, stalls: 0, lastStallMs: 0, lastStallAt: null, startedAt: null };
 
-/** @returns {{worstMs:number, worstAt:string|null, stalls:number, lastStallMs:number, lastStallAt:string|null, watching:boolean}} */
+/** @returns {{worstMs:number, worstGcMs:number, worstAt:string|null, stalls:number, lastStallMs:number, lastStallAt:string|null, watching:boolean}} */
 export function loopLagStatus() {
+  // The collector's share of the worst block, summed when read: a gc entry
+  // reaches the ring after the tick that measured the block.
+  let worstGcMs = 0;
+  try { if (state.worstWindow) worstGcMs = Math.min(state.worstMs, gcDuring(state.worstWindow[0], state.worstWindow[1]).ms); } catch { /* attribution is best-effort */ }
   return {
     watching: state.startedAt !== null,
     worstMs: Math.round(state.worstMs),
+    worstGcMs: Math.round(worstGcMs),
     worstAt: state.worstAt,
     stalls: state.stalls,
     lastStallMs: Math.round(state.lastStallMs),
@@ -165,7 +170,7 @@ export function loopLagStatus() {
 /** Reset the high-water mark (the operator endpoint offers this; alarms do not). */
 export function resetLoopLag() {
   recentLate.length = 0;
-  state.worstMs = 0; state.worstAt = null; state.stalls = 0; state.lastStallMs = 0; state.lastStallAt = null;
+  state.worstMs = 0; state.worstAt = null; state.worstWindow = null; state.stalls = 0; state.lastStallMs = 0; state.lastStallAt = null;
 }
 
 export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsMs = STATS_MS, log = console.warn, statsLog = console.log } = {}) {
@@ -205,7 +210,7 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
     recentLate.push(lastLate); if (recentLate.length > RECENT_TICKS) recentLate.shift();
     lagEwma = lagEwma * 0.6 + lastLate * 0.4;
     if (late <= 0) return;
-    if (late > state.worstMs) { state.worstMs = late; state.worstAt = new Date(now).toISOString(); }
+    if (late > state.worstMs) { state.worstMs = late; state.worstAt = new Date(now).toISOString(); state.worstWindow = [now - late - 50, now]; }
     if (late >= COUNT_MS) { minute.blocks200++; minute.blockedMs += late; }
     if (late >= warnMs) {
       state.stalls++; state.lastStallMs = late; state.lastStallAt = new Date(now).toISOString();

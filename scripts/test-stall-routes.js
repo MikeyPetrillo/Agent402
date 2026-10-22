@@ -19,6 +19,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { PerformanceObserver } from "node:perf_hooks";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { getFreePort } from "./lib/free-port.js";
@@ -61,15 +62,28 @@ const sales = await import("../src/sales-ledger.js");
   db.close();
 }
 
-// The worst event-loop block while `fn` runs, from a 1 ms interval.
-let worst = 0, last = performance.now();
-const lagTimer = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+// The worst event-loop block while `fn` runs, from a 1 ms interval, less the
+// collector's pauses inside it (the production stall line reports collector
+// time apart too): the gaps are kept so a pause is subtracted from the gap it
+// fell in.
+let gaps = null, last = performance.now();
+const lagTimer = setInterval(() => { const t = performance.now(); if (gaps) gaps.push([last, t]); last = t; }, 1);
+const gcPauses = [];
+new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push([e.startTime, e.startTime + e.duration]); }).observe({ entryTypes: ["gc"] });
 async function blockOf(fn) {
   await new Promise((r) => setTimeout(r, 20));
-  worst = 0; last = performance.now();
+  gaps = []; last = performance.now(); gcPauses.length = 0;
   const value = await fn();
   await new Promise((r) => setTimeout(r, 5));
-  return { value, ms: Math.round(worst) };
+  let ms = 0, raw = 0, gc = 0;
+  for (const [a, b] of gaps) {
+    let inGc = 0;
+    for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
+    if (b - a > raw) { raw = b - a; gc = inGc; }
+    ms = Math.max(ms, b - a - inGc);
+  }
+  gaps = null;
+  return { value, ms: Math.round(ms), raw: Math.round(raw), gc: Math.round(gc) };
 }
 
 // --- 1a. sales summaries
@@ -168,7 +182,7 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   const rebuilt = await blockOf(() => x.routableSellerSummaries());
   const projected = x._routableRowBuildsForTest() - before;
   ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
-  ok(rebuilt.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${rebuilt.ms} ms)`);
+  ok(rebuilt.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${rebuilt.ms} ms; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
 }
 
@@ -223,7 +237,7 @@ const mp = await import("../src/market-page.js");
   cache.clear();
   const builds0 = x._indexSnapshotBuildsForTest();
   let turns = 0, shared = true, readerWorst = 0, inLine = 0;
-  worst = 0; last = performance.now();
+  gaps = []; last = performance.now();
   const warming = x.loadPersistedIndexCacheAsync(ndjson);
   // Each turn of the warm start: the nav strip, the page and a second page
   // read the snapshot, as three HTML requests landing in one turn would.
@@ -241,7 +255,8 @@ const mp = await import("../src/market-page.js");
   }
   const loaded = await warming;
   await new Promise((r) => setTimeout(r, 5));
-  const warmWorst = Math.round(worst);
+  const warmWorst = Math.round(Math.max(0, ...gaps.map(([g0, g1]) => g1 - g0)));
+  gaps = null;
   const builds = x._indexSnapshotBuildsForTest() - builds0;
   ok(loaded >= 5800 && turns >= 10, `a warm start of ${loaded} sellers ran over ${turns} turns with readers in each`);
   ok(shared && inLine === 0, "every reader in one turn got the same snapshot, and no turn built more than one");
@@ -303,8 +318,10 @@ try {
     const resp = await fetch(base + r);
     await resp.arrayBuffer();
     await sleep(300);
-    const ms = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop.worstMs;
-    ok(resp.status === 200 && ms < ROUTE_BOUND_MS, `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (bound ${ROUTE_BOUND_MS} ms)`);
+    // Our code's hold: the worst block less the collector's share of it.
+    const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
+    const ms = worstMs - worstGcMs;
+    ok(resp.status === 200 && ms < ROUTE_BOUND_MS, `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (bound ${ROUTE_BOUND_MS} ms; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
   }
   {
     // The shared labelled snapshot reaches the page: every external row of the

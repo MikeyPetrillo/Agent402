@@ -32,9 +32,22 @@ ok(after.worstMs >= 400, `and the measured lag is of the right order (${after.wo
 ok(after.lastStallAt !== null, "the stall carries a timestamp, so it can be matched to a failed payment");
 ok(lines.some((l) => /event loop blocked \d+ms/.test(l)), "it logs the number, not just that something happened");
 ok(lines.some((l) => /connect timeouts/.test(l)), "and says why that matters, for whoever reads the log next");
+// The collector's share of the worst block is read with it: a pause inside
+// the block counts, one outside it does not.
+{
+  const { noteGcEntry } = await import("../src/loop-lag.js");
+  // The runtime's own pauses inside the spin are already counted; ours add to them.
+  const base = loopLagStatus().worstGcMs;
+  ok(base >= 0 && base <= after.worstMs, `the collector share is part of the block (${base}ms of ${after.worstMs}ms)`);
+  const at = Date.parse(after.worstAt);
+  noteGcEntry(at - 300, 150, 4);
+  noteGcEntry(at - 60_000, 900, 4);
+  const withGc = loopLagStatus();
+  ok(withGc.worstGcMs === Math.min(after.worstMs, base + 150) && withGc.worstMs === after.worstMs, `a pause inside the worst block adds to its collector share, one outside it does not (${base} -> ${withGc.worstGcMs}ms of ${withGc.worstMs}ms)`);
+}
 
 resetLoopLag();
-ok(loopLagStatus().worstMs === 0 && loopLagStatus().stalls === 0, "reset clears the high-water mark");
+ok(loopLagStatus().worstMs === 0 && loopLagStatus().worstGcMs === 0 && loopLagStatus().stalls === 0, "reset clears the high-water mark and its collector share");
 
 stop();
 ok(loopLagStatus().watching === false, "stops cleanly");
