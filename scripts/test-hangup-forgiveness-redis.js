@@ -10,6 +10,7 @@
 //   - control: released tickets free their room for the other replica.
 // Requires REDIS_URL (under CI a missing one fails).
 import { spawn } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -50,7 +51,7 @@ const base = { HANGUP_FORGIVE_FILE: "off", STATE_DATABASE_URL: "", HANGUP_FORGIV
 const replica = (env) => new Promise((resolve, reject) => {
   const c = spawn(process.execPath, [SELF, "child"], { env: { ...process.env, ...base, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; c.stdout.on("data", (d) => { out += d; });
-  c.on("close", (code) => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
+  c.on("close", (code) => { try { resolve(childJson(out)); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
 });
 const pair = (envA, envB) => { const at = String(Date.now() + 2500); return Promise.all([replica({ ...envA, XC_AT: at }), replica({ ...envB, XC_AT: at })]); };
 

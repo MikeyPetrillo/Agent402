@@ -7,6 +7,7 @@
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-sales-ledger-pg.js
 import { mkdtempSync, rmSync, existsSync, utimesSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,9 +72,9 @@ try {
       console.log(JSON.stringify({ n, imported: sl.salesSummary({ detailed: true }).totals.external.sales }));
       await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
     `;
-    const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+    const out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
       env: { ...process.env, STATE_DB_SCHEMA: `${S}_imp`, LEDGER_MIRROR_MARGIN_MS: "60000", LEDGER_MIRROR_REFRESH_MS: "1000000000" }, cwd: ROOT, encoding: "utf8",
-    }).trim().split("\n").pop());
+    }));
     ok(out.imported === 2 && out.n === 0, `M2: the first refresh after an import pulls none of the imported rows (${out.n}; mirror holds ${out.imported} external sales)`);
   }
 
@@ -133,7 +134,7 @@ try {
     console.log(JSON.stringify({ totals: s.totals, file1: sl.saleByTx("0xfile1"), late: sl.saleByTx("0xlate"), new1: sl.saleByTx("0xnew1"), fb: sl.feedbackForTx("0xnew1"), else_: sl.saleByTx("0xelse") }));
     await sdb.closeStateDb();
   `;
-  const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  const out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }));
   ok(out.file1 === null, "a second boot does not import the file again (a row deleted from the table stays gone)");
   ok(out.late?.internal === true, "the boot sweep reclassifies a burner's row in the table");
   ok(out.new1?.attestUid === "0xuid1" && out.fb?.verdict === "bad" && out.else_?.slug === "elsewhere", "the second boot reads the table's current state");
@@ -141,7 +142,7 @@ try {
   ok(!existsSync(join(DIR, "absent", "agent402-sales.db")), "a boot with no file does not create one");
 
   // ---- roll-forward after a rollback -----------------------------------------
-  const bootWithFile = () => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc.replace(JSON.stringify(join(DIR, "absent", "agent402-sales.db")), JSON.stringify(FILE))], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }).trim().split("\n").pop());
+  const bootWithFile = () => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", childSrc.replace(JSON.stringify(join(DIR, "absent", "agent402-sales.db")), JSON.stringify(FILE))], { env: { ...process.env }, cwd: ROOT, encoding: "utf8" }));
   // (a) an ordinary write-through: the file sits within the grace of the tables' newest row, so a file edit is not applied.
   ok((await sl.recordSale({ slug: "roll", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xroll1", synthetic: false })) === true, "a sale recorded by the database build (written through to the file)");
   { const f = new Database(FILE); f.prepare("UPDATE sale_feedback SET verdict = 'good' WHERE tx = '0xnew1'").run(); f.close(); }
@@ -255,10 +256,10 @@ try {
       console.log(JSON.stringify({ loaded, unloaded: unloadedStores(), landed, n }));
       await sdb.__dropStateSchema(); await sdb.closeStateDb(); process.exit(0);
     `;
-    const big = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+    const big = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], {
       env: { ...process.env, SALES_LEDGER_DB: bigFile, STATE_DB_SCHEMA: bigSchema, STATE_STORE_RETRY_MS: "500", LEDGER_MIRROR_REFRESH_MS: "1000000000" },
       cwd: ROOT, encoding: "utf8", maxBuffer: 64 << 20,
-    }).trim().split("\n").pop());
+    }));
     ok(big.loaded && !big.unloaded.includes("sales ledger") && big.landed === true && big.n === 130_001,
       `130k file sales in the reconcile window: the ledger loads and a sale lands (${JSON.stringify(big)})`);
   }

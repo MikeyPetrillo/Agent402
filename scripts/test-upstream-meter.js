@@ -11,6 +11,7 @@
 // Offline, no network. Uses a unique upstream name per run so the shared
 // dev-machine /tmp stats DB cannot pollute the assertions.
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -23,7 +24,7 @@ const run = (code) => {
     cwd: new URL("..", import.meta.url).pathname,
   });
   if (r.status !== 0) throw new Error(`child failed: ${r.stderr}`);
-  return JSON.parse(r.stdout.trim().split("\n").pop());
+  return childJson(r.stdout);
 };
 
 // Process 1: record 3 calls (2 same caller, 1 other), read back.

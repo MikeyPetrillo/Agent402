@@ -9,6 +9,7 @@
 // Requires REDIS_URL (under CI a missing one fails); the database rounds run
 // when STATE_DATABASE_URL is set.
 import { spawn } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,7 +51,7 @@ const PREFIX = `esgr${process.pid}${Date.now().toString(36)}`;
 const replica = (env) => new Promise((resolve, reject) => {
   const c = spawn(process.execPath, [SELF, "child"], { env: { ...process.env, SHARED_LIMITS_PREFIX: PREFIX, WALLET_DAILY_LEDGER_FILE: join(TMP, `w-${randomBytes(3).toString("hex")}.json`), ...env }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; c.stdout.on("data", (d) => { out += d; });
-  c.on("close", (code) => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
+  c.on("close", (code) => { try { resolve(childJson(out)); } catch { reject(new Error(`replica exited ${code}: ${out}`)); } });
 });
 const race = async (env) => {
   const payer = `0x${randomBytes(20).toString("hex")}`;

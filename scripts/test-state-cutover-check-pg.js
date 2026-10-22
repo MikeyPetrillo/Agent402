@@ -4,6 +4,7 @@
 // files it is given are never changed. Requires STATE_DATABASE_URL (CI fails
 // without it).
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ const c = new pg.Client({ connectionString: url });
 try {
   const seed = spawnSync(process.execPath, ["scripts/lib/state-fixture.mjs", "seed", data, "600", "260"], { env: fileEnv, encoding: "utf8" });
   ok(seed.status === 0, "fixture written in file mode");
-  const fx = JSON.parse(seed.stdout.trim().split("\n").pop());
+  const fx = childJson(seed.stdout);
   ok(fx.byStatus.owed > 200 && fx.byStatus.paid > 0 && fx.byStatus.void > 0, `refunds in every status, more than 200 owed (${JSON.stringify(fx.byStatus)})`);
   const before = digest();
   const r = spawnSync(process.execPath, ["scripts/state-cutover-check.js", "--sales", join(data, "agent402-sales.db"), "--refunds", join(data, "agent402-refunds.db"), "--decide", join(data, "agent402-decide.db"), "--json"], { env: process.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });

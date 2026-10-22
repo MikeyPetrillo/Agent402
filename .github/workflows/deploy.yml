@@ -2753,6 +2753,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # A child's JSON result is read with childJson, never as its last line (offline)
+          t node scripts/test-child-json.js
           # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
           t node scripts/test-no-em-dash-shipped.js
           # A public issue body carries reasons and ids, never a dollar figure (workflow bodies + the quoted runner log lines - offline)

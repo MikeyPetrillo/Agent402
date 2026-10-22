@@ -5,6 +5,7 @@
 // rather than overwrites the other container's rows. The other container is a
 // real second process. Requires STATE_DATABASE_URL (CI fails without it).
 import { spawn, spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +46,7 @@ function otherContainer(usd, chain = "base") {
   `;
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: process.env, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`other container failed: ${r.stderr}`);
-  return JSON.parse(r.stdout.trim().split("\n").pop());
+  return childJson(r.stdout);
 }
 
 try {
@@ -153,7 +154,7 @@ try {
     setTimeout(() => relay.heal(), 7000);
     const status = await new Promise((r) => child.on("exit", r));
     await relay.close();
-    let out = null; try { out = JSON.parse(stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+    let out = null; try { out = childJson(stdout); } catch { /* reported below */ }
     ok(status === 0 && out, `the outage boot ran (${status}; ${stderr.slice(-200)})`);
     ok(out?.first?.ok === false && out.first.code === "spend_ledger_unreadable" && out.may?.code === "spend_ledger_unreadable", "a container whose first ledger read failed (no file either) refuses chain spends instead of starting at zero");
     ok(out?.payerOnly === true, "a spend with no chain wallet is not held by the chain ledger");
@@ -168,7 +169,7 @@ try {
       console.log(JSON.stringify({ ok: d.ok, code: d.code || null, spent: G.walletDailySpentUsd("base") }));
       process.exit(0);
     `], { env: { ...process.env, STATE_DATABASE_URL: "postgres://postgres@127.0.0.1:1/none?sslmode=disable", WALLET_DAILY_LEDGER_FILE: childFile }, encoding: "utf8", timeout: 60_000 });
-    let o2 = null; try { o2 = JSON.parse(r2.stdout.trim().split("\n").pop()); } catch { /* reported below */ }
+    let o2 = null; try { o2 = childJson(r2.stdout); } catch { /* reported below */ }
     ok(o2?.code === "wallet_daily_ceiling" && near(o2.spent, 0.9), `an outage boot with the ledger file present decides on the file's day (${JSON.stringify(o2)})`);
   }
 

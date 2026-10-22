@@ -7,6 +7,7 @@
 // targets. Separately three sellers in one week were refused by
 // /api/index/register's 30/hour GLOBAL cap and two gave up and emailed instead.
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,7 +126,7 @@ const boot = (advances, nested = null) => {
     process.exit(0);
   `;
   const out = execFileSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, CRAWL_CYCLE_FILE: cycleFile, FREE_MODE: "true" }, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }).toString();
-  return JSON.parse(out.trim().split("\n").pop());
+  return childJson(out);
 };
 try {
   const first = boot(3);

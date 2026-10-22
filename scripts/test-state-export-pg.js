@@ -7,6 +7,7 @@
 // readers, and a file-mode boot of every store on the exported directory.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,7 +58,7 @@ try {
       ? { ...fileEnv, CUTOVER_MODE: "file", SALES_LEDGER_DB: join(out, "agent402-sales.db"), REFUND_DB_DIR: out, DECIDE_LEDGER_DB: join(out, "agent402-decide.db") }
       : { ...dbEnv, CUTOVER_MODE: "pg", CUTOVER_KEEP_SCHEMA: "1", SALES_LEDGER_DB: join(empty, "agent402-sales.db"), REFUND_DB_DIR: empty, DECIDE_LEDGER_DB: join(empty, "agent402-decide.db") };
     const r = run(["scripts/lib/cutover-summary.mjs", "with-decide"], env);
-    try { const j = JSON.parse(r.stdout.trim().split("\n").pop()); delete j.mode; return j; } catch { return { error: r.stderr.slice(-300) }; }
+    try { const j = childJson(r.stdout); delete j.mode; return j; } catch { return { error: r.stderr.slice(-300) }; }
   };
   const fileFig = summary("file"), dbFig = summary("pg");
   ok(!fileFig.error && fileFig.rows?.sales === 605 && fileFig.refunds?.count === 262, `file mode on the export reads every sale and refund (${JSON.stringify(fileFig.rows || fileFig.error)})`);

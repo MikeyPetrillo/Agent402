@@ -16,6 +16,7 @@
 // Redis the same void tombstone holds (test-ledger-journal-redis-pg.js).
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { mkdtempSync } from "node:fs";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -75,7 +76,7 @@ const statusOf = async (h) => (await pgDirect(`SELECT status FROM ${schema}.refu
 const runB = (hashes, env = {}) => new Promise((resolve, reject) => {
   const c = spawn(process.execPath, [SELF, "child", ...hashes], { env: { ...process.env, STATE_DATABASE_URL: DIRECT, STATE_DB_SCHEMA: schema, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   let out = ""; c.stdout.on("data", (d) => { out += d; });
-  c.on("close", (code) => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { reject(new Error(`child exited ${code}: ${out}`)); } });
+  c.on("close", (code) => { try { resolve(childJson(out)); } catch { reject(new Error(`child exited ${code}: ${out}`)); } });
 });
 const hash = () => `0x${randomBytes(32).toString("hex")}`;
 const refused = (h) => debts.inputRefused({}, { hash: h, payer: `0x${"2".repeat(40)}`, amountUsd: 0.01, status: 400 });
