@@ -85,6 +85,9 @@ try {
   let up = false;
   for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
   ok(up, "server booted (/health is never shed)");
+  const ready = await fetch(`${base}/health/ready`, from("203.0.113.5"));
+  const readyQ = await fetch(`${base}/health?ready=1`, from("203.0.113.5"));
+  ok(ready.status === 200 && readyQ.status === 200, `the readiness check (/health/ready, /health?ready=1) is never shed (${ready.status}, ${readyQ.status})`);
   const free = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5"));
   ok(free.status === 503 && free.headers.get("retry-after") === "2" && /paid calls keep flowing/.test((await free.json()).error), `a free request past the ceiling is shed with 503 + Retry-After (${free.status})`);
   const paid = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", "payment-signature": "x".repeat(40) }), body: JSON.stringify({ text: "a" }) });

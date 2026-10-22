@@ -2,6 +2,8 @@
 // loaded, so a container in a deploy overlap takes no traffic while route
 // queries would run on its main thread; and never longer than
 // READY_ROUTER_WAIT_MS, so a worker that will not load cannot fail a deploy.
+// With ROUTER_WORKERS=0 there is no worker to wait for and readiness answers
+// 200 at once.
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 
@@ -58,5 +60,9 @@ async function boot(env) {
   ok(seen[0]?.status === 200, `READY_ROUTER_WAIT_MS=0 turns the wait off (${JSON.stringify(seen[0])})`);
 }
 
+{
+  const { seen } = await boot({ ROUTER_WORKERS: "0", READY_ROUTER_WAIT_MS: "60000" });
+  ok(seen[0]?.status === 200 && seen[0]?.path === 200, `ROUTER_WORKERS=0: readiness does not wait for a worker (${JSON.stringify(seen[0])})`);
+}
 console.log(`\ntest-health-router-warming: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

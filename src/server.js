@@ -2470,12 +2470,12 @@ setStallContext(() => oldestInFlight(3));
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it
 // is parsed, so the thread stays free for payment verification and paid
-// handlers. Protected: /health, /__operator, the MCP connector's loopback
+// handlers. Protected: /health and /health/ready, /__operator, the MCP connector's loopback
 // replay, the Stripe webhook, every priced catalog route and the /v1
 // gateway (paid or not: the unpaid 402 is the first step of a purchase).
 app.use((req, res, next) => {
   const path = String(req.path || "/");
-  if (path === "/health" || path.startsWith("/__operator") || path === "/api/stripe/webhook") return next();
+  if (path === "/health" || path === "/health/ready" || path.startsWith("/__operator") || path === "/api/stripe/webhook") return next();
   const why = shouldShedFree({ inFlight: inFlightCount() });
   if (!why) return next();
   // The MCP connector's paid replay (its marker header AND a local socket).
