@@ -6667,6 +6667,34 @@ function persistedEntries() {
   }
   return out;
 }
+// The background persist and pull walk every origin's tool array (about 200k
+// tools in production), which held the event loop for a second at a time when
+// done in one turn or in fixed counts of origins (one large catalogue outweighs
+// fifty small ones). They yield on elapsed time instead: at most
+// PERSIST_SLICE_MS of work per turn, whatever the origins weigh.
+const PERSIST_SLICE_MS = 20;
+function sliceClock(ms = PERSIST_SLICE_MS) {
+  let start = performance.now();
+  return async () => {
+    if (performance.now() - start < ms) return;
+    await new Promise((r) => setImmediate(r));
+    start = performance.now();
+  };
+}
+/** persistedEntries, projected across turns: the origins are taken in one
+ *  pass (the same set and order the synchronous walk reads), then each is
+ *  projected with a yield whenever a slice is spent. */
+async function persistedEntriesSliced() {
+  const held = [...cache.entries()];
+  const tick = sliceClock();
+  const out = [];
+  for (const [origin, v] of held) {
+    const e = persistedEntryOf(v);
+    if (e) out.push([origin, e]);
+    await tick();
+  }
+  return out;
+}
 function persistedEntryOf(v) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
@@ -6719,13 +6747,12 @@ export async function persistOriginToStateDb(origin) {
 }
 
 /** Async persist for the crawler's own cycle. Each origin is stringified ONCE,
- *  in batches with an event-loop turn between them, and both files are built
+ *  in time slices with an event-loop turn between them, and both files are built
  *  from those lines: the whole-cache stringify, a second stringify per origin
  *  to size the log line and a third for the NDJSON lines used to run as one
  *  synchronous block (~220 ms for 52 MB locally, seconds on the production
  *  container). Overlapping cycles never write twice. */
 let persistInFlight = false;
-const PERSIST_BATCH = 50;
 export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
   if (persistInFlight) return false;
   persistInFlight = true;
@@ -6733,14 +6760,15 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     // The other container's removals and newer entries first (no-op without a database).
     await pullIndexChanges();
     if (cache.size === 0) return false;
-    const entries = persistedEntries();
+    const entries = await persistedEntriesSliced();
     if (!entries.length) return false;
     const savedAt = Date.now();
     const t0 = performance.now();
     const lines = new Array(entries.length);
+    const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       lines[i] = JSON.stringify(entries[i]);
-      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+      await tick();
     }
     const ms = Math.round(performance.now() - t0);
     const bytes = lines.reduce((n, l) => n + l.length + 1, 0);
@@ -6848,6 +6876,7 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
       pullWatermark = r.rows[0].t;
       pullWatermarkId = "";
     }
+    const tick = sliceClock();
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
         // The stamp travels as text: a JS Date drops the microseconds, and the
@@ -6856,6 +6885,10 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         [INDEX_RECORDS, pullWatermark, pullWatermarkId, pageSize],
       );
       for (const { id, body, stamp } of r.rows) {
+        // Each folded row is projected, stringified and hashed: a page of
+        // large catalogues is seconds of work, so it is spread over turns.
+        // The cache is read per row below, after any yield.
+        await tick();
         pullWatermark = stamp;
         pullWatermarkId = String(id);
         if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
@@ -6910,12 +6943,13 @@ async function persistIndexCacheToStateDb(entries, lines) {
   try {
     const held = new Set();
     const changed = new Map(); // origin -> hash, applied once its batch is stored
+    const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       const origin = entries[i][0];
       held.add(origin);
       const h = lineHash(lines[i]);
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
-      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+      await tick();
     }
     // The body is the entry alone: the line is `[origin, entry]`, and the
     // entry starts after the origin string and its comma.

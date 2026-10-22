@@ -1413,6 +1413,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
+          t node scripts/test-index-persist-slices-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
           t node scripts/test-index-reprice-replicas-pg.js
           # Index side stores merge per key and fold the other container's changes on the pull
