@@ -322,18 +322,24 @@ export const datasetStatus = () => ({ ...status, configured: backupConfigured() 
  *
  * Bounded (at most `days` reads, 60 s cache) and never throws: an unreadable
  * bucket reads `{ error }`, which is a different answer from "no day recorded"
- * and must not be collapsed into it.
+ * and must not be collapsed into it. Each day is asked by listing (objectExists),
+ * not by a GET: getObject reads a 403 as absent, so a rejected credential would
+ * otherwise read as three unrecorded days.
  */
 let recordedCache = { at: 0, value: null };
-export async function datasetRecorded({ days = 3, now = Date.now() } = {}) {
+export async function datasetRecorded({ days = 3, now = Date.now(), exists = null, get = null } = {}) {
   if (!backupConfigured()) return { configured: false };
-  if (recordedCache.value && now - recordedCache.at < 60_000) return recordedCache.value;
+  const injected = Boolean(exists || get);
+  exists ||= objectExists; get ||= getObject;
+  if (!injected && recordedCache.value && now - recordedCache.at < 60_000) return recordedCache.value;
   const out = { configured: true, days: [], newest: null };
   try {
     for (let i = 0; i < days; i++) {
       const day = new Date(now - i * 86400000).toISOString().slice(0, 10);
-      const raw = await getObject(`${DATASET_PREFIX}/dt=${day}/manifest.json`);
-      if (!raw) continue;
+      const key = `${DATASET_PREFIX}/dt=${day}/manifest.json`;
+      if (!(await exists(key))) continue;
+      const raw = await get(key);
+      if (!raw) throw new Error(`${day} manifest is listed but could not be read`);
       out.days.push(day);
       if (!out.newest) {
         const m = JSON.parse(raw.toString("utf8"));
@@ -361,7 +367,7 @@ export async function datasetRecorded({ days = 3, now = Date.now() } = {}) {
   } catch (e) {
     out.error = String(e.message).slice(0, 200);
   }
-  recordedCache = { at: now, value: out };
+  if (!injected) recordedCache = { at: now, value: out };
   return out;
 }
 
