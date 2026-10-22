@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -58,6 +59,13 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   x._resetFlatCacheForTest(); x._resetIndexRowsForTest();
   const sync = digest(x.allIndexedTools({ limit: 300, offset: 40_000 }));
   ok(bg === sync, "background and synchronous builds produce the same rows in the same order");
+  // A search is one pass over every row: the routes run it in slices, with
+  // the same answer as the whole pass.
+  for (const args of [{ search: "json", limit: 50, offset: 20 }, { category: "data", limit: 100 }, { source: "third-party", search: "price", limit: 10, offset: 300 }]) {
+    const whole = x.allIndexedTools(args);
+    const sliced = await x.allIndexedToolsAsync(args);
+    ok(isDeepStrictEqual(sliced, whole) && whole.matched > 0, `the sliced search answers as the whole pass (${JSON.stringify(args)}: ${whole.matched} matched)`);
+  }
 }
 
 // --- 1b. the router's per-tool records stay hidden, and the heap stays bounded

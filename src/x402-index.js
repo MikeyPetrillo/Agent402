@@ -9483,7 +9483,7 @@ function directoryHayOf(t) {
 }
 /** How many row search texts have been built (a repeat search builds none). */
 export function _directoryHayBuildsForTest() { return directoryHayBuilds; }
-export function allIndexedTools({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
+export function allIndexedTools(args = {}) {
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
   // the third-party index this page exists to show, which would read as a
@@ -9493,6 +9493,12 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   // help anyone choose. `excludeOrigin` still drops our crawled self-listing
   // (we publish to the Bazaar, so the crawler finds us) so ours appear exactly
   // once, from the authoritative catalog rather than a stale crawl of it.
+  return runSteps(indexedToolsSteps(args));
+}
+/** allIndexedTools, the filter run across turns of at most DIRECTORY_SLICE_MS
+ *  (a search is one pass over the whole directory). Same answer. */
+export function allIndexedToolsAsync(args = {}) { return runSlicedAsync(indexedToolsSteps(args)); }
+function* indexedToolsSteps({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
   const rows = interleavedIndexRows(ourTools, excludeOrigin);
   const q = String(search || "").trim().toLowerCase();
   const terms = q ? queryTerms(q, { max: 8 }) : [];
@@ -9500,7 +9506,7 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   const net = String(network || "").trim().toLowerCase();
 
   const src = String(source || "").trim().toLowerCase();
-  const filtered = !terms.length && !cat && !net && !src ? rows : rows.filter((t) => {
+  const keep = (t) => {
     if (src === "ours" && !t.ours) return false;
     if (src === "third-party" && t.ours) return false;
     if (cat && String(t.category || "").toLowerCase() !== cat) return false;
@@ -9508,7 +9514,14 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
     if (!terms.length) return true;
     const hay = directoryHayOf(t);
     return terms.every((term) => hay.includes(term));
-  });
+  };
+  let filtered = rows;
+  if (terms.length || cat || net || src) {
+    filtered = [];
+    for (let i = 0; i < rows.length; i++) { if (keep(rows[i])) filtered.push(rows[i]); if (i % 1000 === 999) yield; }
+  }
+  let described = 0;
+  for (let i = 0; i < filtered.length; i++) { if (filtered[i].described) described++; if (i % 5000 === 4999) yield; }
 
   const off = Math.max(0, parseInt(offset, 10) || 0);
   const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
@@ -9519,7 +9532,7 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
     matched: filtered.length,
     offset: off,
     limit: lim,
-    described: filtered.filter((t) => t.described).length,
+    described,
     results: filtered.slice(off, off + lim),
   };
 }

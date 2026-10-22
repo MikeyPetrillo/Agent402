@@ -366,7 +366,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -4659,9 +4659,11 @@ app.post("/__operator/monitors/run", (req, res) => {
 // ranking (see salesSummary's contract in src/sales-ledger.js for why each of
 // those three came out). The itemized view is operator-only, below; the
 // analyzed per-tool layer is the paid bestsellers tool.
-app.get("/api/sales", (_req, res) => {
+// Its own 60 s reading, not the shared page figures: a settled sale shows here
+// within the minute, and the summary is still built one query per turn.
+app.get("/api/sales", async (_req, res) => {
   try {
-    res.set("Cache-Control", "public, max-age=60").json(memoSurface("sales:summary", 60_000, () => sharedSummary({ days: 30 })));
+    res.set("Cache-Control", "public, max-age=60").json(await memoSurfaceAsync("sales:summary", 60_000, () => salesSummaryAsync({ days: 30 })));
   } catch (err) {
     // Public route: a SQLite failure message names the ledger's absolute
     // path — log it, answer generically (leak audit 2026-08-18).
@@ -7492,7 +7494,7 @@ app.get("/marketplace/tools", async (req, res) => {
   const search = String(req.query.q || req.query.search || "").slice(0, 120);
   const category = String(req.query.category || "").slice(0, 60);
   const source = String(req.query.source || "").slice(0, 20);
-  const data = allIndexedTools({
+  const data = await allIndexedToolsAsync({
     search,
     category,
     source,
@@ -7508,7 +7510,7 @@ app.get("/marketplace/tools", async (req, res) => {
 app.get("/api/index/tools", async (req, res) => {
   const ourTools = ourToolsAsIndexRows();
   await indexRowsReady({ ourTools, excludeOrigin: BASE_URL });
-  const data = allIndexedTools({
+  const data = await allIndexedToolsAsync({
     search: String(req.query.q || req.query.search || "").slice(0, 120),
     category: String(req.query.category || "").slice(0, 60),
     network: String(req.query.network || "").slice(0, 40),
