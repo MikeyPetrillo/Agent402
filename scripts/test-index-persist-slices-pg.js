@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { PerformanceObserver } from "node:perf_hooks";
+import { Session } from "node:inspector/promises";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-index-persist-slices-pg" });
 
@@ -75,14 +76,52 @@ async function longestBlock(fn) {
     clearInterval(timer);
     obs.disconnect();
   }
-  let ms = 0, raw = 0;
+  let ms = 0, raw = 0, at = null;
   for (const [a, b] of gaps) {
     let gc = 0;
     for (const [s, e] of gcs) gc += Math.max(0, Math.min(b, e) - Math.max(a, s));
     raw = Math.max(raw, b - a);
-    ms = Math.max(ms, b - a - gc);
+    if (b - a - gc > ms) { ms = b - a - gc; at = [a, b]; }
   }
-  return { result, ms: Math.round(ms), raw: Math.round(raw) };
+  return { result, ms: Math.round(ms), raw: Math.round(raw), at };
+}
+// On a failed bound: run the job again under the sampling profiler and print
+// the functions on the stack inside its longest block, so the log names what
+// held the loop rather than only how long.
+async function explainLongestBlock(label, fn) {
+  const session = new Session();
+  session.connect();
+  try {
+    await session.post("Profiler.enable");
+    await session.post("Profiler.setSamplingInterval", { interval: 250 });
+    await session.post("Profiler.start");
+    const t0 = performance.now(); // the profile's startTime, on this clock
+    // The sampler's first sample lands up to a second after start.
+    await new Promise((r) => setTimeout(r, 1500));
+    const block = await longestBlock(fn);
+    const { profile } = await session.post("Profiler.stop");
+    if (!block.at) return;
+    const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+    const parent = new Map();
+    for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n.id);
+    const counts = new Map();
+    let ts = profile.startTime, inside = 0;
+    profile.samples.forEach((id, i) => {
+      ts += profile.timeDeltas[i];
+      const at = t0 + (ts - profile.startTime) / 1000;
+      if (at < block.at[0] || at > block.at[1]) return;
+      inside++;
+      const seen = new Set();
+      for (let n = id; n; n = parent.get(n)) {
+        const cf = byId.get(n).callFrame;
+        if (!cf.url) continue;
+        seen.add(`${cf.functionName || "(anonymous)"} ${cf.url.split("/").pop().split("?")[0]}:${cf.lineNumber + 1}`);
+      }
+      for (const f of seen) counts.set(f, (counts.get(f) || 0) + 1);
+    });
+    console.error(`# ${label}: longest block ${block.ms} ms, ${inside} samples inside it`);
+    for (const [f, c] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.error(`#   ${String(Math.round((100 * c) / Math.max(1, inside))).padStart(3)}%  ${f}`);
+  } finally { session.disconnect(); }
 }
 
 // The bound is one slice (20 ms) plus four times the largest single unit of
@@ -141,6 +180,12 @@ try {
   const pull = { a: pullA, b: pullB, ms: Math.min(pullA.ms, pullB.ms), raw: Math.min(pullA.raw, pullB.raw) };
   ok(pull.a.result === data.length && pull.b.result === data.length, `B pulls every origin A wrote, both times (${pull.a.result}, ${pull.b.result})`);
   ok(pull.ms < BOUND_MS, `the pull never held the event loop past ${BOUND_MS} ms (longest block ${pull.ms} ms; ${pull.raw} ms with collector pauses)`);
+  if (pull.ms >= BOUND_MS) {
+    A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 20_000_000 }]));
+    await A.persistIndexCacheAsync();
+    A.warmRouteIndex(); B.warmRouteIndex();
+    await explainLongestBlock("pull, profiled", () => B.pullIndexChanges({ pageSize: 1000, maxPages: 20 }));
+  }
 
   // Same index on both sides: the slicing changed when the work runs, not what it produces.
   const sellers = (m) => m.indexSnapshot(snapArgs).sellers.filter((s) => s.origin.startsWith("https://seller-")).map((s) => `${s.origin} ${s.toolCount}`).sort();
