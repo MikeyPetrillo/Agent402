@@ -17,6 +17,17 @@
 //              request: warmers, crawlers, timers).
 //   facilitator refusals  a settle refused for an out-of-funds or billing
 //              class, per network and facilitator label.
+//   answers    per slug, every final 200 of a catalog route, by what the body
+//              carries (src/answer-shape.js): ok, empty, error-shaped,
+//              unchecked. Split by origin like the tool classes. The last few
+//              non-ok answers per slug keep their reasons (field names only,
+//              never a value or a payer). toolAnswers reads degraded when one
+//              slug's outside empty-or-error-shaped share of its checked
+//              answers reaches TOOL_ANSWER_BAD_RATE over the last hour (at
+//              least TOOL_ANSWER_MIN_HOUR checked) or the last day (at least
+//              TOOL_ANSWER_MIN_DAY). The operator view also lists live-data
+//              slugs whose outside sales all returned one identical body
+//              (the sales ledger's response_sha256; detail only, no word).
 //
 // Counts sit in five-minute buckets kept for 24 hours. The words read the
 // last hour; the operator view also carries the 24-hour totals.
@@ -36,10 +47,11 @@
 // served while one recompute runs after the response, so no request waits
 // on a merge.
 //
-// Public surface: /api/gateway-status carries toolFailures, upstreamHealth
-// and facilitatorFunds as one word each. Slugs, upstream names, counts and
+// Public surface: /api/gateway-status carries toolFailures, upstreamHealth,
+// facilitatorFunds and toolAnswers as one word each. Slugs, upstream names, counts and
 // messages are on /__operator/tool-failures.json only.
 import { randomUUID } from "node:crypto";
+import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
 
 export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
@@ -48,6 +60,9 @@ export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone"
 export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
 export const WORDS = ["ok", "degraded", "failing"];
 export const FUNDS_WORDS = ["ok", "refused", "demoted"];
+export const ANSWER_WORDS = ["ok", "degraded"];
+export { ANSWER_CLASSES };
+const LAST_ANSWERS_PER_SLUG = 5;
 const MAX_SLUGS = 2_000;
 const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
@@ -68,6 +83,16 @@ export function thresholds(env = process.env) {
     upstreamMinCalls: num(env.UPSTREAM_FAIL_MIN_CALLS, 8),
     // facilitatorFunds reads refused while a refusal is this recent.
     fundsWindowMs: num(env.FACILITATOR_FUNDS_WINDOW_MS, HOUR_MS),
+    // toolAnswers degraded: one slug's outside empty + error-shaped share of
+    // its checked 200s (ok + empty + error-shaped) at or above this rate,
+    // over at least answerMinHour checked in 1 h or answerMinDay in 24 h.
+    answerBadRate: num(env.TOOL_ANSWER_BAD_RATE, 0.5),
+    answerMinHour: num(env.TOOL_ANSWER_MIN_HOUR, 10),
+    answerMinDay: num(env.TOOL_ANSWER_MIN_DAY, 30),
+    // Identical-answer detail: a live-data slug with at least this many
+    // outside sales in the window, every one the same response digest.
+    sameAnswerMinSales: num(env.TOOL_ANSWER_SAME_MIN_SALES, 5),
+    sameAnswerWindowMs: num(env.TOOL_ANSWER_SAME_WINDOW_H, 24) * HOUR_MS,
   };
 }
 
@@ -113,6 +138,7 @@ const FIXED_UPSTREAMS = [
 
 const emptyTool = () => TOOL_CLASSES.map(() => 0);
 const emptyUp = () => UPSTREAM_KINDS.map(() => 0);
+const emptyAns = () => ANSWER_CLASSES.map(() => 0);
 const add = (a, b) => { for (let i = 0; i < a.length; i++) a[i] += Number(b?.[i]) || 0; return a; };
 
 /** The default cross-replica store: Redis through the shared client. */
@@ -142,11 +168,13 @@ export function redisSnapshotStore({ getClient, shared, keyPrefix = "tfm" } = {}
   };
 }
 
-export function createToolFailureMonitor({ now = () => Date.now(), store = null, replicaId = null, env = process.env, isDemoted = () => [] } = {}) {
+export function createToolFailureMonitor({ now = () => Date.now(), store = null, replicaId = null, env = process.env, isDemoted = () => [], identicalAnswers = () => [] } = {}) {
   const id = String(replicaId || env.RAILWAY_REPLICA_ID || randomUUID()).slice(0, 64);
   const tools = new Map();      // slug -> Map(bucket -> { o: [], s: [] })
   const upstreams = new Map();  // name -> Map(bucket -> { o: [], s: [], b: [] })
   const lastToolError = new Map(); // slug -> { at, status, message, synthetic }
+  const answers = new Map();    // slug -> Map(bucket -> { o: [], s: [] }) over ANSWER_CLASSES
+  const lastAnswer = new Map(); // slug -> [{ at, klass, reasons, synthetic }] (non-ok, newest last)
   const lastUpstream = new Map();  // name -> { at, kind, host, status }
   const refusals = [];          // { at, network, facilitator, reason }
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
@@ -187,6 +215,26 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     if (!row) { row = { o: emptyTool(), s: emptyTool() }; m.set(b, row); prune(m, at); }
     const klass = toolClassOf(status, { shed });
     row[synthetic ? "s" : "o"][TOOL_CLASSES.indexOf(klass)]++;
+    return klass;
+  }
+
+  /** Count one final 200's answer class (src/answer-shape.js classifyAnswer). */
+  function noteAnswer(slug, klass, { synthetic = false, reasons = [], at = now() } = {}) {
+    const s = String(slug || "");
+    const i = ANSWER_CLASSES.indexOf(klass);
+    if (!s || i < 0) return null;
+    let m = answers.get(s);
+    if (!m) { if (answers.size >= MAX_SLUGS) return null; m = new Map(); answers.set(s, m); }
+    const b = bucketOf(at);
+    let row = m.get(b);
+    if (!row) { row = { o: emptyAns(), s: emptyAns() }; m.set(b, row); prune(m, at); }
+    row[synthetic ? "s" : "o"][i]++;
+    if (klass !== "ok") {
+      const list = lastAnswer.get(s) || [];
+      list.push({ at, klass, reasons: (Array.isArray(reasons) ? reasons : []).slice(0, 8).map((r) => String(r).slice(0, 64)), synthetic: !!synthetic });
+      while (list.length > LAST_ANSWERS_PER_SLUG) list.shift();
+      lastAnswer.set(s, list);
+    }
     return klass;
   }
 
@@ -243,6 +291,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       at: t,
       tools: pack(tools),
       upstreams: pack(upstreams),
+      answers: pack(answers),
+      lastAnswer: Object.fromEntries([...lastAnswer].map(([k, v]) => [k, v.filter((x) => x.at > t - DAY_MS)]).filter(([, v]) => v.length)),
       lastToolError: Object.fromEntries([...lastToolError].filter(([, v]) => v.at > t - DAY_MS)),
       lastUpstream: Object.fromEntries([...lastUpstream].filter(([, v]) => v.at > t - DAY_MS)),
       refusals: refusals.filter((r) => r.at > t - DAY_MS),
@@ -273,7 +323,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   }
 
   function mergeSnapshots(all) {
-    const toolsM = {}, upM = {}, lastT = {}, lastU = {};
+    const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     for (const s of all) {
       for (const [slug, rows] of Object.entries(s.tools || {})) {
@@ -290,11 +340,20 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
           add(d.o, row.o); add(d.s, row.s); add(d.b, row.b);
         }
       }
+      for (const [slug, rows] of Object.entries(s.answers || {})) {
+        const dst = (ansM[slug] ||= {});
+        for (const [b, row] of Object.entries(rows)) {
+          const d = (dst[b] ||= { o: emptyAns(), s: emptyAns() });
+          add(d.o, row.o); add(d.s, row.s);
+        }
+      }
+      for (const [k, v] of Object.entries(s.lastAnswer || {})) if (Array.isArray(v)) (lastA[k] ||= []).push(...v);
       for (const [k, v] of Object.entries(s.lastToolError || {})) if (!lastT[k] || lastT[k].at < v.at) lastT[k] = v;
       for (const [k, v] of Object.entries(s.lastUpstream || {})) if (!lastU[k] || lastU[k].at < v.at) lastU[k] = v;
       for (const r of s.refusals || []) refs.push(r);
     }
-    return { tools: toolsM, upstreams: upM, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at) };
+    for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at) };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -350,6 +409,30 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         last: m.lastUpstream[name] ? { ...m.lastUpstream[name], at: new Date(m.lastUpstream[name].at).toISOString() } : null,
       });
     }
+    const ansRows = [];
+    let ansWord = "ok";
+    const shareOf = (c) => ({ checked: c.ok + c.empty + c["error-shaped"], bad: c.empty + c["error-shaped"] });
+    const over = (x, min) => x.checked >= min && x.bad / x.checked >= th.answerBadRate;
+    // Every slug's answers summed, so the operator sees what was read even
+    // when nothing was flagged.
+    const totals = { hour: { o: emptyAns(), s: emptyAns() }, day: { o: emptyAns(), s: emptyAns() } };
+    for (const [slug, rows] of Object.entries(m.answers || {})) {
+      const h = sumWindow(rows, ["o", "s"], ANSWER_CLASSES.length, hourFloor);
+      const d = sumWindow(rows, ["o", "s"], ANSWER_CLASSES.length, dayFloor);
+      add(totals.hour.o, h.o); add(totals.hour.s, h.s); add(totals.day.o, d.o); add(totals.day.s, d.s);
+      const ho = named(ANSWER_CLASSES, h.o), dO = named(ANSWER_CLASSES, d.o);
+      const hs = shareOf(ho), ds = shareOf(dO);
+      const word = over(hs, th.answerMinHour) || over(ds, th.answerMinDay) ? "degraded" : "ok";
+      if (word === "degraded") ansWord = "degraded";
+      const anyBad = d.o[1] + d.o[2] + d.s[1] + d.s[2] > 0;
+      if (!anyBad && word === "ok") continue;
+      ansRows.push({
+        slug, status: word,
+        hour: { outside: ho, synthetic: named(ANSWER_CLASSES, h.s), outsideChecked: hs.checked, outsideBad: hs.bad },
+        day: { outside: dO, synthetic: named(ANSWER_CLASSES, d.s), outsideChecked: ds.checked, outsideBad: ds.bad },
+        last: (m.lastAnswer?.[slug] || []).map((x) => ({ ...x, at: new Date(x.at).toISOString() })),
+      });
+    }
     const recent = m.refusals.filter((r) => r.at > t - th.fundsWindowMs);
     let demoted = [];
     try { demoted = isDemoted() || []; } catch { demoted = []; }
@@ -357,9 +440,11 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
+    ansRows.sort((a, b) => rank[a.status] - rank[b.status] || b.day.outsideBad - a.day.outsideBad || a.slug.localeCompare(b.slug));
     return {
-      toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord,
-      thresholds: th, tools: toolRows, upstreams: upRows,
+      toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord,
+      thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
+      answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
       facilitatorRefusals24h: m.refusals.filter((r) => r.at > t - DAY_MS).length,
       demoted,
@@ -388,13 +473,14 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
    *  now instead of reading the cache (tests and one-off reads). */
   async function status({ full = false, t = now(), fresh = false } = {}) {
     const e = fresh ? await recompute(t) : await cachedEvaluation(t);
-    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds } };
+    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds }, toolAnswers: { status: e.toolAnswers } };
     const failingTools = e.tools.filter((r) => r.status !== "ok");
     const badUps = e.upstreams.filter((r) => r.status !== "ok");
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
       facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted },
+      toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
     };
   }
 
@@ -403,6 +489,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     await refreshRemote(t, { maxAgeMs: 0 });
     const e = evaluate(t);
     const sharedOk = !!store && remote.ok;
+    // Identical answers: read on the operator's request only (one grouped
+    // query over the window), never for the public word.
+    let identical = { slugs: [], read: false };
+    try {
+      const rows = await identicalAnswers({ sinceMs: t - e.thresholds.sameAnswerWindowMs, untilMs: t + 1 });
+      identical = { slugs: identicalAnswerFlags(rows, { minSales: e.thresholds.sameAnswerMinSales }), read: true };
+    } catch { identical = { slugs: [], read: false }; }
     return {
       scope: sharedOk ? "shared" : "instance",
       replica: id,
@@ -411,11 +504,14 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         : "Counts are this process's own (no shared store answered); another replica's failures are not in them.",
       bucketMinutes: BUCKET_MS / 60_000,
       ...e,
+      identicalAnswers: { windowHours: e.thresholds.sameAnswerWindowMs / HOUR_MS, minSales: e.thresholds.sameAnswerMinSales, read: identical.read, slugs: identical.slugs },
       // Names and words, for the operator (public issues carry the word only).
       issueSummary: {
         tools: e.tools.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         upstreams: e.upstreams.filter((r) => r.status !== "ok").map((r) => `${r.upstream.startsWith("facilitator:") ? "facilitator" : r.upstream} (${r.status})`),
         facilitatorNetworks: [...new Set(e.facilitatorRefusals.map((r) => r.network))],
+        answers: e.answers.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
+        identicalAnswers: identical.slugs.map((r) => r.slug),
       },
     };
   }
@@ -430,9 +526,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 
@@ -441,12 +537,16 @@ let singleton = null;
 /** The process's monitor; the Redis store is attached when shared limits are on. */
 export function toolFailureMonitor() {
   if (singleton) return singleton;
-  singleton = createToolFailureMonitor({ store: lazyStore, isDemoted: () => demotedReader() });
+  singleton = createToolFailureMonitor({ store: lazyStore, isDemoted: () => demotedReader(), identicalAnswers: (w) => identicalAnswerReader(w) });
   return singleton;
 }
 let demotedReader = () => [];
 /** The settle-demotion module hands in its reader (avoids an import cycle). */
 export function setDemotedReader(fn) { if (typeof fn === "function") demotedReader = fn; }
+let identicalAnswerReader = () => [];
+/** The server hands in the sales-ledger read, already narrowed to live-data
+ *  slugs: ({ sinceMs, untilMs }) -> [{ slug, sales, distinctAnswers, payers }]. */
+export function setIdenticalAnswerReader(fn) { if (typeof fn === "function") identicalAnswerReader = fn; }
 
 // Resolved on first use, so importing this module never opens a connection.
 const lazyStore = {

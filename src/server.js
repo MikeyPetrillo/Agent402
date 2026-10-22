@@ -39,7 +39,8 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentStalls, longStallVerdict, stallAlarmMsFromEnv } from "./loop-lag.js";
 import { runAsJob, activeJobs } from "./active-jobs.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
-import { toolFailureMonitor } from "./tool-failure-monitor.js";
+import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
+import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
@@ -619,7 +620,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -2302,6 +2303,11 @@ installEgressMeter();
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
   setEgressOutcomeObserver((host, p, init) => { monitor.observeFetch(host, p, init, originNow()); });
+  // Identical answers (operator detail): live-data slugs only. A pure-CPU
+  // tool answers the same bytes to the same input by design, and the memory
+  // and identity-bound reads answer each payer from its own store.
+  const liveSlugs = new Set(Object.values(CATALOG).filter((d) => d?.slug && !isComputePayable(d) && d.category !== "memory" && !d.identityBound).map((d) => d.slug));
+  setIdenticalAnswerReader(({ sinceMs, untilMs }) => answerDigestWindow(sinceMs, untilMs).filter((r) => liveSlugs.has(r.slug)));
   monitor.start();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
@@ -3598,7 +3604,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // billing settle refusal inside the hour) / demoted (a facilitator in its
     // settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" } }))),
+    // toolAnswers reads ok / degraded: one slug's outside 200s were empty
+    // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -10171,7 +10179,7 @@ if (!FREE_MODE) {
     // Every catalog answer past the gates is counted by its final status
     // (src/tool-failure-monitor.js); our own probes, canaries and wallets
     // count on their own lane.
-    if (def) noteToolOutcomeOnClose(req, res, def.slug);
+    if (def) noteToolOutcomeOnClose(req, res, def.slug, def);
     if (!def || res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     if (!(quotedPriceUsd(def, req) > 0)) return next();
     req.__a402Dispatched = true;
@@ -10231,15 +10239,32 @@ function callIsOurs(req) {
   if (isSyntheticRequest(req)) return true;
   try { return isOwnWallet(paidCallPayer(req)); } catch { return false; }
 }
-function noteToolOutcomeOnClose(req, res, slug) {
+// The checkable contract of each catalog tool's 200 (src/answer-shape.js),
+// built once per tool on its first answer. A pure-CPU tool's empty answer is
+// its input's answer, so only its error shape is read.
+const answerContracts = new WeakMap();
+function answerContractFor(def) {
+  let c = answerContracts.get(def);
+  if (!c) { c = answerContractOf(def, { deterministic: isComputePayable(def) }); answerContracts.set(def, c); }
+  return c;
+}
+function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
   const synthetic = callIsOurs(req);
   if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
+  // The JSON body handed to res.json, held by reference (nothing is copied or
+  // serialized) and read only after the response closed, so classifying it
+  // never delays, changes or bills the answer.
+  const answer = def ? observeJsonAnswer(res) : null;
   res.once("close", () => {
     try {
       const status = res.headersSent ? res.statusCode : 499;
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted });
+      if (answer && status === 200) {
+        const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
+        toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
+      }
     } catch { /* bookkeeping only */ }
   });
 }

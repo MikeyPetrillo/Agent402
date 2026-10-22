@@ -1071,6 +1071,23 @@ export function externalSlugWindow(sinceMs, untilMs) {
   return qExtSlugWindow.all(sinceMs, untilMs);
 }
 
+/**
+ * Per slug over [sinceMs, untilMs): external sales that recorded a response
+ * digest, how many distinct digests they returned and how many distinct
+ * payers bought. Counts only (no digest, no payer leaves this function); the
+ * operator's identical-answer read (src/tool-failure-monitor.js) flags a
+ * live-data slug whose many sales all returned one body.
+ */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+let qAnswerDigests = null;
+export function answerDigestWindow(sinceMs, untilMs = Date.now()) {
+  qAnswerDigests ||= db.prepare(`
+    SELECT slug, COUNT(*) AS sales, COUNT(DISTINCT response_sha256) AS distinctAnswers, COUNT(DISTINCT payer) AS payers
+    FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND response_sha256 IS NOT NULL AND ts >= ? AND ts < ?
+    GROUP BY slug`);
+  return qAnswerDigests.all(Number(sinceMs) || 0, Number(untilMs) || Date.now());
+}
+
 /** When the ledger recorded its first row (unix ms), or null when empty. */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function firstRecordedTs() {

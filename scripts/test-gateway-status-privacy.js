@@ -55,6 +55,8 @@ for (const k of ["toolFailures", "upstreamHealth"]) {
 }
 ok(["ok", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status", `facilitatorFunds publishes its word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
 ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
+ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubBody.toolAnswers).join(",") === "status", `toolAnswers publishes its word only (${JSON.stringify(pubBody?.toolAnswers)})`);
+ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");
 
 // --- the Tempo direct-mode screen word appears only while direct mode is mounted ---
 ok(!("sanctionsScreen" in pubBody) && !("sanctionsScreen" in opBody), "no sanctionsScreen field without Tempo direct mode (scripts/test-sanctions-screen.js covers the direct-mode words)");

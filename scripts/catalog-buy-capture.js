@@ -19,6 +19,7 @@
 //
 // Pure functions, unit-tested offline by scripts/test-catalog-buy-examples.js.
 import { trimExample } from "../src/tool-output-examples.js";
+import { populatedArrayKeys } from "../src/answer-shape.js";
 
 export const CAPTURE_MAX_BYTES = 24 * 1024;
 export const OUR_HOSTS = ["agent402.tools"];
@@ -137,7 +138,7 @@ export function documentedShape(example, source) {
   return {
     source,
     keys: obj ? Object.keys(example) : [],
-    populatedArrays: obj ? Object.entries(example).filter(([, v]) => Array.isArray(v) && v.length > 0).map(([k]) => k) : [],
+    populatedArrays: populatedArrayKeys(example),
     bytes: example === undefined ? 0 : Buffer.byteLength(JSON.stringify(example), "utf8"),
   };
 }
