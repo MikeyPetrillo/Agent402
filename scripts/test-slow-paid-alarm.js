@@ -33,17 +33,17 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
 {
   const now = Date.now();
   if (fn(S._resetSlowPaidCalls)) S._resetSlowPaidCalls();
-  const fast = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "v1-chat-nano", handlerMs: 15_000, endEpochMs: now - 60_000, status: 200 }) : undefined;
-  ok(fast === null, "a 15 s chat call is under the bound and is not listed");
+  const fast = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "stock-history", handlerMs: 15_000, endEpochMs: now - 60_000, status: 200 }) : undefined;
+  ok(fast === null, "a 15 s paid call is under the bound and is not listed");
   ok(fn(S.slowPaidVerdict) && S.slowPaidVerdict(3600_000, now).degraded === false, "no slow paid call: not degraded");
-  const row = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "v1-chat-nano", handlerMs: 26_000, endEpochMs: now - 30_000, status: 200 }) : null;
-  ok(row?.slug === "v1-chat-nano" && row?.ms === 26000 && row?.boundMs === 20000, `a 26 s chat call is listed against the shared bound (${JSON.stringify(row)})`);
+  const row = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "stock-history", handlerMs: 26_000, endEpochMs: now - 30_000, status: 200 }) : null;
+  ok(row?.slug === "stock-history" && row?.ms === 26000 && row?.boundMs === 20000, `a 26 s paid call is listed against the shared bound (${JSON.stringify(row)})`);
   const v = fn(S.slowPaidVerdict) ? S.slowPaidVerdict(3600_000, now) : {};
   ok(v.degraded === true && v.count === 1, "one slow paid call in the hour degrades");
-  ok(JSON.stringify(v.slugs) === JSON.stringify(["v1-chat-nano"]), `the verdict names the slug (${JSON.stringify(v.slugs)})`);
+  ok(JSON.stringify(v.slugs) === JSON.stringify(["stock-history"]), `the verdict names the slug (${JSON.stringify(v.slugs)})`);
   ok(fn(S.slowPaidVerdict) && S.slowPaidVerdict(3600_000, now + 3_700_000).degraded === false, "a slow call older than an hour no longer degrades");
   ok(fn(S.slowPaidVerdict) && S.slowPaidVerdict(3600_000, now, 0).degraded === false, "with the alarm off the listed call does not degrade");
-  ok(fn(S.noteSlowPaidCall) && S.noteSlowPaidCall({ slug: "v1-chat-nano", handlerMs: 90_000, endEpochMs: now }, 0) === null, "with the alarm off nothing is listed");
+  ok(fn(S.noteSlowPaidCall) && S.noteSlowPaidCall({ slug: "stock-history", handlerMs: 90_000, endEpochMs: now }, 0) === null, "with the alarm off nothing is listed");
   const unfinished = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "web-search", handlerMs: null, elapsedMs: 121_000, endEpochMs: now, status: 200 }) : null;
   ok(unfinished?.unfinished === true && unfinished?.ms === 121000, "a handler still running when the call was recorded counts with its elapsed time");
 }
@@ -55,7 +55,14 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
   ok(p?.slow === true && p.maxSeconds * 1000 > 20000, "v1-videos is declared slow with a run budget past the shared bound");
   const budgetMs = (p?.maxSeconds || 0) * 1000;
   ok(fn(S.slowPaidBoundMs) && S.slowPaidBoundMs("v1-videos", 20000) === budgetMs, "a declared-slow route's bound is its run budget");
-  ok(fn(S.slowPaidBoundMs) && S.slowPaidBoundMs("v1-chat-nano", 20000) === 20000, "an ordinary route's bound is the shared one");
+  ok(fn(S.slowPaidBoundMs) && S.slowPaidBoundMs("search-news", 20000) === 20000, "an ordinary route's bound is the shared one");
+  {
+    const { UPSTREAM_TIMEOUT_MS } = await import("../src/tools/llm-gateway-kit.js");
+    ok(S.CHAT_ATTEMPT_BOUND_MS === UPSTREAM_TIMEOUT_MS, `the chat bound is the gateway's own bound on one model attempt (${S.CHAT_ATTEMPT_BOUND_MS} ms)`);
+  }
+  ok(["v1-chat", "v1-chat-metered", "v1-chat-nano", "v1-chat-pro"].every((s) => S.slowPaidBoundMs(s, 20000) === S.CHAT_ATTEMPT_BOUND_MS), "a chat tier is held to one model attempt, not the shared bound");
+  ok(S.slowPaidBoundMs("v1-chat-metered", 120000) === 120000, "...and a shared bound above it still applies");
+  ok(S.slowPaidBoundMs("v1-chatter", 20000) === 20000 && S.slowPaidBoundMs("v1-embeddings", 20000) === 20000, "a slug that only starts like a chat tier keeps the shared bound");
   ok(S.slowPaidBoundMs("route-execute", 20000) === 240000, "a job-capable router tier is held to the outside-seller deadline, not the shared bound");
   ok(S.slowPaidBoundMs("seller-payability", 20000) === 55000, "a job-capable route with its own ceiling is held to that ceiling");
   ok(S.slowPaidBoundMs("seller-payability", 90000) === 90000, "a shared bound above a route's ceiling still applies");
@@ -72,9 +79,9 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
   if (fn(S._resetSlowPaidCalls)) S._resetSlowPaidCalls();
   const now = Date.now();
   if (fn(L.recordStall)) L.recordStall({ at: now - 10_000, ms: 6000, gcMs: 0, inFlight: [], jobs: [] });
-  const over = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "v1-chat-mini", handlerMs: 25_000, endEpochMs: now - 5_000, status: 200 }) : null;
+  const over = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "search-news", handlerMs: 25_000, endEpochMs: now - 5_000, status: 200 }) : null;
   ok(over?.stallOverlap === true, "a slow call whose handler spanned a stall says so");
-  const clear = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "v1-chat-mini", handlerMs: 25_000, endEpochMs: now - 120_000, status: 200 }) : null;
+  const clear = fn(S.noteSlowPaidCall) ? S.noteSlowPaidCall({ slug: "search-news", handlerMs: 25_000, endEpochMs: now - 120_000, status: 200 }) : null;
   ok(clear?.stallOverlap === false, "a slow call with no stall in its span says not");
   const v = fn(S.slowPaidVerdict) ? S.slowPaidVerdict(3600_000, now) : {};
   ok(v.withStall === 1 && v.count === 2, "the verdict counts how many overlapped a stall");
@@ -118,11 +125,11 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
     res.end();
     await sleep(5);
   };
-  await call("v1-chat-nano", 120);
-  await call("v1-chat-mini", 5);
+  await call("stock-history", 120);
+  await call("search-news", 5);
   delete process.env.ALERT_SLOW_PAID_MS;
   const rows = fn(S.recentSlowPaidCalls) ? S.recentSlowPaidCalls() : [];
-  ok(rows.length === 1 && rows[0].slug === "v1-chat-nano" && rows[0].ms >= 60, `a paid call recorded by the phase timer past the bound lands in the list (${JSON.stringify(rows)})`);
+  ok(rows.length === 1 && rows[0].slug === "stock-history" && rows[0].ms >= 60, `a paid call recorded by the phase timer past the bound lands in the list (${JSON.stringify(rows)})`);
   ok(!JSON.stringify(rows).includes("0xabcd"), "the payer the timer knows never reaches the list");
 }
 
