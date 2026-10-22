@@ -20,6 +20,12 @@ carries its own version on npm.
   refuses it and names where it pointed, so a signature or a credits key
   stays with the host you configured; if the new address is the one you
   meant, set it as the base URL.
+- A paid call to a slow route (reports, video, the premium image) now sends
+  `Prefer: respond-async` for a job link, or `Prefer: wait=<maxSeconds>` to
+  wait on the connection. A paid call with neither is answered `400` before
+  any payment is taken, so a client that would hang up first is never
+  charged for an answer it did not receive. `agent402-client` 0.8.16 and
+  later is run as a job on its own.
 
 ### 2026-10-20
 - New tool `dub` (`POST /api/dub`): translates a text into a target language

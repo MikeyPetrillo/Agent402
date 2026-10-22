@@ -104,7 +104,7 @@ export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPayme
       slug: def.slug,
       maxSeconds: budget,
       syncLimitSeconds: bound,
-      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. Nothing was charged.`,
+      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. Prefer: wait is not served on this connection for this route. Nothing was charged.`,
     });
   };
 }

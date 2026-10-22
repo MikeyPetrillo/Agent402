@@ -145,6 +145,8 @@ try {
   const oa = await (await fetch(`${B}/openapi.json`)).json();
   const op = oa.paths?.[PATH]?.post;
   ok(op?.["x-agent402-async"]?.preferWait === "wait=75" && op["x-agent402-async"].withoutPrefer === 400, "/openapi.json carries the same async block");
+  const preferParam = (op?.parameters || []).find((p) => p?.name === "Prefer");
+  ok(preferParam && !preferParam.schema?.enum && /wait=75/.test(preferParam.description || "") && /400 before any payment/.test(preferParam.description || ""), `/openapi.json's Prefer parameter accepts wait= and names the refusal (${JSON.stringify(preferParam?.schema)})`);
   const llms = await (await fetch(`${B}/llms.txt`)).text();
   ok(/image-gen-premium\)[^\n]*Prefer: wait=75 to wait on the connection/.test(llms), "/llms.txt marks the route with both headers");
 

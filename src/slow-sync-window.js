@@ -99,7 +99,7 @@ export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaym
       req.slowSyncAsyncApplied = true;
       return next();
     }
-    log(`[slow-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${window} s, no Prefer)`);
+    log(`[slow-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${window} s, ${wait == null ? "no Prefer" : `Prefer: wait=${wait} too short`})`);
     return res.status(400).set("Cache-Control", "no-store").json({
       error: "respond_async_required",
       slug: def.slug,
