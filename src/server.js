@@ -363,7 +363,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -10976,9 +10976,20 @@ if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
-  // The tool directory is built in slices once the warm start is in, so the
-  // first /marketplace/tools visitor does not build it.
-  startCrawler({ selfOrigin: BASE_URL, onWarmed: () => { indexRowsReady({ ourTools: ourToolsAsIndexRows(), excludeOrigin: BASE_URL }).catch(() => {}); } });
+  // Once the warm start is in, the index snapshot, the seller summaries and
+  // the tool directory are built in slices, so the first page, search or
+  // /marketplace/tools visitor does not build one in its own turn.
+  startCrawler({ selfOrigin: BASE_URL, onWarmed: () => {
+    (async () => {
+      if (!indexSnapshotCache.value) {
+        const version = indexCacheVersion();
+        const value = await indexSnapshotAsync(indexCtx());
+        if (!indexSnapshotCache.value) indexSnapshotCache = { at: Date.now(), value, version };
+      }
+      await warmRoutableSellerSummaries();
+      await indexRowsReady({ ourTools: ourToolsAsIndexRows(), excludeOrigin: BASE_URL });
+    })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
+  } });
 }
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them

@@ -7595,10 +7595,25 @@ export function __resetRoutableSummaryMemoForTest() { routableSummaryMemo = null
 // kept per entry: a rebuild projects only the sellers re-crawled since the
 // last one (the projection walks every tool's payTo).
 const routableRowByEntry = new WeakMap(); // entry -> { origin, row }
-function buildRoutableSellerSummaries() {
+let routableRowBuilds = 0;
+/** How many seller summary rows have been projected (a rebuild over unchanged entries projects none). */
+export function _routableRowBuildsForTest() { return routableRowBuilds; }
+function buildRoutableSellerSummaries() { return runSteps(routableSummarySteps()); }
+/** Build the seller summaries in slices and memoize them: the boot's warm,
+ *  so the first search does not project every seller in its own turn. */
+export async function warmRoutableSellerSummaries() {
+  if (!removalsKnown()) return;
+  const size = cache.size;
+  const out = await runSlicedAsync(routableSummarySteps());
+  if (cache.size === size) routableSummaryMemo = { at: Date.now(), size, out: Object.freeze(out) };
+}
+function* routableSummarySteps() {
   const out = [];
   const aliasOrigins = computeAliasOrigins(cache);
-  for (const [origin, v] of cache.entries()) {
+  yield;
+  let walked = 0;
+  for (const [origin, v] of [...cache.entries()]) {
+    if (++walked % SNAPSHOT_YIELD_SELLERS === 0) yield;
     if (v?.error || !isRoutable(v) || aliasOrigins.has(origin)) continue;
     // The crawler can discover and cache the real, publicly-registered
     // agent402.tools origin regardless of what BASE_URL this instance is
@@ -7643,6 +7658,7 @@ function buildRoutableSellerSummaries() {
       payTosByNetwork: allPayTosByNetwork(v.tools),
       evmDomainByNetwork: evmDomainUnion(v.tools),
     };
+    routableRowBuilds++;
     if (v && typeof v === "object") routableRowByEntry.set(v, { origin, row });
     out.push(row);
   }
