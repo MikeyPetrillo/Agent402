@@ -4,22 +4,31 @@
 // stringify, the hash and, on the pull, the fold of every changed row. They
 // yield on elapsed time, so the longest block stays near one slice whatever
 // the catalogues weigh.
+// Container B runs in its own process, as each production container does: its
+// loop and its collector are measured against its own index, not a heap that
+// also holds A's index and the synthetic input.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-persist-slices-pg.js
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { fork } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { PerformanceObserver } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { requireTestPg } from "./lib/test-pg.js";
-requireTestPg({ label: "test-index-persist-slices-pg" });
-
-process.env.X402_INDEX_CRAWL = "off";
-const DIR = mkdtempSync(join(tmpdir(), "index-slices-pg-"));
-// No write-through: the cache file's directory does not exist, as in production
-// (the rows are the cache there).
-process.env.INDEX_CACHE_FILE = join(DIR, "absent", "x402-index-cache.json");
-process.env.REMOVED_ORIGINS_FILE = join(DIR, "removed-origins.json");
+const IS_B = process.env.INDEX_SLICES_ROLE === "b";
+let DIR = null;
+if (!IS_B) {
+  // The child inherits all of this, the test schema included.
+  requireTestPg({ label: "test-index-persist-slices-pg" });
+  process.env.X402_INDEX_CRAWL = "off";
+  DIR = mkdtempSync(join(tmpdir(), "index-slices-pg-"));
+  // No write-through: the cache file's directory does not exist, as in production
+  // (the rows are the cache there).
+  process.env.INDEX_CACHE_FILE = join(DIR, "absent", "x402-index-cache.json");
+  process.env.REMOVED_ORIGINS_FILE = join(DIR, "removed-origins.json");
+}
 
 const sdb = await import("../src/state-db.js");
 let pass = 0, fail = 0;
@@ -88,6 +97,7 @@ async function longestBlock(fn) {
 // On a failed bound: run the job again under the sampling profiler and print
 // the functions on the stack inside its longest block, so the log names what
 // held the loop rather than only how long.
+function calibrationSpin(ms) { const end = performance.now() + ms; while (performance.now() < end) { /* spin */ } }
 async function explainLongestBlock(label, fn) {
   const session = new Session();
   session.connect();
@@ -95,22 +105,33 @@ async function explainLongestBlock(label, fn) {
     await session.post("Profiler.enable");
     await session.post("Profiler.setSamplingInterval", { interval: 250 });
     await session.post("Profiler.start");
-    const t0 = performance.now(); // the profile's startTime, on this clock
     // The sampler's first sample lands up to a second after start.
     await new Promise((r) => setTimeout(r, 1500));
+    // The profile's clock has its own origin: a known 30 ms spin, found in
+    // the samples by name, maps it onto performance.now().
+    const spinAt = performance.now();
+    calibrationSpin(30);
     const block = await longestBlock(fn);
     const { profile } = await session.post("Profiler.stop");
     if (!block.at) return;
     const byId = new Map(profile.nodes.map((n) => [n.id, n]));
     const parent = new Map();
     for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n.id);
-    const counts = new Map();
-    let ts = profile.startTime, inside = 0;
+    const sampleTimes = [];
+    { let t = profile.startTime; for (const d of profile.timeDeltas) sampleTimes.push((t += d)); }
+    const onSpin = (id) => { for (let n = id; n; n = parent.get(n)) if (byId.get(n).callFrame.functionName === "calibrationSpin") return true; return false; };
+    const firstSpin = profile.samples.findIndex(onSpin);
+    if (firstSpin < 0) { console.error(`# ${label}: longest block ${block.ms} ms (the profile has no calibration samples)`); return; }
+    const offsetMs = spinAt - sampleTimes[firstSpin] / 1000;
+    const counts = new Map(), leaves = new Map();
+    let inside = 0;
     profile.samples.forEach((id, i) => {
-      ts += profile.timeDeltas[i];
-      const at = t0 + (ts - profile.startTime) / 1000;
+      const at = sampleTimes[i] / 1000 + offsetMs;
       if (at < block.at[0] || at > block.at[1]) return;
       inside++;
+      const leaf = byId.get(id).callFrame;
+      const lk = `${leaf.functionName || "(anonymous)"}${leaf.url ? ` ${leaf.url.split("/").pop().split("?")[0]}:${leaf.lineNumber + 1}` : ""}`;
+      leaves.set(lk, (leaves.get(lk) || 0) + 1);
       const seen = new Set();
       for (let n = id; n; n = parent.get(n)) {
         const cf = byId.get(n).callFrame;
@@ -121,6 +142,9 @@ async function explainLongestBlock(label, fn) {
     });
     console.error(`# ${label}: longest block ${block.ms} ms, ${inside} samples inside it`);
     for (const [f, c] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.error(`#   ${String(Math.round((100 * c) / Math.max(1, inside))).padStart(3)}%  ${f}`);
+    // Where each sample was running: (garbage collector), (program) and
+    // native builtins carry no script, so they show only here.
+    for (const [f, c] of [...leaves].sort((a, b) => b[1] - a[1]).slice(0, 8)) console.error(`#   leaf ${String(Math.round((100 * c) / Math.max(1, inside))).padStart(3)}%  ${f}`);
   } finally { session.disconnect(); }
 }
 
@@ -142,63 +166,94 @@ function largestUnitMs(origin, entry) {
   return best;
 }
 const snapArgs = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "test" };
+const sellers = (m) => m.indexSnapshot(snapArgs).sellers.filter((s) => s.origin.startsWith("https://seller-")).map((s) => `${s.origin} ${s.toolCount}`).sort();
+const PULL = { pageSize: 1000, maxPages: 20 };
 
-try {
-  const A = await import("../src/x402-index.js?container=a");
-  const B = await import("../src/x402-index.js?container=b");
-  await B.pullIndexChanges(); // B's watermark: it has read everything older
-  const data = synth();
-  const toolCount = data.reduce((n, [, e]) => n + e.tools.length, 0);
-  ok(toolCount === 198000 && data.length === 5800, `prod-scale input: ${data.length} origins, ${toolCount} tools`);
-  const unit = largestUnitMs(...data[0]);
-  const BOUND_MS = Math.round(SLICE_MS + 4 * unit);
-  console.log(`largest origin's unit of work ${unit.toFixed(1)} ms; bound ${BOUND_MS} ms`);
-  A.__testSeedCache(data);
-  ok(await A.persistIndexCacheAsync(), "A's first save writes every origin");
-  // A's route index is built now, so its own background drain (a separate
-  // sliced job) is not running beside the measurements below.
-  A.warmRouteIndex();
-
-  // Each job runs twice and the shorter of its two longest blocks is held to
-  // the bound: the walk this replaces blocks on every run, and a one-off
-  // scheduler pause on a shared runner is not the job's own block.
-  const twice = async (fn) => { const a = await longestBlock(fn); const b = await longestBlock(fn); return { a, b, ms: Math.min(a.ms, b.ms), raw: Math.min(a.raw, b.raw) }; };
-
-  // ---- an unchanged save: project, stringify and hash every origin ---------
-  const save = await twice(() => A.persistIndexCacheAsync());
-  ok(save.a.result === true && save.b.result === true, "A's unchanged saves complete");
-  ok(save.ms < BOUND_MS, `the save never held the event loop past ${BOUND_MS} ms (longest block ${save.ms} ms; ${save.raw} ms with collector pauses)`);
-
-  // ---- B folds every origin A wrote ------------------------------------------
-  const pullOnce = () => longestBlock(() => B.pullIndexChanges({ pageSize: 1000, maxPages: 20 }));
-  const pullA = await pullOnce();
-  // A re-crawls everything, so B has every origin to fold again.
-  A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 10_000_000 }]));
-  await A.persistIndexCacheAsync();
-  A.warmRouteIndex(); B.warmRouteIndex();
-  const pullB = await pullOnce();
-  const pull = { a: pullA, b: pullB, ms: Math.min(pullA.ms, pullB.ms), raw: Math.min(pullA.raw, pullB.raw) };
-  ok(pull.a.result === data.length && pull.b.result === data.length, `B pulls every origin A wrote, both times (${pull.a.result}, ${pull.b.result})`);
-  ok(pull.ms < BOUND_MS, `the pull never held the event loop past ${BOUND_MS} ms (longest block ${pull.ms} ms; ${pull.raw} ms with collector pauses)`);
-  if (pull.ms >= BOUND_MS) {
-    A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 20_000_000 }]));
-    await A.persistIndexCacheAsync();
-    A.warmRouteIndex(); B.warmRouteIndex();
-    await explainLongestBlock("pull, profiled", () => B.pullIndexChanges({ pageSize: 1000, maxPages: 20 }));
-  }
-
-  // Same index on both sides: the slicing changed when the work runs, not what it produces.
-  const sellers = (m) => m.indexSnapshot(snapArgs).sellers.filter((s) => s.origin.startsWith("https://seller-")).map((s) => `${s.origin} ${s.toolCount}`).sort();
-  ok(JSON.stringify(sellers(A)) === JSON.stringify(sellers(B)), "B serves the same sellers and tool counts as A after the pull");
-  const row = await sdb.records.get("x402-index", "https://seller-0.example");
-  ok(row?.tools?.length === 5009 && row.tools[0].description === data[0][1].tools[0].description && row.fetchedAt === data[0][1].fetchedAt + 10_000_000, "the largest origin's row holds its whole catalogue");
-  A.stopCrawler?.(); B.stopCrawler?.();
-} catch (e) {
-  fail++; console.error("FAIL - threw:", e?.stack || e);
-} finally {
-  await sdb.__dropStateSchema().catch(() => {});
-  await sdb.closeStateDb();
-  rmSync(DIR, { recursive: true, force: true });
+// ---- container B: a child process answering the parent's commands ----------
+async function containerB() {
+  const B = await import("../src/x402-index.js");
+  const commands = {
+    init: () => B.pullIndexChanges(), // B's watermark: it has read everything older
+    warm: () => B.warmRouteIndex(),
+    pull: async () => { const { result, ms, raw } = await longestBlock(() => B.pullIndexChanges(PULL)); return { result, ms, raw }; },
+    explain: () => explainLongestBlock("pull, profiled", () => B.pullIndexChanges(PULL)),
+    sellers: () => sellers(B),
+    exit: () => { setImmediate(() => process.exit(0)); },
+  };
+  process.on("message", async ({ id, cmd }) => {
+    try { process.send({ id, value: (await commands[cmd]()) ?? null }); } catch (e) { process.send({ id, error: String(e?.stack || e) }); }
+  });
+  process.send({ id: 0, value: "ready" });
 }
-console.log(`\ntest-index-persist-slices-pg: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+
+async function main() {
+  const child = fork(fileURLToPath(import.meta.url), [], { env: { ...process.env, INDEX_SLICES_ROLE: "b" }, stdio: ["inherit", "inherit", "inherit", "ipc"] });
+  const waiting = new Map();
+  let seq = 0;
+  child.on("message", ({ id, value, error }) => { const w = waiting.get(id); if (!w) return; waiting.delete(id); if (error) w.reject(new Error(error)); else w.resolve(value); });
+  child.on("exit", (code) => { for (const w of waiting.values()) w.reject(new Error(`container B exited (${code})`)); waiting.clear(); });
+  const askB = (cmd) => new Promise((resolve, reject) => { const id = ++seq; waiting.set(id, { resolve, reject }); child.send({ id, cmd }); });
+  await new Promise((resolve, reject) => { waiting.set(0, { resolve, reject }); });
+  try {
+    const A = await import("../src/x402-index.js");
+    await askB("init");
+    const data = synth();
+    const toolCount = data.reduce((n, [, e]) => n + e.tools.length, 0);
+    ok(toolCount === 198000 && data.length === 5800, `prod-scale input: ${data.length} origins, ${toolCount} tools`);
+    const unit = largestUnitMs(...data[0]);
+    const BOUND_MS = Math.round(SLICE_MS + 4 * unit);
+    console.log(`largest origin's unit of work ${unit.toFixed(1)} ms; bound ${BOUND_MS} ms`);
+    A.__testSeedCache(data);
+    ok(await A.persistIndexCacheAsync(), "A's first save writes every origin");
+    // A's route index is built now, so its own background drain (a separate
+    // sliced job) is not running beside the measurements below.
+    A.warmRouteIndex();
+
+    // Each job runs twice and the shorter of its two longest blocks is held to
+    // the bound: the walk this replaces blocks on every run, and a one-off
+    // scheduler pause on a shared runner is not the job's own block.
+    const twice = async (fn) => { const a = await longestBlock(fn); const b = await longestBlock(fn); return { a, b, ms: Math.min(a.ms, b.ms), raw: Math.min(a.raw, b.raw) }; };
+
+    // ---- an unchanged save: project, stringify and hash every origin ---------
+    const save = await twice(() => A.persistIndexCacheAsync());
+    ok(save.a.result === true && save.b.result === true, "A's unchanged saves complete");
+    ok(save.ms < BOUND_MS, `the save never held the event loop past ${BOUND_MS} ms (longest block ${save.ms} ms; ${save.raw} ms with collector pauses)`);
+
+    // ---- B folds every origin A wrote ------------------------------------------
+    const pullOnce = () => askB("pull");
+    const pullA = await pullOnce();
+    // A re-crawls everything, so B has every origin to fold again.
+    A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 10_000_000 }]));
+    await A.persistIndexCacheAsync();
+    A.warmRouteIndex(); await askB("warm");
+    const pullB = await pullOnce();
+    const pull = { a: pullA, b: pullB, ms: Math.min(pullA.ms, pullB.ms), raw: Math.min(pullA.raw, pullB.raw) };
+    ok(pull.a.result === data.length && pull.b.result === data.length, `B pulls every origin A wrote, both times (${pull.a.result}, ${pull.b.result})`);
+    ok(pull.ms < BOUND_MS, `the pull never held the event loop past ${BOUND_MS} ms (longest block ${pull.ms} ms; ${pull.raw} ms with collector pauses)`);
+
+    // Same index on both sides: the slicing changed when the work runs, not what it produces.
+    ok(JSON.stringify(sellers(A)) === JSON.stringify(await askB("sellers")), "B serves the same sellers and tool counts as A after the pull");
+    const row = await sdb.records.get("x402-index", "https://seller-0.example");
+    ok(row?.tools?.length === 5009 && row.tools[0].description === data[0][1].tools[0].description && row.fetchedAt === data[0][1].fetchedAt + 10_000_000, "the largest origin's row holds its whole catalogue");
+    // Last, as it rewrites every row: a failed pull bound is run again under the profiler.
+    if (pull.ms >= BOUND_MS) {
+      A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 20_000_000 }]));
+      await A.persistIndexCacheAsync();
+      A.warmRouteIndex(); await askB("warm");
+      await askB("explain");
+    }
+    A.stopCrawler?.();
+  } catch (e) {
+    fail++; console.error("FAIL - threw:", e?.stack || e);
+  } finally {
+    await askB("exit").catch(() => {});
+    if (child.exitCode === null) child.kill();
+    await sdb.__dropStateSchema().catch(() => {});
+    await sdb.closeStateDb();
+    rmSync(DIR, { recursive: true, force: true });
+  }
+  console.log(`\ntest-index-persist-slices-pg: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
+
+if (IS_B) await containerB(); else await main();
