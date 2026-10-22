@@ -604,5 +604,72 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   ok(d5.plan[0].tool.exampleParams.url === "<url>", `a reference to this step itself is not kept (${JSON.stringify(d5.plan[0].tool.exampleParams)})`);
 }
 
+// ---- a step leads with a comparable tool execute can buy, at the lower price ----
+// A two-step research task where two pricey compliance tools fit a little
+// better than a general search tool and a cited-answer tool: one compliance
+// tool needs an input the task does not give (and the plan says so in one
+// step while writing task words for it in the other), the other is not one
+// execute can buy. Seller names are neutral; the same plan comes back when
+// the search row is marked first party, so who sells it never decides.
+{
+  const TASK = "Search for the official EU AI Act text and summary of obligations for general-purpose AI models";
+  const outside = (host, route, name, description, price, required, { executable = true, health = 1 } = {}) => remoteToolRow(
+    { seller: `https://${host}`, route, method: "GET", name, description, price, networks: ["eip155:8453"], health },
+    { requestContract: { state: "declared", required: { query: required } }, lastLiveAt: NOW - 600_000, executable });
+  const sector = outside("compliance-a.example", "/sector", "Sector compliance", "industry specific regulatory compliance obligations eu ai act official text summary", 0.15, ["sector"]);
+  const aiact = outside("compliance-b.example", "/ai-act", "AI Act", "eu ai act obligations official text summary for ai models", 0.25, ["topic"], { executable: false });
+  const search = outside("search-c.example", "/search", "Web search", "search the web: official text summary eu ai act obligations results", 0.01, ["q"], { health: 0.5 });
+  const answer = outside("answer-d.example", "/answer", "Cited answer", "cited answer from the web: eu ai act official text summary obligations", 0.02, ["question"], { health: 0.5 });
+  const FITS = [{ Sector: 0.83, AI: 0.80, Web: 0.82, Cited: 0.80 }, { Sector: 0.85, AI: 0.84, Web: 0.80, Cited: 0.82 }];
+  const run = async (rows) => {
+    const idx = new ToolIndex();
+    for (const r of rows) idx.upsert(r);
+    const llm = stubLlm([
+      { steps: [{ purpose: "find the official EU AI Act text", query: "eu ai act official text", dependsOn: [] }, { purpose: "summary of obligations for general-purpose AI models", query: "eu ai act obligations summary", dependsOn: [] }] },
+      (system, user) => { const fits = {}; keysFor(user).forEach((st, si) => st.candidates.forEach((c) => { fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.5 : FITS[si]?.[c.name.split(" ")[0]] ?? 0.1; })); return { fits }; },
+      (system, user) => {
+        const out = {};
+        for (const e of keysFor(user)) {
+          const s1 = e.key.split(".")[0] === "1";
+          if (e.name === "Sector compliance") out[e.key] = { sector: s1 ? "general-purpose AI models" : "<sector>" };
+          if (e.name === "AI Act") out[e.key] = { topic: "general-purpose AI models" };
+          if (e.name === "Web search") out[e.key] = { q: s1 ? "official EU AI Act text" : "EU AI Act obligations for general-purpose AI models" };
+          if (e.name === "Cited answer") out[e.key] = { question: "summary of obligations for general-purpose AI models" };
+        }
+        return { params: out };
+      },
+    ]);
+    return buildDecision({ task: TASK, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  };
+  const d = await run([sector, aiact, search, answer]);
+  const lead = d.plan.map((p) => `${p.tool.slug}${p.tool.callDirectly ? "*" : ""}${p.tool.exampleParamsNeedInput ? "?" : ""} $${p.tool.priceUsd}`).join(", ");
+  ok(d.plan.length === 2, `the task plans as two steps (${lead})`);
+  ok(d.plan.every((p) => p.tool.callDirectly !== true), `no step leads with a tool execute cannot buy while a comparable one can be bought (${lead})`);
+  ok(d.plan.every((p) => !p.tool.exampleParamsNeedInput), `no step leads with a tool that needs input the task does not give (${lead})`);
+  ok(d.plan[0]?.tool.id === search.id && /lower price/.test(d.plan[0].why), `the search step leads with the comparable tool at a fraction of the price (${d.plan[0]?.tool.slug}; ${d.plan[0]?.why})`);
+  ok(d.estimatedCostUsd <= 0.05, `the plan quotes the cheaper comparable tools (${d.estimatedCostUsd})`);
+  const said = new Map(); // `${id}:${name}` -> [given, open]
+  for (const p of d.plan) for (const t of [p.tool, ...p.fallbacks]) for (const name of t.inputSchema?.required || []) {
+    const v = t.exampleParams?.[name];
+    const k = `${t.id}:${name}`, e = said.get(k) || [false, false];
+    if (typeof v === "string" && /^<[^<>]*>$/.test(v)) e[1] = true; else if (v !== undefined) e[0] = true;
+    said.set(k, e);
+  }
+  const both = [...said].filter(([, [g, o]]) => g && o).map(([k]) => k);
+  ok(!both.length, `no tool is given an input in one step that the plan says the task does not give in another (${both.join(", ") || "none"})`);
+  ok(d.plan.some((p) => [p.tool, ...p.fallbacks].some((t) => t.id === sector.id)), "the tool that needs more input stays in the plan as a backup");
+  // Neutral: who sells the cheaper tool changes nothing.
+  const d2 = await run([sector, aiact, { ...search, firstParty: true, seller: "agent402" }, answer]);
+  ok(JSON.stringify(d2.plan.map((p) => [p.tool.id, ...p.fallbacks.map((f) => f.id)])) === JSON.stringify(d.plan.map((p) => [p.tool.id, ...p.fallbacks.map((f) => f.id)])), "the same plan whether the cheaper tool is first or third party");
+  // The margins hold: a cheaper tool that fits clearly worse does not lead.
+  const { leadOf: leadOfFn } = await import("../services/decide/planner.js");
+  const leadOf = typeof leadOfFn === "function" ? leadOfFn : () => ({ x: { row: {} } });
+  const row = (id, priceUsd, extra = {}) => ({ id, slug: id, priceUsd, ...extra });
+  ok(leadOf([{ row: row("a", 0.2), fit: 0.95, score: 0.9 }, { row: row("b", 0.01), fit: 0.8, score: 0.88 }]) === null, "a cheaper tool outside the fit margin does not lead");
+  ok(leadOf([{ row: row("a", 0.2), fit: 0.9, score: 0.9 }, { row: row("b", 0.15), fit: 0.9, score: 0.89 }]) === null, "a slightly cheaper comparable tool does not reorder the ranking");
+  ok(leadOf([{ row: row("a", 0.2), fit: 0.9, score: 0.9 }, { row: row("b", 0.01, { pricedByQuote: true }), fit: 0.9, score: 0.89 }]) === null, "a floor price never undercuts");
+  ok(leadOf([{ row: row("a", 0.01, { executable: false }), fit: 0.9, score: 0.9 }, { row: row("b", 0.05), fit: 0.88, score: 0.87 }])?.x.row.id === "b", "a buyable comparable tool leads over one execute cannot buy");
+}
+
 console.log(`\ntest-decide-planner: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
