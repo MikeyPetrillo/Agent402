@@ -404,6 +404,17 @@ const payFetch = wrapFetchWithPayment(fetch, client);
 Pairs with `maxPerCallUsd` / `dailyLimitUsd` (how much) and
 `withNetworkPreference` (which chain).
 
+## Paid calls never follow redirects
+
+A request that can carry a payment or a credits key is sent with
+`redirect: "manual"`. If it is answered with a redirect, the call throws
+`PaymentRedirectError` (`.location` is where it pointed) and nothing more is
+signed, so a redirect can never draw a payment to another host or carry a
+signature to one. A signature already sent before the redirect stays counted
+against your caps. Point `baseUrl` at the address that serves the routes
+directly (`https://agent402.tools`, not `www.` or `http://`); the error names
+the origin to use.
+
 ## Distrusted certificate authorities (`distrustFetch`)
 
 Since 0.8.14 the SDK's own requests refuse a TLS chain that passes through one

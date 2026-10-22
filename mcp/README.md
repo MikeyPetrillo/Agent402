@@ -64,7 +64,7 @@ Every variable the server reads (all optional):
 | `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or another EVM chain the server offers), or USDG on Robinhood Chain. |
 | `SOLANA_AGENT_KEY` | _(unset)_ | Base58 secret key (or JSON byte array) of a Solana wallet funded with USDC on Solana. |
 | `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`) already issued (new credits are not on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. |
-| `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
+| `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `4` | Refuse any single call priced above this many USD (e.g. `0.05`); `off` disables it. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | no session cap | Opt-in hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. Applies to the wallet and the credits path. |
