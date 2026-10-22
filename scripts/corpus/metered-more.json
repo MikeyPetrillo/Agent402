@@ -148,9 +148,9 @@
     },
     {
       "slug": "transcribe",
-      "name": "the sample ogg",
+      "name": "the speech fixture",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
+        "url": "https://agent402.tools/fixtures/sample-speech.wav"
       },
       "requires": "OPENAI_API_KEY",
       "expect": {
@@ -165,9 +165,9 @@
     },
     {
       "slug": "transcribe-pro",
-      "name": "the sample ogg on the pro model",
+      "name": "the speech fixture on the pro model",
       "input": {
-        "url": "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
+        "url": "https://agent402.tools/fixtures/sample-speech.wav"
       },
       "requires": "OPENAI_API_KEY",
       "expect": {
