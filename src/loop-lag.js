@@ -88,7 +88,7 @@ export function longStallVerdict(thresholdMs, windowMs = 3600_000, now = Date.no
     for (const r of stallRing) {
       if (now - r.atMs > windowMs || r.ms < thresholdMs) continue;
       long++;
-      for (const f of r.inFlight) { const k = f.replace(/\s+\d+ms$/, ""); if (!routes.includes(k)) routes.push(k); }
+      for (const f of r.inFlight) { const k = f.replace(/\s+\d+ms( done)?$/, ""); if (!routes.includes(k)) routes.push(k); }
       for (const j of r.jobs) if (!jobs.includes(j)) jobs.push(j);
     }
   }
@@ -198,7 +198,7 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
       // the jobs list the background work running (or ending) inside the
       // stall; the stall profiler (src/stall-profiler.js) names the code.
       let inFlight = [], jobs = [], gcMs = 0;
-      try { const c = stallContext ? stallContext() : null; if (Array.isArray(c)) inFlight = c; } catch { /* context is best-effort */ }
+      try { const c = stallContext ? stallContext({ fromMs: now - late - 50 }) : null; if (Array.isArray(c)) inFlight = c; } catch { /* context is best-effort */ }
       try { jobs = jobsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
       let gc = "";
       try { gc = gcPhrase(late, now); gcMs = gcDuring(now - late - 50, now).ms; } catch { /* attribution is best-effort */ }

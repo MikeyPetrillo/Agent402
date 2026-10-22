@@ -38,7 +38,7 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentStalls, longStallVerdict, stallAlarmMsFromEnv } from "./loop-lag.js";
 import { runAsJob, activeJobs } from "./active-jobs.js";
-import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, oldestInFlight, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
+import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
@@ -2471,7 +2471,7 @@ app.use(requestTimingMiddleware((req) => {
   if (segs[0] === "api" || segs[0] === "v1") return `${method} /${segs.slice(0, 2).join("/")}`;
   return `${method} /${segs[0] || ""}${segs.length > 1 ? "/*" : ""}`;
 }, carriesPaidCredential));
-setStallContext(() => oldestInFlight(3));
+setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it
 // is parsed, so the thread stays free for payment verification and paid
