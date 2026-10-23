@@ -25,6 +25,7 @@ import { join, dirname, basename } from "node:path";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
 // every snapshot upserts its daily rows into the economy table (the state
@@ -430,3 +431,8 @@ export function warmEconomySnapshot({ delayMs = 20_000 } = {}) {
 
 // esc/fmt formatting for the rendered section now live in x402-index.js,
 // next to the section that consumes this snapshot.
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("x402-economy.history", () => history, { note: "economy history by day" });
+registerMemoryStore("x402-economy.snapshot", () => cached, { note: "economy snapshot" });
+registerSqliteStore("x402-economy.db", () => hdb, { note: "economy history database" });

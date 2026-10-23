@@ -52,6 +52,7 @@
 // messages are on /__operator/tool-failures.json only.
 import { randomUUID } from "node:crypto";
 import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
@@ -597,3 +598,6 @@ function realStore() {
   }
   return storePromise;
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("tool-failure-monitor", () => singleton, { note: "failure buckets" });

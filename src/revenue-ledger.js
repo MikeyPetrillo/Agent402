@@ -38,6 +38,7 @@ import { evmLogsRead } from "./evm-logs-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
+import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
@@ -1923,3 +1924,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   console.log(`revenue-ledger: sync loop started (${USE_PG ? `state database; mirror: ${DB_PATH}` : `db: ${DB_PATH}`})`);
   return true;
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("revenue-ledger.db", () => db, { note: "revenue ledger" });
+registerMemoryStore("revenue-ledger.staged", () => staged, { note: "rows staged per chain wallet" });

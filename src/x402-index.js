@@ -280,6 +280,7 @@ import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { decodeTagCharacters, hasHiddenCharacters, stripHiddenCharacters } from "./hidden-chars.js";
+import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -10080,3 +10081,36 @@ export function _resetIndexRowsForTest() { indexRowsMemo = { key: null, at: 0, r
 // shape-plausible body per the tool's input schema, or a seller convention
 // of 402-before-validate; deferred as its own change, not bolted onto the
 // Solana-rail work. Tracked here so the next reader does not re-discover it.
+
+// Operator heap read (/__operator/heap.json `stores`): what this module holds.
+registerMemoryStore("x402-index.entries", () => cache, { note: "crawled seller entries (tools, manifests, packed docs)" });
+registerMemoryStore("x402-index.routeIndex", null, {
+  note: "route index: token postings over decorated tool records",
+  figure: () => {
+    let refs = 0;
+    const sample = [];
+    for (const list of routeIdx.postings.values()) {
+      refs += list.length;
+      if (sample.length < 48 && list.length) sample.push(list[(refs * 7) % list.length]);
+    }
+    const perTool = sample.length ? sample.reduce((s, t) => s + approxBytes(t), 0) / sample.length : 0;
+    const bytes = refs * 8 + routeIdx.postings.size * 64 + routeIdx.indexedTools * perTool;
+    return { rows: routeIdx.indexedTools, mb: bytes / 1048576, detail: { tokens: routeIdx.postings.size, postingRefs: refs, termCache: routeIdx.termCache.size, pending: routeIdx.pending.size } };
+  },
+});
+registerMemoryStore("x402-index.directory", () => flatCache.rows, { note: "flattened tool directory rows" });
+registerMemoryStore("x402-index.tokenIntern", () => tokenIntern, { note: "interned name tokens" });
+registerMemoryStore("x402-index.bazaarTools", () => bazaarToolsByOrigin, { note: "registry tool rows by origin" });
+registerMemoryStore("x402-index.sideSynced", () => sideSynced, { note: "side-store rows last synced (JSON per key)" });
+registerMemoryStore("x402-index.docs", () => docs, { note: "state documents held by the index" });
+registerMemoryStore("x402-index.probeExamples", null, {
+  note: "probe examples by origin",
+  figure: () => { const s = probeExampleMemo.stats(); return { rows: s.origins, mb: s.bytes / 1048576 }; },
+});
+registerMemoryStore("x402-index.removedOrigins", () => removedOrigins, { note: "removed origins" });
+registerMemoryStore("x402-index.goneRoutes", () => goneRoutes, { note: "retired seller routes" });
+registerMemoryStore("x402-index.robotsCache", () => robotsCache, { note: "robots.txt reads" });
+registerMemoryStore("x402-index.crawlValidators", () => crawlValidators, { note: "ETag/Last-Modified per document" });
+registerMemoryStore("x402-index.crawlBackoff", () => crawlBackoff, { note: "crawl backoff per origin path" });
+registerMemoryStore("x402-index.pgOriginHashes", () => pgOriginHashes, { note: "persisted row hashes per origin" });
+registerMemoryStore("x402-index.marketMemo", () => marketMemo, { note: "market pulse build" });
