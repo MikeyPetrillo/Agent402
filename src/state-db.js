@@ -1172,7 +1172,12 @@ export function stateDbStatus() {
 export async function __dropStateSchema() {
   const p = getPool();
   if (!p) return;
-  await p.query(`DROP SCHEMA IF EXISTS ${schema()} CASCADE`);
+  // A test's background writes can still hold row locks when it tears down;
+  // DROP ... CASCADE then deadlocks with them (40P01). Retry the drop briefly.
+  for (let attempt = 0; ; attempt++) {
+    try { await p.query(`DROP SCHEMA IF EXISTS ${schema()} CASCADE`); return; }
+    catch (e) { if (e?.code !== "40P01" || attempt >= 4) throw e; await new Promise((r) => setTimeout(r, 100 * (attempt + 1))); }
+  }
 }
 export async function closeStateDb() {
   if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }

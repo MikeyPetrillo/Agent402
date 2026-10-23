@@ -1159,7 +1159,7 @@ async function main() {
             net = receipt?.network || null;
           } catch { /* best-effort */ }
         }
-        console.log(`\nOK    robinhood  /api/hash  → settled $0.001 USDG on Robinhood Chain (payer ${account.address}${net ? `, network ${net}` : ""})${tx ? `\n      tx: https://robinhoodchain.blockscout.com/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
+        console.log(`\nOK    robinhood  /api/hash  → settled $${(Number(rh[0]?.amount || 0) / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "")} USDG on Robinhood Chain (payer ${account.address}${net ? `, network ${net}` : ""})${tx ? `\n      tx: https://robinhoodchain.blockscout.com/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
         noteRail("robinhood", true);
       } else if (paid.status === 402) {
         const reason = settleRejectReason(paid.headers);

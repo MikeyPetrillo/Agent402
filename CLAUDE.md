@@ -217,6 +217,14 @@ heartbeat page on it under one issue that closes when nothing is owed.
   stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
   breakers and the composite guard, with a 429 that names it instead of the wallet.
+- **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
+  `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
+  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
+  (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
+  can run through our own relayer; it is static so the paid retry re-derives the same amount.
+  A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms.txt,
+  the chain page and the guides read the same floor. Refunds pay list price, so a floored-chain
+  buyer is under-refunded by the difference (the same safe direction as premiums).
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
   sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is

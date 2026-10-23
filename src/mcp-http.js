@@ -52,6 +52,7 @@ import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
+import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -1177,7 +1178,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               // was told not to expect - the same defect this tool's `reports`
               // line was fixed for, one field away. test-price-prose pins the
               // retired figures by name, so do not quote them back in here.
-              prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
+              prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
