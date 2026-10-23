@@ -13,7 +13,7 @@
 //   - a price published as an OBJECT is still a price the seller stated; 21
 //     routes published null while carrying {"amountMinor":50,"currency":"USD"}
 import { strict as assert } from "node:assert";
-import { priceToMicroUsd } from "../src/x402-index.js";
+import { priceToMicroUsd } from "../src/price-usd.js";
 
 let n = 0;
 const eq = (a, b, m) => { assert.equal(a, b, m); n++; };
@@ -56,5 +56,12 @@ eq(priceToMicroUsd({ amount: "7500", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGG
 
 // absences and nonsense
 for (const v of [null, undefined, "", {}, [], -1, NaN, Infinity]) eq(priceToMicroUsd(v), null, `${JSON.stringify(v)} is null`);
+
+eq(priceToMicroUsd({ mode: "fixed", amount: "10000", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }), 10000,
+  "a currency contract identifies atomic units without an MPP method");
+eq(priceToMicroUsd({ amount: "10000", currency: "0x00000000000000000000000000000000000000ff" }), null,
+  "an unknown currency contract never becomes a dollar price");
+eq(priceToMicroUsd({ amount: "5", currency: "USDC" }), 5000000,
+  "a ticker without payment context remains a dollar figure");
 
 console.log(`test-price-parse: ${n} assertions OK`);

@@ -44,6 +44,15 @@ ok(
 );
 ok(!openapiHasPaymentSignal(null) && !openapiHasPaymentSignal({}), "null/empty openapi is not a signal");
 
+{
+  const [row] = normaliseOpenapiTools({ paths: { "/api/example": { post: {
+    summary: "Example operation",
+    "x-payment-info": { price: { mode: "fixed", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "10000" }, protocols: [{ x402: {} }] },
+  } } } }, "https://seller.example");
+  ok(row.price === "$0.01", "a nested currency contract prices atomic units as dollars");
+  ok(row.originDeclaredPrice === 0.01, "the declared-price anchor uses the same atomic conversion");
+}
+
 // ---- 1b. annotated documents list free siblings, flagged, and drop deprecated ----
 // Revised 2026-07-27 (seller escalation): unannotated operations in an
 // annotated document are part of the curated surface the seller publishes —

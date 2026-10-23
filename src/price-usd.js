@@ -103,7 +103,7 @@ export function atomicContext(obj) {
   // sentence. An asset field carrying a real identifier still states base
   // units, which is what an x402 accept carries and what every case this
   // machinery was built for looks like.
-  if (looksLikeAssetIdentifier(obj.asset)) return true;
+  if (looksLikeAssetIdentifier(obj.asset) || looksLikeAssetIdentifier(obj.currency)) return true;
   return typeof obj.currency === "string" && !!obj.currency.trim()
     && (typeof obj.method === "string" || typeof obj.intent === "string");
 }
