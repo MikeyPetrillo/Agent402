@@ -287,6 +287,27 @@ await check("own first, our relayer refuses with nothing sent: the listed fallba
   }
 });
 
+await check("the facilitator refilled while our relayer settles a payment: that payment finishes there once, the next goes to the facilitator once", async () => {
+  const order = createRobinhoodOrder({ host: HOST, now: () => NOW, log: () => {} });
+  order.update(dry());
+  const calls = [];
+  let release;
+  const relayer = { settle: (p) => { calls.push(["relayer", p.id]); return new Promise((r) => { release = () => r({ success: true, transaction: `0xown${p.id}`, network: RH }); }); } };
+  const client = { settle: async (p) => { calls.push(["facilitator", p.id]); return { success: true, transaction: `0xfac${p.id}`, network: RH }; } };
+  withRobinhoodGasOrder(client, { order, relayer });
+  const first = { id: 1 };
+  const inFlight = client.settle(first, { network: RH });
+  order.update([row({ runway: 5000 })]);
+  assert.equal(order.ownFirst(), false, "the refill puts the facilitator first");
+  const next = await client.settle({ id: 2 }, { network: RH });
+  release();
+  const settled = await inFlight;
+  assert.equal(settled.transaction, "0xown1", "the in-flight payment keeps its settler");
+  assert.equal(ownFirstAttemptOf(first, RH), true, "its failure path still knows our relayer was asked first");
+  assert.equal(next.transaction, "0xfac2");
+  assert.deepEqual(calls, [["relayer", 1], ["facilitator", 2]], "each payment is sent to exactly one settler");
+});
+
 await check("the payment middleware wires it: the primary is wrapped, the gas check feeds the order, the refresh runs", () => {
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
   const live = (re) => re.test(src);
