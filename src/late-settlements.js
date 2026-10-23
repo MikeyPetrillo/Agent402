@@ -94,6 +94,8 @@ const NONCE = /^0x[0-9a-fA-F]{64}$/;
 // used it: before its booking, since the facilitator may have broadcast first.
 const AUTH_LOOKBACK_MS = 10 * 60_000;
 
+/** How a log line names an entry: its transaction, or its authorization. */
+const labelOf = (e) => (e.tx ? `tx ${e.tx}` : `auth ${e.payer}/${e.nonce}`);
 const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), MAX_BACKOFF_MS);
 
 /**
@@ -227,7 +229,7 @@ export function createLateSettleBook({
       await refresh();
       if (state.pending[key]) return true;
       if (entries().length >= maxEntries) {
-        log(`[late-settle] book is full (${maxEntries}); ${network} tx ${c.tx} NOT booked - resolve the unresolved entries`);
+        log(`[late-settle] book is full (${maxEntries}); ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} NOT booked - resolve the unresolved entries`);
         return false;
       }
       const t = now();
@@ -247,10 +249,10 @@ export function createLateSettleBook({
       let id = null;
       try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
       if (id == null) {
-        alarm(`[late-settle] ${network} tx ${c.tx} failed naming a transaction and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
+        alarm(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} failed and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
         return false;
       }
-      log(`[late-settle] ${network} tx ${c.tx} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
+      log(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
       return true;
     },
     /** The entries as last read; call refresh() first for the shared view. */
@@ -296,7 +298,7 @@ export function createLateSettleBook({
               p[e.key] = { ...p[e.key], failures, nextCheckAt: now() + backoff(failures), ...(stuck ? { state: "unresolved", unresolvedAt: now() } : {}) };
             });
           } catch { /* the store itself is failing: the next pass retries */ }
-          if (stuck) { out.unresolved++; log(`[late-settle] ${e.network} tx ${e.tx} unresolved after ${failures} failed passes; operator action needed`); }
+          if (stuck) { out.unresolved++; log(`[late-settle] ${e.network} ${labelOf(e)} unresolved after ${failures} failed passes; operator action needed`); }
         }
       }
       return out;
@@ -306,9 +308,9 @@ export function createLateSettleBook({
       let e = e0;
       let receipt;
       let readable = true;
-      // Used, but the transaction that used it is not found yet: never closed
-      // as not landed.
-      let usedUnfound = false;
+      // A used authorization is never closed as not landed, whatever this pass
+      // could read of its transaction.
+      let usedAuth = false;
       if (!e.tx && e.nonce) {
         // Booked by authorization: unused means nothing has landed (yet); used
         // means the transaction that used it is found and judged like any
@@ -317,12 +319,12 @@ export function createLateSettleBook({
           if (!url) throw new Error("no RPC");
           const c = (m, p) => call(url, m, p);
           if (await authorizationUsed(c, e.asset, e.payer, e.nonce)) {
+            usedAuth = true;
             const { head, from } = await blockNear(c, e.at - AUTH_LOOKBACK_MS);
             const start = Number.isFinite(e.scanFrom) ? e.scanFrom : from;
             const f = await findAuthorizationTx(c, { token: e.asset, authorizer: e.payer, nonce: e.nonce, fromBlock: start, toBlock: head });
             if (f.tx) e = { ...e, tx: f.tx };
             else {
-              usedUnfound = true;
               await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], scanFrom: f.scannedTo + 1 }; });
             }
           }
@@ -379,10 +381,10 @@ export function createLateSettleBook({
       // authorization can no longer move money: past the window and past its
       // validBefore, a transaction mined later reverts.
       const authExpired = authorizationExpired(e.validBefore, t);
-      if (t - e.at >= WINDOW_MS && readable && authExpired && !usedUnfound) {
+      if (t - e.at >= WINDOW_MS && readable && authExpired && !usedAuth) {
         await drop();
         out.absent++;
-        log(`[late-settle] ${e.network} tx ${e.tx} never mined within ${Math.round(WINDOW_MS / 60_000)} min and its authorization has expired; closed as not landed`);
+        log(`[late-settle] ${e.network} ${labelOf(e)} never mined within ${Math.round(WINDOW_MS / 60_000)} min and its authorization has expired; closed as not landed`);
         return;
       }
       if (t - e.at >= MAX_AGE_MS) {
@@ -390,7 +392,7 @@ export function createLateSettleBook({
         // valid): kept for a human, never dropped.
         await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, state: "unresolved", unresolvedAt: t }; });
         out.unresolved++;
-        log(`[late-settle] ${e.network} tx ${e.tx} unresolved after ${checks} checks (${unreadable} unreadable); operator action needed`);
+        log(`[late-settle] ${e.network} ${labelOf(e)} unresolved after ${checks} checks (${unreadable} unreadable); operator action needed`);
         return;
       }
       await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, failures: 0, nextCheckAt: now() + backoff(checks) }; });

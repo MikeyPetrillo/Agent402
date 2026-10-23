@@ -16,10 +16,17 @@
 //   3. Still unused: our relayer submits it (it re-reads authorizationState
 //      under its own lock before signing). If it does not settle, the chain is
 //      read once more, in case the facilitator's transfer landed meanwhile.
-//   4. Any read failure, or a refusal while the authorization can still be
-//      used: refused (402) and the AUTHORIZATION is booked in the
-//      late-settlement book (src/late-settlements.js), which finds whatever
-//      transaction later uses it and books it owed.
+//   4. Any read failure (a receipt that cannot be read yet included), or a
+//      refusal while the authorization can still be used: refused (402) and
+//      the AUTHORIZATION is booked in the late-settlement book
+//      (src/late-settlements.js), which finds whatever transaction later uses
+//      it and books it owed.
+// Bounds: the wait in (1) ends inside the authorization's settle deadline and
+// the CDN answer window. Our relayer in (3) is skipped (the authorization is
+// booked instead) when the buyer left holding a forgiveness ticket, when the
+// authorization's deadline leaves it no time, or when a CDN request's window
+// is shorter than the relayer's worst case (its lock wait plus its receipt
+// wait); the relayer's own steps are bounded by those two settings.
 //
 // One EIP-3009 nonce moves money at most once, so no path here can charge a
 // buyer twice; the claims make sure one transfer answers one request.
@@ -28,6 +35,8 @@ import { keccak256, toHex, encodeFunctionData, parseAbi } from "viem";
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { SETTLE_RULE_SECONDS } from "./evm-validity.js";
+import { chargeCancelledForClientGone } from "./hangup-settlement.js";
+import { relayerSettings } from "./robinhood-relayer.js";
 
 export const AUTHORIZATION_USED_TOPIC = keccak256(toHex("AuthorizationUsed(address,bytes32)"));
 const STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
@@ -126,7 +135,9 @@ export async function authorizationUsed(call, token, authorizer, nonce) {
  * @param {string} o.rpcUrl    the chain's JSON-RPC endpoint
  * @param {object} o.relayer   our own relayer client ({ settle })
  */
-export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relayer, waitMs = ambiguousWaitMs(), pollMs = 1_000, fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = console.warn } = {}) {
+export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relayer, waitMs = ambiguousWaitMs(), pollMs = 1_000,
+  relayerWorstMs = (() => { const s = relayerSettings(); return s.lockWaitMs + s.receiptTimeoutMs; })(),
+  clientGone = chargeCancelledForClientGone, fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = console.warn } = {}) {
   if (!rpcUrl) throw new Error("no RPC for eip155:4663");
   const tok = String(token).toLowerCase(), ours = String(treasury).toLowerCase();
   const call = (method, params) => rpc(rpcUrl, method, params, fetchImpl, RPC_TIMEOUT_MS, []);
@@ -139,7 +150,10 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
     const { tx } = await findAuthorizationTx(call, { token: tok, authorizer: auth.from, nonce: auth.nonce, fromBlock: from, toBlock: head });
     if (!tx) return { tx: null, found: false };
     const receipt = await call("eth_getTransactionReceipt", [tx]);
-    if (!receipt || String(receipt.status) !== "0x1") return { tx, found: true, ours: false };
+    // Not readable yet (the node has the log, not the receipt): unknown, never
+    // read as a revert.
+    if (!receipt) return { tx, found: true, unknown: true };
+    if (String(receipt.status) !== "0x1") return { tx, found: true, ours: false };
     const moved = evmTransferredInReceipt(receipt, { token: tok, from: auth.from, toSet: [ours] });
     return { tx, found: true, ours: moved >= BigInt(amount) && moved > 0n };
   }
@@ -179,6 +193,7 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
         const p = await proofOf(auth, amount, sinceMs);
         if (p.ours) return served(p.tx);
         if (!p.found) return { refused: true, lateAuth, reason: "used, its transaction not found yet" };
+        if (p.unknown) return { refused: true, lateAuth, reason: `used by tx ${p.tx}, its receipt not readable yet` };
         return { refused: true, lateAuth: null, reason: `used by tx ${p.tx} without this payment's transfer to us` };
       };
 
@@ -194,6 +209,12 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
       }
 
       if (settleLeft() <= RELAYER_MARGIN_MS) return { refused: true, lateAuth, reason: "no time left for our relayer before the authorization's deadline" };
+      // The buyer left holding a forgiveness ticket: no money is moved for
+      // them. The authorization stays booked, so a facilitator transfer that
+      // still lands is recorded as owed.
+      if (req && clientGone(req)) return { refused: true, lateAuth, reason: "the buyer left (forgiven); our relayer is not used" };
+      const cdnLeft = cdnSyncLeftMs(req, now());
+      if (cdnLeft != null && cdnLeft - CDN_MARGIN_MS < relayerWorstMs) return { refused: true, lateAuth, reason: "the CDN answer window is shorter than our relayer's worst case" };
       let r;
       try { r = await relayer.settle(ctx.paymentPayload, rq); } catch (e) { r = { success: false, errorReason: "relayer_error", errorMessage: String(e?.message || e) }; }
       if (r?.success === true && TX.test(String(r.transaction || ""))) return served(String(r.transaction).toLowerCase());

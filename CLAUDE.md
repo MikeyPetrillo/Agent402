@@ -251,9 +251,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
   With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
   transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our
-  transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (inside
-  the authorization's deadline) goes to our relayer, and a read failure is a 402 with the
-  authorization booked in the late-settlement book (`scripts/test-rh-outage.js`).
+  transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (the wait
+  ends inside the authorization's settle deadline and the CDN answer window) goes to our relayer,
+  which is skipped when the buyer left forgiven, the deadline leaves it no time, or a CDN
+  window is shorter than its lock wait plus receipt wait. A read failure (an unreadable receipt
+  included) is a 402 with the authorization booked in the late-settlement book, which never
+  closes a used authorization as not landed (`scripts/test-rh-outage.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
