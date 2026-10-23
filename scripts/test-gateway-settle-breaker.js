@@ -545,6 +545,27 @@ delete process.env.OPENAI_API_KEY;
   req.res.emit("finish");
   ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: Gateway refusing the same wallet (insufficient_balance) still counts against it");
   b._gatewaySettleBreakerReset();
+  // From a wallet-only consult (global:false) a pending answer feeds nothing:
+  // not the wallet, and not the /v1 global pause it takes no part in.
+  const wo = batchedReq();
+  b.armGatewaySettleBreaker(wo, key, { global: false });
+  wo.res.statusCode = 402;
+  wo.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
+  wo.res.emit("finish");
+  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 0 && b.gatewaySettleBreakerBlocked(key).fails === 0, "a wallet-only consult's pending answer counts toward neither the wallet nor the global pause");
+  b._gatewaySettleBreakerReset();
+}
+
+// The lift time with more failures than the threshold: when the
+// (len - MAX + 1)th newest failure ages out, not the oldest.
+{
+  b._gatewaySettleBreakerReset();
+  const key = "ip:198.51.100.77";
+  const t0 = Date.now();
+  for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(key, t0 + i * 10, { global: false });
+  const st = b.gatewaySettleBreakerBlocked(key, t0 + 50);
+  ok(st.blocked && st.until === t0 + 20 + 900, `five failures, threshold three: lifts when the third newest ages out (until ${st.until - t0} ms after the first)`);
+  b._gatewaySettleBreakerReset();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

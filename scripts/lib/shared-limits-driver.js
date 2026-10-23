@@ -50,11 +50,11 @@ async function run(cmd) {
     case "mode": return { mode: SL.sharedLimitsMode(), word: SL.sharedLimitsStatus().status, breakerShared: B._gatewaySettleBreakerShared, compositeShared: G._compositeGuardShared, hangupShared: H._hangupForgivenessShared, payerLedgerShared: E.__sharedPayerLedger, jevShared: J._jevShared, coverShared: C._inflightCoverShared };
     case "barrier": await barrier(); return { ok: true };
     // gateway settle breaker
-    case "gwb.fail": { for (let i = 0; i < (cmd.n || 1); i++) B.recordGatewaySettleFailure(cmd.key, Date.now(), { global: cmd.global !== false }); await barrier(); return { ok: true }; }
+    case "gwb.fail": { for (let i = 0; i < (cmd.n || 1); i++) B.recordGatewaySettleFailure(cmd.key, Number.isFinite(cmd.at) ? cmd.at + i : Date.now(), { global: cmd.global !== false, walletCount: cmd.walletCount !== false }); await barrier(); return { ok: true }; }
     case "gwb.success": { B.recordGatewaySettleSuccess(cmd.key); await barrier(); return { ok: true }; }
     case "gwb.check": {
       try { await B.gatewaySettleBreakerCheck(fakeReq(cmd.ip), { global: cmd.global !== false }); return { ok: true }; }
-      catch (e) { return { ok: false, status: e.statusCode, message: String(e.message).slice(0, 80) }; }
+      catch (e) { return { ok: false, status: e.statusCode, message: String(e.message).slice(0, 80), until: (String(e.message).match(/until (\d{4}-\d\d-\d\dT[0-9:.]+Z)/) || [])[1] || null }; }
     }
     case "gwb.local": return B.gatewaySettleBreakerBlocked(cmd.key);
     // composite spend guard
