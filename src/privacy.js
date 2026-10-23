@@ -78,7 +78,8 @@ so every claim below is verifiable in code.</p>
     identical repeat calls to the AI gateway, identical retries carrying an
     <code>Idempotency-Key</code> (or the x402 payment-identifier), and the JSON answer of a call paid
     with a signed EVM x402 payment (keyed by that payment's nonce, so a re-sent copy is answered without
-    a second settlement) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
+    a second settlement; not on identity-bound routes such as memory, on routes with a lasting effect,
+    or for streamed calls) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
     <li>a search on <code>/api/find</code> or the connector's <code>catalog.find</code> that finds no
     matching tool, and a request sent to <code>/api/wish</code>, is kept as text on our demand board
     together with a hash of your IP address combined with the day (never the address itself); an entry

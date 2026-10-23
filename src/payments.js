@@ -48,7 +48,8 @@ import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
-import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
+import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
+import { existsSync } from "node:fs";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -344,17 +345,32 @@ export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } =
 /** The pending book, for the operator route; null without an Arc client. */
 export function circlePendingBookForOperator() { return circlePendingBook; }
 
-// Batched settlements Gateway answered settlement_pending, by authorization
-// (src/gateway-nanopayments.js). One book per process, the store shared.
+// Batched settlements whose outcome Gateway left unknown, by authorization
+// (src/gateway-nanopayments.js). One book per process, the store shared. It
+// is loaded, and its resolver run, whenever the option is on OR a book may
+// hold entries (a state database, or the book's file on disk), whatever the
+// switch and Gateway's boot /supported read say: an entry booked before a
+// switch-off or on a replica whose boot read failed is still resolved and
+// still pages.
 let gatewayPendingBookInstance = null;
 async function gatewayPendingBook() {
   if (!gatewayPendingBookInstance) gatewayPendingBookInstance = createGatewayPendingBook();
   return gatewayPendingBookInstance;
 }
-/** off while the option is off; else the book's own word. */
+/** True when this process must load the pending book and run its resolver. */
+export function gatewayPendingBookWanted(env = process.env) {
+  if (gatewayNanopaymentsEnabled(env) || String(env.STATE_DATABASE_URL || "").trim()) return true;
+  const file = gatewayPendingFile(env);
+  try { return existsSync(file) || existsSync(`${file}.pending.ndjson`); } catch { return false; }
+}
+/** The book's own word, read from the shared store; "off" with no book, or
+ *  with the switch off and nothing in the book, its journal or memory. */
 export async function gatewayPendingStatus() {
   if (!gatewayPendingBookInstance) return "off";
-  try { return await gatewayPendingBookInstance.alarmStatus(); } catch { return "unknown"; }
+  try {
+    const word = await gatewayPendingBookInstance.alarmStatus();
+    return word === "ok" && !gatewayNanopaymentsEnabled() ? "off" : word;
+  } catch { return "unknown"; }
 }
 export function gatewayPendingBookForOperator() { return gatewayPendingBookInstance; }
 // The late-settlement book (src/late-settlements.js), built on first use.
@@ -667,7 +683,12 @@ export function acceptsForItem(item, rails) {
   // that takes the first accept it can sign keeps taking the plain one, and a
   // Gateway-aware client picks this one by extra.name. Never on an
   // identity-bound route (above): those keep the plain EVM accept only.
-  const gatewayKinds = rails.gatewayKinds instanceof Map ? rails.gatewayKinds : null;
+  // Never on a route whose effect outlives the answer (hasLastingEffect:
+  // memory writers, attest, feedback, the route-execute tiers,
+  // seller-payability): a batched payment Gateway leaves pending is answered
+  // 402 AFTER the handler ran (x402 runs the handler before it settles), and
+  // its resend runs the handler again, so the effect would happen twice.
+  const gatewayKinds = rails.gatewayKinds instanceof Map && !hasLastingEffect(item.slug) ? rails.gatewayKinds : null;
   const batched = gatewayKinds
     ? evmCaip2.filter((caip2) => gatewayKinds.has(caip2) && (!allowed || allowed.has(caip2)))
       .map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, ...gatewayAcceptFields(gatewayKinds.get(caip2)) }))
@@ -1544,7 +1565,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     const wanted = gatewayNanopaymentNetworks().filter((c) => evmCaip2.includes(c));
     const skipped = gatewayNanopaymentNetworks().filter((c) => !evmCaip2.includes(c));
     if (skipped.length) console.warn(`[gateway] batched option not offered on ${skipped.join(", ")}: not in the plain offer`);
-    const bookPending = async (entry) => (await gatewayPendingBook()).book(entry);
+    // Each entry carries the catalog slug of the route it paid for, read
+    // from the request's method and path, so a debt it becomes is booked
+    // under that slug (the resolver falls back to the path for a route the
+    // catalog does not list).
+    const slugForResource = (resource) => {
+      const def = typeof resource === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, resource) ? catalog[resource] : null;
+      return typeof def?.slug === "string" ? def.slug : null;
+    };
+    const bookPending = async (entry) => (await gatewayPendingBook()).book({ ...entry, slug: slugForResource(entry.resource) });
     gatewayClient = new GatewayNanopaymentsClient({ networks: wanted, onPending: bookPending });
     let why = "boot probe skipped (X402_SYNC_ON_START=false)";
     if (wanted.length && syncOnStart) {
@@ -1566,7 +1595,6 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }
     if (gatewayKinds.size) {
       console.log(`Circle Gateway batched option: offered on ${[...gatewayKinds.keys()].join(", ")} (gas-free for the buyer; settled off chain into the Gateway balance)`);
-      void gatewayPendingBook();
       if (syncOnStart && walletAddress) {
         startGatewayBalanceWatch(gatewayClient, { depositor: walletAddress, domains: [...gatewayKinds.keys()].map((c) => GATEWAY_DOMAINS[c]).filter((d) => Number.isInteger(d)) });
       }
@@ -1574,6 +1602,25 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     if (why) console.warn(`WARNING: Circle Gateway batched option ${gatewayKinds.size ? "partly" : "not"} offered - ${why}. The plain accepts are unaffected.`);
   }
   setGatewayOffer(gatewayKinds);
+  // The pending book and its resolver do not wait on the offer: loaded
+  // whenever the option is on or a book may hold entries (a state database,
+  // or the book's file), so entries booked before a switch-off, or on a
+  // replica whose boot /supported read failed, are still resolved and the
+  // gatewayPending word still reads them. The resolver runs under a lease,
+  // so one replica ticks; its transfer read is keyless and needs no offer.
+  // Sales and debts are looked up by transfer id in any case.
+  const saleByTransferId = byTransferIdAnyCase(async (id) => (await import("./sales-ledger.js")).saleByTxFresh(id));
+  const owedByTransferId = byTransferIdAnyCase(async (id) => (await import("./refund-ledger.js")).refundByEvidenceFresh(id));
+  if (gatewayPendingBookWanted()) {
+    const book = await gatewayPendingBook();
+    const { recordRefundOwed } = await import("./refund-ledger.js");
+    startGatewayPendingResolver({
+      book, client: gatewayClient || new GatewayNanopaymentsClient({ networks: [] }), payTo: walletAddress || null,
+      recordOwed: async (row) => recordRefundOwed({ ...row, tx: gatewayTransferId(row.tx) }),
+      owedExists: async (tx) => !!(await owedByTransferId(tx)),
+      wasServed: async ({ tx }) => !!(await saleByTransferId(tx)),
+    });
+  }
   // Which networks may offer `upto`. Two gates, both required:
   //   1. Operator opt-in — X402_UPTO_NETWORKS (CSV of CAIP-2 ids, or "all").
   //      Unset means the scheme is never registered and every 402 is
@@ -1667,22 +1714,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // other payment takes the vendor's own lookup (installed after the settle
   // preference, so a tagged plain request still reads its own scope).
   // A resend of a payment Gateway left pending is resolved against Gateway's
-  // transfer record first; a sale already booked for that transfer refuses it.
+  // transfer record first; a sale already booked for that transfer refuses
+  // it, and so does an owed debt booked for it (the buyer is repaid). The
+  // resolver (started above) settles entries nobody resends.
   if (gatewayClient && gatewayKinds.size) {
-    const { saleByTxFresh } = await import("./sales-ledger.js");
     installGatewayRouting(server, gatewayClient, new Set(gatewayKinds.keys()), {
       pendingBook: await gatewayPendingBook(),
-      wasServed: async ({ tx }) => !!(await saleByTxFresh(tx)),
-    });
-    // A pending entry nobody resends is read against Gateway's record every
-    // ten minutes under a lease: settled and never served becomes an owed
-    // debt (refund-run proves it at Gateway and repays it), failed is dropped.
-    const { recordRefundOwed, refundByEvidenceFresh } = await import("./refund-ledger.js");
-    startGatewayPendingResolver({
-      book: await gatewayPendingBook(), client: gatewayClient, payTo: walletAddress || null,
-      recordOwed: async (row) => recordRefundOwed(row),
-      owedExists: async (tx) => !!(await refundByEvidenceFresh(tx)),
-      wasServed: async ({ tx }) => !!(await saleByTxFresh(tx)),
+      wasServed: async ({ tx }) => !!(await saleByTransferId(tx)),
+      owedExists: async (tx) => !!(await owedByTransferId(tx)),
     });
   }
   for (const caip2 of evmCaip2) {

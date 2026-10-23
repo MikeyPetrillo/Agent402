@@ -18,8 +18,19 @@
 // chain), --amount <usd> (requires --from: an amount names one source domain,
 // never every domain at once; default: the whole available balance of the
 // source domain), --recipient <0x address> (default: the seller address
-// itself), --max-fee <usd> (default 2, the ceiling the burn intent carries),
+// itself), --max-fee <usd> (the ceiling the burn intent carries; below),
 // --expiry-blocks <n> (the burn intent's validity window, below), --execute.
+//
+// Fee: Gateway takes its fee from the source balance on top of the value
+// withdrawn, up to the burn intent's maxFee, so a transfer of the whole
+// balance would leave nothing to pay it and be refused. The value is
+// therefore at most the available balance minus --max-fee: the whole-balance
+// default withdraws exactly that, and an --amount above it is refused before
+// anything is signed. The --max-fee default is DEFAULT_MAX_FEE_USD, 1% of the
+// default withdraw alert (GATEWAY_WITHDRAW_ALERT_USD's default,
+// src/gateway-nanopayments.js): a withdrawal made when the alert fires gives
+// up at most 1% of it to fees. A fee above the ceiling is Gateway's refusal,
+// and nothing is minted; pass a higher --max-fee to accept it.
 //
 // Expiry: the burn intent's maxBlockHeight is the source chain's current block
 // (eth_blockNumber on its RPC, src/evm-rpcs.js) plus a window of
@@ -40,7 +51,7 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, createWalletClient, http, pad, parseUnits, formatUnits, zeroAddress, encodeFunctionData } from "viem";
 import { randomBytes } from "node:crypto";
-import { GATEWAY_API_BASE, GATEWAY_DOMAINS, GATEWAY_NETWORK_NAMES, GatewayNanopaymentsClient } from "../src/gateway-nanopayments.js";
+import { GATEWAY_API_BASE, GATEWAY_DOMAINS, GATEWAY_NETWORK_NAMES, GatewayNanopaymentsClient, DEFAULT_WITHDRAW_ALERT_USD } from "../src/gateway-nanopayments.js";
 import { evmRpcFor } from "../src/evm-rpcs.js";
 
 // Mainnet Gateway contracts (Circle's published addresses; the same on every
@@ -51,6 +62,8 @@ const USDC = { "eip155:5042": "0x3600000000000000000000000000000000000000", "eip
 const CHAIN_ID = { "eip155:5042": 5042, "eip155:8453": 8453 };
 
 export const DEFAULT_EXPIRY_BLOCKS = 10_000n;
+/** The --max-fee default: 1% of the default withdraw alert (see Fee above). */
+export const DEFAULT_MAX_FEE_USD = DEFAULT_WITHDRAW_ALERT_USD / 100;
 export const MIN_EXPIRY_BLOCKS = 100n;
 export const MAX_EXPIRY_BLOCKS = 1_000_000n;
 
@@ -107,7 +120,7 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
     error(`--amount needs --from: without it the amount would be withdrawn from each of ${domainNames()}. Name one source domain with --from.`);
     return 2;
   }
-  const maxFeeUsd = Number(flag("max-fee", "2"));
+  const maxFeeUsd = Number(flag("max-fee", String(DEFAULT_MAX_FEE_USD)));
   if (!Number.isFinite(maxFeeUsd) || maxFeeUsd < 0) { error("--max-fee must be a non-negative number"); return 2; }
   const expiryRaw = flag("expiry-blocks", DEFAULT_EXPIRY_BLOCKS.toString());
   const expiryBlocks = /^[0-9]{1,9}$/.test(String(expiryRaw)) ? BigInt(expiryRaw) : -1n;
@@ -136,9 +149,18 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
     const source = netByDomain[domain];
     if (!source) continue;
     const dest = toNet || source;
-    const amountUsd = amountFlag != null ? Number(amountFlag) : usd;
-    if (!Number.isFinite(amountUsd) || amountUsd <= 0) { log(`  domain ${domain}: nothing to withdraw`); continue; }
-    if (amountUsd > usd + 1e-9) { error(`  domain ${domain}: --amount ${amountUsd} is above the available ${usd}`); return 2; }
+    // Room for Gateway's fee (see Fee above): the value is at most the
+    // available balance less the fee ceiling, counted in USDC's 6 decimals.
+    const availableAtomic = parseUnits(Number(usd).toFixed(6), 6);
+    const feeAtomic = parseUnits(maxFeeUsd.toFixed(6), 6);
+    const roomAtomic = availableAtomic > feeAtomic ? availableAtomic - feeAtomic : 0n;
+    if (amountFlag != null) {
+      const asked = Number(amountFlag);
+      if (!Number.isFinite(asked) || asked <= 0) { log(`  domain ${domain}: nothing to withdraw`); continue; }
+      if (parseUnits(asked.toFixed(6), 6) > roomAtomic) { error(`  domain ${domain}: --amount ${asked} leaves no room for the fee: at most ${formatUnits(roomAtomic, 6)} (the available ${usd} less --max-fee ${maxFeeUsd})`); return 2; }
+    }
+    if (roomAtomic <= 0n) { log(`  domain ${domain}: nothing to withdraw (the available ${usd} does not cover --max-fee ${maxFeeUsd})`); continue; }
+    const amountUsd = amountFlag != null ? Number(amountFlag) : Number(formatUnits(roomAtomic, 6));
     let head;
     try { head = await currentBlock(source, { fetchImpl, env }); }
     catch (e) { error(`  domain ${domain}: could not read the current block on ${source} (${String(e?.message || e).slice(0, 120)}); a burn intent is never signed without an expiry`); return 1; }
