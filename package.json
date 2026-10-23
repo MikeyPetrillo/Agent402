@@ -100,7 +100,7 @@
     "stripe": "^23.0.0",
     "tesseract.js": "^5.1.1",
     "turndown": "^7.2.4",
-    "undici": "7.30.0",
+    "undici": "7.30.1",
     "viem": "^2.57.7"
   },
   "overrides": {
