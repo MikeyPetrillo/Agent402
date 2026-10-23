@@ -727,5 +727,76 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(lf.creditState(out2.leftoverCredit.token).state === "active", "H5: the activation lands on retry");
 }
 
+// ---- replan: a saved decision planned again before its run ----
+{
+  const { priceForDepth } = await import("../src/decide/config.js");
+  const { replanPriceUsd, planChanges } = await import("../src/tools/decide-kit.js");
+  const planFee = priceForDepth("plan");
+  const savedPlan = [{ step: 1, purpose: "one", tool: tool("a"), fallbacks: [tool("b")], dependsOn: [] }];
+  const newPlan = [{ step: 1, purpose: "one", tool: tool("c", { priceUsd: 0.008 }), fallbacks: [tool("b")], dependsOn: [] }];
+  let replanMode = "new";
+  const replanCalls = [];
+  const replan = async (body) => {
+    replanCalls.push(body);
+    if (replanMode === "down") throw Object.assign(new Error("The decision service did not answer in time - not charged; retry shortly"), { statusCode: 503 });
+    if (replanMode === "gone") throw Object.assign(new Error("unknown decision"), { statusCode: 404 });
+    const p = replanMode === "same" ? savedPlan : newPlan;
+    return { decisionId: `dec_re${replanCalls.length}`, task: "t", depth: "plan", plan: p, estimatedCostViaAgent402Usd: 0.02, judged: true, plannerVersion: "v-test", shape: { shapeKey: "k1" } };
+  };
+  const exr = makeExecuteHandler({ ledger, getCatalog: () => catalog, now, replan });
+  ledger.saveDecision({ decisionId: "rp1", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("rp1");
+
+  const saved = ledger.getDecision("rp1");
+  ok(replanPriceUsd({ replan: true }, saved) === planFee && replanPriceUsd({}, saved) === 0 && replanPriceUsd({ replan: true }, { depth: "sketch" }) === 0, "the re-plan price is the plan price at the saved depth; zero without replan or for a sketch");
+  const base = executeQuoteUsd({ decisionId: "rp1" }, { ledger, now: clock });
+  const withReplan = executeQuoteUsd({ decisionId: "rp1", replan: true }, { ledger, now: clock });
+  ok(base === 0.02 && Math.abs(withReplan - (0.02 + planFee)) < 1e-9, `the 402 quote adds the plan price for replan (${base} -> ${withReplan})`);
+
+  // The new plan runs, the saved one does not.
+  calls.length = 0; replanCalls.length = 0; replanMode = "new";
+  const req = mkReq("0xr1");
+  const out = await exr({ decisionId: "rp1", replan: true }, req);
+  ok(replanCalls.length === 1 && replanCalls[0].decisionId === "rp1" && Math.abs(replanCalls[0].priceUsd - planFee) < 1e-9, "the planner is asked to plan the saved decision again, at the plan price");
+  ok(out.status === "complete" && calls.some((c) => c[0] === "c") && !calls.some((c) => c[0] === "a"), "the run executes the new plan's tool, not the saved one");
+  ok(out.replanned?.ran === true && out.replanned.decisionId === "dec_re1" && out.replanned.unchanged === false, `the answer names the new decision (${JSON.stringify(out.replanned)?.slice(0, 160)})`);
+  const ch = out.replanned.changes;
+  ok(ch.length === 1 && ch[0].step === 1 && ch[0].before.id === "a" && ch[0].after.id === "c" && ch[0].before.priceUsd === 0.01 && ch[0].after.priceUsd === 0.008, "each changed step says which tool and price it moved from and to");
+  ok(out.decisionId === "rp1" && Math.abs(out.paidUsd - (0.02 + planFee)) < 1e-9 && out.budgetUsd === 0.02, `the run stays on the saved decision; paid covers budget plus plan price, the plan price is not spendable (${out.paidUsd}, budget ${out.budgetUsd})`);
+  ok(out.leftoverCredit && Math.abs(out.leftoverCredit.amountUsd - (0.02 - out.spentUsd)) < 1e-9, `a re-plan that ran keeps its price: only unspent budget comes back (${out.leftoverCredit?.amountUsd})`);
+  const rec = ledger.getDecision("dec_re1");
+  ok(rec && rec.plan?.[0]?.tool?.id === "c" && !rec.settled && typeof out.replanned.feedbackToken === "string", "the new plan is recorded as its own decision with a feedback token, unsettled until payment");
+  settle(req, 200);
+  ok(ledger.getDecision("dec_re1")?.settled === true, "...and settles with the payment");
+
+  // Nothing better: unchanged.
+  calls.length = 0; replanMode = "same";
+  const same = await exr({ decisionId: "rp1", replan: true }, mkReq("0xr2"));
+  ok(same.replanned?.ran === true && same.replanned.unchanged === true && same.replanned.changes.length === 0 && calls.some((c) => c[0] === "a"), "a re-plan that picks the same tools reports unchanged: true");
+
+  // The planner is down: the saved plan runs and the plan price comes back.
+  calls.length = 0; replanMode = "down";
+  const fb = await exr({ decisionId: "rp1", replan: true }, mkReq("0xr3"));
+  ok(fb.replanned?.ran === false && fb.replanned.returnedAsCredit === true && /did not answer/.test(fb.replanned.reason) && calls.some((c) => c[0] === "a"), `a re-plan that cannot run falls back to the saved plan and says so (${JSON.stringify(fb.replanned)})`);
+  ok(fb.leftoverCredit && Math.abs(fb.leftoverCredit.amountUsd - (0.02 + planFee - fb.spentUsd)) < 1e-9 && fb.spentUsd <= 0.02, `...and the plan price is returned as credit with the unspent budget (${fb.leftoverCredit?.amountUsd})`);
+
+  // Past the saved decision's credit window the price could not come back: refused, nothing spent.
+  ledger.saveDecision({ decisionId: "rp_old", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - 25 * 3600_000 });
+  ledger.markDecisionSettled("rp_old");
+  calls.length = 0;
+  await throwsWith(() => exr({ decisionId: "rp_old", replan: true }, mkReq("0xr4")), 503, "nothing was charged", "a failed re-plan on a decision past its credit window is refused, not charged");
+  ok(calls.length === 0, "...before any step runs");
+  replanMode = "gone";
+  await throwsWith(() => exr({ decisionId: "rp_old", replan: true, runKey: "k-gone" }, mkReq("0xr5")), 503, "no longer held", "a task the planner no longer holds says so");
+
+  // Input checks, and the path without replan is unchanged.
+  await throwsWith(() => exr({ decisionId: "rp1", replan: "yes" }, mkReq("0xr6")), 400, '"replan" must be true or false', "replan must be a boolean");
+  await throwsWith(() => exr({ steps: ["a", "b"], replan: true }, mkReq("0xr7")), 400, "pass its decisionId", "a sketch cannot be re-planned");
+  calls.length = 0; replanCalls.length = 0;
+  const plain = await exr({ decisionId: "rp1" }, mkReq("0xr8"));
+  ok(!("replanned" in plain) && replanCalls.length === 0 && plain.paidUsd === 0.02 && calls.some((c) => c[0] === "a"), "without replan nothing is re-planned and the answer has no replanned field");
+  ok(planChanges([], newPlan)[0]?.before === null && planChanges(savedPlan, [])[0]?.after === null, "a step the new plan adds or drops shows null on the missing side");
+}
+
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -216,6 +216,15 @@ export const routes = {
     const b = await readJson(req);
     return { decisionId: String(b.decisionId || ""), cost: await state.decisions.getCost(String(b.decisionId || "")) };
   },
+  // A saved decision planned again on its own task, constraints and depth
+  // (POST /api/decide/execute with replan): a new decision with its own id,
+  // recorded like any other. The task text never leaves this service.
+  "POST /internal/replan": async (req) => {
+    const b = await readJson(req);
+    const saved = await state.decisions.get(String(b.decisionId || ""));
+    if (!saved?.result?.task) throw Object.assign(new Error("unknown decision"), { statusCode: 404 });
+    return decide({ task: saved.result.task, constraints: saved.constraints || {}, depth: saved.result.depth, payer: b.payer, rail: b.rail, priceUsd: b.priceUsd, synthetic: b.synthetic === true, deadlineAt: b.deadlineAt });
+  },
   "POST /internal/decision": async (req) => {
     const b = await readJson(req);
     const d = await state.decisions.get(String(b.decisionId || ""));

@@ -90,6 +90,19 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   const c2 = await state.decisions.getCost(again.decisionId);
   ok(cost.embedTokens > 0, "query embedding tokens are part of the decision's cost");
   ok(again.cached === true && c2.cached === true && c2.modelCalls === 0 && c2.modelUsd === 0, "a cache hit is recorded as a zero-model-cost decision");
+
+  // Re-plan (POST /api/decide/execute replan): the saved task, constraints
+  // and depth are planned again into a new decision; the task stays here.
+  const { routes } = await import("../services/decide/server.js");
+  const asked = await decide({ task: "hash the text hello with sha256", depth: "quick", constraints: { excludeSellers: ["nobody.example"] } });
+  state.cache = makeDecisionCache(60_000);
+  const reqOf = (body) => { const b = Buffer.from(JSON.stringify(body)); return { async *[Symbol.asyncIterator]() { yield b; } }; };
+  const re = await routes["POST /internal/replan"](reqOf({ decisionId: asked.decisionId, priceUsd: 0.005 }));
+  const stored = await state.decisions.get(re.decisionId);
+  ok(re.decisionId && re.decisionId !== asked.decisionId && re.depth === "quick" && Array.isArray(re.plan) && re.plan.length > 0, `a re-plan is a new decision at the saved depth (${re.decisionId})`);
+  ok(stored?.constraints?.excludeSellers?.[0] === "nobody.example" && stored.result.task === "hash the text hello with sha256", "it plans the saved task with the saved constraints");
+  let gone = null; try { await routes["POST /internal/replan"](reqOf({ decisionId: "dec_missing" })); } catch (e) { gone = e; }
+  ok(gone?.statusCode === 404, "an unknown or pruned decision is a 404");
 }
 
 ok(plainDbConnection("postgres://u@postgres.railway.internal:5432/x") && plainDbConnection("postgres://u@127.0.0.1:5433/x") && !plainDbConnection("postgres://u@db.example.com/x"), "TLS is skipped only on the private network or loopback");
