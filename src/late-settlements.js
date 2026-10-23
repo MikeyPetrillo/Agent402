@@ -39,6 +39,7 @@ import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
+import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -85,6 +86,13 @@ export function validBeforeOf(v) {
 const authorizationExpired = (validBefore, t) => validBefore != null && Number(validBefore) > 0 && t > Number(validBefore) * 1000;
 
 export const lateKey = (network, tx) => `${String(network)}|${String(tx).toLowerCase()}`;
+/** An entry booked by AUTHORIZATION (no transaction known yet): the one an
+ *  ambiguous facilitator failure leaves (src/robinhood-outage.js). */
+export const lateAuthKey = (network, payer, nonce) => `${String(network)}|auth|${String(payer).toLowerCase()}|${String(nonce).toLowerCase()}`;
+const NONCE = /^0x[0-9a-fA-F]{64}$/;
+// How far back an authorization-keyed entry looks for the transaction that
+// used it: before its booking, since the facilitator may have broadcast first.
+const AUTH_LOOKBACK_MS = 10 * 60_000;
 
 const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), MAX_BACKOFF_MS);
 
@@ -96,9 +104,20 @@ const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), 
  */
 export function lateSettleCandidate(ctx) {
   const tx = String(ctx?.__a402LateTx?.transaction || ctx?.error?.transaction || "");
-  if (!TX.test(tx)) return null;
   const req = ctx?.requirements || {};
   const auth = ctx?.paymentPayload?.payload?.authorization || ctx?.paymentPayload?.payload?.permit2Authorization || {};
+  // After an ambiguous failure the AUTHORIZATION is booked: whichever
+  // transaction later uses it (the facilitator's or our relayer's) is found
+  // on chain. It wins over a named transaction, which may be a no-op of ours.
+  const la = ctx?.__a402LateAuth;
+  if (la && NONCE.test(String(la.nonce || ""))) {
+    return {
+      network: String(req.network || ""), tx: null, nonce: String(la.nonce), payer: String(la.payer || auth.from || ""),
+      payTo: String(req.payTo || ""), asset: String(req.asset || ""), amount: String(req.amount ?? ""),
+      resource: ctx?.paymentPayload?.resource?.url || null, validBefore: validBeforeOf(la.validBefore ?? auth.validBefore), via: la.via || "ambiguous facilitator",
+    };
+  }
+  if (!TX.test(tx)) return null;
   return {
     network: String(req.network || ""),
     tx,
@@ -202,8 +221,9 @@ export function createLateSettleBook({
         log(`[late-settle] ${network} settlement ${c.tx} failed naming a transaction; no RPC configured, not booked`);
         return false;
       }
-      if (!TX.test(String(c.tx || "")) || !ADDR.test(String(c.payer || "")) || !ADDR.test(String(c.payTo || "")) || !ADDR.test(String(c.asset || "")) || !/^[0-9]{1,30}$/.test(String(c.amount || ""))) return false;
-      const key = lateKey(network, c.tx);
+      const byAuth = !c.tx && NONCE.test(String(c.nonce || ""));
+      if ((!byAuth && !TX.test(String(c.tx || ""))) || !ADDR.test(String(c.payer || "")) || !ADDR.test(String(c.payTo || "")) || !ADDR.test(String(c.asset || "")) || !/^[0-9]{1,30}$/.test(String(c.amount || ""))) return false;
+      const key = byAuth ? lateAuthKey(network, c.payer, c.nonce) : lateKey(network, c.tx);
       await refresh();
       if (state.pending[key]) return true;
       if (entries().length >= maxEntries) {
@@ -212,12 +232,14 @@ export function createLateSettleBook({
       }
       const t = now();
       const entry = {
-        key, network, tx: String(c.tx).toLowerCase(), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
+        key, network, tx: byAuth ? null : String(c.tx).toLowerCase(), ...(byAuth ? { nonce: String(c.nonce).toLowerCase() } : {}), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
         amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
       if (await write(entry)) {
-        log(`[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
+        log(byAuth
+          ? `[late-settle] ${network} authorization ${c.payer} nonce ${c.nonce} (via ${entry.via}): outcome unknown; booked until it is read on chain`
+          : `[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
         return true;
       }
       // The store did not take it: kept in the journal and landed by the next
@@ -279,11 +301,36 @@ export function createLateSettleBook({
       }
       return out;
     },
-    async _one(e, out) {
-      const url = rpcFor(e.network);
+    async _one(e0, out) {
+      const url = rpcFor(e0.network);
+      let e = e0;
       let receipt;
       let readable = true;
-      try { receipt = url ? await call(url, "eth_getTransactionReceipt", [e.tx]) : undefined; } catch { readable = false; }
+      // Used, but the transaction that used it is not found yet: never closed
+      // as not landed.
+      let usedUnfound = false;
+      if (!e.tx && e.nonce) {
+        // Booked by authorization: unused means nothing has landed (yet); used
+        // means the transaction that used it is found and judged like any
+        // other booked transaction.
+        try {
+          if (!url) throw new Error("no RPC");
+          const c = (m, p) => call(url, m, p);
+          if (await authorizationUsed(c, e.asset, e.payer, e.nonce)) {
+            const { head, from } = await blockNear(c, e.at - AUTH_LOOKBACK_MS);
+            const start = Number.isFinite(e.scanFrom) ? e.scanFrom : from;
+            const f = await findAuthorizationTx(c, { token: e.asset, authorizer: e.payer, nonce: e.nonce, fromBlock: start, toBlock: head });
+            if (f.tx) e = { ...e, tx: f.tx };
+            else {
+              usedUnfound = true;
+              await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], scanFrom: f.scannedTo + 1 }; });
+            }
+          }
+        } catch { readable = false; }
+      }
+      if (readable && e.tx) {
+        try { receipt = url ? await call(url, "eth_getTransactionReceipt", [e.tx]) : undefined; } catch { readable = false; }
+      }
       if (!url) readable = false;
       const drop = async () => change((p) => { delete p[e.key]; });
       if (readable && receipt) {
@@ -332,7 +379,7 @@ export function createLateSettleBook({
       // authorization can no longer move money: past the window and past its
       // validBefore, a transaction mined later reverts.
       const authExpired = authorizationExpired(e.validBefore, t);
-      if (t - e.at >= WINDOW_MS && readable && authExpired) {
+      if (t - e.at >= WINDOW_MS && readable && authExpired && !usedUnfound) {
         await drop();
         out.absent++;
         log(`[late-settle] ${e.network} tx ${e.tx} never mined within ${Math.round(WINDOW_MS / 60_000)} min and its authorization has expired; closed as not landed`);

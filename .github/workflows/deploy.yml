@@ -1845,6 +1845,8 @@ jobs:
           t node scripts/test-late-settlements.js
           # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check, paid-mode boot with and without the key (stub chain, throwaway keys - offline)
           t node scripts/test-own-relayer.js
+          # Robinhood outage: an ambiguous facilitator failure is read on chain (used with our transfer -> served once; unused -> our relayer; read failure -> 402 and the authorization booked owed if it lands; other networks and no relayer key unchanged) (stub chain - offline)
+          t node scripts/test-rh-outage.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
           t node scripts/test-arc-rail.js
           # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)

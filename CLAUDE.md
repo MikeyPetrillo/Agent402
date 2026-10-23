@@ -249,6 +249,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
   balance check before signing, and a hash for any send that may have reached the node so a
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
+  With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
+  transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our
+  transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (inside
+  the authorization's deadline) goes to our relayer, and a read failure is a 402 with the
+  authorization booked in the late-settlement book (`scripts/test-rh-outage.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
