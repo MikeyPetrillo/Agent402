@@ -101,7 +101,7 @@ try {
   ok(st.pending === 0 && st.writes >= SELLERS, `backfill wrote every origin (${st.writes} writes, ${backfillMs} ms)`);
   const idx = await sdb.stateQuery("SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'index_listings'", [sdb.stateDbSchema()]);
   const names = idx.rows.map((r) => r.indexname);
-  ok(names.includes("index_listings_order_idx") && names.includes("index_listings_category_idx"), `the order and category indexes exist (${names.join(", ")})`);
+  ok(names.includes("index_listings_page_idx") && names.includes("index_listings_category_idx"), `the page-order and category indexes exist (${names.join(", ")})`);
   ok(!st.trigram || names.includes("index_listings_hay_trgm"), `search index: ${st.trigram ? "pg_trgm trigram GIN" : "pg_trgm unavailable, table scan"}`);
   const flatBefore = x._flatBuildsForTest();
   let same = 0;
@@ -156,6 +156,53 @@ try {
   await store.flush();
   ok(store.status().writes === writes, "re-marking unchanged origins writes nothing (content hash)");
 
+  // ---- reconcile: stored origins the cache no longer holds are removed -------
+  {
+    const strayOrigin = "https://stray-not-cached.example";
+    await store.writeOrigin(strayOrigin, { sellerKey: "Stray Co", sellerName: "Stray Co", rows: [{ method: "POST", route: "/api/stray", t: { route: "/api/stray", name: "stray" }, flat: { described: true, category: "web", networks: [] } }] });
+    const kept = origins[20];
+    const before = await sdb.stateQuery(`SELECT origin FROM ${sdb.stateDbSchema()}.index_listing_origins WHERE origin = ANY($1)`, [[strayOrigin, kept]]);
+    ok(before.rows.length === 2, "the stray origin is stored beside a cached one");
+    const removedN = await x.reconcileListings();
+    const after = await sdb.stateQuery(`SELECT origin FROM ${sdb.stateDbSchema()}.index_listing_origins WHERE origin = ANY($1)`, [[strayOrigin, kept]]);
+    const strayRows = await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${sdb.stateDbSchema()}.index_listings WHERE origin = $1`, [strayOrigin]);
+    ok(removedN >= 1 && after.rows.length === 1 && after.rows[0].origin === kept && strayRows.rows[0].n === 0, `reconcile removes the origin the cache does not hold and keeps the cached one (removed ${removedN})`);
+  }
+
+  // ---- the category rollup is kept briefly and cleared by a write ------------
+  {
+    store._resetCountsForTest();
+    const q0 = store._statsForTest().categoryQueries;
+    await x.indexedToolCategoriesAsync(SELF); await x.indexedToolCategoriesAsync(SELF); await x.indexedToolCategoriesAsync(SELF);
+    const q1 = store._statsForTest().categoryQueries;
+    ok(q1 - q0 === 1, `three category reads run one query (${q1 - q0})`);
+    const ce = cache.get(origins[12]);
+    cache.set(origins[12], { ...ce, fetchedAt: ce.fetchedAt + 1, tools: [...ce.tools, { route: "/api/cat-bump", method: "POST", name: "bump", description: "a bump for agents", category: "media", tags: [], price: "$0.001", networks: ["eip155:8453"] }] });
+    await store.writeOrigin(origins[12], x._listingRowsForOriginForTest(origins[12]));
+    await x.indexedToolCategoriesAsync(SELF);
+    ok(store._statsForTest().categoryQueries - q1 === 1, "a write clears it: the next read queries again");
+  }
+
+  // ---- the database cannot answer: last good page, else a 503 ------------------
+  {
+    const s = sdb.stateDbSchema();
+    const seen = await run({ search: "weather" });
+    await sdb.stateQuery(`ALTER TABLE ${s}.index_listings RENAME TO index_listings_away`);
+    try {
+      const stale = await run({ search: "weather" });
+      ok(stale.stale === true && JSON.stringify(stale.results) === JSON.stringify(seen.results), "a page already served is answered from its last good copy, marked stale");
+      let err = null;
+      try { await run({ search: "never-asked-before-zz" }); } catch (e) { err = e; }
+      ok(err && err.statusCode === 503, `a page never served answers a 503, not a crash (${err?.statusCode})`);
+      store._resetCountsForTest();
+      let cerr = null;
+      try { await x.indexedToolCategoriesAsync("https://other-self.example"); } catch (e) { cerr = e; }
+      ok(cerr && cerr.statusCode === 503, "the category rollup answers a 503 the same way");
+    } finally {
+      await sdb.stateQuery(`ALTER TABLE ${s}.index_listings_away RENAME TO index_listings`);
+    }
+  }
+
   // ---- the search uses the trigram index -----------------------------------------
   if (st.trigram) {
     // A small fixture table is cheaper to scan, so the planner is told to avoid
@@ -180,6 +227,48 @@ try {
   }
   const worst = Math.round(Math.max(...times));
   ok(worst < Number(process.env.LISTINGS_SEARCH_MS || 50), `a directory page answers in ${worst} ms at ${JSON.parse(baseline[0]).total} rows, counts included (bound 50 ms)`);
+
+  // ---- two containers on one table: one seller order, paging is exact ----------
+  // Container B boots while the order table is empty, A places sellers, then a
+  // new seller arrives on each (a crawl, then the peer pull). B's empty copy
+  // must not renumber over A's placement, and no two sellers share an ord.
+  {
+    const s = sdb.stateDbSchema();
+    for (const t of ["index_listings", "index_listing_bodies", "index_listing_sellers", "index_listing_origins"]) await sdb.stateQuery(`DROP TABLE IF EXISTS ${s}.${t}`);
+    const { createListingsStore } = await import("../src/index-listings-pg.js");
+    const coll = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    const data = {};
+    const keys = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "hotel", "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "zulu"];
+    keys.forEach((k, i) => { data[`https://${k}-1.example`] = { key: k, n: 2 + (i % 4) }; });
+    const mk = () => createListingsStore({
+      rowsForOrigin: (o) => (data[o] ? { sellerKey: data[o].key, sellerName: data[o].key, rows: Array.from({ length: data[o].n }, (_, j) => ({ method: "POST", route: `/r${j}`, t: { o, j }, flat: { described: j % 2 === 0, category: "x", networks: [] } })) } : null),
+      keyForOrigin: (o) => data[o]?.key || null,
+      projectRow: (o, t) => ({ o, j: t.j }), collate: coll, terms: (q) => [q], hayOf: () => "h", log: () => {},
+    });
+    const A = mk(), B = mk();
+    await A.ensure(); await B.ensure();
+    for (const o of Object.keys(data)) A.markDirty(o);
+    await A.flush();
+    data["https://golf-1.example"] = { key: "golf", n: 3 }; data["https://golf-2.example"] = { key: "golf", n: 2 };
+    A.markDirty("https://golf-1.example"); await A.flush();
+    B.markDirty("https://golf-2.example"); await B.flush();
+    const sellers = await sdb.stateQuery(`SELECT seller_key, ord FROM ${s}.index_listing_sellers`);
+    const ords = sellers.rows.map((r) => Number(r.ord));
+    ok(new Set(ords).size === ords.length, `no two sellers share an order position (${ords.length} sellers)`);
+    const split = await sdb.stateQuery(`SELECT seller_key, count(DISTINCT seller_ord)::int AS n FROM ${s}.index_listings GROUP BY 1 HAVING count(DISTINCT seller_ord) > 1`);
+    ok(split.rows.length === 0, `every seller's rows carry one order position (${split.rows.map((r) => r.seller_key).join(",") || "none split"})`);
+    const byKey = new Map(sellers.rows.map((r) => [r.seller_key, Number(r.ord)]));
+    const sorted = [...byKey.keys()].sort(coll);
+    ok(sorted.every((k, i) => i === 0 || byKey.get(sorted[i - 1]) < byKey.get(k)), "the order positions follow the collated seller names");
+    // Paging over the whole directory returns every row exactly once, in the
+    // order one big page gives.
+    const whole = await A.directory({ limit: 500 });
+    const paged = [];
+    for (let off = 0; off < whole.matched; off += 3) paged.push(...(await B.directory({ offset: off, limit: 3 })).results);
+    const ids = paged.map((r) => `${r.o}#${r.j}`);
+    ok(new Set(ids).size === ids.length && ids.length === whole.matched, `paging in 3s returns every row once (${ids.length} of ${whole.matched})`);
+    ok(JSON.stringify(paged) === JSON.stringify(whole.results), "...in the order one page of everything gives");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb?.();
