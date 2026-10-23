@@ -49,7 +49,7 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -690,12 +690,17 @@ await check("a resend whose transfer already has an owed refund row is refused (
     assert.equal(await book.book({ payer: acct.address, network: "eip155:8453", nonce: q, amount: "5000" }), true);
     const qkey = pendingKey("eip155:8453", acct.address, q);
     assert.equal(await book.claimResume(qkey, "me"), true);
-    rmSync(join(dir, "p.json"), { force: true });
-    mkdirSync(join(dir, "p.json"));
+    // The store stays readable but stops taking writes (its directory is
+    // made read-only), so the entry is still there to drop or hand back.
+    chmodSync(dir, 0o555);
+    assert.ok(await book.get(qkey), "still readable");
     assert.equal(await book.releaseResume(qkey, "me"), false, "a hand-back that did not land answers false");
     const r = await book.resolve(qkey, { outcome: "served" });
     assert.equal(r.ok, false, "a drop that did not land answers not ok");
-  } finally { gw.mode = "ok"; rmSync(dir, { recursive: true, force: true }); }
+    chmodSync(dir, 0o755);
+    assert.equal((await book.get(qkey)).state, "resuming", "nothing changed");
+    assert.equal((await book.resolve(qkey, { outcome: "served" })).ok, true, "control: the same drop lands once the store takes writes");
+  } finally { gw.mode = "ok"; try { chmodSync(dir, 0o755); } catch { /* removed */ } rmSync(dir, { recursive: true, force: true }); }
 });
 
 await check("the resolver: a drop that does not land is counted kept, never owed or served; the owed row carries the slug booked with the entry, else the path (never the last segment); an ambiguous entry Gateway never took is dropped after the grace, a pending one only once its authorization has expired", async () => {
