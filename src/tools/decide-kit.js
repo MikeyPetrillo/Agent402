@@ -25,6 +25,7 @@ import { hasLastingEffect } from "../hangup-forgiveness.js";
 import { sketchPlan, sketchListPriceUsd, SKETCH_MIN_STEPS, SKETCH_MAX_STEPS } from "../decide/sketch-plan.js";
 import { planShape } from "../decide/plan-shape.js";
 import { attemptErrorCode } from "../decide/skip-codes.js";
+import { createReplanGuard } from "../decide/replan-guard.js";
 export { SKIP_CODES, attemptErrorCode, skipCodeOf } from "../decide/skip-codes.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -444,14 +445,29 @@ function defaultRunStopSignal() {
   return parts.length ? AbortSignal.any(parts) : null;
 }
 
-export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isOwnTraffic = () => false, isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal, replan = (body, opts) => callService("/internal/replan", body, opts) }) {
+export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isOwnTraffic = () => false, isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal, replan = (body, opts) => callService("/internal/replan", body, opts), replanGuard = createReplanGuard() }) {
   // A write after money may have moved: awaited once, then retried and
   // journaled (kind, payload) on local disk before the run answers.
   const afterSpend = (label, kind, payload, thunk) => ledgerWriteAfterSpend(label, thunk, ledgerRetryMs, journalOf(ledger, kind, payload));
   const finish = (args) => afterSpend(`finish run ${args.runId}`, "finishRun", args, () => ledger.finishRun(args));
   const restore = (token, runId) => afterSpend(`restore credit ${runId}`, "restoreCredit", { token, runId }, () => ledger.restoreCredit(token, runId));
   const settleHold = (runId, holdId, amountUsd) => afterSpend(`${amountUsd > 0 ? "settle" : "drop"} hold ${runId}`, "settleSellerHold", { holdId, amountUsd }, () => ledger.settleSellerHold(holdId, amountUsd));
+  // A re-plan that ran the planner and whose request then ended in a 4xx
+  // (never settled) is counted against the payer (src/decide/replan-guard.js).
+  const replanKey = (req) => payerOf(req) || String(req?.ip || "anonymous");
   return async function executeHandler(input, req) {
+    const mark = { replanRan: false };
+    try {
+      return await runExecute(input, req, mark);
+    } catch (e) {
+      const status = Number(e?.statusCode || e?.status);
+      if (mark.replanRan && status >= 400 && status < 500) {
+        try { await replanGuard.note(replanKey(req)); } catch { /* a count must never change the answer */ }
+      }
+      throw e;
+    }
+  };
+  async function runExecute(input, req, mark) {
     const cfg = decideConfig();
     if (input.params != null && (typeof input.params !== "object" || Array.isArray(input.params))) throw bad('"params" must be an object keyed by step number');
     const payer = payerOf(req);
@@ -581,12 +597,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // assumed is read here and redeemed at booking (a race in between is
       // still refused there).
       await refuseEarly(saved.plan);
+      if (await replanGuard.blocked(replanKey(req))) {
+        throw bad(`This wallet's recent re-plans (${replanGuard.limit} in the last hour) ended without a run that could be charged, so "replan" is paused for up to an hour; nothing was charged. Send the same body without "replan" to run the saved plan.`, 429);
+      }
       if (creditAssumed > 0 && await ledger.creditAvailableUsd(input.creditToken, d.id, t) + 1e-9 < creditAssumed) {
         throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
       }
       const creditMs = runBudgetMs(req);
       const planMs = Math.min(cfg.budgetMs[saved.depth] ?? cfg.budgetMs.plan, Number.isFinite(creditMs) && creditMs > 0 ? creditMs / 2 : Infinity);
       let fresh = null, why = null;
+      mark.replanRan = true;
       try {
         const ans = await replan({ decisionId: saved.id, payer, rail: req?.mppTempoCredential ? "mpp" : "x402", priceUsd: planCharge, synthetic, deadlineAt: Date.now() + planMs }, { timeoutMs: planMs + 1000 });
         if (!Array.isArray(ans?.plan) || !ans.plan.length) why = "no indexed tool covers the task now";

@@ -368,7 +368,10 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       r = await g.check();
       assert.equal(r[0].status, "unread");
       m.noteRelayerGas(r);
-      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low", "unreadable reads the public word low (fails closed)");
+      const fullU = await m.status({ fresh: true, full: true });
+      assert.equal(fullU.facilitatorFunds.relayersUnread, 1, "the operator detail names it unreadable");
+      assert.equal(fullU.facilitatorFunds.relayersLow, 0, "...not short of gas");
       chain.down = false;
       r = await g.check();
       assert.equal(r[0].status, "ok", "a good read clears it");

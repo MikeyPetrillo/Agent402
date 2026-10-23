@@ -27,7 +27,7 @@ const TITLES = {
   upstreamHealth: "upstreamHealth: an upstream is timing out or failing",
   facilitatorFunds: "facilitatorFunds: a facilitator refused settlement",
   // facilitatorFunds=low (a settlement signer short of gas) has its own title.
-  facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low",
+  facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
 };
 const titleOf = (field, word) => (field === "facilitatorFunds" && word === "low" ? TITLES.facilitatorGas : TITLES[field]);
 const fieldOf = (key) => (key === "facilitatorGas" ? "facilitatorFunds" : key);

@@ -846,6 +846,43 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ledger.markDecisionSettled("rp_room");
   const room = await exr({ decisionId: "rp_room", replan: true }, mkReq("0xr12"));
   ok(room.replanned?.returnedAsCredit === true && room.leftoverCredit?.amountUsd > planFee - 1e-9, `with 10 min left the saved plan runs and the plan price comes back (${room.leftoverCredit?.amountUsd})`);
+
+  // A re-plan whose run then ends caller-caused (a 4xx, never settled) cost a
+  // planner run for nothing: it counts against the payer, and past the limit
+  // "replan" is refused before the planner. Paid re-plans and plain runs of
+  // the saved plan are never limited, and other payers are unaffected.
+  {
+    const { createLocalReplanGuard } = await import("../src/decide/replan-guard.js");
+    const guard = createLocalReplanGuard({ limit: 2 });
+    const exG = makeExecuteHandler({ ledger, getCatalog: () => catalog, now, replan, replanGuard: guard });
+    replanMode = "new";
+    const unfit = { decisionId: "rp1", replan: true, params: { 1: { wrong: 1 } } };
+    for (let i = 1; i <= 2; i++) {
+      replanCalls.length = 0;
+      await throwsWith(() => exG(unfit, mkReq("0xabuse")), 400, "Nothing was charged", `uncharged re-plan ${i} of 2 runs the planner, then its run ends caller-caused`);
+      ok(replanCalls.length === 1, `...the planner ran (${replanCalls.length})`);
+    }
+    replanCalls.length = 0; calls.length = 0;
+    await throwsWith(() => exG(unfit, mkReq("0xabuse")), 429, "paused", "the next re-plan past the limit is refused");
+    ok(replanCalls.length === 0 && calls.length === 0, `...before the planner or any step (${replanCalls.length} planner calls)`);
+    const plain = await exG({ decisionId: "rp1" }, mkReq("0xabuse"));
+    ok(!("replanned" in plain) && plain.steps?.[0]?.status === "ok", "running the saved plan without replan is not limited");
+    replanCalls.length = 0;
+    const other = await exG({ decisionId: "rp1", replan: true }, mkReq("0xother"));
+    ok(other.replanned?.ran === true && replanCalls.length === 1, "another payer's re-plan is unaffected");
+    const g1 = createLocalReplanGuard({ limit: 1 });
+    const exPaid = makeExecuteHandler({ ledger, getCatalog: () => catalog, now, replan, replanGuard: g1 });
+    replanCalls.length = 0;
+    for (let i = 0; i < 3; i++) await exPaid({ decisionId: "rp1", replan: true }, mkReq("0xgood"));
+    ok(replanCalls.length === 3, `re-plans whose runs are paid never count, even at a limit of one (${replanCalls.length} ran)`);
+    // The production guard without a shared counter keeps this process's own
+    // count: it neither refuses everyone nor forgets.
+    const { createReplanGuard } = await import("../src/decide/replan-guard.js");
+    const real = createReplanGuard({ limit: 1 });
+    const before = await real.blocked("0xsolo");
+    await real.note("0xsolo");
+    ok(before === false && await real.blocked("0xsolo") === true && await real.blocked("0xsomeone") === false, "without Redis the guard counts per process, per payer (no fail-closed refusal)");
+  }
 }
 
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
