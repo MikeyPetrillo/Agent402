@@ -217,7 +217,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
   `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
   stay in the window as outcomes and never erase failures, so a buyer settling hundreds of
   calls is not cut off by a few replayed authorizations, whatever order the fast reverts and
-  slower settlements land in. The `/v1` global pause counts distinct buyers, not
+  slower settlements land in; `GATEWAY_SETTLE_BREAKER_HARD_MAX` (default 40) failures refuse
+  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` global pause counts distinct buyers, not
   failures. Only a refusal whose offer the next 402 withdraws (`isWithdrawnSubcentRefusal`)
   stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both

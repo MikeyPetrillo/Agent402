@@ -106,7 +106,16 @@ ok(b.gatewaySettleBreakerKey(undefined) === null && b.gatewaySettleBreakerKey({}
   b._gatewaySettleBreakerReset();
   for (let i = 0; i < 3; i++) { b.recordGatewaySettleFailure(K, t0 + i * 10); b.recordGatewaySettleSuccess(K, t0 + 5 + i * 10); }
   ok(!b.gatewaySettleBreakerBlocked(K).blocked, "failures must be MORE than the share: three against three is served");
-  ok(b.gatewaySettleBreakerStatus().minFailShare === 0.5, "the share is reported in the status (default 0.5)");
+  ok(b.gatewaySettleBreakerStatus().minFailShare === 0.5 && b.gatewaySettleBreakerStatus().hardMaxFails === 40, "the share and the hard ceiling are reported in the status (defaults 0.5 and 40)");
+  // The ceiling: a key that settles plenty still cannot run up failures without
+  // bound. 39 failures against 1000 settled calls pass the share; the 40th refuses.
+  b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 1000; i++) b.recordGatewaySettleSuccess(K, t0 + i * 0.1);
+  for (let i = 0; i < 39; i++) b.recordGatewaySettleFailure(K, t0 + 100 + i * 0.5);
+  ok(!b.gatewaySettleBreakerBlocked(K).blocked, "39 failures against a thousand settled calls: served (under the ceiling, under the share)");
+  b.recordGatewaySettleFailure(K, t0 + 150);
+  const s3 = b.gatewaySettleBreakerBlocked(K);
+  ok(s3.blocked && s3.fails === 40 && s3.oks === 1000, `the 40th failure refuses the key whatever it settled (got ${JSON.stringify(s3)})`);
   // Shared replicas: the settled calls are written to and read from their own
   // shared window, and each count is the larger of the store's and this
   // process's, so a settled call on one replica weighs on every replica's verdict.

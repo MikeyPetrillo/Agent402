@@ -58,8 +58,9 @@
 // nonce already used, so the copy reverts at every facilitator) is never cut
 // off by a handful of such reverts, whatever order the fast reverts and the
 // slower settlements land in; a key whose payments mostly fail is still
-// stopped after MAX_FAILS of them. Settled calls stay in the window as
-// outcomes; they do not erase the failures.
+// stopped after MAX_FAILS of them, and any key at HARD_MAX_FAILS failures is
+// stopped whatever it settled (the bound on unpaid handler runs). Settled
+// calls stay in the window as outcomes; they do not erase the failures.
 import { payerFromRequest } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
@@ -74,6 +75,10 @@ export const WINDOW_MS = num(process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS, 15 * 
 /** The share of a key's outcomes inside the window that must be failures
  *  (strictly more than this) before MAX_FAILS of them refuse it. */
 export const MIN_FAIL_SHARE = (() => { const n = Number(process.env.GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE); return Number.isFinite(n) && n >= 0 && n < 1 ? n : 0.5; })();
+/** Failures inside the window that refuse a key whatever its settled count:
+ *  the share rule bounds a wallet's unpaid handler runs by its own settled
+ *  calls, and this bounds them outright. */
+export const HARD_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_HARD_MAX, 40);
 /** Settled outcomes kept per key (the window's rate needs a count, not every stamp). */
 const MAX_OKS_KEPT = 5000;
 /** DISTINCT buyers with a settle failure inside the window that pause every
@@ -192,7 +197,7 @@ function inWindow(arr, now) { return arr.filter((t) => now - t < WINDOW_MS); }
 function verdict(failTimes, nFails, nOks, nBills) {
   const out = { blocked: false, fails: nFails, oks: nOks, billingFails: nBills };
   if (nFails < MAX_FAILS) return out;
-  if (nFails <= MIN_FAIL_SHARE * (nFails + nOks)) return out;
+  if (nFails < HARD_MAX_FAILS && nFails <= MIN_FAIL_SHARE * (nFails + nOks)) return out;
   const idx = Math.max(0, failTimes.length - MAX_FAILS);
   return { ...out, blocked: true, until: (failTimes[idx] ?? failTimes[failTimes.length - 1] ?? Date.now()) + WINDOW_MS };
 }
@@ -396,7 +401,7 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     // own): the count the global pause trips on.
     globalFailsInWindow: (pruneGlobal(now), globalFailKeys.size),
     globalPaused: g.paused, globalPausedUntil: g.paused ? new Date(g.until).toISOString() : null, globalTrips,
-    maxFails: MAX_FAILS, minFailShare: MIN_FAIL_SHARE, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
+    maxFails: MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
 
