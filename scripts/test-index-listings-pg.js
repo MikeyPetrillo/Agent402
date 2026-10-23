@@ -129,6 +129,13 @@ try {
   await store.flush();
   const newRow = await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${sdb.stateDbSchema()}.index_listings WHERE origin = $1 AND route = '/api/brand-new-route'`, [changed]);
   ok(newRow.rows[0].n === 1, "a changed origin's new route is written");
+  // A change to a row's text alone (same method and route) reaches the table.
+  const textOrigin = origins[10];
+  const te = cache.get(textOrigin);
+  cache.set(textOrigin, { ...te, tools: te.tools.map((t, k) => (k === 0 ? { ...t, description: "renamed weather lookups for agents zzqx" } : t)), fetchedAt: te.fetchedAt + 1 });
+  await store.flush();
+  const renamed = await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${sdb.stateDbSchema()}.index_listings WHERE origin = $1 AND hay LIKE '%zzqx%'`, [textOrigin]);
+  ok(renamed.rows[0].n === 1, "a changed description on an existing route is written");
   const gone = await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${sdb.stateDbSchema()}.index_listings WHERE origin = $1`, [removed]);
   ok(gone.rows[0].n === 0, "a removed origin's rows are deleted");
   // The answers still match the in-memory directory over the changed cache.
