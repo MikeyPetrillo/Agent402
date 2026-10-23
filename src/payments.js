@@ -48,7 +48,7 @@ import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
-import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
+import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -1672,6 +1672,16 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     const { saleByTxFresh } = await import("./sales-ledger.js");
     installGatewayRouting(server, gatewayClient, new Set(gatewayKinds.keys()), {
       pendingBook: await gatewayPendingBook(),
+      wasServed: async ({ tx }) => !!(await saleByTxFresh(tx)),
+    });
+    // A pending entry nobody resends is read against Gateway's record every
+    // ten minutes under a lease: settled and never served becomes an owed
+    // debt (refund-run proves it at Gateway and repays it), failed is dropped.
+    const { recordRefundOwed, refundByEvidenceFresh } = await import("./refund-ledger.js");
+    startGatewayPendingResolver({
+      book: await gatewayPendingBook(), client: gatewayClient, payTo: walletAddress || null,
+      recordOwed: async (row) => recordRefundOwed(row),
+      owedExists: async (tx) => !!(await refundByEvidenceFresh(tx)),
       wasServed: async ({ tx }) => !!(await saleByTxFresh(tx)),
     });
   }

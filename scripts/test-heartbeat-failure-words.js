@@ -51,12 +51,12 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\n' >> "$GH_LOG"
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
 
-async function run({ gateway, op = null, token = "t", open = null }) {
+async function run({ gateway, op = null, token = "t", open = null, script = step.run }) {
   const gs = path.join(dir, "gs.json"), opf = path.join(dir, "op.json"), log = path.join(dir, "gh.log");
   await writeFile(gs, JSON.stringify(gateway));
   await writeFile(opf, JSON.stringify(op || {}));
   await writeFile(log, "");
-  const r = spawnSync("bash", ["-e", "-c", step.run], {
+  const r = spawnSync("bash", ["-e", "-c", script], {
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r",
       OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41" },
     encoding: "utf8",
@@ -118,6 +118,38 @@ try {
     r = await run({ gateway: { toolFailures: { status: "unknown" } }, open: TITLES.toolFailures });
     assert.equal(closed(r.calls).length, 0);
     assert.deepEqual(created(r.calls), []);
+  });
+
+  // The Gateway pending book (src/gateway-nanopayments.js): its own step and
+  // title; unresolved and full page, ok and off close, pending does neither.
+  const GP_TITLE = "Gateway pending settlements need attention";
+  const gpStep = steps.find((s) => String(s.name || "").startsWith("Gateway pending settlements check"));
+  await check("gatewayPending: unresolved and full open one issue, ok and off close it, pending and unknown do neither", async () => {
+    assert.ok(gpStep, "heartbeat.yml has the Gateway pending step");
+    assert.match(gpStep.run, /\.gatewayPending\.status/);
+    assert.doesNotMatch(gpStep.run, /curl[^\n]*\/__operator\//, "the step never reads the operator endpoint");
+    for (const w of ["unresolved", "full"]) {
+      const { calls } = await run({ gateway: { gatewayPending: { status: w } }, script: gpStep.run });
+      const c = created(calls);
+      assert.deepEqual(c.map((x) => x.title), [GP_TITLE], w);
+      assert.match(c[0].body, new RegExp(`gatewayPending\\.status=${w}\\.`));
+    }
+    let r = await run({ gateway: { gatewayPending: { status: "full" } }, open: GP_TITLE, script: gpStep.run });
+    assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
+    assert.ok(r.calls.some((c) => c[0] === "issue" && c[1] === "comment" && c[2] === "41"));
+    for (const w of ["ok", "off"]) {
+      r = await run({ gateway: { gatewayPending: { status: w } }, open: GP_TITLE, script: gpStep.run });
+      assert.equal(closed(r.calls).length, 1, w);
+    }
+    for (const w of ["pending", "near_capacity", "unknown"]) {
+      r = await run({ gateway: { gatewayPending: { status: w } }, open: GP_TITLE, script: gpStep.run });
+      assert.equal(closed(r.calls).length, 0, w);
+      assert.deepEqual(created(r.calls), [], w);
+    }
+    r = await run({ gateway: {}, script: gpStep.run });
+    assert.deepEqual(created(r.calls), [], "an older build without the field opens nothing");
+    const { ALARMS } = await import("../workers/status-probe/src/index.js");
+    assert.ok(ALARMS.some((a) => a.title === GP_TITLE), "the Worker carries the same title");
   });
 
   await check("the status Worker maps the same three words under the same titles", async () => {

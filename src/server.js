@@ -3609,8 +3609,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // unresolved and full.
     circlePending: { status: await circlePendingStatus() },
     // The Circle Gateway batched option (src/gateway-nanopayments.js):
-    // gatewayPending reads off / ok / pending / near_capacity / full for
-    // settlements Gateway answered settlement_pending; gatewayBalance reads
+    // gatewayPending reads off / ok / pending / near_capacity / unresolved /
+    // full for settlements Gateway answered settlement_pending (the heartbeat
+    // and the status Worker page on unresolved and full; a settled, unserved
+    // entry becomes an owed debt that refundsOwed covers); gatewayBalance reads
     // off / unknown / ok / withdraw (our Gateway balance is past
     // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
     // the per-domain split on the operator view only.

@@ -714,6 +714,34 @@ jobs:
               ;;
           esac
 
+      # Circle Gateway batched settlements Gateway answered settlement_pending
+      # (src/gateway-nanopayments.js): one word on /api/gateway-status. The
+      # resolver books a settled, unserved entry as an owed debt (refundsOwed
+      # covers it). unresolved / full page; ok and off close; pending,
+      # near_capacity and unknown do neither.
+      - name: Gateway pending settlements check (alarm when one needs an operator)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.gatewayPending.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "gateway pending: $WORD"
+          TITLE="Gateway pending settlements need attention"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unresolved|full)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports gatewayPending.status=$WORD. unresolved: a batched payment Circle Gateway answered as pending is still waiting past its bound; the resolver reads it every ten minutes and keeps it until Gateway reports it settled or failed. Read it on /__operator/gateway-pending.json and look its nonce up in Gateway's transfer history. full: the pending book reached its bound and refused a new entry (the server log names it). A settled, unserved entry becomes an owed refund (refundsOwed). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: gatewayPending reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
       # owed (any buyer's debt past a 15 min grace) / aging / stuck page; ok
       # closes; unknown does neither. The status Worker runs the same check
