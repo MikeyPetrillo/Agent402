@@ -31,7 +31,9 @@
 //   SIG_LIMIT            signatures scanned per token account (default 100)
 //   SOLANA_RPCS          comma-separated JSON-RPC endpoints
 import { fileURLToPath } from "node:url";
-import { ZERO_EVM_ADDRESS } from "./revenue-scan.js";
+// Local, not imported from ./revenue-scan.js: the production image ships this
+// file without its sibling (Dockerfile; scripts/test-image-runtime-scripts.js).
+const ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 const WALLET = (process.env.SOLANA_REVENUE_WALLET || "").trim();
 // Default = the paid canary's Solana burner (public address only — the key
