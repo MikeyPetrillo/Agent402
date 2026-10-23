@@ -10058,13 +10058,33 @@ export function configureListingsStore({ excludeOrigin = "", ourTools = null } =
   }
   if (Array.isArray(ourTools)) listings.setOurs(ourTools);
   for (const origin of cache.keys()) listings.markDirty(origin);
+  if (!listingsReconcileTimer) {
+    // Stored origins the cache no longer holds are removed: first a few
+    // minutes after boot (the backfill has written by then), then hourly.
+    const tick = () => { reconcileListings().catch((e) => console.warn(`[listings] reconcile failed: ${String(e?.message || e).slice(0, 120)}`)); };
+    listingsReconcileTimer = setTimeout(function again() { tick(); listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_MS); listingsReconcileTimer.unref?.(); }, LISTINGS_RECONCILE_FIRST_MS);
+    listingsReconcileTimer.unref?.();
+  }
   return true;
+}
+// Only against a loaded index: during a warm start, or with nothing loaded
+// yet, "the cache does not hold this origin" says nothing about the origin.
+let listingsReconcileTimer = null;
+const LISTINGS_RECONCILE_FIRST_MS = 5 * 60_000;
+const LISTINGS_RECONCILE_MS = 60 * 60_000;
+const reconcileListingsLeased = leased("index-listings-reconcile", { ttlMs: 30 * 60_000, failOpen: false }, () => listings.reconcile((origin) => cache.has(origin)));
+/** Remove stored directory rows for origins the cache no longer holds (null when skipped). */
+export async function reconcileListings() {
+  if (!listingsOn() || warmStartInProgress || cache.size === 0) return null;
+  const r = await reconcileListingsLeased();
+  return typeof r === "number" ? r : null;
 }
 /** Operator detail for the database-backed directory (null when off). */
 export function listingsStoreStatus() { return listingsOn() ? listings.status() : null; }
 /** Test hooks. */
 export function _listingsStoreForTest() { return listings; }
-export function _resetListingsStoreForTest() { listings = null; listingsSelf = ""; if (listingsFlushTimer) clearTimeout(listingsFlushTimer); listingsFlushTimer = null; }
+export function _listingRowsForOriginForTest(origin) { return listingRowsForOrigin(origin); }
+export function _resetListingsStoreForTest() { listings = null; listingsSelf = ""; if (listingsFlushTimer) clearTimeout(listingsFlushTimer); listingsFlushTimer = null; if (listingsReconcileTimer) clearTimeout(listingsReconcileTimer); listingsReconcileTimer = null; }
 /** How many times the in-memory flattened directory was built (the store keeps it at zero). */
 export function _flatBuildsForTest() { return flatBuilds; }
 

@@ -40,6 +40,15 @@ const likeEscape = (s) => String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
 // the same counts, and the in-memory directory is itself up to minutes stale.
 const COUNTS_TTL_MS = 30_000;
 const COUNTS_MAX = 200;
+// The category rollup, kept like the counts (cleared by every write).
+const CATEGORIES_TTL_MS = 30_000;
+// Last good pages, served when the database cannot answer a read.
+const PAGES_KEPT = 64;
+const PAGE_STALE_MAX_MS = 15 * 60_000;
+// One advisory lock key for the seller order (any 64-bit constant).
+const SELLER_ORDER_LOCK = 4_022_310_847_115;
+/** A read the database could not answer: the route's error handler answers 503. */
+const unavailable = (e) => Object.assign(new Error(`tool directory temporarily unavailable (${String(e?.message || e).slice(0, 80)})`), { statusCode: 503 });
 
 /**
  * @param {object} o
@@ -61,7 +70,9 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
   let totalsMemo = null; // { at, total, ours }
   let oursRef = null, oursHash = null;
   let seeding = null;
-  const stats = { writes: 0, skipped: 0, deletes: 0, rankUpdates: 0, queries: 0, renumbers: 0 };
+  const categoriesMemo = new Map(); // self -> { at, value }
+  const lastPages = new Map(); // page key -> { at, value }
+  const stats = { writes: 0, skipped: 0, deletes: 0, rankUpdates: 0, queries: 0, renumbers: 0, reconciled: 0, stalePages: 0, categoryQueries: 0 };
 
   async function ensure() {
     if (ready) return ready;
@@ -86,7 +97,8 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
             category TEXT NOT NULL, category_served TEXT NOT NULL, networks TEXT NOT NULL, hay TEXT NOT NULL,
             rank INTEGER NOT NULL DEFAULT 0, seller_ord DOUBLE PRECISION NOT NULL DEFAULT 0,
             PRIMARY KEY (origin, pos));
-          CREATE INDEX IF NOT EXISTS index_listings_order_idx ON ${s}.index_listings (described DESC, rank, seller_ord);
+          DROP INDEX IF EXISTS ${s}.index_listings_order_idx;
+          CREATE INDEX IF NOT EXISTS index_listings_page_idx ON ${s}.index_listings (described DESC, rank, seller_ord, origin, pos);
           CREATE INDEX IF NOT EXISTS index_listings_seller_idx ON ${s}.index_listings (seller_key);
           CREATE INDEX IF NOT EXISTS index_listings_category_idx ON ${s}.index_listings (category);`);
         if (trigram) {
@@ -96,18 +108,37 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
           catch (e) { trigram = false; log(`[listings] trigram index not created (${String(e?.message || e).slice(0, 80)}); search reads the table`); }
         }
       });
-      const r = await stateQuery(`SELECT seller_key, ord FROM ${s}.index_listing_sellers`);
-      sellerKeys = r.rows.map((x) => ({ key: x.seller_key, ord: Number(x.ord) })).sort((a, b) => collate(a.key, b.key));
+      await loadSellers({ query: (q, p) => stateQuery(q, p) });
       if (!trigram) log("[listings] pg_trgm is not available: directory search scans the table");
     })().catch((e) => { ready = null; throw e; });
     return ready;
   }
 
   // ------------------------------------------------------------ seller order
+  // The table is the order: every container reads a seller's ord from it, and
+  // placing a new seller (or renumbering) happens under one advisory lock with
+  // the order re-read first, so a container whose copy is empty or stale never
+  // renumbers over a peer's placement and two sellers never share an ord.
+  async function loadSellers(client) {
+    const r = await client.query(`SELECT seller_key, ord FROM ${S()}.index_listing_sellers`);
+    sellerKeys = r.rows.map((x) => ({ key: x.seller_key, ord: Number(x.ord) })).sort((a, b) => collate(a.key, b.key));
+  }
+  async function lockSellerOrder(client) {
+    await client.query("SELECT pg_advisory_xact_lock($1)", [SELLER_ORDER_LOCK]);
+    await loadSellers(client);
+  }
   /** The ord for a seller key, inserting it between its collated neighbors.
    *  Ords are spaced doubles, so a new seller never renumbers the others
    *  until a gap closes (then every seller is renumbered once). */
-  async function ordFor(key, client) {
+  async function ordFor(key, client, { locked = false } = {}) {
+    if (!locked) {
+      // Held to the end of the write's transaction, so a peer's renumber
+      // cannot land between reading this ord and writing rows with it.
+      await client.query("SELECT pg_advisory_xact_lock($1)", [SELLER_ORDER_LOCK]);
+      const have = await client.query(`SELECT ord FROM ${S()}.index_listing_sellers WHERE seller_key = $1`, [key]);
+      if (have.rows.length) return Number(have.rows[0].ord);
+      await loadSellers(client);
+    }
     let lo = 0, hi = sellerKeys.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; const c = collate(sellerKeys[mid].key, key); if (c < 0) lo = mid + 1; else hi = mid; }
     if (lo < sellerKeys.length && sellerKeys[lo].key === key) return sellerKeys[lo].ord;
@@ -145,19 +176,26 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
    *  whole table again and again. A key already placed keeps its ord. */
   async function seedSellers(keys) {
     await ensure();
-    const known = new Set(sellerKeys.map((k) => k.key));
-    const fresh = [...new Set(keys.filter((k) => k && !known.has(k)))];
-    if (!fresh.length) return 0;
-    if (!sellerKeys.length || fresh.length > 50) {
-      // Many new keys at once (the first backfill, a warm start into a table
-      // that holds only a few): place them all in one renumber, rows included.
-      sellerKeys = [...sellerKeys.map((k) => k.key), ...fresh].sort(collate).map((key, i) => ({ key, ord: (i + 1) * 2 ** 20 }));
-      await withStateTx((c) => writeSellerOrds(sellerKeys, c, { rows: true }));
-      stats.renumbers++;
+    const local = new Set(sellerKeys.map((k) => k.key));
+    const wanted = [...new Set(keys.filter(Boolean))];
+    if (!wanted.some((k) => !local.has(k))) return 0;
+    return withStateTx(async (c) => {
+      // Under the lock, against the table's order (a peer may have placed some).
+      await lockSellerOrder(c);
+      const known = new Set(sellerKeys.map((k) => k.key));
+      const fresh = wanted.filter((k) => !known.has(k));
+      if (!fresh.length) return 0;
+      if (!sellerKeys.length || fresh.length > 50) {
+        // Many new keys at once (the first backfill, a warm start into a table
+        // that holds only a few): place them all in one renumber, rows included.
+        sellerKeys = [...sellerKeys.map((k) => k.key), ...fresh].sort(collate).map((key, i) => ({ key, ord: (i + 1) * 2 ** 20 }));
+        await writeSellerOrds(sellerKeys, c, { rows: true });
+        stats.renumbers++;
+        return fresh.length;
+      }
+      for (const k of fresh.sort(collate)) await ordFor(k, c, { locked: true });
       return fresh.length;
-    }
-    await withStateTx(async (c) => { for (const k of fresh.sort(collate)) await ordFor(k, c); });
-    return fresh.length;
+    });
   }
 
   /** Rank every row of one seller group, per described pass, in the in-memory
@@ -229,7 +267,26 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
       if (rows.length) await rerank(listed.sellerKey, c);
       if (was?.seller_key && was.seller_key !== listed.sellerKey) await rerank(was.seller_key, c);
     });
-    counts.clear(); totalsMemo = null;
+    counts.clear(); totalsMemo = null; categoriesMemo.clear();
+  }
+
+  /** Delete the stored rows of every origin the cache no longer holds (an
+   *  origin removed while the store was off, or dropped by a path that never
+   *  marked it). `present(origin)` answers whether the cache holds it now; our
+   *  own rows are never removed here. Sliced: one origin per write. */
+  async function reconcile(present) {
+    await ensure();
+    const r = await stateQuery(`SELECT origin FROM ${S()}.index_listing_origins`);
+    let removed = 0;
+    let until = performance.now() + sliceMs;
+    for (const { origin } of r.rows) {
+      if (origin === OURS_ORIGIN || present(origin)) continue;
+      await writeOrigin(origin, null);
+      removed++;
+      if (performance.now() >= until) { await new Promise((res) => setImmediate(res)); until = performance.now() + sliceMs; }
+    }
+    stats.reconciled += removed;
+    return removed;
   }
 
   /** Mark an origin changed (the cache set or delete hook). */
@@ -305,6 +362,26 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
 
   /** A directory page: the in-memory directory's answer shape. */
   async function directory(args = {}) {
+    const pageKey = JSON.stringify([args.search || "", args.category || "", args.network || "", args.source || "", args.excludeOrigin || "", args.offset || 0, args.limit || 0]);
+    try {
+      const value = await directoryFresh(args);
+      lastPages.delete(pageKey);
+      lastPages.set(pageKey, { at: Date.now(), value });
+      if (lastPages.size > PAGES_KEPT) lastPages.delete(lastPages.keys().next().value);
+      return value;
+    } catch (e) {
+      // The database could not answer: the last good copy of this same page,
+      // when recent, rather than an error; otherwise the route answers 503.
+      const hit = lastPages.get(pageKey);
+      if (hit && Date.now() - hit.at <= PAGE_STALE_MAX_MS) {
+        stats.stalePages++;
+        log(`[listings] page read failed, serving the last good copy: ${String(e?.message || e).slice(0, 120)}`);
+        return { ...hit.value, stale: true };
+      }
+      throw unavailable(e);
+    }
+  }
+  async function directoryFresh(args) {
     await ensure();
     // Our own rows are written in line when they change (a few hundred rows,
     // and a page without them would be wrong); crawled origins are written by
@@ -339,8 +416,8 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
       if (counts.size > COUNTS_MAX) counts.delete(counts.keys().next().value);
     }
     const page = await stateQuery(`SELECT p.origin, p.ours, b.body FROM (SELECT origin, pos, ours, described, rank, seller_ord FROM ${s}.index_listings ${sql}
-      ORDER BY described DESC, rank, seller_ord LIMIT ${lim} OFFSET ${off}) p JOIN ${s}.index_listing_bodies b ON b.origin = p.origin AND b.pos = p.pos
-      ORDER BY p.described DESC, p.rank, p.seller_ord`, params);
+      ORDER BY described DESC, rank, seller_ord, origin, pos LIMIT ${lim} OFFSET ${off}) p JOIN ${s}.index_listing_bodies b ON b.origin = p.origin AND b.pos = p.pos
+      ORDER BY p.described DESC, p.rank, p.seller_ord, p.origin, p.pos`, params);
     // Text, not jsonb: jsonb reorders object keys, and a served row keeps the
     // key order the in-memory directory serves.
     const results = page.rows.map((x) => { const b = JSON.parse(x.body); return x.ours ? b.row : projectRow(x.origin, b.t, b.sellerName); });
@@ -358,24 +435,36 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
 
   /** Category rollup over third-party rows, most first. */
   async function categories(excludeOrigin = "") {
-    await ensure();
     const self = String(excludeOrigin || "").replace(/\/+$/, "").toLowerCase();
-    // The row's category is the crawled one or "other" (flatRowOf); ties in
-    // count are ordered by name here, where the in-memory rollup keeps first
-    // appearance.
-    const r = await stateQuery(`SELECT category_served AS c, count(*)::int AS n FROM ${S()}.index_listings
-      WHERE NOT ours ${self ? "AND lower(origin) <> $1" : ""} GROUP BY 1 ORDER BY n DESC, 1`, self ? [self] : []);
-    return r.rows.map((x) => ({ category: x.c, count: x.n }));
+    const hit = categoriesMemo.get(self);
+    if (hit && Date.now() - hit.at <= CATEGORIES_TTL_MS) return hit.value;
+    try {
+      await ensure();
+      // The row's category is the crawled one or "other" (flatRowOf); ties in
+      // count are ordered by name here, where the in-memory rollup keeps first
+      // appearance.
+      stats.categoryQueries++;
+      const r = await stateQuery(`SELECT category_served AS c, count(*)::int AS n FROM ${S()}.index_listings
+        WHERE NOT ours ${self ? "AND lower(origin) <> $1" : ""} GROUP BY 1 ORDER BY n DESC, 1`, self ? [self] : []);
+      const value = r.rows.map((x) => ({ category: x.c, count: x.n }));
+      categoriesMemo.set(self, { at: Date.now(), value });
+      return value;
+    } catch (e) {
+      if (hit && Date.now() - hit.at <= PAGE_STALE_MAX_MS) return hit.value;
+      throw unavailable(e);
+    }
   }
 
   return {
-    ensure, markDirty, flush, setOurs, directory, categories, writeOrigin, seedSellers,
+    ensure, markDirty, flush, setOurs, directory, categories, writeOrigin, seedSellers, reconcile,
     /** Place these seller keys before the next flush writes rows. */
     seed: (keys) => { seeding = seedSellers(keys).catch((e) => { log(`[listings] seller order seed failed: ${String(e?.message || e).slice(0, 120)}`); }); return seeding; },
     oursOrigin: OURS_ORIGIN, oursListing,
     pending: () => dirty.size,
     /** Test hook: forget the cached counts (the next page counts afresh). */
-    _resetCountsForTest: () => { counts.clear(); totalsMemo = null; },
+    _resetCountsForTest: () => { counts.clear(); totalsMemo = null; categoriesMemo.clear(); },
+    /** Test hook: the store's counters. */
+    _statsForTest: () => ({ ...stats }),
     status: () => ({ trigram, pending: dirty.size, sellers: sellerKeys ? sellerKeys.length : null, ...stats }),
   };
 }
