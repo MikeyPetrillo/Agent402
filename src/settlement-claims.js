@@ -223,7 +223,9 @@ export function isPendingSettlement(ctx) {
  */
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 export function namesUnsettledTx(ctx) {
-  return TX_HASH.test(String(ctx?.__a402LateTx?.transaction || "")) || TX_HASH.test(String(ctx?.error?.transaction || ""));
+  // An authorization booked after an ambiguous failure (src/robinhood-outage.js)
+  // is unresolved the same way: whatever transaction uses it may still land.
+  return TX_HASH.test(String(ctx?.__a402LateTx?.transaction || "")) || TX_HASH.test(String(ctx?.error?.transaction || "")) || !!ctx?.__a402LateAuth?.nonce;
 }
 
 /**

@@ -978,6 +978,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // Our own relayer (ROBINHOOD_RELAYER_KEY): the last of Robinhood's settle
   // fallbacks, after every listed facilitator (src/robinhood-relayer.js).
   let ownRelayer = null;
+  // With our relayer: an ambiguous facilitator failure on Robinhood is read on
+  // chain instead of stopping the chain (src/robinhood-outage.js).
+  let robinhoodOutage = null;
   if (robinhoodEnabled) {
     addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
@@ -1020,6 +1023,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         const { evmRpcFor } = await import("./evm-rpcs.js");
         const client = createOwnRelayerClient({ key: robinhoodRelayerKeySafe(), network: ROBINHOOD_CAIP2, asset: USDG.asset, payTo: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2) });
         ownRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
+        const { createRobinhoodOutage } = await import("./robinhood-outage.js");
+        robinhoodOutage = createRobinhoodOutage({ network: ROBINHOOD_CAIP2, token: USDG.asset, treasury: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2), relayer: client });
         console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only; pays gas only when the listed facilitators fail)`);
       } catch (e) {
         console.warn(`WARNING: own Robinhood relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
@@ -1621,7 +1626,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // boot check may still confirm or drop one.
     // Our own relayer, when configured, comes after them.
     ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
-  });
+  }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
   // feedback, my-usage, receipts) keys the caller on authorization.from; for a
@@ -2369,7 +2374,7 @@ function registerFacilitatorUpstream(url) {
   try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
 }
 
-export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null) {
+export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {
   server.onVerifyFailure(async (ctx) => {
     const reason = summarizeFacilitatorError(ctx?.error);
     console.warn(
@@ -2502,7 +2507,9 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       return { recovered: true, result: r.result };
     }
     if (!fallbackEnabled) return;
-    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return;
+    // An ambiguous failure (it may have broadcast) on a network with an outage
+    // handler is read on chain rather than stopping here (src/robinhood-outage.js).
+    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
     // A refusal that is retryable only because the transfer reverted reaches
     // only the facilitators the operator listed for it (revertRetry), never
     // the default chain: with no listed fallback the chain stops exactly as it
@@ -2512,7 +2519,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // not asked again.
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
       .filter(({ name }) => !demotionAttempt?.asked.has(name));
-    for (const { name, client, revertRetry } of candidates) {
+    for (const { name, client, revertRetry, own } of candidates) {
       if (revertOnly && revertRetry !== true) continue;
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);
@@ -2532,6 +2539,8 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           if (isRetryableSettleRefusal(refusal, ctx?.requirements?.network)) { revertOnly = !isPreBroadcastSettleRejection(refusal); continue; }
           // The chain stops here. A refusal that names a transaction may still
           // land: the late-settlement book reads it (src/late-settlements.js).
+          // An ambiguous one from a listed facilitator is read on chain first.
+          if (!own) { const o = await settleAfterAmbiguous(ctx, refusal, name, outageFor); if (o) return o; }
           noteLateTx(ctx, result?.transaction, name);
           return;
         }
@@ -2564,12 +2573,56 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // candidate. A timeout/5xx here may
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
-        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) { noteLateTx(ctx, err?.transaction, name); return; }
+        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) {
+          if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
+          noteLateTx(ctx, err?.transaction, name);
+          return;
+        }
         revertOnly = !isPreBroadcastSettleRejection(err);
       }
     }
   });
 }
+
+/**
+ * After an AMBIGUOUS settle failure (it may have broadcast; see
+ * src/robinhood-outage.js), the network's outage handler reads the buyer's
+ * authorization on chain. A transfer it proves is ours is served like any
+ * recovered settlement (claimed first, so one transfer answers one request);
+ * otherwise the payment is refused and, when the authorization can still be
+ * used, booked for the late-settlement book on `ctx.__a402LateAuth`. Answers
+ * the hook result, or undefined when nothing applies (the chain stops as it
+ * always did).
+ */
+async function settleAfterAmbiguous(ctx, err, via, outageFor) {
+  const network = ctx?.requirements?.network;
+  const outage = outageFor(network);
+  if (!outage) return undefined;
+  const { isAmbiguousSettleFailure } = await import("./robinhood-outage.js");
+  if (!isAmbiguousSettleFailure(err, { isPreBroadcast: isPreBroadcastSettleRejection, isRevertRetry: (e) => isRetryableSettleRefusal(e, network) })) return undefined;
+  let r;
+  try { r = await outage.handle(ctx); } catch (e) {
+    console.warn(`[payments] ${network} outage check after ${via} errored: ${String(e?.message || e).slice(0, 120)}`);
+    r = { refused: true, lateAuth: lateAuthOf(ctx), reason: "outage check errored" };
+  }
+  if (!r) return undefined;
+  if (r.served) {
+    if (await recoveredTxHeldElsewhere(ctx, r.result)) {
+      console.warn(`[payments] ${network} after ${via}'s ambiguous failure: tx ${r.result.transaction} already held by another request or booked owed; not served`);
+      return undefined;
+    }
+    releaseCoverOnSettled(ctx, r.result);
+    console.warn(`[payments] recovered ${network} settlement after ${via}'s ambiguous failure: tx ${r.result.transaction} (read on chain)`);
+    return { recovered: true, result: r.result };
+  }
+  if (r.lateAuth) ctx.__a402LateAuth = r.lateAuth;
+  console.warn(`[payments] ${network} after ${via}'s ambiguous failure: refused (${r.reason})${r.lateAuth ? "; the authorization is booked until it is read on chain" : ""}`);
+  return undefined;
+}
+const lateAuthOf = (ctx) => {
+  const a = ctx?.paymentPayload?.payload?.authorization;
+  return a && a.from && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
+};
 
 /** The transaction a stopping fallback named, for the late-settlement hook
  *  registered after this one (it reads the same failure context). */
