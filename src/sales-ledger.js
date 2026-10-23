@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS sales (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   ts        INTEGER NOT NULL,   -- unix ms, server clock at response finish
   slug      TEXT    NOT NULL,
-  price_usd REAL    NOT NULL,   -- catalog price at time of sale
+  price_usd REAL    NOT NULL,   -- price paid on the settling chain (src/paid-price.js)
   rail      TEXT    NOT NULL,   -- usdc | pow | heartbeat | marketplace
   network   TEXT,               -- settlement chain (usdc rail only)
   payer     TEXT,               -- verified EIP-3009 payer, lowercase (EVM only)

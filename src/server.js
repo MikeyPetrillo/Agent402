@@ -61,6 +61,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
+import { paidPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -130,6 +131,13 @@ function settledPriceUsd(def, req, res) {
   if (Number.isFinite(metered) && metered > 0) return metered;
   if (priceFnOf(def) && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   return flat;
+}
+// The USD an x402 request actually paid on its settling network (caip2): the
+// gated price above raised by that network's premium and floor, or the amount
+// the buyer signed on an EVM rail (src/paid-price.js). Books and debts read
+// this, so a chain priced above the list records what moved.
+function paidUsdOf(def, req, res, caip2) {
+  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: res?.getHeader?.("X-Metered-Usd"), paymentHeader: paymentHeaderOf(req) });
 }
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
@@ -208,7 +216,7 @@ function recordHangupDebt(req, res) {
       payer: payerFromRequest(req) || payerFromPaymentResponse(settleReceipt),
       tx: txFromPaymentResponse(settleReceipt),
       wire: req.mppCredential ? "mpp" : "x402",
-      priceUsd: settledPriceUsd(def, req, res),
+      priceUsd: paidUsdOf(def, req, res, decodeSettleReceipt(settleReceipt)?.network),
     };
   } else if (req.creditsSettled && Number(req.creditsChargedOnClose) > 0) {
     // A balance debit, not an on-chain payment: the refund executor holds
@@ -10091,7 +10099,11 @@ app.use((req, res, next) => {
         if (!FREE_MODE) whenTempoLedgerPayerKnown(req, "sales", () => {
           const rail = method;
           const network = method === "usdc" ? networkFor() : method === "credits" ? "stripe" : null;
-          const priceUsd = settledPriceUsd(def, req, res);
+          // An x402 settle books what moved on its chain (premium, floor);
+          // Tempo, card and credits rails have neither and keep the gated price.
+          const priceUsd = method === "usdc" && !req.tempoSettled && !req.stripeSettled
+            ? paidUsdOf(def, req, res, decodeSettleReceipt(settleReceipt)?.network)
+            : settledPriceUsd(def, req, res);
           const synthetic = method === "heartbeat" || isSyntheticRequest(req);
           // Request-payload attribution covers EVM (EIP-3009 authorization.from);
           // SVM/Stellar payloads carry no such field, so fall back to the
@@ -10166,7 +10178,7 @@ app.use((req, res, next) => {
         // route priced by the model's home tier), never the route's list
         // price: a debt recorded below what the receipt took is a silent
         // write-off of the difference.
-        const priceUsd = settledPriceUsd(def, req, res);
+        const priceUsd = paidUsdOf(def, req, res, receipt?.network);
         const network = networkFromPaymentResponse(settleReceipt);
         const synthetic = isSyntheticRequest(req);
         const payer = payerFromRequest(req) || payerFromPaymentResponse(settleReceipt);

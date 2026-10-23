@@ -594,7 +594,16 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
     const cdnHeaders = cdn ? { "x-origin-auth": CDN_SECRET, "cf-connecting-ip": "203.0.113.9" } : {};
     const paid = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred, ...cdnHeaders } });
     await paid.text();
-    return { status: paid.status, ownSends: st.sends.length - sends, primarySettles: rhAsked.settle, log: log.join("") };
+    // The sale is booked when the response finishes; read the newest row.
+    let sale = null;
+    if (paid.status === 200) {
+      const { default: Database } = await import("better-sqlite3");
+      for (let i = 0; i < 40 && !sale; i++) {
+        await sleep(100);
+        try { const db = new Database(join(tmp, "sales.db"), { readonly: true, fileMustExist: true }); sale = db.prepare("SELECT slug, price_usd AS priceUsd, network FROM sales ORDER BY id DESC LIMIT 1").get() || null; db.close(); } catch { /* not written yet */ }
+      }
+    }
+    return { status: paid.status, ownSends: st.sends.length - sends, primarySettles: rhAsked.settle, log: log.join(""), sale, signedUsd: Number(accepted.amount) / 1e6 };
   } finally {
     proc.kill("SIGKILL");
     for (const [srv] of servers) srv.close();
@@ -608,6 +617,11 @@ await check("paid server WITH the key: the primary reverts, our relayer settles 
   assert.equal(r.primarySettles, 1);
   assert.equal(r.ownSends, 1, r.log.slice(-1500));
   assert.equal(r.status, 200, r.log.slice(-1500));
+  // The sale is booked at what the buyer signed on Robinhood (the floor), not
+  // the route's list price.
+  assert.ok(r.sale, "the sale is booked");
+  assert.equal(r.sale.priceUsd, r.signedUsd, `booked ${r.sale.priceUsd}, signed ${r.signedUsd}`);
+  assert.ok(r.signedUsd > 0.005, "the signed amount is the floor, above this route's list price");
 });
 
 await check("paid server WITHOUT the key: one URL behaves as before (402, our relayer sends nothing)", async () => {
