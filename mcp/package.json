@@ -82,11 +82,11 @@
     "viem": "^2.21.0"
   },
   "overrides": {
-    "qs": "6.16.0",
+    "qs": "6.16.1",
     "ws": "^8.21.0",
     "hono": "4.13.13",
     "fast-uri": "3.1.8",
-    "body-parser": "2.3.0",
+    "body-parser": "2.4.0",
     "@hono/node-server": "2.0.12",
     "ip-address": "10.7.4",
     "@solana-program/token": "0.17.0",

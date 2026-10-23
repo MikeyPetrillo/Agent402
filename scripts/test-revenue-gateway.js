@@ -48,7 +48,7 @@ const page = (allTime) => revenuePage("https://agent402.tools", {
   allTime,
   mpp: { count: 0, rails: {} },
 });
-const flat = (html) => html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+const flat = (html) => html.replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s+/g, " ");
 
 console.log("revenue: Circle Gateway batched sales");
 

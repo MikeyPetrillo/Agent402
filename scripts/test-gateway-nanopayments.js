@@ -1358,7 +1358,7 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     }
     // The legal pages and /how-to-pay carry the batched text only while the
     // option is offered (the off boot below asserts its absence).
-    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s+/g, " ");
     const terms = await flat("/terms");
     assert.ok(terms.includes("A Circle Gateway batched payment settles off chain at Gateway. If Gateway settles one after its request was answered pending and the request is never served, we record the amount as owed and repay it on chain after confirming it in Gateway's records."), "terms: the batched paragraph");
     assert.ok(terms.includes("Paid calls settle on public blockchains (except Circle Gateway batched payments, below)"), "terms: the on-chain sentence is scoped");
@@ -1704,7 +1704,7 @@ await check("switch off: no batched accept anywhere, no option on the surfaces, 
     // No batched text on the legal pages, /how-to-pay, llms.txt or /api/pricing
     // with the switch off; the nonce disclosure and the replay size bound are
     // there regardless.
-    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s+/g, " ");
     const pages = { "/privacy": await flat("/privacy"), "/terms": await flat("/terms"), "/how-to-pay": await flat("/how-to-pay"), "/llms.txt": await flat("/llms.txt"), "/api/pricing": JSON.stringify(pricing) };
     for (const [path, text] of Object.entries(pages)) assert.doesNotMatch(text, /Circle Gateway|Gateway batched|batched payment|Batched option|GatewayWalletBatched/, `${path}: no batched text with the switch off`);
     assert.ok(pages["/terms"].includes("Paid calls settle on public blockchains - USDC"), "terms: the on-chain sentence reads as before");
