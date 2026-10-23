@@ -268,6 +268,25 @@ try {
     const ids = paged.map((r) => `${r.o}#${r.j}`);
     ok(new Set(ids).size === ids.length && ids.length === whole.matched, `paging in 3s returns every row once (${ids.length} of ${whole.matched})`);
     ok(JSON.stringify(paged) === JSON.stringify(whole.results), "...in the order one page of everything gives");
+
+    // A renumber on A while B's copy is stale: B's next write for a seller it
+    // already knows must take that seller's position from the table.
+    for (let i = 0; i < 60; i++) data[`https://aa${String(i).padStart(3, "0")}-1.example`] = { key: `aa${String(i).padStart(3, "0")}`, n: 1 };
+    for (const o of Object.keys(data)) if (o.startsWith("https://aa")) A.markDirty(o);
+    await A.flush();
+    data["https://alpha-1.example"].n = 5;
+    await B.writeOrigin("https://alpha-1.example", (() => { const d = data["https://alpha-1.example"]; return { sellerKey: d.key, sellerName: d.key, rows: Array.from({ length: d.n }, (_, j) => ({ method: "POST", route: `/r${j}`, t: { o: "https://alpha-1.example", j }, flat: { described: j % 2 === 0, category: "x", networks: [] } })) }; })());
+    const split2 = await sdb.stateQuery(`SELECT l.seller_key FROM ${s}.index_listings l JOIN ${s}.index_listing_sellers k ON k.seller_key = l.seller_key WHERE l.seller_ord <> k.ord LIMIT 5`);
+    ok(split2.rows.length === 0, `after a peer's renumber, a write from a container with a stale copy uses the table's position (${split2.rows.map((r) => r.seller_key).join(",") || "all match"})`);
+
+    // Rows that tie on (described, rank, seller position) still page exactly
+    // once each: the page order ends on (origin, pos).
+    await sdb.stateQuery(`UPDATE ${s}.index_listings SET seller_ord = 1 WHERE seller_key IN ('bravo', 'charlie', 'delta')`);
+    const tied = await A.directory({ limit: 500 });
+    const tiedPaged = [];
+    for (let off = 0; off < tied.matched; off += 2) tiedPaged.push(...(await B.directory({ offset: off, limit: 2 })).results);
+    const tiedIds = tiedPaged.map((r) => `${r.o}#${r.j}`);
+    ok(new Set(tiedIds).size === tiedIds.length && tiedIds.length === tied.matched && JSON.stringify(tiedPaged) === JSON.stringify(tied.results), `rows tied on their sort key page exactly once each (${tiedIds.length} of ${tied.matched})`);
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
