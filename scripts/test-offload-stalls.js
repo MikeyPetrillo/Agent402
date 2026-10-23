@@ -21,7 +21,7 @@ process.env.X402_INDEX_CRAWL = "off";
 const x = await import("../src/x402-index.js");
 const { buildRoutePerfFixture } = await import("./lib/route-perf-fixture.js");
 const cache = x._cacheForTests();
-buildRoutePerfFixture({ cache: { set: (o, e) => cache.set(o, { ...e, fetchedAt: 1, history: [1] }) } });
+const { ctx: routeCtx } = buildRoutePerfFixture({ cache: { set: (o, e) => cache.set(o, { ...e, fetchedAt: 1, history: [1] }) } });
 const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.matched, r.results])).digest("hex");
 
 // --- 1. the directory
@@ -112,6 +112,48 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     const heapMb = Math.round(process.memoryUsage().heapUsed / 1048576);
     ok(heapMb < Number(process.env.OFFLOAD_HEAP_MB || 520), `the production-sized index, router and directory fit under the heap ceiling (${heapMb} MB)`);
   }
+}
+
+// --- 1c. a route query meets an index backlog (a peer pull or a crawl burst
+// replaced half the entries) and answers in slices: it never indexes the
+// backlog inline (that held the loop 5.4 s on prod, 2026-10-23), it scans the
+// pending entries whole, and its answer equals the one once they are indexed.
+{
+  const { PerformanceObserver } = await import("node:perf_hooks");
+  const gcs = [];
+  const obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) gcs.push([e.startTime, e.startTime + e.duration]); });
+  obs.observe({ entryTypes: ["gc"] });
+  const Q = "pdf extract text";
+  let i = 0;
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  const pendingBefore = x._routeIndexStatsForTest().pending;
+  await new Promise((r) => setTimeout(r, 20));
+  const gaps = [];
+  let last = performance.now();
+  const timer = setInterval(() => { const t = performance.now(); gaps.push([last, t]); last = t; }, 1);
+  gcs.length = 0;
+  const sliced = await x.routeQueryAsyncInThread({ query: Q, top: 25, ...routeCtx });
+  await new Promise((r) => setTimeout(r, 50));
+  clearInterval(timer);
+  obs.disconnect();
+  let worst = 0;
+  for (const [a, b] of gaps) {
+    let inGc = 0;
+    for (const [s0, e0] of gcs) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
+    worst = Math.max(worst, b - a - inGc);
+  }
+  ok(pendingBefore > 1000 && worst < GAP_MS, `a route query over a ${pendingBefore}-entry index backlog never holds the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms, collector subtracted)`);
+  while (x._routeIndexStatsForTest().pending || x._routeIndexStatsForTest().partial) await new Promise((r) => setImmediate(r));
+  const drained = x.routeQuery({ query: Q, top: 25, ...routeCtx });
+  ok(sliced.count > 0 && JSON.stringify([sliced.count, sliced.sellersMatched, sliced.results]) === JSON.stringify([drained.count, drained.sellersMatched, drained.results]), `...and its answer equals the answer once the backlog is indexed (${sliced.count} rows)`);
+  // A pending row is a candidate by the index's own rule: a row that shares
+  // only a non-selecting word ("to", "the") with the query is not one, so a
+  // query whose one real word matches nothing answers nothing, backlog or not.
+  i = 0;
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  const none = await x.routeQueryAsyncInThread({ query: "to the zzqqnomatch", top: 25, include: "external", ...routeCtx });
+  ok(x._routeIndexStatsForTest().pending > 0 || x._routeIndexStatsForTest().partial, "the backlog is still pending for that query");
+  ok(none.count === 0, `a pending row sharing only "to"/"the" with the query is not a candidate (${none.count} rows)`);
 }
 
 // --- 2 + 3. source pins
