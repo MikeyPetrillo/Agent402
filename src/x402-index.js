@@ -7255,7 +7255,10 @@ export function startCrawler(opts = {}) {
     // The caller's own warmers (the tool directory) run once the cache is in.
     try { opts.onWarmed?.(); } catch { /* a warmer never breaks the crawler */ }
     const t = setTimeout(() => {
-      try { const t0 = Date.now(); const n = warmRouteIndex(); console.log(`[x402-index] route index warmed: ${n} tools in ${Date.now() - t0} ms (off the first buyer's query)`); }
+      // In slices: the warm start already queued every entry for the
+      // background drain, and indexing a prod-sized backlog in one turn held
+      // the loop for seconds. This only makes sure the drain is running.
+      try { routeIndexSync({ drain: false }); console.log(`[x402-index] route index: ${routeIdx.indexedTools} tools indexed, ${routeIdx.pending.size + (routeIdx.partial ? 1 : 0)} entries still indexing in the background`); }
       catch (e) { console.warn(`[x402-index] route index warm failed (the first query builds it instead): ${String(e?.message || e).slice(0, 120)}`); }
     }, ROUTE_INDEX_WARM_DELAY_MS);
     t.unref?.();
@@ -8617,7 +8620,7 @@ function routeIndexCompactIfStale() {
   const total = routeIdx.indexedTools + routeIdx.staleTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) routeIndexStartShadow();
 }
-function routeIndexSync({ sync = false } = {}) {
+function routeIndexSync({ sync = false, drain = true } = {}) {
   const total = routeIdx.indexedTools + routeIdx.staleTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) {
     if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
@@ -8628,8 +8631,13 @@ function routeIndexSync({ sync = false } = {}) {
     }
     routeIndexStartShadow();
   }
-  // A query finishes the live index's partly indexed entry first, so it never
-  // ranks a seller with only some of its rows in the postings.
+  // A query does not index the backlog: a peer pull or a crawl burst can leave
+  // thousands of entries pending, and draining them here held the event loop
+  // for seconds on prod (5.4 s, 2026-10-23). The query scans those entries
+  // whole instead (routeIndexUnindexedLive) and the background drain indexes
+  // them in slices.
+  if (!drain) { if (routeIdx.partial || routeIdx.pending.size) routeIndexScheduleDrain(); return; }
+  // warmRouteIndex finishes the live index's partly indexed entry first.
   if (routeIdx.partial) routeIndexAdvancePartial();
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
@@ -8640,6 +8648,18 @@ function routeIndexSync({ sync = false } = {}) {
   }
   routeIdx.pending.clear();
   routeIdx.termCache.clear(); // new vocabulary may match a cached term
+}
+/** Live entries the index does not hold yet: pending ones and the entry the
+ *  drain is part way through. A query scans these whole, so it never misses a
+ *  seller set before it and never ranks one with only some rows indexed. */
+function routeIndexUnindexedLive() {
+  const out = new Map();
+  const p = routeIdx.partial;
+  if (p && cache.get(p.origin) === p.v && !routeIdx.indexed.has(p.v)) out.set(p.v, p.origin);
+  for (const [origin, v] of routeIdx.pending) {
+    if (cache.get(origin) === v && !routeIdx.indexed.has(v)) out.set(v, origin);
+  }
+  return out;
 }
 /** Test hook: resolves once no background rebuild is in flight. */
 export async function _routeIndexSettledForTest() {
@@ -8827,6 +8847,11 @@ export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null
 // its budget by well under a millisecond, large enough that the generator
 // hop is noise.
 const ROUTE_SCORE_YIELD_ROWS = 256;
+// Posting rows walked between chances to yield while candidates are collected
+// (a power of two minus one, for a mask test), and the time one decoration
+// slice of an unindexed entry may take.
+const ROUTE_COLLECT_YIELD_MASK = 4095;
+const ROUTE_DECORATE_SLICE_MS = 6;
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null }) {
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
@@ -8856,7 +8881,8 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // rather rank fewer trustworthy options than more flaky ones.
   const localRef = inc === "external" ? null : localPoolFor({ baseUrl, catalog, prices, network, toolCount, walletName });
   const localPool = localRef ? localRef.pool : [];
-  const aliasOrigins = inc === "local" ? null : computeAliasOrigins(cache);
+  // Walked across turns (memoized per cache version, so usually a read).
+  const aliasOrigins = inc === "local" ? null : yield* computeAliasOriginsSteps(cache);
   // Same self-exclusion as indexSnapshot/routableSellerSummaries: the crawler
   // can discover and cache the real agent402.tools origin regardless of this
   // instance's own BASE_URL. Our own tools are already in localPool above -
@@ -8973,50 +8999,89 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   if (!selecting.some(Boolean)) selecting.fill(true);
   if (!memoHit) for (const t of localPool) scoreRow(t);
   if (!memoHit && inc !== "local" && removalsKnown()) {
-    routeIndexSync();
+    routeIndexSync({ drain: false });
+    // The query reads ONE view of the cache, taken here before any yield: its
+    // live entries in cache order (the order rows are pushed in decides how
+    // ties resolve) and the ones the index does not hold yet. The async driver
+    // may let a crawl or the drain write between slices; nothing written after
+    // this line changes what this query ranks.
+    const liveOrder = [...cache.values()];
+    const live = new Set(liveOrder);
+    const unindexed = routeIndexUnindexedLive(); // entry -> origin, scanned whole
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
-    // re-run them 500 times), and a per-query stamp on each tool's index
-    // record dedupes a tool reached through several tokens.
-    const stamp = ++routeIdx.queryStamp;
+    // re-run them 500 times). A per-query set dedupes a tool reached through
+    // several tokens (a stamp on the shared record would be overwritten by a
+    // query that runs between this one's slices).
     const entryOk = new Map();
+    const okOf = (v, origin) => {
+      let ok = entryOk.get(v);
+      if (ok === undefined) {
+        // The same seller filter the full scan applied; liveness is the
+        // view above, so a stale posting (its entry replaced) is never served.
+        ok = live.has(v) && isRoutable(v) && !aliasOrigins.has(origin) && !isSelfOrigin(origin);
+        entryOk.set(v, ok);
+      }
+      return ok;
+    };
+    const seen = new Set();
     const byEntry = new Map(); // live entry -> candidate tools (unordered)
+    let visited = 0;
     for (let k = 0; k < nTerms; k++) {
       if (!selecting[k]) continue;
-      for (const tok of routeIndexTokensFor(terms[k], shortTerm[k])) {
+      const toks = routeIndexTokensFor(terms[k], shortTerm[k]);
+      yield;
+      for (const tok of toks) {
         const list = routeIdx.postings.get(tok);
         if (!list) continue;
-        for (let i = 0; i < list.length; i++) {
+        // A posting list grows while the drain runs between slices; the rows
+        // past this length belong to entries this query scans whole or did
+        // not see.
+        const n = list.length;
+        for (let i = 0; i < n; i++) {
+          if ((++visited & ROUTE_COLLECT_YIELD_MASK) === 0) yield;
           const t = list[i];
           const home = t[TOOL_HOME];
-          if (!home || home.stamp === stamp) continue;
-          home.stamp = stamp;
-          let ok = entryOk.get(home.v);
-          if (ok === undefined) {
-            // The liveness test is a BELT, not the load-bearing rule: rows are
-            // emitted below by walking the cache's live entries, so a stale
-            // posting (its entry replaced) can never be served whatever this
-            // says - it is skipped here only to save the grouping work. The
-            // rest is the same seller filter the full scan applied.
-            ok = cache.get(home.origin) === home.v && isRoutable(home.v) && !aliasOrigins.has(home.origin) && !isSelfOrigin(home.origin);
-            entryOk.set(home.v, ok);
-          }
-          if (!ok) continue;
+          if (!home || seen.has(t)) continue;
+          seen.add(t);
+          if (unindexed.has(home.v) || !okOf(home.v, home.origin)) continue;
           let arr = byEntry.get(home.v);
           if (!arr) byEntry.set(home.v, (arr = []));
           arr.push(t);
         }
       }
     }
+    // Entries the index does not hold yet are scanned whole: decorated in
+    // slices (the drain shares the same resumable decoration), and a row is a
+    // candidate by the rule the index would have applied to it - one of its
+    // tokens is selected by a selecting term - so a pending seller ranks
+    // exactly as it will once indexed.
+    const selectedBy = [];
+    for (let k = 0; k < nTerms; k++) if (selecting[k]) selectedBy.push(shortTerm[k] ? ((tok) => tok === terms[k]) : ((tok) => tok.includes(terms[k])));
+    const isCandidate = (t) => {
+      const st = toolStatics(t);
+      const toks = new Set(splitTokens(st.hay));
+      for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
+      for (const tok of toks) for (const sel of selectedBy) if (sel(tok)) return true;
+      return false;
+    };
+    for (const [v, origin] of unindexed) {
+      if (!okOf(v, origin)) continue;
+      let pool;
+      while (!(pool = decorateRemoteToolsStep(v, performance.now() + ROUTE_DECORATE_SLICE_MS))) yield;
+      const arr = [];
+      for (let i = 0; i < pool.length; i++) {
+        if (isCandidate(pool[i])) arr.push(pool[i]);
+        if ((i & 255) === 255) yield;
+      }
+      if (arr.length) byEntry.set(v, arr);
+    }
     if (byEntry.size) {
-      // Cache order is fixed here, before any yield: the async driver may let
-      // a crawl write the cache between slices, and the order rows are pushed
-      // in decides how ties resolve.
       const ordered = [];
-      for (const v of cache.values()) {
+      for (const v of liveOrder) {
         const arr = byEntry.get(v);
         if (!arr) continue;
-        if (arr.length > 1) arr.sort((a, b) => a[TOOL_HOME].pos - b[TOOL_HOME].pos);
+        if (arr.length > 1 && !unindexed.has(v)) arr.sort((a, b) => a[TOOL_HOME].pos - b[TOOL_HOME].pos);
         ordered.push(arr);
       }
       let sinceYield = 0;
