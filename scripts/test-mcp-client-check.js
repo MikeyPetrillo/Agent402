@@ -22,6 +22,8 @@ import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { FLAGSHIP_OUTPUT_SCHEMAS, META_OUTPUT_SCHEMAS, outputSchemaFromExample } from "../src/mcp-flagship.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHECK = join(ROOT, "scripts", "mcp-client-check.js");
@@ -49,6 +51,37 @@ function runCheck(baseUrl, outName) {
       resolve({ status, stdout, stderr, summary });
     });
   });
+}
+
+// ------------------------------------------------- listed schemas compile
+
+// The reference client compiles every listed outputSchema at tools/list and
+// refuses the WHOLE listing on one bad schema. The hand-written tables and
+// the schema inferred from a discovery example (the decide tools list that
+// way, and only where the decide service is configured, so a local boot
+// never lists them) must all compile under the SDK's own validator. The
+// inferred shapes below include the one that reached production: an empty
+// example array, whose item type was typeof undefined.
+{
+  const validator = new AjvJsonSchemaValidator();
+  const compiles = (schema) => { try { validator.getValidator(schema); return null; } catch (err) { return err.message; } };
+  const tables = { ...Object.fromEntries(Object.entries(FLAGSHIP_OUTPUT_SCHEMAS).map(([k, v]) => [`flagship ${k}`, v])), ...Object.fromEntries(Object.entries(META_OUTPUT_SCHEMAS).map(([k, v]) => [`meta ${k}`, v])) };
+  const bad = Object.entries(tables).map(([k, s]) => [k, compiles(s)]).filter(([, e]) => e);
+  ok(Object.keys(tables).length >= 10 && bad.length === 0, `every hand-written outputSchema compiles under the SDK validator (${Object.keys(tables).length} schemas)${bad.length ? `: ${bad.map(([k, e]) => `${k}: ${e}`).join("; ")}` : ""}`);
+  const examples = {
+    "empty array": { gaps: [] },
+    "null field": { leftoverCredit: null },
+    "array of objects": { steps: [{ step: 1 }] },
+    "array of strings": { tags: ["a"] },
+    "nested arrays": { rows: [[1, 2]] },
+    "array with a null": { holes: [null] },
+    "scalars and an object": { n: 1, s: "x", b: true, o: { k: 1 } },
+    "not an object": "text",
+  };
+  const badEx = Object.entries(examples).map(([k, ex]) => [k, compiles(outputSchemaFromExample(ex))]).filter(([, e]) => e);
+  ok(badEx.length === 0, `a schema inferred from a discovery example compiles for every example shape${badEx.length ? `: ${badEx.map(([k, e]) => `${k}: ${e}`).join("; ")}` : ""}`);
+  const emptyArray = outputSchemaFromExample({ gaps: [] }).properties.gaps;
+  ok(emptyArray.type === "array" && emptyArray.items === undefined, "an empty example array infers a typed array with no item type, never items.type \"undefined\"");
 }
 
 // ------------------------------------------------------------ real server
