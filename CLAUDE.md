@@ -174,6 +174,10 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   `tollbooth/test.js` + `edge.test.js` + `features.test.js`, and the many `scripts/test-*.js`.
 - Raise the MCP free-tier limit for sweeps:
   `AGENT402_MCP_MAX_PER_MIN=999999 AGENT402_MCP_MAX_PER_HOUR=9999999`.
+- Independent MCP client: `scripts/mcp-client-check.js` reads `/mcp` with the reference SDK
+  client (a handful of free calls, no wallet); `scripts/test-mcp-client-check.js` runs it against
+  a port-0 boot and a drifted stub, and `mcp-clients.yml` runs it against production every 6
+  hours (`MCP_CHECK_TARGET=prod`), paging one issue.
 - A skipped integration test is not coverage: under `CI`, a missing dependency must fail.
 
 ## x402 settlement ordering (CRITICAL)

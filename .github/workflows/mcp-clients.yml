@@ -1,0 +1,89 @@
+# The hosted MCP connector read by an independent client, every 6 hours: the
+# reference @modelcontextprotocol/sdk Client over Streamable HTTP initializes
+# against https://agent402.tools/mcp, lists the tools, and makes a handful of
+# free calls (scripts/mcp-client-check.js). Our own harness posts raw JSON-RPC;
+# a real client validates schemas and answer shapes, so this is the view a
+# host gets, and the one a drift in names, descriptions or shapes breaks first.
+#
+# Schedule and dispatch only, never on a push: the CI lane runs the same check
+# against a local boot on every push (scripts/test-mcp-client-check.js). A
+# failure opens (or updates) ONE issue with the check lines and the next clean
+# run closes it. No secrets: the check holds no wallet, the free tool runs on
+# the free tier, the paid call carries no credential. Spends nothing.
+name: MCP connector independent client (every 6 hours)
+
+on:
+  schedule:
+    - cron: "41 */6 * * *" # every 6 hours, at :41
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: mcp-clients
+  cancel-in-progress: false
+
+jobs:
+  mcp-client-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install dependencies (secretless)
+        # Dependency lifecycle scripts are skipped; the check needs only the
+        # MCP SDK, and this workflow carries no secret at any scope.
+        env:
+          UPSTREAM_COSTS_JSON: ""
+        run: npm ci --ignore-scripts
+      - name: Independent client check against production
+        id: check
+        env:
+          MCP_CHECK_TARGET: prod
+          MCP_CHECK_OUT: mcp-client-check.json
+        run: |
+          set +e
+          node scripts/mcp-client-check.js 2>&1 | tee check.log
+          code=${PIPESTATUS[0]}
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Page (open / update / close the issue)
+        if: always()
+        env:
+          RESULT: ${{ steps.check.outputs.exit }}
+        run: |
+          TITLE="MCP connector: an independent client failed a check"
+          RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          find_issue() { gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title --jq "[.[] | select(.title == \"$1\")][0].number // empty"; }
+          OPEN=$(find_issue "$TITLE")
+          if [ "$RESULT" != "0" ]; then
+            LINES=$(grep -E '^(ok|FAIL) - ' check.log 2>/dev/null | head -40 || true)
+            if [ -z "$LINES" ]; then LINES="(no check lines: the client could not start; log tail follows)
+          $(tail -25 check.log 2>/dev/null)"; fi
+            BODY="An independent MCP client (the reference @modelcontextprotocol/sdk Client over Streamable HTTP) failed a check against https://agent402.tools/mcp: a listed tool, a description, an input schema, a free answer, the paid-call refusal or the tasks wire is not what a client expects. Our own harness may still pass. Run: $RUN
+
+          \`\`\`
+          $LINES
+          \`\`\`
+
+          Reproduce locally: \`MCP_CHECK_TARGET=prod node scripts/mcp-client-check.js\` (free calls only, no wallet)."
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN
+
+          \`\`\`
+          $LINES
+          \`\`\`"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the independent client check passed at $(date -u +%FT%TZ). Run: $RUN"
+          fi
