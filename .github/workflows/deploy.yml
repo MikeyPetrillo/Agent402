@@ -1835,6 +1835,8 @@ jobs:
           t node scripts/test-revenue-cold.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
+          # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
+          t node scripts/test-rh-fallback-confirm.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
           t node scripts/test-arc-rail.js
           # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
