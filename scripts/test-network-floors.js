@@ -24,6 +24,10 @@ const priceOn = async (opt, req = {}) => (typeof opt.price === "function" ? opt.
 
 console.log("per-chain price floors");
 
+await check("the default Robinhood floor is $0.006 (a settlement there must pay for its own gas)", () => {
+  assert.equal(ROBINHOOD_MIN_PRICE_DEFAULT_USD, 0.006);
+});
+
 await check("default: Robinhood Chain carries the floor, no other chain does", () => {
   const f = networkPriceFloors({});
   assert.equal(f.size, 1);
