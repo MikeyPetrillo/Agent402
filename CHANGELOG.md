@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## v2.8.0 - 2026-10-20
 
+### 2026-10-23
+- `agent402-client` 0.8.17 and `agent402-mcp` 0.13.19: with a prepaid credits
+  key, a spending cap counts the route's own price, not a higher price another
+  chain's payment option carries, so a budget lasts as long as it should.
+- `agent402-client` 0.8.17 takes `payNetworks`, the chains a pre-wrapped
+  payment fetch pays on, and counts the dearest option on those chains; without
+  it the cap still counts the dearest option on any chain.
+
 ### 2026-10-22
 - Please upgrade the buyer packages: `agent402-client` 0.8.16,
   `agent402-mcp` 0.13.17, `agent402-agentkit` 0.1.7, `agent402-openclaw`

@@ -2,6 +2,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-23",
+    title: "Spending caps count the price you pay",
+    items: [
+      "agent402-client 0.8.17 and agent402-mcp 0.13.19: with a prepaid credits key, a spending cap counts the route's own price, not a higher price another chain's payment option carries, so a budget lasts as long as it should.",
+      "agent402-client 0.8.17 takes payNetworks, the chains a pre-wrapped payment fetch pays on, and counts the dearest option on those chains; without it the cap still counts the dearest option on any chain.",
+    ],
+  },
+  {
     date: "2026-10-22",
     title: "Please upgrade the buyer packages",
     items: [
