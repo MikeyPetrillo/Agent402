@@ -34,6 +34,7 @@ import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
+import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
@@ -338,6 +339,45 @@ export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } =
 }
 /** The pending book, for the operator route; null without an Arc client. */
 export function circlePendingBookForOperator() { return circlePendingBook; }
+// The late-settlement book (src/late-settlements.js), built on first use.
+let lateBook = null;
+async function lateSettleBook() {
+  if (lateBook) return lateBook;
+  const { createLateSettleBook } = await import("./late-settlements.js");
+  const { saleByTxFresh } = await import("./sales-ledger.js");
+  const { txServedElsewhere } = await import("./settlement-claims.js");
+  // Served after all: a sale recorded for the tx, or a request holding its
+  // settlement claim. Checking also takes the claim, so nothing can serve
+  // that tx after it is booked owed.
+  lateBook = lateBook || createLateSettleBook({
+    wasServed: async ({ tx, network, key }) =>
+      !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `late-settle:${key}`)),
+  });
+  return lateBook;
+}
+/** The late-settlement book for the operator route (built on first use). */
+export async function lateSettleBookForOperator() { return lateSettleBook(); }
+let lateReconcileStarted = false;
+function startLateSettleReconcile() {
+  if (lateReconcileStarted || process.env.X402_SYNC_ON_START === "false" || process.env.LATE_SETTLE_RECONCILE === "off") return;
+  lateReconcileStarted = true;
+  void (async () => {
+    const { leased } = await import("./state-db.js");
+    const { RECONCILE_LEASE_MS } = await import("./late-settlements.js");
+    const tick = leased("late-settle-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
+      const b = await lateSettleBook();
+      await b.ready;
+      await b.refresh();
+      if (!b.list().length) return null;
+      const r = await b.reconcile();
+      if (r.owed || r.reverted || r.notOurs || r.absent || r.served || r.unresolved || r.errors) console.warn(`[late-settle] reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.reverted} reverted, ${r.notOurs} without this transfer, ${r.absent} never mined, ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still open`);
+      return r;
+    });
+    const ms = Number(process.env.LATE_SETTLE_RECONCILE_MS) > 0 ? Number(process.env.LATE_SETTLE_RECONCILE_MS) : 2 * 60_000;
+    const t = setInterval(() => { tick().catch(() => {}); }, ms);
+    if (typeof t.unref === "function") t.unref();
+  })().catch((e) => console.warn(`[late-settle] reconcile did not start: ${String(e?.message || e).slice(0, 120)}`));
+}
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -1605,6 +1645,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only when nothing recovered the payment.
   registerSettlementClaimHooks(server);
   registerSettlementClaimRelease(server);
+  // A settle failure that names a transaction may still land: booked and
+  // read from the chain, and owed if it did (src/late-settlements.js).
+  // Registered after every hook that can recover the payment, so it sees
+  // only failures nothing settled.
+  registerLateSettleHook(server, lateSettleBook);
+  startLateSettleReconcile();
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -2472,6 +2518,9 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
             errorReason: result?.errorReason, errorMessage: result?.errorMessage, transaction: result?.transaction,
           });
           if (isRetryableSettleRefusal(refusal, ctx?.requirements?.network)) { revertOnly = !isPreBroadcastSettleRejection(refusal); continue; }
+          // The chain stops here. A refusal that names a transaction may still
+          // land: the late-settlement book reads it (src/late-settlements.js).
+          noteLateTx(ctx, result?.transaction, name);
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
@@ -2495,11 +2544,17 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // candidate. A timeout/5xx here may
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
-        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) return;
+        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) { noteLateTx(ctx, err?.transaction, name); return; }
         revertOnly = !isPreBroadcastSettleRejection(err);
       }
     }
   });
+}
+
+/** The transaction a stopping fallback named, for the late-settlement hook
+ *  registered after this one (it reads the same failure context). */
+function noteLateTx(ctx, transaction, via) {
+  if (ctx && typeof transaction === "string" && /^0x[0-9a-fA-F]{64}$/.test(transaction)) ctx.__a402LateTx = { transaction, via };
 }
 
 /**

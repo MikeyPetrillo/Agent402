@@ -1837,6 +1837,8 @@ jobs:
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
           t node scripts/test-rh-fallback-confirm.js
+          # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
+          t node scripts/test-late-settlements.js
           # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check, paid-mode boot with and without the key (stub chain, throwaway keys - offline)
           t node scripts/test-own-relayer.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)

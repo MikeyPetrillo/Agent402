@@ -395,7 +395,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -5760,7 +5760,7 @@ app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) =
 // the ledger exists to prevent. The refund EXECUTOR (refund.yml -> scripts/
 // refund-run.js) is the only thing that sends money, from its own keys in
 // Actions secrets - this server never holds a spending key.
-app.get("/__operator/refunds.json", (req, res) => {
+app.get("/__operator/refunds.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // The real brute-force bound is operatorAuthed's own per-IP attempt limiter,
   // which charges budget only on a WRONG credential - CodeQL cannot see it
@@ -5780,6 +5780,10 @@ app.get("/__operator/refunds.json", (req, res) => {
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
+    // Settle failures that named a transaction, open until the chain says
+    // whether it landed (src/late-settlements.js); a landed one becomes an
+    // owed row above.
+    unconfirmedSettlements: await lateSettleBookForOperator().then((b) => b.operatorView()).catch(() => null),
   });
 });
 // Self-serve seller conversion/churn (2026-08-16). first_seen: when the
