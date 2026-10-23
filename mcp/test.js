@@ -413,6 +413,18 @@ try {
       accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }],
       extensions: { bazaar: { info: { input: { type: "http", method: "POST", body: { text: "x" } } }, schema: { type: "object", properties: { input: { type: "object" } } } } },
     };
+    // A $0.001 route whose 402 also carries a floored Robinhood (USDG) accept
+    // at $0.005, as this server's does: the credits gate debits the route's
+    // own quote, so a credits cap counts $0.001, not the other chain's floor.
+    const flooredRow = { slug: "floored", method: "POST", path: "/api/floored", price: "$0.001", description: "floored", category: "util", computePayable: false };
+    const flooredOffer = {
+      x402Version: 2, resource: { url: "http://127.0.0.1/api/floored", description: "floored", mimeType: "application/json" },
+      accepts: [
+        { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } },
+        { scheme: "exact", network: "eip155:4663", amount: "5000", asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "Global Dollar", version: "1" } },
+      ],
+    };
+    seen.flooredPaid = 0;
     const { error: _offerError, ...refusedOfferKeys } = refusedOffer;
     const refusedBody = { reason: "requirements-mismatch", hint: "Echo the accepts entry you were offered verbatim.", retry: "rebuild-payment", ...refusedOfferKeys };
     seen.refusedPaid = 0;
@@ -449,7 +461,12 @@ try {
     seen.redirPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/floored")) {
+        req.resume();
+        if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
+        return send(402, {}, { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(flooredOffer)).toString("base64") });
+      }
       if (req.url.startsWith("/api/redir-first")) { req.resume(); res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
       if (req.url.startsWith("/api/redir-paid")) {
         req.resume();
@@ -518,6 +535,25 @@ try {
       if (served.isError) fail(`a quote inside the cap must still pay: ${text(served).slice(0, 300)}`);
       if (seen.authorized !== 1) fail(`the under-cap call must be paid exactly once, saw ${seen.authorized}`);
       console.log("a quote inside the cap still pays ✓");
+    } finally { await credits.close().catch(() => {}); }
+
+    // credits: another chain's floor in the offer is not the debit. A per-call
+    // cap of $0.004 serves the $0.001 route, and a $0.004 budget pays it four
+    // times (counted at $0.005 it would refuse the first call).
+    const callFloored = (c) => c.callTool({ name: "catalog.call", arguments: { slug: "floored", params: { text: "x" } } });
+    credits = await connect({ AGENT402_CREDITS_KEY: creditsKey, AGENT402_MAX_PER_CALL: "0.004" });
+    try {
+      const served = await callFloored(credits);
+      if (served.isError) fail(`a $0.001 credits call must not count another chain's floor against a $0.004 cap: ${text(served).slice(0, 300)}`);
+      console.log("credits: a per-call cap below another chain's floor still serves the $0.001 route ✓");
+    } finally { await credits.close().catch(() => {}); }
+    credits = await connect({ AGENT402_CREDITS_KEY: creditsKey, AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.004" });
+    try {
+      const before = seen.flooredPaid;
+      let servedCount = 0;
+      for (let i = 0; i < 5; i++) { const r = await callFloored(credits); if (!r.isError) servedCount++; }
+      if (seen.flooredPaid - before !== 4 || servedCount !== 4) fail(`a $0.004 credits budget must pay four $0.001 calls and refuse the fifth, paid ${seen.flooredPaid - before}`);
+      console.log("credits: the budget is charged the debit ($0.001 a call), not the dearest accept ✓");
     } finally { await credits.close().catch(() => {}); }
 
     // wallet: the same cap, refused before any signature (unfunded throwaway key)

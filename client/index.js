@@ -30,7 +30,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.16";
+const VERSION = "0.8.17";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -91,6 +91,9 @@ export class Agent402 {
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
    * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
    *                                         enforced on the payment that is signed (see guardX402Client)
+   * @param {string[]} [opts.payNetworks]    the chains your pre-wrapped `fetch` pays on (e.g. ["base"], the
+   *                                         names withNetworkPreference takes): without an x402Client the
+   *                                         caps count the dearest accept on these chains, not on every chain
    * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) already issued (new credits are
    *                                         not on sale) - pays wallet-only tools when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
@@ -109,7 +112,7 @@ export class Agent402 {
    *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
-    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null,
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null } = {}) {
     this.respondAsync = respondAsync;
@@ -155,6 +158,10 @@ export class Agent402 {
     this._signCtx = new AsyncLocalStorage();
     this._guarded = false;
     if (x402Client) this.guardX402Client(x402Client);
+    // The chains a pre-wrapped fetch pays on, as CAIP-2 ids (null = unknown).
+    this._payNetworks = Array.isArray(payNetworks) && payNetworks.length
+      ? new Set(payNetworks.map((n) => String(NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim()).toLowerCase()))
+      : null;
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
     // Buyer-owned delivery policy. The callback stays entirely local and may
@@ -649,8 +656,11 @@ export class Agent402 {
    *  "guarded" (the signing guard holds every signature to the caps, so the
    *  cheapest known accept is what can be paid, and unknown ones are dropped
    *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
-   *  one counts, and one that cannot be priced is refused here), or "credits"
-   *  (nothing is signed; the dearest known accept counts).
+   *  one counts, among the chains in `payNetworks` when they are given, and one
+   *  that cannot be priced is refused here), or "credits" (nothing is signed:
+   *  the credits gate debits the route's own quote, and no accept is below it,
+   *  since a chain premium or price floor only raises an accept, so the
+   *  cheapest known accept counts).
    *  @returns {Promise<number>} the quoted amount, or `listUsd` when there is no readable 402 */
   async _quotedUsd(send, listUsd, { slug = "", mode = "wallet" } = {}) {
     if (!this._spendCapsConfigured()) return listUsd;
@@ -658,7 +668,11 @@ export class Agent402 {
     try {
       const pre = await send();
       if (pre?.status !== 402) return listUsd;
-      q = quoteOf(await challengeAccepts(pre));
+      let accepts = await challengeAccepts(pre);
+      if (mode === "wallet" && this._payNetworks && Array.isArray(accepts)) {
+        accepts = accepts.filter((a) => this._payNetworks.has(String(a?.network || "").toLowerCase()));
+      }
+      q = quoteOf(accepts);
     } catch (e) {
       // A redirect is refused here, before anything is reserved or signed.
       if (e instanceof PaymentRedirectError) throw e;
@@ -671,7 +685,7 @@ export class Agent402 {
         `refusing to pay for "${slug}" - ${q.max == null ? "no" : "a"} payment option it offers is in an asset this client cannot price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
         { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
     }
-    const quoted = mode === "guarded" ? q.min : q.max;
+    const quoted = mode === "wallet" ? q.max : q.min;
     // Larger of the two: an understated catalog must not lower the ceiling
     // the cap is checked against.
     return Math.max(listUsd, quoted);
