@@ -8827,7 +8827,8 @@ const yieldToLoop = () => new Promise((r) => setImmediate(r));
 // when it ends (a burst of queries would otherwise all pass a budget check
 // that none of them had charged yet).
 export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null } = {}) {
-  const steps = routeQuerySteps(args);
+  // In this thread a backlog is scanned, never indexed inline (see routeIndexSync).
+  const steps = routeQuerySteps({ ...args, drainBacklog: false });
   let sliceStart = performance.now();
   let r = steps.next();
   while (!r.done) {
@@ -8852,7 +8853,7 @@ const ROUTE_SCORE_YIELD_ROWS = 256;
 // slice of an unindexed entry may take.
 const ROUTE_COLLECT_YIELD_MASK = 4095;
 const ROUTE_DECORATE_SLICE_MS = 6;
-function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null }) {
+function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
@@ -8999,7 +9000,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   if (!selecting.some(Boolean)) selecting.fill(true);
   if (!memoHit) for (const t of localPool) scoreRow(t);
   if (!memoHit && inc !== "local" && removalsKnown()) {
-    routeIndexSync({ drain: false });
+    routeIndexSync({ drain: drainBacklog });
     // The query reads ONE view of the cache, taken here before any yield: its
     // live entries in cache order (the order rows are pushed in decides how
     // ties resolve) and the ones the index does not hold yet. The async driver

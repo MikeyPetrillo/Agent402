@@ -123,7 +123,7 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const gcs = [];
   const obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) gcs.push([e.startTime, e.startTime + e.duration]); });
   obs.observe({ entryTypes: ["gc"] });
-  const Q = "search the web for news and get a list of the price of a token and the wallet balance on base chain with x402 usdc";
+  const Q = "pdf extract text";
   let i = 0;
   for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
   const pendingBefore = x._routeIndexStatsForTest().pending;
