@@ -1415,6 +1415,8 @@ jobs:
           t node scripts/test-index-replicas-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
+          # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
+          t node scripts/test-index-listings-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
           t node scripts/test-index-reprice-replicas-pg.js
           # Index side stores merge per key and fold the other container's changes on the pull
