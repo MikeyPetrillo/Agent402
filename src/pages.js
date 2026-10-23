@@ -14,6 +14,7 @@ import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
@@ -850,6 +851,16 @@ export function openapiSpec(baseUrl, catalog) {
             ...(o.chainId ? { chainId: o.chainId } : {}),
             description: o.description,
           })),
+          // The Circle Gateway batched option, where the live offer carries
+          // it (src/gateway-nanopayments.js): the same price on a second
+          // exact accept the buyer pays gas-free from a Gateway balance.
+          // Identity-bound routes keep the plain accept only. Absent while
+          // the option is off.
+          ...(() => {
+            const gw = gatewayOfferPublic();
+            if (!gw || tool.identityBound) return {};
+            return { nanopayments: { kind: gw.kind, networks: Object.keys(gw.networks), buyerGas: "none", settlement: "batched off chain by Circle Gateway", select: `the accept whose extra.name is ${gw.kind}` } };
+          })(),
         };
       })(),
     };

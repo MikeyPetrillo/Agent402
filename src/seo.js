@@ -10,6 +10,7 @@ import { ADAPTERS } from "./adapter-docs.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS_OR } from "./rails.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -427,6 +428,16 @@ const decidePrices = () => _decideConfig().prices;
 const decideRoutingFeePct = () => _decideConfig().routingFeePct;
 const decideCreditHours = () => _decideConfig().credit.ttlHours;
 
+/** The Circle Gateway batched option, as one sentence for llms.txt, from the
+ *  live offer (src/gateway-nanopayments.js); empty while it is off. */
+function gatewayNanopaymentsLine() {
+  const gw = gatewayOfferPublic();
+  if (!gw) return "";
+  const nets = Object.keys(gw.networks);
+  const chains = Object.entries(CHAIN_PAGES).filter(([, c]) => nets.includes(c.caip2)).map(([, c]) => c.chainName);
+  return ` **Gas-free batched option (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\` and a seven-day \`maxTimeoutSeconds\`): a buyer that holds a Circle Gateway USDC balance signs the same EIP-3009 authorization under that domain and pays no gas; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`. Identity-bound routes offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
+}
+
 export function llmsTxt(baseUrl, catalog) {
   // Identity-bound routes, read from the same flag the gates and tool pages read
   // (isIdentityBoundRoute, stamped on each def at catalog build), never typed.
@@ -524,7 +535,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.${gatewayNanopaymentsLine()}
 
 **Already hold a prepaid credits key?** New credits are not on sale; a key already issued keeps working. Send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
