@@ -330,7 +330,7 @@ delete process.env.MPP_RECONCILE;
   const branch = src.slice(src.indexOf("} else if ((req.tempoSettled || req.stripeSettled) && res.statusCode >= 400"));
   ok(branch.length > 0 && /recordRefundOwed\(\{[\s\S]{0,600}wire: req\.tempoSettled \? "mpp-tempo" : "mpp-stripe"/.test(branch.slice(0, 3000)),
     "server.js records a refund debt (wire mpp-tempo / mpp-stripe) when a Tempo/Stripe settle is followed by a >= 400");
-  ok(/wire: req\.mppCredential \? "mpp" : "x402"/.test(src), "server.js tags x402-path debts with the wire, so MPP evm charged-failures are countable");
+  ok(/function x402WireOf\(req\) \{[\s\S]{0,160}return req\.mppCredential \? "mpp" : "x402";/.test(src) && (src.match(/wire: x402WireOf\(req\)/g) || []).length >= 2, "server.js tags x402-path debts with the wire (x402WireOf), so MPP evm charged-failures are countable");
   ok(/mppReconcile: await mppReconciler\.status\(\{ full \}\)/.test(src), "gateway-status passes the operator flag (public view is words only)");
 }
 
