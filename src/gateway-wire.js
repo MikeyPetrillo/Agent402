@@ -57,7 +57,7 @@ export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway accepted this batched p
 /** What a buyer is told when Gateway reports the batched payment failed:
  *  Gateway charges nothing for a failed transfer, so a fresh one is safe. */
 export const SETTLEMENT_FAILED_REASON = "settlement_failed";
-export const SETTLEMENT_FAILED_DETAIL = "Circle Gateway reports that this batched payment failed, and a failed Gateway transfer is not charged. Sign a fresh authorization to retry.";
+export const SETTLEMENT_FAILED_DETAIL = "Circle Gateway reports that this batched payment failed, so Gateway took nothing for it. Sign a fresh authorization to retry.";
 
 /** True for a settle receipt (decoded PAYMENT-RESPONSE) that says Gateway is
  *  still settling the payment: neither served nor refused by the buyer's own
