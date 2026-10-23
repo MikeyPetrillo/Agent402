@@ -73,6 +73,16 @@ const check = (name, fn) => {
   catch (e) { failures++; console.log(`  FAIL ${name}\n       ${e.message}`); }
 };
 
+check("Robinhood has its own chart color and Arbitrum folds into Other", () => {
+  const slots = REVENUE_CHART_JS.match(/var SLOTS=(\{[^}]*\})/)[1].replace(/(\w+):/g, '"$1":');
+  const SLOTS = JSON.parse(slots);
+  if (!SLOTS.robinhood) throw new Error(`robinhood has no named slot: ${slots}`);
+  if (SLOTS.arbitrum) throw new Error("arbitrum still holds a named slot");
+  const names = REVENUE_CHART_JS.match(/var NAMES=\{[^}]*\}/)[0];
+  if (!names.includes(`${SLOTS.robinhood}:"Robinhood"`)) throw new Error("the legend does not name Robinhood's slot");
+  if (new Set(Object.values(SLOTS)).size !== Object.keys(SLOTS).length || Object.values(SLOTS).some((n) => n < 1 || n > 7)) throw new Error("slots must be distinct, 1-7 (8 is Other)");
+});
+
 async function boot({ freeFails = false, tempoDays = [], tempoFails = false } = {}) {
   const html = `<!doctype html><html><body>${inlineRevenueChartScript(revenueChartSection())}</body></html>`;
   // fetch must exist BEFORE the inline script runs, so the chart's own IIFE is
