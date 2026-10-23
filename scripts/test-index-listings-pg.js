@@ -136,9 +136,11 @@ try {
   for (const q of QUERIES.slice(0, 8)) onAfter.push(stable(await run(q)));
   delete process.env.INDEX_LISTINGS_STORE;
   x._resetFlatCacheForTest(); x._resetIndexRowsForTest();
+  const flatOff = x._flatBuildsForTest();
   let same2 = 0;
   for (let i = 0; i < 8; i++) if (stable(await run(QUERIES[i])) === onAfter[i]) same2++;
   ok(same2 === 8, `after the change and the removal the pages still match (${same2}/8)`);
+  ok(x._flatBuildsForTest() > flatOff, "switched off, the same process answers from the in-memory directory again (the switch is read per request)");
   process.env.INDEX_LISTINGS_STORE = "pg";
 
   // ---- a second container's identical write is a hash compare ----------------
@@ -146,6 +148,18 @@ try {
   for (const o of origins.slice(0, 50)) store.markDirty(o);
   await store.flush();
   ok(store.status().writes === writes, "re-marking unchanged origins writes nothing (content hash)");
+
+  // ---- the search uses the trigram index -----------------------------------------
+  if (st.trigram) {
+    // A small fixture table is cheaper to scan, so the planner is told to avoid
+    // a scan where it can: the check is that the search CAN use the index.
+    const text = await sdb.withStateTx(async (c) => {
+      await c.query("SET LOCAL enable_seqscan = off");
+      const plan = await c.query(`EXPLAIN SELECT count(*) FROM ${sdb.stateDbSchema()}.index_listings WHERE hay LIKE '%weather%'`);
+      return plan.rows.map((r) => r["QUERY PLAN"]).join("\n");
+    });
+    ok(/index_listings_hay_trgm/.test(text), `a search reads the trigram index, not the whole table (${/Seq Scan/.test(text) ? "seq scan" : "index"})`);
+  }
 
   // ---- latency -----------------------------------------------------------------
   // Each page timed with the database warm (it has answered the query once)
