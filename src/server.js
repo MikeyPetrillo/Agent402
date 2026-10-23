@@ -403,7 +403,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -2800,7 +2800,7 @@ startSharedLimitsProbe();
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "private, no-store").json(await toolFailureMonitor().report());
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView() });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });

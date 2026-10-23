@@ -45,6 +45,7 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
+import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
@@ -994,7 +995,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // chain instead of stopping the chain (src/robinhood-outage.js).
   let robinhoodOutage = null;
   if (robinhoodEnabled) {
-    addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
+    const robinhoodPrimary = new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL });
+    addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, robinhoodPrimary);
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
     for (const url of ROBINHOOD_FACILITATOR_URLS.slice(1)) {
       const name = `Robinhood fallback (${url})`;
@@ -1038,6 +1040,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         const { createRobinhoodOutage } = await import("./robinhood-outage.js");
         robinhoodOutage = createRobinhoodOutage({ network: ROBINHOOD_CAIP2, token: USDG.asset, treasury: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2), relayer: client });
         console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only; pays gas only when the listed facilitators fail)`);
+        // While the listed facilitator's settlement signer reads dry, our
+        // relayer settles first and the facilitator is not asked; a reading
+        // that shows it funded again puts it first (src/robinhood-order.js).
+        robinhoodOrder = createRobinhoodOrder({ host: hostOfUrl(ROBINHOOD_FACILITATOR_URL) });
+        withRobinhoodGasOrder(robinhoodPrimary, { order: robinhoodOrder, relayer: client });
+        startRobinhoodOrderRefresh(robinhoodOrder);
       } catch (e) {
         console.warn(`WARNING: own Robinhood relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
       }
@@ -1049,6 +1057,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks),
         ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
+        onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
@@ -2367,7 +2376,31 @@ async function ethUsdFromCryptoPrice() {
   return Number(out?.coins?.ethereum?.price);
 }
 
-export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice } = {}) {
+// The Robinhood settle order (src/robinhood-order.js): decided here from the
+// gas readings, read by the wrapped facilitator client on every settle.
+let robinhoodOrder = null;
+const hostOfUrl = (url) => { try { return new URL(String(url)).host; } catch { return ""; } };
+/** The current Robinhood settle order (operator detail), or null. */
+export function robinhoodOrderView() { return robinhoodOrder ? robinhoodOrder.view() : null; }
+// The container running the leased gas check updates the order as it reads
+// (onReadings); every container also re-reads the merged readings (other
+// containers' snapshots included) on a short timer, so the order follows the
+// newest reading wherever it was taken.
+function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROBINHOOD_ORDER_REFRESH_MS) || 60_000 } = {}) {
+  const run = async () => {
+    try {
+      const mon = toolFailureMonitor();
+      if (typeof mon.refreshRemote === "function") await mon.refreshRemote();
+      const e = mon.evaluate();
+      order.update(e?.relayerGas || []);
+    } catch { /* a missing reading leaves the order as it is */ }
+  };
+  const t = setInterval(() => { void run(); }, intervalMs);
+  t.unref?.();
+  return run;
+}
+
+export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice, onReadings = null } = {}) {
   const { leased } = await import("./state-db.js");
   const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck } = await import("./facilitator-gas.js");
   const { evmRpcFor } = await import("./evm-rpcs.js");
@@ -2382,6 +2415,7 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
     if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners, floorCheck }));
     const readings = await checkers.get(key).check();
     toolFailureMonitor().noteRelayerGas(readings);
+    if (typeof onReadings === "function") { try { onReadings(readings); } catch { /* the order is advisory */ } }
     for (const r of readings) {
       if ((r.status === "low" || r.status === "unread") && r.facilitator !== "price floor") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
     }
@@ -2535,9 +2569,13 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       return { recovered: true, result: r.result };
     }
     if (!fallbackEnabled) return;
+    // Our own relayer settled first because the listed facilitator read dry
+    // (src/robinhood-order.js): it is not asked again below, and its own
+    // ambiguous answer is not handed back to it by the outage path.
+    const ownFirst = ownFirstAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network);
     // An ambiguous failure (it may have broadcast) on a network with an outage
     // handler is read on chain rather than stopping here (src/robinhood-outage.js).
-    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
+    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return ownFirst ? undefined : settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
     // A refusal that is retryable only because the transfer reverted reaches
     // only the facilitators the operator listed for it (revertRetry), never
     // the default chain: with no listed fallback the chain stops exactly as it
@@ -2546,7 +2584,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // A facilitator the demotion wrapper already asked for this payment is
     // not asked again.
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
-      .filter(({ name }) => !demotionAttempt?.asked.has(name));
+      .filter(({ name, own }) => !demotionAttempt?.asked.has(name) && !(ownFirst && own));
     for (const { name, client, revertRetry, own } of candidates) {
       if (revertOnly && revertRetry !== true) continue;
       try {
