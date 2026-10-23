@@ -95,10 +95,15 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     const t0 = performance.now();
     const sampled = x.indexMemoryFigures({ sampleBytes: true });
     const readMs = performance.now() - t0;
+    // Timed against serializing every entry's tools on the same machine, so a
+    // slow runner slows both: the sampled read must stay a small fraction of
+    // the whole, under a generous absolute cap.
+    const t1 = performance.now();
     let whole = 0;
     for (const e of cache.values()) whole += JSON.stringify(e.tools || []).length;
+    const wholeMs = performance.now() - t1;
     const wholeMb = whole / 1048576, est = sampled.jsonMbEstimate;
-    ok(est && est.sampledEntries > 50 && est.sampledEntries <= 2 * 120 && readMs < 50, `the sampled heap read reads ${est?.sampledEntries} entries in ${readMs.toFixed(1)} ms (bound 50 ms)`);
+    ok(est && est.sampledEntries > 50 && est.sampledEntries <= 2 * 120 && readMs < Math.max(20, wholeMs * 0.25) && readMs < 250, `the sampled heap read reads ${est?.sampledEntries} entries in ${readMs.toFixed(1)} ms (whole serialize ${wholeMs.toFixed(1)} ms; bound a quarter of it, under 250 ms)`);
     ok(Math.abs(est.tools - wholeMb) <= Math.max(2, wholeMb * 0.25), `...and its tool-row estimate (${est.tools} MB) is within 25% of the whole serialized (${wholeMb.toFixed(1)} MB)`);
     ok(sampled.routeIndex?.tokens > 0 && sampled.routeIndex.postingRefs >= sampled.routeIndex.tokens, `...and it counts the route index (${sampled.routeIndex?.tokens} tokens, ${sampled.routeIndex?.postingRefs} postings)`);
     ok(!("jsonMbEstimate" in figs), "the plain read stays counts only");
