@@ -3670,6 +3670,9 @@ jobs:
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-all.js
 
+      - name: "Independent MCP client (the reference SDK client reads a local boot; a stub drift fails it)"
+        run: node scripts/test-mcp-client-check.js
+
       - name: "Self-consistency — every tool and route our own text names must exist"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-self-consistency.js
 
