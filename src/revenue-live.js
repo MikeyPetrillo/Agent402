@@ -11,7 +11,7 @@
 import { tempoSelfRecipient } from "./mpp-tempo.js";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
-import { trackStoreReady } from "./state-db.js";
+import { trackStoreReady, leased } from "./state-db.js";
 import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "./chain-block-time.js";
 import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
@@ -260,6 +260,7 @@ export const EVM = {
 // src/solana-history-rpc.js, which also routes getTransaction (an immutable
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
+import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence } from "./refresh-cadence.js";
 export { SOLANA_RPCS };
 
 // Stellar/Algorand REST endpoints. Alchemy doesn't serve these chains, so each
@@ -1533,44 +1534,87 @@ function persistLastGood(rails) {
     if (keep.length) void lastGoodDoc.save({ asOf: new Date().toISOString(), rails: keep });
   } catch { /* persistence must never break the snapshot */ }
 }
-// Snapshot freshness. 10 minutes (was 60s): the refresh fans out ~100 chunked
-// eth_getLogs across six EVM rails, and crawler traffic on the marketplace/
-// revenue pages kept the 60s cache permanently warm — ~1,440 full scans/day,
-// the dominant driver of the Alchemy compute-unit bill. Visitor latency is
-// UNAFFECTED (stale-while-revalidate below serves the cached object instantly
-// and refreshes in the background); only the card's freshness changes, on a
-// surface that already labels carried-forward data "live · cached". Env
-// override for ops experiments.
-// 60 minutes (was 10, was 60s before that).
-//
-// MEASURED, not estimated: an egress census run against production recorded
-// 221 Alchemy RPC calls from this file in a single refresh - the fan-out of
-// chunked eth_getLogs across six EVM rails. At a 10-minute TTL, crawler traffic
-// on /revenue, /marketplace and the chain pages keeps the cache permanently
-// warm, which is up to 144 refreshes a day: roughly 955,000 billed calls a
-// month, for a page that earns nothing.
-//
-// This is the third time this exact shape has been paid for. It was 60s until
-// July (~9.5M/month), then 10 minutes, and the 10 was still chosen by feel
-// rather than by measurement. 60 minutes is 83% fewer than 10, and the card
-// already labels carried-forward data "live · cached" - the honesty mechanism
-// for staleness exists precisely so this number can be tuned for cost.
-//
-// Visitor latency is unaffected either way: stale-while-revalidate below serves
-// the cached object instantly and refreshes in the background. What changes is
-// only how old the rail balances may be, on a surface that says so.
+// Snapshot freshness: 4 hours (was 60 minutes, 10 before that, 60 s before
+// that). One refresh fans out a few hundred chunked eth_getLogs plus Solana
+// reads across every rail, all through the metered keyed RPCs, and the page
+// earns nothing. Visitor latency does not depend on this number:
+// stale-while-revalidate below serves the cached object at once and refreshes
+// in the background. What it sets is how old the rail balances and recent
+// settles may be, on a surface that labels carried-forward data "live ·
+// cached" and prints the read time. Revenue totals do not come from here: the
+// revenue ledger (src/revenue-ledger.js) syncs every few minutes. Env override
+// for ops experiments.
 //
 // The real fix is to stop re-scanning chains we already index - src/revenue-
 // ledger.js persists every settlement - but that is a rewrite of where the
-// snapshot's numbers come from, not a constant. Filed rather than rushed.
-const SNAPSHOT_TTL_MS = parseInt(process.env.REVENUE_SNAPSHOT_TTL_MS, 10) || 60 * 60_000;
+// snapshot's numbers come from, not a constant.
+const SNAPSHOT_TTL_MS = REVENUE_SNAPSHOT_TTL_MS; // src/refresh-cadence.js: default 4 hours, REVENUE_SNAPSHOT_TTL_MS overrides
+
+// ONE live scan for every container. Each replica kept its own snapshot and
+// rescanned when its own TTL lapsed, so every scan ran once per replica, and
+// every boot scanned again. With a state database the scan runs under a lease
+// and the whole snapshot is saved as a document: a container whose copy is
+// stale first adopts a saved snapshot younger than the TTL (a boot included),
+// and only the lease holder scans; a container that finds the lease held
+// keeps serving what it has and looks again shortly. Without a database each
+// process scans on its own, as before.
+const SHARED_RETRY_MS = 30_000;
+const SHARED_RECENT_ROWS = 50; // per rail, in the saved copy (the page lists far fewer)
+const sharedSnapDoc = createJsonDocument({ name: "revenue-snapshot", log: () => {} });
+const scanLeased = leased("revenue-snapshot-refresh", { ttlMs: 10 * 60_000, failOpen: true, log: () => {} }, (fn) => fn());
+const snapDeps = { scan: null, store: undefined, lease: null, now: () => Date.now() };
+let sharedRetryAt = 0;
+function sharedSnapshotStore() {
+  if (snapDeps.store !== undefined) return snapDeps.store;
+  if (sharedSnapDoc.backend !== "pg") return null;
+  return {
+    read: async () => { const r = await sharedSnapDoc.read({ quiet: true }); return r?.ok && r.exists ? r.body : null; },
+    save: (snap) => sharedSnapDoc.update(() => snap),
+  };
+}
+/** The snapshot as it is saved for the other containers: recent rows capped. */
+export function sharedSnapshotBody(snap) {
+  return { ...snap, rails: (snap.rails || []).map((r) => (Array.isArray(r.recent) && r.recent.length > SHARED_RECENT_ROWS ? { ...r, recent: r.recent.slice(0, SHARED_RECENT_ROWS) } : r)) };
+}
+function sharedSnapshotFresh(s, now) {
+  const at = Date.parse(s?.asOf || "");
+  return Boolean(s && Array.isArray(s.rails) && Number.isFinite(at) && now - at < SNAPSHOT_TTL_MS && (!cached || at > cachedAt));
+}
+async function refreshShared(opts) {
+  const scan = snapDeps.scan || refreshSnapshot;
+  const store = sharedSnapshotStore();
+  const keep = (s) => { if (s && s !== cached) { cached = s; cachedAt = Date.parse(s.asOf) || snapDeps.now(); } return s; };
+  if (!store) return keep(await scan(opts));
+  const adopt = async () => {
+    try { const s = await store.read(); if (sharedSnapshotFresh(s, snapDeps.now())) return keep(s); } catch { /* a read failure falls through to the lease */ }
+    return null;
+  };
+  const seen = await adopt();
+  if (seen) return seen;
+  const r = await (snapDeps.lease || scanLeased)(async () => {
+    // Another container may have finished a scan while this one waited.
+    const again = await adopt();
+    if (again) return again;
+    const s = keep(await scan(opts));
+    if (s) await Promise.resolve(store.save(sharedSnapshotBody(s))).catch(() => false);
+    return s;
+  });
+  if (r && r.skipped) { sharedRetryAt = snapDeps.now() + SHARED_RETRY_MS; return cached; }
+  return r;
+}
+/** Tests only: replace the scan, the shared store (null = none), the lease and the clock. */
+export function _setRevenueSnapshotDepsForTest(d = {}) {
+  Object.assign(snapDeps, { scan: null, store: undefined, lease: null, now: () => Date.now() }, d);
+  cached = null; cachedAt = 0; refreshing = null; sharedRetryAt = 0;
+}
 const SCAN_REQUEST_DEADLINE_MS = parseInt(process.env.REVENUE_SCAN_DEADLINE_MS, 10) || 25_000;
 const RAIL_DEADLINE_MS = parseInt(process.env.REVENUE_RAIL_DEADLINE_MS, 10) || 45_000;
 const SCAN_TIMED_OUT = Symbol("revenue-scan-timeout");
 export async function revenueSnapshot(opts) {
-  if (cached && Date.now() - cachedAt < SNAPSHOT_TTL_MS) return cached;
+  const now = snapDeps.now();
+  if (cached && (now - cachedAt < SNAPSHOT_TTL_MS || now < sharedRetryAt)) return cached;
   if (!refreshing) {
-    refreshing = refreshSnapshot(opts)
+    refreshing = refreshShared(opts)
       .catch(() => cached) // a failed scan keeps serving the last snapshot
       .finally(() => { refreshing = null; });
   }
@@ -1695,7 +1739,7 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     rails,
     note: "Balances + recent inbound transfers, read live from public RPCs (best-effort per rail). totalUsd is the combined wallet balance (includes our own canary/test money); windowExternalUsd counts only classified external per-call payments in the recent scan windows. All figures are independently verifiable at the explorer links.",
   };
-  cachedAt = Date.now();
+  cachedAt = Date.parse(cached.asOf);
   return cached;
 }
 
@@ -2059,7 +2103,7 @@ export function revenuePage(baseUrl, snap) {
     ${standing}
     ${hero}
     <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection(snap.range)}

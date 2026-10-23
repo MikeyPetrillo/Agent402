@@ -3912,7 +3912,7 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
   setInterval(() => { probeOxAlphaAvailability().catch(() => {}); }, 60 * 60_000).unref();
 }
 // Recent rows are re-read from the ledger per request (withFreshRecent); only
-// the balances ride the hourly background snapshot. Wallet balances and their
+// the balances ride the background snapshot (every 4 hours). Wallet balances and their
 // combined total are operator-only: /api/revenue serializes through
 // publicRevenueSnapshot, /__operator/revenue.json carries the full reading.
 const revenueApi = revenueApiHandlers({
@@ -4115,7 +4115,7 @@ app.get("/api/revenue/mpp", (req, res) => {
 app.get("/revenue", async (req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
-    // only the balances ride the hourly background snapshot.
+    // only the balances ride the background snapshot (every 4 hours).
     const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
@@ -8092,7 +8092,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed hourly (see startLeaderboardRefresh below) — each request is a
+// refreshed every 4 hours (see startLeaderboardRefresh below) — each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):
@@ -11272,7 +11272,7 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // takes even that hit off buyers' pageviews.
 bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
-// x402 Leaderboard cache: warms once at boot, refreshes hourly. Failures keep
+// x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.

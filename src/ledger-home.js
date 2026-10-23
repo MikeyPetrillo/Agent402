@@ -21,6 +21,7 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase, POW_DIFFICULTY } from "./pow.js";
+import { leaderboardCadence } from "./refresh-cadence.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
 // These chips were hardcoded and went stale at the 2026-08-23 repricing: the
@@ -211,7 +212,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "agent402.tools"], url: baseUrl, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol (MPP)", "agentic payments", "AI agents"], logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, email: "mike@agent402.tools", parentOrganization: { "@type": "Organization", name: "Havok Holdings LLC" }, sameAs: [REPO_URL, "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://pypi.org/project/agent402-langchain/", "https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d"] };
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "Agent402 - applied layer of Agentic Finance"], url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };
   const appLd = { "@type": "SoftwareApplication", "@id": `${baseUrl}/#app`, name: "Agent402", url: baseUrl, applicationCategory: "DeveloperApplication", operatingSystem: RAILS.map((r) => r.name).join(", "), license: "https://www.gnu.org/licenses/agpl-3.0.html", description: `Open-source, self-hostable Agentic Finance server for x402 + MPP: ${fmtNum(count)} pay-per-call tools for AI agents (${packCount} of them multi-tool skill packs), plus an open index, Smart Order Router and on-chain seller leaderboard.`, offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: String(minPriceUsd(catalog)), highPrice: maxPriceUsd(catalog).toFixed(2), priceCurrency: "USD", description: `Per-call micropayments in USDC and USDG across ${RAILS.length} chains, free with proof-of-work, or by card: finished reports ${usd0(CARD_LO)} to ${usd0(CARD_HI)}, monitors ${usd0(MON_USD)} a month` } };
-  const datasetLd = { "@type": "Dataset", "@id": `${baseUrl}/#leaderboard`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD, unique buyers per seller.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, distribution: { "@type": "DataDownload", encodingFormat: "application/json", contentUrl: `${baseUrl}/api/leaderboard` } };
+  const datasetLd = { "@type": "Dataset", "@id": `${baseUrl}/#leaderboard`, name: "x402 seller leaderboard - Base USDC settled volume", description: "On-chain snapshot, refreshed " + leaderboardCadence() + ", ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD, unique buyers per seller.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, distribution: { "@type": "DataDownload", encodingFormat: "application/json", contentUrl: `${baseUrl}/api/leaderboard` } };
   const surfacesLd = { "@type": "ItemList", "@id": `${baseUrl}/#surfaces`, name: "Free x402 discovery primitives", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Find - resolve a task to the best-matching tool", url: `${baseUrl}/api/find` },
     { "@type": "ListItem", position: 2, name: "Route - neutral Smart Order Router across every x402 seller", url: `${baseUrl}/api/route` },
@@ -468,7 +469,7 @@ curl -X POST /api/hash \\
   <div class="hm-obsidian" style="padding:48px 40px;">
     <div class="hm-kicker" style="color:var(--accent-lit);">$ GET /api/leaderboard</div>
     <h2 class="hm-h2" style="color:var(--on-panel);">The open index for every seller.</h2>
-    ${sectionMeta(["hourly on-chain snapshot", "Bazaar → eth_getLogs → by payTo"], "margin:10px 0 14px;color:var(--on-panel-faint);")}
+    ${sectionMeta([`on-chain snapshot ${leaderboardCadence()}`, "Bazaar → eth_getLogs → by payTo"], "margin:10px 0 14px;color:var(--on-panel-faint);")}
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);max-width:76ch;margin:0 0 30px;font-weight:300;">The x402 sellers we can crawl, ranked by <strong style="color:var(--on-panel);font-weight:500;">real Base USDC settled volume</strong> - not self-reported traffic. The rows below are the head of the board; the full ranking is at <a href="/leaderboard" style="color:var(--on-panel);">/leaderboard</a>. <span style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--on-panel);">include=external</span> excludes us from our own ranking, because a neutral index has to be checkable.</p>
 
     <div style="border:1px solid var(--panel-rule-2);border-radius:var(--radius);overflow:hidden;background:rgba(255,255,255,.025);">
@@ -486,7 +487,7 @@ curl -X POST /api/hash \\
         <tbody>${leaderboardRowsHtml}</tbody>
       </table>
       </div>
-      <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span style="white-space:nowrap;">Agent402 excluded · hourly</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full leaderboard →</a></div>
+      <div style="padding:11px 18px;border-top:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span style="white-space:nowrap;">Agent402 excluded · ${leaderboardCadence()}</span><a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full leaderboard →</a></div>
     </div>
 
   </div>
