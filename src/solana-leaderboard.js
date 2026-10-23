@@ -50,7 +50,10 @@ const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocum
 import { scanCoverage } from "./partial-answer.js";
 
 export const SOLANA_LB_CACHE_FILE = process.env.SOLANA_LB_CACHE_FILE || "/data/solana-leaderboard.json";
-const REFRESH_MS = Number(process.env.SOLANA_LB_REFRESH_MS) || 2 * 60 * 60_000;
+// Four hours: the board re-reads every settled payment through the keyed
+// Solana lane, its largest metered line; production already ran at this value.
+export const SOLANA_LB_DEFAULT_REFRESH_MS = 4 * 60 * 60_000;
+const REFRESH_MS = Number(process.env.SOLANA_LB_REFRESH_MS) || SOLANA_LB_DEFAULT_REFRESH_MS;
 const CONCURRENCY = Number(process.env.SOLANA_LB_CONCURRENCY) || 1;
 const RETRY_PAUSE_MS = Number(process.env.SOLANA_LB_RETRY_PAUSE_MS) || 1500;
 // Every Solana payTo the index knows (a few hundred today); the bound is a
