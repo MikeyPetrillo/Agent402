@@ -414,6 +414,7 @@ if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
+import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -5813,7 +5814,13 @@ app.get("/__operator/refunds.json", async (req, res) => {
   res.set("Cache-Control", "no-store").json({
     totals: refundTotals(),
     status,
-    refunds: listRefunds({ status, limit: Math.min(500, parseInt(req.query.limit, 10) || 200) }),
+    // A Circle Gateway batched debt names how it is proven: by Gateway's
+    // transfer record when the row holds Gateway's transfer id (refund-run
+    // holds it until Gateway reports the transfer confirmed), and held by
+    // name when it holds none (scripts/refund-run.js GATEWAY_NO_ID_HOLD).
+    refunds: listRefunds({ status, limit: Math.min(500, parseInt(req.query.limit, 10) || 200) }).map((r) => (isGatewayWire(r?.wire)
+      ? { ...r, settlement: "offchain", proof: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(r.evidence || "")) ? "circle-gateway-transfer (repaid once Gateway reports it confirmed or completed)" : "held: no Gateway transfer id recorded - resolve by hand from Gateway's transfer history" }
+      : r)),
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
@@ -10800,8 +10807,12 @@ for (const tool of ALL_KIT) {
             // and on any other rail nothing withdraws the refused offer - this
             // guard's per-payer and global bounds are all that stop a billing
             // lapse becoming an unbounded run of served, never-charged reports.
+            // A Circle Gateway batched payment Gateway is still settling is
+            // not the buyer's failure (they were told to resend the same
+            // payment): it still feeds the global bound, never the payer's.
             const st = res.statusCode;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
+            else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
             else if (st === 402 || st >= 500) recordCompositeSpendFailure(guardKey, { global: !ownGlobalBound });
           } catch { /* never break a response */ }
         });

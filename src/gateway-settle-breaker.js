@@ -65,6 +65,7 @@ import { payerFromRequest } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
+import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 
@@ -121,7 +122,7 @@ const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let sharedSeq = 0;
 const CONTROL = "gateway-settle-breaker";
 function sharedKey(key) { return key.replace(/[\s]/g, "_"); }
-function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
+function sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount = true }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
     void sharedWrite(CONTROL, shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
@@ -135,7 +136,7 @@ function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
       }
     });
   }
-  if (!key) return;
+  if (!key || !walletCount) return;
   void sharedWrite(CONTROL, shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
   if (billing) void sharedWrite(CONTROL, shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
 }
@@ -224,8 +225,8 @@ export function gatewaySettleBreakerGlobalPaused(now = Date.now()) {
 }
 
 /** A payment was presented, the handler served, and settlement FAILED. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false } = {}) {
-  if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn });
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false, walletCount = true } = {}) {
+  if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount });
   // `global:false` (the wallet-only catalog consult): the failure counts
   // against the WALLET only. A catalog read costs a fraction of a cent, so
   // twelve of them must never pause the LLM tiers - that would hand anyone
@@ -247,7 +248,9 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
       console.warn(`[gateway-breaker] unsettled gateway calls from ${parts.join(", ")} inside ${Math.round(WINDOW_MS / 1000)} s - pausing every /v1 tier until ${new Date(globalPausedUntil).toISOString()}`);
     }
   }
-  if (!key) return;
+  // walletCount:false (a Circle Gateway settlement still pending): one buyer
+  // toward the global pause, nothing against the wallet.
+  if (!key || !walletCount) return;
   const arr = inWindow(fails.get(key) || [], now);
   arr.push(now);
   fails.set(key, arr);
@@ -320,6 +323,17 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
       // paused payTo) and that the route's next 402 really drops it.
       if (isWithdrawnSubcentRefusal(receipt, { req })) {
         if (global) recordGatewaySettleFailure(null, Date.now(), { global: true, withdrawn: true });
+        return;
+      }
+      // A Circle Gateway batched payment Gateway is still settling
+      // (src/gateway-wire.js): the buyer was told to resend the same payment,
+      // and nothing about it is the wallet's doing, so it is kept off the
+      // WALLET's count (and is not a clear either). The run was served and
+      // not yet paid, so it still counts toward the /v1 global pause when
+      // this consult takes part in it, as this buyer (distinct buyers trip
+      // that pause, so one buyer's pending payments count once).
+      if (isGatewayPendingAnswer(req, receipt)) {
+        if (global) recordGatewaySettleFailure(key, Date.now(), { global: true, walletCount: false });
         return;
       }
       // Any OTHER facilitator billing refusal (free_tier_exhausted, a credits
