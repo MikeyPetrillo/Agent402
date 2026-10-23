@@ -146,6 +146,15 @@ await check("never mined: kept inside the window, closed once past it with the a
   assert.equal(book.list().length, 0);
 });
 
+await check("never mined but its authorization still valid: kept past the window, since it can still land", async () => {
+  const book = makeBook({ recordOwed: async () => { throw new Error("nothing is owed yet"); } });
+  await book.book(entry(17, { validBefore: Math.floor(clock / 1000) + 24 * 3600 }));
+  clock += WINDOW_MS + 2 * 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.absent, 0, "absence is not proven while the authorization can still move money");
+  assert.equal(book.list().length, 1);
+});
+
 await check("an RPC that never answers keeps the entry, then marks it unresolved for a human (never dropped)", async () => {
   const book = makeBook();
   await book.book(entry(8));
@@ -238,9 +247,11 @@ await check("a recovered settlement (a fallback settled it) books nothing", asyn
 await check("the paid server registers the booking hook after every hook that can recover a payment", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
-  const fallbackAt = src.indexOf("registerFacilitatorFailureHooks(server, payAiClient");
-  const releaseAt = src.indexOf("registerSettlementClaimRelease(server);");
-  const lateAt = src.indexOf("registerLateSettleHook(server, lateSettleBook);");
+  // Live calls only: a line that is commented out does not register anything.
+  const at = (re) => { const m = re.exec(src); return m ? m.index : -1; };
+  const fallbackAt = at(/^[ \t]*registerFacilitatorFailureHooks\(server, payAiClient/m);
+  const releaseAt = at(/^[ \t]*registerSettlementClaimRelease\(server\);/m);
+  const lateAt = at(/^[ \t]*registerLateSettleHook\(server, lateSettleBook\);/m);
   assert.ok(fallbackAt > 0 && releaseAt > fallbackAt && lateAt > releaseAt, "order: fallback chain, claim release, late booking");
 });
 
