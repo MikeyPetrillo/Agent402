@@ -74,7 +74,9 @@ async function blockOf(fn) {
   await new Promise((r) => setTimeout(r, 20));
   gaps = []; last = performance.now(); gcPauses.length = 0;
   const value = await fn();
-  await new Promise((r) => setTimeout(r, 5));
+  // The observer delivers gc entries on a later task: wait for a pause that
+  // ended the window to arrive before it is subtracted.
+  await new Promise((r) => setTimeout(r, 50));
   let ms = 0, raw = 0, gc = 0;
   for (const [a, b] of gaps) {
     let inGc = 0;
@@ -216,7 +218,7 @@ const mp = await import("../src/market-page.js");
     const oneTurnMs = Math.round(performance.now() - t0);
     const sliced = await blockOf(() => mp.marketPageAsync(null, "https://agent402.tools", opts));
     ok(sliced.value === whole && whole.length > 100_000, `/marketplace${all ? "?all=1" : ""}: the sliced page is the one-turn page, byte for byte (${whole.length} chars, ${labelled.sellers.length} sellers)`);
-    ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms, which includes the collector's work between turns; the page in one turn: ${oneTurnMs} ms)`);
+    ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
     // The page's own work per step, timed step by step: no step is more than
     // a fraction of the whole page (the loop-lag figure above also carries
     // the garbage collector's tasks, which run between turns either way).

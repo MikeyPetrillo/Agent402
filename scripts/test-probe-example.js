@@ -370,8 +370,11 @@ try {
   vc = await crawl(c.origin);
   ok(vc?.tools?.find((t) => t.route === "/v1/oa")?.networks?.includes(ARC), "seller c: the first crawl reached the 402 with the OpenAPI example");
   ok(validatorFor(c.origin, "/openapi.json")?.etag === ETAG.etag, "seller c sent a validator, so the next OpenAPI read is conditional");
-  // Forget what the first crawl learned, so the second must probe again.
+  // Between crawls the OpenAPI rows are one packed buffer, not heap rows.
   const entry = _cacheForTests().get(c.origin);
+  ok(Buffer.isBuffer(entry.openapiPacked) && !("openapiTools" in entry) && !("openapiRoutes" in entry), `seller c keeps its OpenAPI rows packed (${entry.openapiPacked?.length} bytes), no row arrays`);
+  const routesBefore = entry.tools.map((t) => `${t.method} ${t.route}`).sort().join(",");
+  // Forget what the first crawl learned, so the second must probe again.
   for (const t of entry.tools) { t.networks = []; t.price = null; delete t.lastProbedAt; delete t.livePrice; delete t.probedAt; }
   idx.clearOriginProbeState(c.origin);
   idx.rememberValidator(c.origin, "/openapi.json", ETAG);
@@ -379,6 +382,7 @@ try {
   bodies.length = 0; seen304.length = 0;
   vc = await crawl(c.origin);
   ok(seen304.includes(`${c.origin}/openapi.json`), "seller c's second crawl was answered 304 for /openapi.json");
+  ok(vc?.tools?.map((t) => `${t.method} ${t.route}`).sort().join(",") === routesBefore && Buffer.isBuffer(_cacheForTests().get(c.origin).openapiPacked), `the 304 crawl unpacked the rows into the same catalogue (${routesBefore}) and packed them again`);
   const posts = oaPosts(c.origin);
   ok(posts.length > 0 && posts[0].body.includes(`${MARK}-oa`), `the 304 crawl's first POST carried the OpenAPI example (${posts.length} POSTs)`);
   ok(vc?.tools?.find((t) => t.route === "/v1/oa")?.networks?.includes(ARC), "and the 304 crawl read the live chain");

@@ -90,6 +90,20 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const figs = x.indexMemoryFigures();
   ok(figs.routeIndexedTools > 100_000 && figs.internedTokens > 0 && figs.internedTokens < figs.routeIndexedTools, `name tokens are interned (${figs.internedTokens} distinct across ${figs.routeIndexedTools} tools)`);
   {
+    // The operator heap read's byte estimate: sampled, so it stays cheap at
+    // production scale, and close to the whole cache serialized.
+    const t0 = performance.now();
+    const sampled = x.indexMemoryFigures({ sampleBytes: true });
+    const readMs = performance.now() - t0;
+    let whole = 0;
+    for (const e of cache.values()) whole += JSON.stringify(e.tools || []).length;
+    const wholeMb = whole / 1048576, est = sampled.jsonMbEstimate;
+    ok(est && est.sampledEntries > 50 && est.sampledEntries <= 2 * 120 && readMs < 50, `the sampled heap read reads ${est?.sampledEntries} entries in ${readMs.toFixed(1)} ms (bound 50 ms)`);
+    ok(Math.abs(est.tools - wholeMb) <= Math.max(2, wholeMb * 0.25), `...and its tool-row estimate (${est.tools} MB) is within 25% of the whole serialized (${wholeMb.toFixed(1)} MB)`);
+    ok(sampled.routeIndex?.tokens > 0 && sampled.routeIndex.postingRefs >= sampled.routeIndex.tokens, `...and it counts the route index (${sampled.routeIndex?.tokens} tokens, ${sampled.routeIndex?.postingRefs} postings)`);
+    ok(!("jsonMbEstimate" in figs), "the plain read stays counts only");
+  }
+  {
     // CI runs without --expose-gc; enable it here so the ceiling is never skipped.
     const v8 = await import("node:v8"); const vm = await import("node:vm");
     v8.setFlagsFromString("--expose-gc");

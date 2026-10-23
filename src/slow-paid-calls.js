@@ -10,7 +10,8 @@
 //
 // The bound is ALERT_SLOW_PAID_MS (default 20000, "off" disables). A route
 // declared slow in src/slow-routes.js is sold as one that runs long, so the
-// shared bound does not apply to it; its own run budget does.
+// shared bound does not apply to it; its own run budget does. A chat tier is
+// held to one model attempt's bound.
 //
 // A row holds the slug, the handler ms, the time, the status, whether a stall
 // overlapped the handler and whether the call is our own traffic. Never a
@@ -37,17 +38,25 @@ export function safeSlug(slug) {
 
 /**
  * The handler bound that applies to `slug`: its run budget when the route is
- * declared slow, the larger of the shared bound and its own ceiling when it
- * can run as a job, the shared bound otherwise; 0 when the alarm is off.
+ * declared slow, the larger of the shared bound and one model attempt for a
+ * chat tier, the larger of the shared bound and its own ceiling when it can
+ * run as a job, the shared bound otherwise; 0 when the alarm is off.
  */
 // SOR_EXTERNAL_DEADLINE_MS's default in src/tools/route-execute.js.
 const ASYNC_CAPABLE_BOUND_MS = 240_000;
+// UPSTREAM_TIMEOUT_MS in src/tools/llm-gateway-kit.js: the gateway's bound on
+// one model attempt. A chat tier waits on the model it sells, and a long
+// prompt on a reasoning model runs well past the shared bound while serving
+// normally, so a chat call reads as slow only past what one attempt may take.
+export const CHAT_ATTEMPT_BOUND_MS = 90_000;
+const isChatTier = (slug) => /^v1-chat(-|$)/.test(String(slug || ""));
 
 export function slowPaidBoundMs(slug, sharedMs = slowPaidMsFromEnv()) {
   if (!(sharedMs > 0)) return 0;
   let profile = null;
   try { profile = asyncProfileOf({ slug }); } catch { profile = null; }
   if (profile?.slow && profile.maxSeconds > 0) return profile.maxSeconds * 1000;
+  if (isChatTier(slug)) return Math.max(sharedMs, CHAT_ATTEMPT_BOUND_MS);
   // A route that can run as a job but is not declared slow (the router tiers
   // wait on outside sellers; the image tiers on a model) is held to its own
   // ceiling when it has one, else to the router's outside-seller deadline.
