@@ -135,7 +135,11 @@ const rev = readFileSync(new URL("revenue-live.js", dir), "utf8");
 // The TTL is written as an expression (`10 * 60_000`), not a literal, so parse
 // the minutes multiplier rather than a bare number - the first version of this
 // assertion captured nothing and reported 0s against correct code.
-const mins = Number((rev.match(/SNAPSHOT_TTL_MS[^;]*\|\|\s*(\d+)\s*\*\s*60_?000/) || [])[1] || 0);
+// The TTL now lives in src/refresh-cadence.js (one place for the cadence and
+// the copy that states it), and revenue-live.js takes it from there.
+const cadenceSrc = readFileSync(new URL("../src/refresh-cadence.js", import.meta.url), "utf8");
+const ttlExpr = (cadenceSrc.match(/REVENUE_SNAPSHOT_DEFAULT_TTL_MS\s*=\s*([\d_*\s]+);/) || [])[1] || "0";
+const mins = /REVENUE_SNAPSHOT_TTL_MS/.test(rev) ? Math.round(ttlExpr.split("*").reduce((p, x) => p * Number(x.trim().replace(/_/g, "")), 1) / 60_000) : 0;
 // Raised from >=5 after a production census measured 221 Alchemy calls per
 // refresh: at a 10-minute TTL that is ~955,000 billed calls/month for a page
 // with no revenue attached. The floor is the lesson, so it moves with it.

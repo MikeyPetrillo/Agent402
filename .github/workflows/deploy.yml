@@ -1833,6 +1833,8 @@ jobs:
           t node scripts/test-revenue-fresh-recent.js
           t node scripts/test-chain-page-own-settle.js
           t node scripts/test-revenue-cold.js
+          # The live rail scan runs once per period across containers (lease + shared snapshot, adopted at boot); cadences default to 4 hours and the copy says so (injected scan/store/lease - offline)
+          t node scripts/test-revenue-shared-scan.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)

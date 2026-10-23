@@ -22,7 +22,7 @@
 //
 // Why server-side caching matters: a full run is ~28 Bazaar pages + several
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
-// hourly; the endpoint reads from cache so each request is sub-millisecond.
+// every 4 hours; the endpoint reads from cache so each request is sub-millisecond.
 
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
@@ -37,6 +37,7 @@ import { NETWORKS } from "./payments.js";
 import { createLogWindowCache, createLogCacheStore, logCacheEnabled, decodeTransferLog, transferForFold } from "./leaderboard-log-cache.js";
 
 import { createBlockClock, rpcHeaderReader } from "./block-clock.js";
+import { LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
 // The board's window is a span of TIME (24h by default, 7d in production),
 // and the scan finds the block where it starts by BLOCK TIMESTAMP
 // (src/block-clock.js). It used to be a block count at an assumed 2 s per Base
@@ -1508,7 +1509,7 @@ export function persistLeaderboardHistoryPoint(snapshot, file = LEADERBOARD_HIST
 }
 
 // Seller-funding state (src/seller-funding.js): per-wallet cursors, known
-// payers and the (wallet, payer) pools, so each hourly read covers only new
+// payers and the (wallet, payer) pools, so each refresh's read covers only new
 // blocks, a payer's history is read once, and a pool is remembered until it is
 // spent. Kept in its own file beside the snapshot, read once (asynchronously)
 // before the first scan and written after each.
@@ -1689,7 +1690,12 @@ let cached = {
 };
 let refreshTimer = null;
 
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+// Four hours (was one; src/refresh-cadence.js): every refresh re-reads the
+// board's window through the metered keyed RPCs. The router's seller evidence
+// comes from this snapshot, so a newly proven seller qualifies within one
+// refresh. LEADERBOARD_REFRESH_MS overrides it, like SOLANA_LB_REFRESH_MS for
+// the Solana board.
+const REFRESH_INTERVAL_MS = LEADERBOARD_REFRESH_MS;
 
 // The Base board's log window cache (src/leaderboard-log-cache.js): one per
 // process, loaded from the store on its first scan. LEADERBOARD_LOG_CACHE=off
@@ -1760,7 +1766,7 @@ async function refreshOnceUnleased(opts) {
   } catch (e) {
     cached.lastError = redactSecrets(String(e?.message || e)).slice(0, 300);
     // Keep the previous snapshot — a transient RPC outage shouldn't wipe a
-    // perfectly good 1-hour-old ranking from the public endpoint.
+    // perfectly good ranking from the last refresh from the public endpoint.
   } finally {
     cached.warming = false;
   }
@@ -1770,7 +1776,7 @@ async function refreshOnceUnleased(opts) {
  * Start the periodic refresh loop. Idempotent — subsequent calls are no-ops.
  * The first refresh fires immediately (non-blocking) so the cache warms as
  * soon as the upstream APIs respond. Pass `{ intervalMs }` to override the
- * default 1-hour cadence (useful in tests).
+ * default cadence, LEADERBOARD_REFRESH_MS (useful in tests).
  */
 export function startLeaderboardRefresh(opts = {}) {
   if (refreshTimer) return;
