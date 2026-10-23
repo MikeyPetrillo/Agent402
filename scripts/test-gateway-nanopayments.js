@@ -982,10 +982,12 @@ await check("pending, end to end: Gateway accepts inside the wait -> served and 
     assert.equal(rows[1].wire, GATEWAY_WIRE);
     const pend2 = await (await fetch(`${base}/__operator/gateway-pending.json`, { headers: { Authorization: `Bearer ${OP}` } })).json();
     assert.equal(pend2.count, 2, "its entry is dropped");
-    // The same payment once more: never a second answer, never a second sale.
+    // The same payment once more: answered from its first answer by the replay
+    // cache (no handler, no Gateway call, no second sale), never run again.
     const third = await pay(base, p);
     await third.text();
-    assert.notEqual(third.status, 200, "a payment already served is not served again");
+    assert.ok(third.status !== 200 || third.headers.get("x-replayed-answer") === "1", `a payment already served is never run again: refused, or the stored answer marked as a replay (got ${third.status}, replay ${third.headers.get("x-replayed-answer")})`);
+    assert.equal(gwVerifies() + gwSettles(), 0, "the resend reaches neither Gateway verify nor settle");
     await sleep(400);
     assert.equal(sales(port).length, 2, "no second sale");
     assert.ok(!leaks(log.text));
