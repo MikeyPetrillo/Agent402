@@ -478,7 +478,7 @@ export const ledgerChunkBlocks = (c) => Math.min(c.chunkBlocks || 9000, 9000, Ma
 // actually been scanned, so a chunk that can never succeed throws and gets
 // logged rather than silently skipping blocks - the one outcome that would
 // lose revenue permanently.
-const RANGE_ERR = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|query returned more than/i;
+export const RANGE_ERR = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|query returned more than|exceeds max results|retry with the range/i;
 const MIN_CHUNK = 100;
 
 /**

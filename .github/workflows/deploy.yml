@@ -1828,6 +1828,8 @@ jobs:
           t node scripts/test-query-terms.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
           t node scripts/test-revenue-ledger.js
+          # Every getLogs reader narrows on each result-cap wording a node has sent
+          t node scripts/test-logs-cap-wording.js
           t node scripts/test-block-clock.js
           # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
           t node scripts/test-chain-block-time.js
