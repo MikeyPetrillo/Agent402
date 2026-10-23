@@ -782,7 +782,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
-import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
+import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
@@ -3664,7 +3664,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // are on /__operator/tool-failures.json.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" } }))),
+    // buyerRefusals reads ok / refusing: the settle breaker refused a key that
+    // had settled a call in its window (src/gateway-settle-breaker.js) inside
+    // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -9469,7 +9472,23 @@ if (!FREE_MODE) {
 
 // Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
 // credits gate and before the paywall, so a replay hit skips settlement.
-app.use(createIdempotency({ isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]), freeMode: FREE_MODE }));
+// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
+// replays its first answer the same way, except on a route whose effect
+// outlives the answer (hasLastingEffect) and on a streamed call, which the
+// store never holds. Replays are counted per slug on the operator detail
+// (/__operator/tool-failures.json), never per payer.
+app.use(createIdempotency({
+  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
+  freeMode: FREE_MODE,
+  implicitReplay: (req) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    return Boolean(def) && !hasLastingEffect(def.slug) && req.body?.stream !== true;
+  },
+  onReplay: (req, { implicit }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+  },
+}));
 
 // x402 paywall for the catalog routes
 // POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST

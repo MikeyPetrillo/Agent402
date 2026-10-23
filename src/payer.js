@@ -119,6 +119,34 @@ export function paymentIdentifierOf(req) {
   } catch { return null; }
 }
 
+/** The single-use identity of an EVM x402 payment: the network it settles on,
+ *  the signed payer and the authorization nonce the chain consumes once
+ *  (EIP-3009 `authorization.nonce`, or the Permit2 nonce on the `upto`
+ *  scheme). Read from the same header the middleware settles from and the
+ *  same signed `from` payerFromRequest accepts, so two requests with one
+ *  identity carry one signed payment. Null for a non-EVM scheme, an unsigned
+ *  payer or a payload without a nonce; callers treat null as "no identity".
+ *  The idempotency middleware uses it as the implicit key of a re-sent
+ *  payment (src/idempotency.js). */
+export function paymentNonceIdentityOf(req) {
+  const header = paymentHeaderOf(req);
+  if (!header) return null;
+  const from = payerFromRequest(req);
+  if (!from) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const p2 = payload?.payload?.permit2Authorization;
+    const nonce = p2 && typeof p2 === "object" ? p2.nonce : payload?.payload?.authorization?.nonce;
+    if (typeof nonce !== "string" || !nonce || nonce.length > 128) return null;
+    // v2 carries the network on `accepted`; v1 at the top level (see paymentSchemeOf).
+    const network = payload?.accepted?.network ?? payload?.network ?? payload?.payload?.network;
+    if (typeof network !== "string" || !network) return null;
+    return { network: network.toLowerCase(), from, nonce: nonce.toLowerCase() };
+  } catch {
+    return null;
+  }
+}
+
 /** The x402 SCHEME the middleware will settle this request under.
  *
  *  Read from the SAME header @x402/express settles from (paymentHeaderOf), and

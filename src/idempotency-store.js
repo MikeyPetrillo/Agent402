@@ -13,7 +13,9 @@
 // entry; the local store also caps total bytes and entries).
 import { getSharedRedisClient } from "./shared-limit.js";
 
-export const IDEM_TTL_MS = 10 * 60 * 1000;
+// Ten minutes; IDEM_TTL_MS overrides it (a paid-mode test shortens it to prove
+// a replay past the window is not served from the store).
+export const IDEM_TTL_MS = (() => { const n = Number(process.env.IDEM_TTL_MS); return Number.isFinite(n) && n >= 1000 ? n : 10 * 60 * 1000; })();
 const IDEM_MAX_ENTRIES = 5000;
 const IDEM_MAX_BYTES = 32 * 1024 * 1024;
 const PREFIX = "idem:";

@@ -2,23 +2,72 @@
 // the gate is real). Exercises the proof-of-work credential path: a retry with
 // the same Idempotency-Key + same PoW token replays the result without
 // re-charging, while the security properties hold — no header, or a different
-// key, never replays (and never leaks a paid result). The facilitator is never
-// contacted (X402_SYNC_ON_START=false); PoW bypasses settlement entirely.
+// key, never replays (and never leaks a paid result). PoW bypasses settlement
+// entirely. The paid path then runs against a stub facilitator (verify says
+// valid for a well-formed authorization, settle succeeds once per nonce):
+// a re-sent signed payment with no key is answered from its first answer with
+// no second settle and no second sale, a different input or route under the
+// same nonce is not, an explicit key still wins, a replay past the store's
+// window is not served, and a route with a lasting effect never replays.
+import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getFreePorts } from "./lib/free-port.js";
 
-const PORT = 3071;
+const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
-const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
+const OP_TOKEN = "idempotency-test-operator-token-0123456789";
+const IDEM_TTL_MS = 4000; // shortened so the past-window case can be run
+let facilitator = null;
+const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog.slice(-20)) console.error("  server:", l); proc.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const solve = (c) => { let n = 0; while (lz(createHash("sha256").update(`${c.challenge}:${n}`).digest()) < c.difficulty) n++; return n; };
 
+// The stub facilitator: /verify accepts a well-formed EIP-3009 authorization,
+// /settle succeeds once per nonce and refuses a nonce it already settled (the
+// chain's single-use rule), counting every call so the test can tell a served
+// replay (no settle) from a re-run (a settle).
+let verifies = 0, settles = 0;
+const settledNonces = new Set();
+facilitator = createServer((req, res) => {
+  let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+    const reply = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+    let auth = null; try { auth = JSON.parse(body)?.paymentPayload?.payload?.authorization || null; } catch { /* ignore */ }
+    const payer = auth?.from || "0x0000000000000000000000000000000000000000";
+    const wellFormed = !!auth && /^0x[0-9a-f]{64}$/i.test(String(auth.nonce || "")) && /^0x[0-9a-fA-F]{40}$/.test(String(auth.from || ""));
+    if (req.url === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (req.url === "/verify") { verifies++; return reply(200, wellFormed ? { isValid: true, payer } : { isValid: false, invalidReason: "malformed authorization" }); }
+    if (req.url === "/settle") {
+      settles++;
+      const nonce = String(auth?.nonce || "").toLowerCase();
+      if (!wellFormed) return reply(200, { success: false, errorReason: "malformed authorization", transaction: "", network: "eip155:8453", payer });
+      if (settledNonces.has(nonce)) return reply(200, { success: false, errorReason: "nonce already used", transaction: "", network: "eip155:8453", payer });
+      settledNonces.add(nonce);
+      return reply(200, { success: true, transaction: "0x" + createHash("sha256").update(nonce).digest("hex"), network: "eip155:8453", payer });
+    }
+    if (req.url === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+    return reply(404, {});
+  });
+});
+await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+
 const proc = spawn("node", ["src/server.js"], {
   env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
+    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
+    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    SALES_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "idem-sales-")), "sales.db"),
+    AGENT402_OPERATOR_TOKEN: OP_TOKEN, IDEM_TTL_MS: String(IDEM_TTL_MS),
     POW_DIFFICULTY: "12", PORT: String(PORT), FREE_MODE: "" },
-  stdio: "ignore",
+  stdio: ["ignore", "pipe", "pipe"],
 });
+const serverLog = [];
+const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 300)); } if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
+proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
@@ -173,8 +222,102 @@ try {
   ok(replaySameXPayment.status !== 200 && replaySameXPayment.headers.get("x-idempotent-replay") !== "true",
     `same x-payment + different payment-signature does NOT replay (cache key binds to payment-signature, got ${replaySameXPayment.status})`);
 
+  // 8. A RE-SENT PAYMENT IS SERVED FROM ITS FIRST ANSWER (2026-10-23). A buyer's
+  // client re-sent a request with the same signed authorization a few seconds
+  // after the first copy; the first settled and was served, the second ran the
+  // handler and reverted at settle (nonce used), so the buyer read a 402 for a
+  // paid call. With no explicit key the payment's identity (network, signed
+  // payer, nonce) is the key: the copy is answered from the store, marked, with
+  // no verify, no settle and no second sale.
+  const PAYER = "0x00000000000000000000000000000000000000a1";
+  const TOOL = "/api/demand-radar?limit=1"; // wallet-only, answers from local state
+  let nonceN = 0;
+  const freshNonce = () => "0x" + (++nonceN).toString(16).padStart(64, "0");
+  const acceptFor = async (path, method = "GET", body) => {
+    const r = await fetch(`${B}${path}`, { method, headers: { "content-type": "application/json" }, body });
+    ok(r.status === 402, `unpaid ${method} ${path} -> 402 (got ${r.status})`);
+    const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf-8"));
+    const accept = (req402.accepts || []).find((a) => a.network === "eip155:8453");
+    ok(!!accept, `${path} offers exact on Base`);
+    return accept;
+  };
+  const credential = (accept, nonce) => Buffer.from(JSON.stringify({
+    x402Version: 2, resource: accept.resource, accepted: accept,
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: PAYER, to: accept.payTo, value: accept.amount, validAfter: "0", validBefore: "9999999999", nonce } },
+  })).toString("base64");
+  const pay = (path, cred, { method = "GET", body, headers = {} } = {}) => fetch(`${B}${path}`, { method, headers: { "content-type": "application/json", "payment-signature": cred, ...headers }, body });
+  const replayed = (r) => r.headers.get("x-replayed-answer") === "1";
+  const opJson = async (path) => (await fetch(`${B}${path}`, { headers: { Authorization: `Bearer ${OP_TOKEN}` } })).json();
+
+  const accept = await acceptFor(TOOL);
+  const nonce1 = freshNonce();
+  const cred1 = credential(accept, nonce1);
+  // a. The first copy: verified, served, settled.
+  const first = await pay(TOOL, cred1);
+  const firstBody = await first.text();
+  ok(first.status === 200 && settles === 1 && verifies === 1 && !replayed(first) && first.headers.get("x-idempotent-replay") !== "true",
+    `paid call with a fresh nonce: verified, served, settled once (status ${first.status}, verifies ${verifies}, settles ${settles})`);
+  // b. The same request again (same header bytes): the stored answer, marked,
+  // with no verify and no settle.
+  const copy = await pay(TOOL, cred1);
+  const copyBody = await copy.text();
+  ok(copy.status === 200 && replayed(copy) && copy.headers.get("x-idempotent-replay") === "true" && copyBody === firstBody && settles === 1 && verifies === 1,
+    `the re-sent payment is answered from the first answer with X-Replayed-Answer: 1, no verify, no settle (status ${copy.status}, verifies ${verifies}, settles ${settles})`);
+  ok(/no-store/.test(copy.headers.get("cache-control") || ""), "the replayed answer is still no-store");
+  // c. The same nonce with a DIFFERENT input, and on a DIFFERENT route: not a
+  // replay. Each takes the normal path, where the used nonce is refused before
+  // or at settlement; neither carries the marker or the first answer.
+  const otherInput = await pay("/api/demand-radar?limit=2", cred1);
+  const otherInputBody = await otherInput.text();
+  ok(otherInput.status !== 200 && !replayed(otherInput) && otherInputBody !== firstBody,
+    `the same nonce with a different input is not a replay (got ${otherInput.status})`);
+  const otherRoute = await pay("/api/hash", cred1, { method: "POST", body: JSON.stringify({ text: "hello world" }) });
+  const otherRouteBody = await otherRoute.text();
+  ok(otherRoute.status !== 200 && !replayed(otherRoute) && !otherRouteBody.includes("b94d27b9"),
+    `the same nonce on a different route is not a replay and serves nothing (got ${otherRoute.status})`);
+  ok(settles === 1, `neither mutated copy settled (settles ${settles})`);
+  // d. An explicit key wins: the entry is bound to it, so the same nonce
+  // re-sent WITHOUT the key is not a replay, and re-sent WITH it is an
+  // Idempotency-Key replay (no implicit marker).
+  const nonce2 = freshNonce();
+  const cred2 = credential(accept, nonce2);
+  const keyed = await pay(TOOL, cred2, { headers: { "Idempotency-Key": "k-with-nonce" } });
+  ok(keyed.status === 200 && settles === 2, `a keyed paid call settles (status ${keyed.status}, settles ${settles})`);
+  const keyedAgain = await pay(TOOL, cred2, { headers: { "Idempotency-Key": "k-with-nonce" } });
+  ok(keyedAgain.status === 200 && keyedAgain.headers.get("x-idempotent-replay") === "true" && !replayed(keyedAgain) && settles === 2,
+    `the same key + payment replays as an Idempotency-Key replay, not an implicit one (status ${keyedAgain.status})`);
+  const unkeyedAgain = await pay(TOOL, cred2);
+  ok(unkeyedAgain.status !== 200 && !replayed(unkeyedAgain) && settles === 2,
+    `the same payment without its key is not served from the keyed entry (got ${unkeyedAgain.status}, settles ${settles})`);
+  // e. A route whose effect outlives the answer never replays implicitly: the
+  // memory writer settles, and its re-sent copy takes the normal path.
+  const memAccept = await acceptFor("/api/memory", "POST", JSON.stringify({ key: "idem/test", value: { n: 1 } }));
+  const cred3 = credential(memAccept, freshNonce());
+  const memBody = JSON.stringify({ key: "idem/test", value: { n: 1 } });
+  const mem = await pay("/api/memory", cred3, { method: "POST", body: memBody });
+  ok(mem.status === 200 && settles === 3, `memory-write (lasting effect) settles (status ${mem.status}, settles ${settles})`);
+  const memCopy = await pay("/api/memory", cred3, { method: "POST", body: memBody });
+  ok(memCopy.status !== 200 && !replayed(memCopy), `its re-sent copy is not served from the store (got ${memCopy.status})`);
+  // f. Past the store's window the first payment is no longer replayed.
+  await sleep(IDEM_TTL_MS + 600);
+  const late = await pay(TOOL, cred1);
+  ok(late.status !== 200 && !replayed(late) && settles === 3, `a copy re-sent after the window is not served from the store (got ${late.status}, settles ${settles})`);
+  // g. The sale is booked once per settled payment: three settles, three usdc
+  // sales (the PoW calls above are usage rows on their own rail), none for
+  // the replays.
+  let sales = -1;
+  for (let i = 0; i < 30 && sales !== settles; i++) { sales = (await opJson("/__operator/sales.json")).totals?.byRail?.["external:usdc"] ?? 0; if (sales !== settles) await sleep(100); }
+  ok(sales === 3, `the sales ledger holds one usdc sale per settled payment and none for a replay (sales ${sales}, settles ${settles})`);
+  // h. Replays are counted per slug on the operator detail: one implicit, one keyed.
+  const tf = await opJson("/__operator/tool-failures.json");
+  const row = (tf.replays || []).find((r) => r.slug === "demand-radar");
+  ok(row && row.hour.implicit === 1 && row.hour.keyed === 1 && tf.replayTotals?.hour?.implicit === 1,
+    `the operator detail counts the replays by slug (${JSON.stringify(row)})`);
+  ok(!JSON.stringify(tf.replays).toLowerCase().includes(PAYER.slice(2, 12)), "and names no payer");
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
+  facilitator.close();
   process.exit(0);
 } catch (e) {
   fail(e.message);
