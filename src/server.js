@@ -11105,7 +11105,10 @@ setUnloadedStoresProbe(unloadedStores);
 revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
-  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
+  // The bound port, so a PORT=0 boot (a test reading the port back) prints
+  // the port the kernel assigned, not the 0 it asked with.
+  const boundPort = httpServer.address()?.port ?? PORT;
+  console.log(`Agent402 listening on :${boundPort} with ${Object.keys(CATALOG).length} paid tools`);
 });
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
