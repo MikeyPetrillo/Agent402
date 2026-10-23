@@ -27,11 +27,34 @@ import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
-const GAP_MS = Number(process.env.STALL_GAP_MS || 120);
-const ROUTE_BOUND_MS = Number(process.env.STALL_ROUTE_BOUND_MS || 150);
+// Same-machine baseline: a fixed job of the kind the builders do (objects
+// built, serialized, parsed, sorted), the fastest of three runs so one
+// collector pause does not decide it. Every loop-hold bound below is the
+// larger of its absolute floor (what a laptop reads, with room) and a share
+// of this baseline, so a shared runner several times slower than a laptop
+// gets a bound several times wider, while a hold that is a multiple of the
+// baseline still fails (the deliberate-regression check below proves it).
+// Measured at about 16 ms on a laptop, where the floors are the bounds. The
+// STALL_*_MS variables set the floors.
+const BASELINE_MS = (() => {
+  const once = () => {
+    const t0 = performance.now();
+    const rows = []; for (let i = 0; i < 36_000; i++) rows.push({ i, s: "k" + (i % 977), v: i * 1.5, t: [i, i + 1] });
+    JSON.parse(JSON.stringify(rows)).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.i - b.i));
+    return performance.now() - t0;
+  };
+  return Math.min(once(), once(), once());
+})();
+const bound = (floor, k) => ({ ms: Math.max(floor, Math.round(k * BASELINE_MS)), note: `bound ${Math.max(floor, Math.round(k * BASELINE_MS))} ms: ${floor} ms or ${k}x the ${BASELINE_MS.toFixed(1)} ms baseline` });
+const GAP = bound(Number(process.env.STALL_GAP_MS || 120), 3);
+const GAP_MS = GAP.ms;
+const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 4);
+const ROUTE_BOUND_MS = ROUTE.ms;
 // One step of a sliced page: measured at 3.4 ms on a laptop for the longest
-// (?all=1, 5,800 sellers); the bound allows a runner several times slower.
-const STEP_BOUND_MS = Number(process.env.STALL_STEP_BOUND_MS || 25);
+// (?all=1, 5,800 sellers); the floor allows a runner several times slower.
+const STEP = bound(Number(process.env.STALL_STEP_BOUND_MS || 25), 0.75);
+const STEP_BOUND_MS = STEP.ms;
+console.log(`baseline ${BASELINE_MS.toFixed(1)} ms; ${GAP.note}; ${ROUTE.note}; ${STEP.note}`);
 const SALES_ROWS = Number(process.env.STALL_SALES_ROWS || 60_000);
 const TRANSFER_ROWS = Number(process.env.STALL_TRANSFER_ROWS || 200_000);
 
@@ -87,6 +110,19 @@ async function blockOf(fn) {
   gaps = null;
   return { value, ms: Math.round(ms), raw: Math.round(raw), gc: Math.round(gc) };
 }
+// The pin every loop-hold figure below is held to, in both sections.
+const heldUnder = (ms, limit) => ms < limit;
+
+// --- 0. a deliberate regression: a build that holds the loop for five times
+// a derived bound must fail the same pin and the same measurement the
+// figures below pass, whatever the machine's baseline made the bound.
+{
+  const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms) { /* hold the loop */ } };
+  for (const [name, limit, note] of [["GAP", GAP_MS, GAP.note], ["ROUTE", ROUTE_BOUND_MS, ROUTE.note]]) {
+    const r = await blockOf(async () => spin(5 * limit));
+    ok(!heldUnder(r.ms, limit), `a deliberate ${5 * limit} ms hold fails the ${name} pin (measured ${r.ms} ms; ${note})`);
+  }
+}
 
 // --- 1a. sales summaries
 {
@@ -94,7 +130,7 @@ async function blockOf(fn) {
     const sync = sales.salesSummary({ days });
     const sliced = await blockOf(() => sales.salesSummaryAsync({ days }));
     ok(isDeepStrictEqual(sliced.value, sync), `salesSummaryAsync({ days: ${days} }) equals salesSummary`);
-    ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms on ${SALES_ROWS} rows (worst ${sliced.ms} ms)`);
+    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) on ${SALES_ROWS} rows (worst ${sliced.ms} ms)`);
     const nSync = sales.externalByNetwork({ days });
     const nSliced = await blockOf(() => sales.externalByNetworkAsync({ days }));
     ok(isDeepStrictEqual(nSliced.value, nSync), `externalByNetworkAsync({ days: ${days} }) equals externalByNetwork (worst ${nSliced.ms} ms)`);
@@ -140,7 +176,7 @@ const rev = await import("../src/revenue-ledger.js");
     const a = whole();
     const b = await blockOf(sliced);
     ok(isDeepStrictEqual(b.value, a), `${name}Async equals ${name} (same figures, same order) on ${TRANSFER_ROWS} transfers`);
-    ok(b.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${b.ms} ms)`);
+    ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms)`);
   }
 }
 
@@ -157,12 +193,12 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   { const [o, v] = cache.entries().next().value; cache.set(o, v); }
   const sliced = await blockOf(() => x.indexSnapshotAsync(ctx));
   ok(whole.sellers.length >= 5800 && isDeepStrictEqual(stripAsOf(sliced.value), stripAsOf(whole)), `indexSnapshotAsync equals indexSnapshot (${whole.sellers.length} sellers)`);
-  ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms)`);
+  ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms)`);
 }
 {
   const ourTools = [];
   const cold = await blockOf(() => x.indexRowsReady({ ourTools, excludeOrigin: "" }));
-  ok(cold.ms < GAP_MS, `a cold tool directory is built in slices, never past ${GAP_MS} ms (worst ${cold.ms} ms)`);
+  ok(heldUnder(cold.ms, GAP_MS), `a cold tool directory is built in slices, never past ${GAP_MS} ms (${GAP.note}) (worst ${cold.ms} ms)`);
   const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.matched, r.described, r.results])).digest("hex");
   const sliced = [digest(x.allIndexedTools({ limit: 300, offset: 40_000 })), digest(x.allIndexedTools({ search: "json", limit: 200 }))];
   const total = x.allIndexedTools({ limit: 1 }).total;
@@ -184,7 +220,7 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   const rebuilt = await blockOf(() => x.routableSellerSummaries());
   const projected = x._routableRowBuildsForTest() - before;
   ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
-  ok(rebuilt.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${rebuilt.ms} ms; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
+  ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
 }
 
@@ -218,14 +254,14 @@ const mp = await import("../src/market-page.js");
     const oneTurnMs = Math.round(performance.now() - t0);
     const sliced = await blockOf(() => mp.marketPageAsync(null, "https://agent402.tools", opts));
     ok(sliced.value === whole && whole.length > 100_000, `/marketplace${all ? "?all=1" : ""}: the sliced page is the one-turn page, byte for byte (${whole.length} chars, ${labelled.sellers.length} sellers)`);
-    ok(sliced.ms < GAP_MS, `...and never held the loop past ${GAP_MS} ms (worst ${sliced.ms} ms; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
+    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
     // The page's own work per step, timed step by step: no step is more than
     // a fraction of the whole page (the loop-lag figure above also carries
     // the garbage collector's tasks, which run between turns either way).
     const steps = mp._marketPageAllStepsForTest("https://agent402.tools", opts);
     let longest = 0, count = 0, r;
     do { const t = performance.now(); r = steps.next(); longest = Math.max(longest, performance.now() - t); count++; } while (!r.done);
-    ok(r.value === whole && count > 20 && longest < STEP_BOUND_MS, `...in ${count} steps, the longest ${longest.toFixed(1)} ms (bound ${STEP_BOUND_MS} ms)`);
+    ok(r.value === whole && count > 20 && heldUnder(longest, STEP_BOUND_MS), `...in ${count} steps, the longest ${longest.toFixed(1)} ms (${STEP.note})`);
   }
   ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
 }
@@ -265,7 +301,7 @@ const mp = await import("../src/market-page.js");
   ok(builds < turns, `the readers of ${turns} turns shared ${builds} snapshot builds (each reader used to build its own: ${turns * 3})`);
   // The loop's own worst block over the warm start is printed, not bounded:
   // it is mostly the loader's batches, which this file does not pin.
-  ok(readerWorst < GAP_MS, `...and the readers' longest turn was ${Math.round(readerWorst)} ms (bound ${GAP_MS} ms; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
+  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms (${GAP.note}; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
   ok(isDeepStrictEqual(x.warmStartSnapshot(ctx).sellers.length, x.indexSnapshot(ctx).sellers.length), "after the warm start a reader builds from the whole cache");
 }
 
@@ -323,7 +359,7 @@ try {
     // Our code's hold: the worst block less the collector's share of it.
     const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
     const ms = worstMs - worstGcMs;
-    ok(resp.status === 200 && ms < ROUTE_BOUND_MS, `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (bound ${ROUTE_BOUND_MS} ms; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
+    ok(resp.status === 200 && heldUnder(ms, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (${ROUTE.note}; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
   }
   {
     // The shared labelled snapshot reaches the page: every external row of the

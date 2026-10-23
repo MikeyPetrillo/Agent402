@@ -1422,6 +1422,8 @@ jobs:
           # Index side stores merge per key and fold the other container's changes on the pull
           t node scripts/test-index-side-stores-pg.js
           t node scripts/test-leaderboard-peer-adopt-pg.js
+          # Two containers, one chain scan per cadence on the Base, Solana and MPP boards: a tick adopts the saved board when it is fresh and never older than its own; a boot kick after a fresh scan reads nothing
+          t node scripts/test-board-scan-once-pg.js
           # Two containers, one live rail scan: the real lease lets one scan, the snapshot is saved as a state document and adopted by the other and by a boot
           t node scripts/test-revenue-shared-scan-pg.js
           # The seller-funding operator switch set on one container applies on the other after one re-read.
