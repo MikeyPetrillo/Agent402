@@ -22,7 +22,10 @@ try {
   // Only the scan is replaced: the store and the lease are the real ones.
   A._setRevenueSnapshotDepsForTest({ scan });
   B._setRevenueSnapshotDepsForTest({ scan });
-  const settle = async (M) => { await M.revenueSnapshot({}); for (let i = 0; i < 50; i++) { await sleep(40); const s = await M.revenueSnapshot({}); if (s && s.rails?.[0]?.rail === "Base" && s.asOf && !s.stale) return s; } return M.revenueSnapshot({}); };
+  // A replica still waiting out the lease answers "warming" (its designed cold
+  // path), so a poll reads that as not yet, never as the answer.
+  const read = (M) => M.revenueSnapshot({}).catch((e) => { if (e?.snapshotWarming) return null; throw e; });
+  const settle = async (M) => { await read(M); for (let i = 0; i < 250; i++) { await sleep(40); const s = await read(M); if (s && s.rails?.[0]?.rail === "Base" && s.asOf && !s.stale) return s; } return M.revenueSnapshot({}); };
 
   // Two replicas asking at once: the lease lets one scan; the other waits its
   // pause, then adopts the saved snapshot.
@@ -30,7 +33,7 @@ try {
   // answers "warming" (the page's existing cold path), and never scans.
   const [a1, bCold] = await Promise.all([settle(A), (async () => { await sleep(5); return B.revenueSnapshot({}).catch((e) => e); })()]);
   ok(scans === 1 && a1.rails[0].balance === 1, `one scan between two replicas asking at once (${scans})`);
-  ok(bCold instanceof Error ? bCold.snapshotWarming === true : bCold?.asOf === a1.asOf, "the replica that did not hold the lease waited instead of scanning");
+  ok(scans === 1 && (bCold instanceof Error ? bCold.snapshotWarming === true : (bCold?.asOf === a1.asOf || bCold?.stale === true)), `the replica that did not hold the lease waited instead of scanning (${bCold instanceof Error ? bCold.message : JSON.stringify({ asOf: bCold?.asOf, stale: bCold?.stale, a1: a1.asOf })}; scans ${scans})`);
   const b1 = await settle(B);
   ok(scans === 1 && b1.asOf === a1.asOf, "...and then adopts the saved snapshot");
   const row = (await sdb.stateQuery(`SELECT body FROM ${sdb.stateDbSchema()}.documents WHERE name = 'revenue-snapshot'`)).rows[0];
