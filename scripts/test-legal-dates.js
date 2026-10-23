@@ -6,9 +6,12 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
+// The date follows the text a reader sees with every optional switch off: a
+// paragraph shown only while a switch is on (the Circle Gateway batched
+// option) moves the sha, not the date, until that switch ships on.
 const PINS = {
-  "src/terms.js": { date: "2026-10-20", sha: "b885c911b0f22f19" },
-  "src/privacy.js": { date: "2026-10-23", sha: "5e90f05f607538bc" },
+  "src/terms.js": { date: "2026-10-20", sha: "f0c08df2d75a682d" },
+  "src/privacy.js": { date: "2026-10-23", sha: "c9e942c536196d90" },
 };
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };

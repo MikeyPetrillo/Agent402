@@ -10,11 +10,16 @@ import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
   const description = "Agent402's privacy policy: no accounts, no ad trackers, an analytics cookie choice you can change. What we process, why, how long we keep it, and how to have it erased.";
   const canonical = `${baseUrl}/privacy`;
+  // The Circle Gateway batched option, read from the live offer every other
+  // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
+  // of the on-chain sentences appear only while it is offered.
+  const gatewayBatched = !!gatewayOfferPublic();
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -115,8 +120,8 @@ so every claim below is verifiable in code.</p>
   recorded for billing and monitoring, without the prompt or completion text.</li>
   <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
-  USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; wallet addresses, amounts, and
-  timestamps are public on-chain by the protocol's design, not collected by us. Payment verification is
+  USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
+  timestamps are public on-chain by the protocol's design, not collected by us. ${gatewayBatched ? "Circle Gateway batched payments are verified and settled by Circle Gateway off chain; the sales ledger keeps Gateway's transfer id for them. " : ""}Payment verification ${gatewayBatched ? "for every other payment " : ""}is
   performed by the payment facilitators (Coinbase CDP and per-chain facilitators, or Tempo's relay) and
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
   and for refunding a call that was charged but failed.</li>
@@ -147,7 +152,8 @@ so every claim below is verifiable in code.</p>
   <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
-  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the signers of a Solana payment (stored only
+  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
+  idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the signers of a Solana payment (stored only
   as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
   on a refused payment, the resource URL it names (see telemetry above). The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
@@ -186,7 +192,7 @@ so every claim below is verifiable in code.</p>
   bookkeeping; no email or card data is involved in that mirror.</li>
   <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
-  facilitators named at <a href="/pricing">/pricing</a>.</li>
+  facilitators named at <a href="/pricing">/pricing</a>${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>
   <li>We do not sell or share data with anyone for advertising or any other purpose.</li>
 </ul>
 
@@ -209,7 +215,7 @@ entries are deleted ${auditRetentionDays()} days after they are written, and dem
 ${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
-on-chain. Aggregate, non-personal counters (total calls served per tool) are kept for the public
+on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
 <p><b>Backups.</b> Each night we copy the stored records above (the state database and the data volume,
 including the email, memory and ledger records) to separate object storage, and each copy is deleted

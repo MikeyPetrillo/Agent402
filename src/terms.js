@@ -4,10 +4,15 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 export function termsPage(baseUrl) {
   const title = "Terms of Service - Agent402";
   const description = "Agent402 terms of service: open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.";
   const canonical = `${baseUrl}/terms`;
+  // The Circle Gateway batched option, read from the live offer every other
+  // surface reads (src/gateway-nanopayments.js): its paragraph and the scoping
+  // of the on-chain sentences appear only while it is offered.
+  const gatewayBatched = !!gatewayOfferPublic();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -111,7 +116,7 @@ We respond to valid notices, including by removing stored material and blocking 
 infringers.</p>
 
 <h2>Payments</h2>
-<p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains - USDC on Base and the other
+<p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other
 chains listed at <a href="/pricing">/pricing</a>, USDG on Robinhood Chain, and MPP settlement on Base,
 Celo or Tempo. An x402 payment settles only after your call returns a successful response; if the call
 returns an error, the payment is not settled and you are not charged. Some payments are final before the
@@ -120,7 +125,10 @@ closes after a payment has settled and before the response is delivered, we reco
 back to the paying wallet, and repay it as described under refunds below. Micropayments are per call and, once settled on-chain, are final and
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
-hold your private key.</p>
+hold your private key.</p>${gatewayBatched ? `
+<p><b>Circle Gateway batched payments.</b> A Circle Gateway batched payment settles off chain at Gateway.
+If Gateway settles one after its request was answered pending and the request is never served, we record
+the amount as owed and repay it on chain after confirming it in Gateway's records.</p>` : ""}
 <p><b>Results from other sellers.</b> Some routes, such as <code>/api/route/execute</code> and
 <code>/api/decide/execute</code>, can return a result that Agent402 obtained from a third-party seller.
 Agent402 buys that result from the seller for its own account, with its own funds, and sells it to you;
@@ -135,7 +143,7 @@ something that did not deliver, we record the amount as owed and repay the walle
 chain it paid on. Repayment is not instant: we review the amounts owed and send them in batches, and we
 check larger amounts by hand before they are sent. Each batch is started and approved by hand, and it
 sends the repayment on every chain we accept payment on: the EVM chains, Tempo, Solana, Stellar and
-Algorand. Before a repayment is sent we confirm on that chain that your payment reached us; on Tempo and
+Algorand. Before a repayment is sent we confirm on that chain that your payment reached us${gatewayBatched ? " (for a Circle Gateway batched payment, in Gateway's records)" : ""}; on Tempo and
 Solana we also confirm the repayment itself before recording it as paid. An amount
 owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect
 outlives the response and was delivered (a memory write, or a purchase we made from another seller for

@@ -484,19 +484,20 @@ await check("the pending book: books once per authorization, lists, words and re
   assert.equal(await book.alarmStatus(), "ok");
   rmSync(dir, { recursive: true, force: true });
 });
-await check("the 402 hint for a pending settlement: accepted and still settling, nothing more charged, resend the same payment; never a new signature", () => {
+await check("the 402 hint for a pending settlement: withheld, resend the same payment, owed if it settles unserved; never a new signature", () => {
   const h = classifySettlementPending({ success: false, errorReason: "settlement_pending", network: "eip155:8453" });
   assert.equal(h.reason, "settlement-pending"); assert.equal(h.retry, "same-payment"); assert.equal(h.network, "eip155:8453");
   assert.equal(h.retryAfterSeconds, 10);
-  assert.match(h.detail, /has not confirmed this batched payment yet \(it is still settling, or its answer did not arrive\)/);
-  assert.match(h.detail, /Nothing more is charged/);
-  assert.match(h.detail, /same request with the same payment header after a short wait/);
+  assert.match(h.detail, /has not confirmed this batched payment yet, so the answer was withheld/);
+  assert.match(h.detail, /same request with the same payment header after a short wait to receive it with no new charge/);
+  assert.match(h.detail, /If Gateway settles the payment and the request is not served, we record the amount as owed to the paying wallet and repay it/);
   assert.match(h.detail, /Do not sign a new authorization/);
-  assert.doesNotMatch(h.detail, /Sign a fresh|repaid as an owed refund/, "no new signature asked for, no repayment promised");
+  assert.doesNotMatch(h.detail, /Sign a fresh|Nothing more is charged/, "no new signature asked for, no unscoped no-charge claim");
   // The same words when the resend itself is still pending (refused at verify).
   const v = hintFor({ reason: "settlement_pending", network: "eip155:8453" });
   assert.equal(v.retry, "same-payment"); assert.equal(v.hint, h.detail); assert.equal(v.reason, "settlement-pending");
   assert.equal(hintFor({ reason: "settlement_failed" }).retry, "fresh-authorization", "a failed Gateway transfer was not charged: a fresh one is safe");
+  assert.equal(hintFor({ reason: "settlement_failed" }).hint, "Circle Gateway reports this batched payment failed; it did not settle to us and this request was not charged. Sign a fresh authorization to retry.");
   assert.equal(classifySettlementPending({ success: false, errorReason: "insufficient_balance" }), null);
   assert.equal(classifySettlementPending({ success: true, errorReason: "settlement_pending" }), null);
 });
@@ -1068,17 +1069,36 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     assert.deepEqual(Object.keys(manifest.payment.x402.gatewayNanopayments.networks).sort(), ["eip155:5042", "eip155:8453"]);
     assert.deepEqual(manifest.payment.x402.acceptKinds.polygon, ["exact"]);
     const llms = await (await fetch(`${base}/llms.txt`)).text();
-    assert.match(llms, /Gas-free batched option \(Circle Gateway nanopayments\)\.\*\* On (Base and Arc|Arc and Base)/);
+    assert.match(llms, /Batched option, no gas per call \(Circle Gateway nanopayments\)\.\*\* On (Base and Arc|Arc and Base)/);
     assert.match(llms, /GatewayWalletBatched/);
     assert.match(llms, /`maxTimeoutSeconds` of 604900 seconds/, "the validity window is read from the offer (Gateway's minValiditySeconds plus the buffer)");
     assert.doesNotMatch(llms, /seven-day/, "never typed");
-    // The copy names the buyer's one-time Gateway deposit beside "no gas",
+    // The copy names the buyer's Gateway deposit beside "no gas" (never
+    // "once": the buyer tops the balance up as it runs low),
     // and every surface that describes the implicit replay names the
     // identity-bound exclusion.
-    assert.match(llms, /first deposits USDC into Circle Gateway \(one on-chain deposit, which the buyer makes and pays gas for\)/);
+    assert.match(llms, /after a USDC deposit into Circle Gateway \(an on-chain transfer the buyer makes and pays gas for\)/);
     assert.match(llms, /Identity-bound routes and routes with a lasting effect \(such as memory writes, attest and the route-execute tiers\) offer the plain accept only/);
     assert.match(llms, /\(identity-bound routes, routes with a lasting effect and streamed calls excepted\)/);
-    assert.match(pricing.payment.gatewayNanopayments.buyerGas, /one-time USDC deposit into Gateway/);
+    const depositSentence = "After a USDC deposit into Gateway (an on-chain transfer the buyer makes and pays gas for), each payment is a signature against that balance, with no gas per payment.";
+    assert.ok(pricing.payment.gatewayNanopayments.buyerGas.includes(depositSentence), "the deposit sentence on /api/pricing");
+    assert.ok(manifest.payment.x402.gatewayNanopayments.buyerGas.includes(depositSentence), "the deposit sentence on /.well-known/x402");
+    for (const [where, text] of [["/api/pricing", JSON.stringify(pricing)], ["/.well-known/x402", JSON.stringify(manifest)], ["llms.txt", llms]]) {
+      assert.doesNotMatch(text, /one-time (USDC )?deposit|deposits USDC into Gateway once|Gas-free/i, `${where}: no "deposit once" and no unscoped gas-free claim`);
+    }
+    // The legal pages and /how-to-pay carry the batched text only while the
+    // option is offered (the off boot below asserts its absence).
+    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    const terms = await flat("/terms");
+    assert.ok(terms.includes("A Circle Gateway batched payment settles off chain at Gateway. If Gateway settles one after its request was answered pending and the request is never served, we record the amount as owed and repay it on chain after confirming it in Gateway's records."), "terms: the batched paragraph");
+    assert.ok(terms.includes("Paid calls settle on public blockchains (except Circle Gateway batched payments, below)"), "terms: the on-chain sentence is scoped");
+    assert.ok(terms.includes("confirm on that chain that your payment reached us (for a Circle Gateway batched payment, in Gateway's records)"), "terms: the refund check is scoped");
+    const priv = await flat("/privacy");
+    assert.ok(priv.includes("Circle Gateway batched payments are verified and settled by Circle Gateway off chain; the sales ledger keeps Gateway's transfer id for them."), "privacy: the batched sentence");
+    assert.ok(priv.includes("for a payment settled on chain, wallet addresses, amounts, and timestamps are public on-chain"), "privacy: the public on-chain sentence is scoped");
+    assert.ok(priv.includes("Payment verification for every other payment is performed by the payment facilitators"), "privacy: the verifier sentence is scoped");
+    const htp = await flat("/how-to-pay");
+    assert.ok(htp.includes("Gateway batched") && htp.includes("A 402 with Retry-After; resend the same payment to be served; a payment that settles and is never served is booked as owed."), "/how-to-pay: the Gateway row in the failure table");
     const privacy = (await (await fetch(`${base}/privacy`)).text()).replace(/\s+/g, " ");
     assert.match(privacy, /not on identity-bound routes such as memory, on routes with a lasting effect, or for streamed calls/);
     const openapi = await (await fetch(`${base}/openapi.json`)).json();
@@ -1216,7 +1236,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     const body = await r.json();
     assert.equal(r.status, 402, `a pending settlement is not served (got ${r.status})`);
     assert.equal(body.reason, "settlement-pending");
-    assert.match(body.hint, /still settling/);
+    assert.match(body.hint, /has not confirmed this batched payment yet/);
     assert.match(body.hint, /same payment header/);
     assert.equal(body.error, undefined, "a body that explains itself carries no error");
     assert.equal(body.retry, "same-payment");
@@ -1403,6 +1423,18 @@ await check("switch off: no batched accept anywhere, no option on the surfaces, 
     assert.equal(pricing.payment.gatewayNanopayments, undefined);
     assert.equal((await (await fetch(`${base}/.well-known/x402`)).json()).payment.x402.gatewayNanopayments, undefined);
     assert.ok(!/GatewayWalletBatched/.test(await (await fetch(`${base}/llms.txt`)).text()));
+    // No batched text on the legal pages, /how-to-pay, llms.txt or /api/pricing
+    // with the switch off; the nonce disclosure and the replay size bound are
+    // there regardless.
+    const flat = async (path) => (await (await fetch(`${base}${path}`)).text()).replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    const pages = { "/privacy": await flat("/privacy"), "/terms": await flat("/terms"), "/how-to-pay": await flat("/how-to-pay"), "/llms.txt": await flat("/llms.txt"), "/api/pricing": JSON.stringify(pricing) };
+    for (const [path, text] of Object.entries(pages)) assert.doesNotMatch(text, /Circle Gateway|Gateway batched|batched payment|Batched option|GatewayWalletBatched/, `${path}: no batched text with the switch off`);
+    assert.ok(pages["/terms"].includes("Paid calls settle on public blockchains - USDC"), "terms: the on-chain sentence reads as before");
+    assert.match(pages["/privacy"], /the payment's nonce and network \(as an idempotency key for a re-sent payment, held with the cached answer for up to \d+ minutes\)/, "privacy names the nonce read");
+    const xm = await (await fetch(`${base}/.well-known/x402`)).json();
+    assert.ok(xm.payment.dataHandling.readsOnly.some((r) => /^the payment's nonce and network: as an idempotency key for a re-sent payment, held with the cached answer for up to \d+ minutes$/.test(r)), "readsOnly names the nonce read");
+    assert.match(pages["/how-to-pay"], /replays the settled 200 \(answers up to 1 MB\)/, "/how-to-pay: the replay size bound");
+    assert.match(pages["/llms.txt"], /inside the replay window \(answers up to 1 MB\)/, "llms.txt: the replay size bound");
     assert.ok(!/batched option/.test(await (await fetch(`${base}/base`)).text()));
     assert.deepEqual((await (await fetch(`${base}/api/gateway-status`)).json()).gatewayBalance, { status: "off" });
     assert.deepEqual((await (await fetch(`${base}/api/gateway-status`)).json()).gatewayPending, { status: "off" });

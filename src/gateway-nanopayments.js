@@ -1242,8 +1242,8 @@ export function gatewayOfferPublic() {
     kind: GATEWAY_KIND_NAME,
     wire: GATEWAY_WIRE,
     networks,
-    buyerGas: "none per payment: after a one-time USDC deposit into Gateway (an on-chain transfer the buyer makes and pays gas for), the buyer signs an EIP-3009 authorization against that balance for each payment and pays no gas for it",
-    settlement: "batched off chain by Circle Gateway and credited to the seller's Gateway balance; the buyer deposits USDC into Gateway once, then every payment is a signature",
+    buyerGas: "none per payment. After a USDC deposit into Gateway (an on-chain transfer the buyer makes and pays gas for), each payment is a signature against that balance, with no gas per payment.",
+    settlement: "batched off chain by Circle Gateway and credited to the seller's Gateway balance",
     note: "Offered beside the plain accept on the same networks at the same price; identity-bound routes and routes with a lasting effect keep the plain accept only. A payment whose accept carries extra.name GatewayWalletBatched is verified and settled through Circle Gateway; every other payment settles through the network's facilitator as before.",
   };
 }

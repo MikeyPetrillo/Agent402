@@ -49,16 +49,17 @@ export function isGatewayBatchedRequest(req) {
 export const PENDING_RETRY_AFTER_SECONDS = 10;
 
 /** What a buyer is told while Gateway has not confirmed a batched payment
- *  (settlement_pending, or a settle answer that never arrived): nothing more
- *  is charged, and the SAME payment
- *  resent after a short wait is served once Gateway reports it settled. Never
- *  a new signature: a second authorization could be a second charge. */
-export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway has not confirmed this batched payment yet (it is still settling, or its answer did not arrive), so the answer was withheld. Nothing more is charged for it. Retry the same request with the same payment header after a short wait: once Gateway reports the payment settled, that retry is served without a new charge. Do not sign a new authorization for this request.";
+ *  (settlement_pending, or a settle answer that never arrived): the SAME
+ *  payment resent after a short wait is served once Gateway reports it
+ *  settled; one that settles and is never served is booked as owed by the
+ *  pending resolver. Never a new signature: a second authorization could be
+ *  a second charge. */
+export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway has not confirmed this batched payment yet, so the answer was withheld. Resend the same request with the same payment header after a short wait to receive it with no new charge. If Gateway settles the payment and the request is not served, we record the amount as owed to the paying wallet and repay it. Do not sign a new authorization for this request.";
 
 /** What a buyer is told when Gateway reports the batched payment failed:
  *  Gateway charges nothing for a failed transfer, so a fresh one is safe. */
 export const SETTLEMENT_FAILED_REASON = "settlement_failed";
-export const SETTLEMENT_FAILED_DETAIL = "Circle Gateway reports that this batched payment failed, so Gateway took nothing for it. Sign a fresh authorization to retry.";
+export const SETTLEMENT_FAILED_DETAIL = "Circle Gateway reports this batched payment failed; it did not settle to us and this request was not charged. Sign a fresh authorization to retry.";
 
 /** True for a settle receipt (decoded PAYMENT-RESPONSE) that says Gateway is
  *  still settling the payment: neither served nor refused by the buyer's own
