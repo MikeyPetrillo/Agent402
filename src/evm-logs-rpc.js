@@ -80,7 +80,7 @@ const note = (o) => { recent.push(o); if (recent.length > 200) recent.shift(); }
 const stateOf = (url) => { let s = laneState.get(url); if (!s) { s = { coolUntil: 0, strikes: 0 }; laneState.set(url, s); } return s; };
 function cool(st, baseMs) { st.strikes = Math.min(st.strikes + 1, 8); st.coolUntil = Date.now() + Math.min(300_000, baseMs * 2 ** (st.strikes - 1)); }
 
-const RANGE_RE = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|ranges over|query returned more than|archive/i;
+export const RANGE_RE = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|ranges over|query returned more than|exceeds max results|retry with the range|archive/i;
 const RATE_RE = /too many requests|rate.?limit|request limit/i;
 const host = (u) => { try { return new URL(u).host; } catch { return "rpc"; } };
 const lc = (s) => String(s || "").toLowerCase();

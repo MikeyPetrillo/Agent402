@@ -38,6 +38,7 @@ import { createLogWindowCache, createLogCacheStore, logCacheEnabled, decodeTrans
 
 import { createBlockClock, rpcHeaderReader } from "./block-clock.js";
 import { LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
+import { registerMemoryStore } from "./memory-stores.js";
 // The board's window is a span of TIME (24h by default, 7d in production),
 // and the scan finds the block where it starts by BLOCK TIMESTAMP
 // (src/block-clock.js). It used to be a block count at an assumed 2 s per Base
@@ -1978,3 +1979,9 @@ export function _resetLeaderboardCacheForTests() {
 // Test seams: a scan's save, and one refresh tick through the lease.
 export const __persistLeaderboardSnapshotForTest = (snap) => persistLeaderboardSnapshot(snap);
 export const __refreshTickForTest = (opts = {}) => refreshOnce(opts);
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("leaderboard.snapshot", () => cached, { note: "seller leaderboard snapshot" });
+registerMemoryStore("leaderboard.history", () => historyMemo, { note: "leaderboard history per file" });
+registerMemoryStore("leaderboard.baseLogCache", () => baseLogCache, { note: "Base settlement log cache" });
+registerMemoryStore("leaderboard.docs", () => docs, { note: "state documents held by the leaderboard" });

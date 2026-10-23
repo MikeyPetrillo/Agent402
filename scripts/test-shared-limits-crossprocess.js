@@ -129,7 +129,10 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(local.fails === 0, "and B's own counter never saw them (the refusal came from the shared window)");
   await A.send({ op: "gwb.success", key });
   r = await B.send({ op: "gwb.check", ip });
-  ok(r.ok === true, "a settled call on A clears the wallet on B");
+  ok(r.ok === false && r.status === 429, `a settled call on A is one outcome against three failures: B still refuses the wallet (${r.status})`);
+  for (let i = 0; i < 3; i++) await A.send({ op: "gwb.success", key });
+  r = await B.send({ op: "gwb.check", ip });
+  ok(r.ok === true, "four settled calls on A outweigh the three failures: B serves the wallet again (the settled calls ride the shared window)");
   // The global pause: distinct buyers failing on both replicas, two each.
   await A.send({ op: "gwb.fail", key: "ip:198.51.100.1" });
   await A.send({ op: "gwb.fail", key: "ip:198.51.100.2" });

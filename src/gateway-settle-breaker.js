@@ -49,8 +49,18 @@
 // floor. Without Redis the consult is synchronous, exactly as before; with it
 // the consult returns a promise (the handlers await it), and when the shared
 // store does not answer the consult decides on this process's counts alone,
-// which is never looser than one replica was. Tune via env. Not a reputation
-// system: a settled call clears the wallet's count at once.
+// which is never looser than one replica was. Tune via env.
+//
+// THE RATE. Failures are read against the settled calls in the same window:
+// a key is refused only when it holds MAX_FAILS failures AND they are more
+// than MIN_FAIL_SHARE of its outcomes. A buyer settling hundreds of calls an
+// hour whose client re-sends a request (the same signed authorization, its
+// nonce already used, so the copy reverts at every facilitator) is never cut
+// off by a handful of such reverts, whatever order the fast reverts and the
+// slower settlements land in; a key whose payments mostly fail is still
+// stopped after MAX_FAILS of them, and any key at HARD_MAX_FAILS failures is
+// stopped whatever it settled (the bound on unpaid handler runs). Settled
+// calls stay in the window as outcomes; they do not erase the failures.
 import { payerFromRequest } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
@@ -62,6 +72,15 @@ const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
 /** Rolling window, and the length of a global pause. */
 export const WINDOW_MS = num(process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS, 15 * 60_000);
+/** The share of a key's outcomes inside the window that must be failures
+ *  (strictly more than this) before MAX_FAILS of them refuse it. */
+export const MIN_FAIL_SHARE = (() => { const n = Number(process.env.GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE); return Number.isFinite(n) && n >= 0 && n < 1 ? n : 0.5; })();
+/** Failures inside the window that refuse a key whatever its settled count:
+ *  the share rule bounds a wallet's unpaid handler runs by its own settled
+ *  calls, and this bounds them outright. */
+export const HARD_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_HARD_MAX, 40);
+/** Settled outcomes kept per key (the window's rate needs a count, not every stamp). */
+const MAX_OKS_KEPT = 5000;
 /** DISTINCT buyers with a settle failure inside the window that pause every
  *  /v1 tier - the per-key count is evadable by rotating wallets or IPs; this
  *  is not. Distinct, not a sum of failures (2026-09-28): the per-key check
@@ -74,6 +93,7 @@ export const WINDOW_MS = num(process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS, 15 * 
 export const GLOBAL_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX, 12);
 
 const fails = new Map(); // key -> number[] (failure timestamps inside the window)
+const oks = new Map();   // key -> number[] (settled-call timestamps inside the window)
 // key -> number[]: the subset of those failures that were a FACILITATOR billing
 // refusal (src/payment-reject.js). They still count - nothing withdraws their
 // offer, so the per-wallet bound is the only thing between them and an
@@ -91,6 +111,7 @@ let globalTrips = 0;
 
 // ---- the shared half ----------------------------------------------------------
 // Window names: gwb-fail / gwb-bill (per key, one entry per failure),
+// gwb-ok (per key, one entry per settled call),
 // gwb-global (one entry per distinct buyer; a keyless failure is its own
 // entry), and the flag gwb-pause. A window add returns the shared count, so
 // the trip decision is made on the count every replica contributed to.
@@ -117,24 +138,30 @@ function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
   void sharedWrite(CONTROL, shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
   if (billing) void sharedWrite(CONTROL, shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
 }
-function sharedRecordSuccess(key) {
-  void sharedWrite(CONTROL, shared.windowClear("gwb-fail", sharedKey(key)));
-  void sharedWrite(CONTROL, shared.windowClear("gwb-bill", sharedKey(key)));
+function sharedRecordSuccess(key, now) {
+  void sharedWrite(CONTROL, shared.windowAdd("gwb-ok", sharedKey(key), { windowMs: WINDOW_MS, member: `${PROC}:${++sharedSeq}`, now }));
 }
-/** The per-key state with the shared window folded in: the shared entries
- *  when the store answered and holds at least as many as this process does,
- *  else this process's own. */
+function sharedClearKey(key) {
+  for (const name of ["gwb-fail", "gwb-bill", "gwb-ok"]) void sharedWrite(CONTROL, shared.windowClear(name, sharedKey(key)));
+}
+/** The per-key state with the shared windows folded in: each count is the
+ *  larger of the store's and this process's own (a write of this process
+ *  may not have landed yet), and the lift time comes from whichever
+ *  failure list is read. A store that does not answer leaves it to this
+ *  process's counts. */
 async function sharedBlocked(key, now) {
   const local = gatewaySettleBreakerBlocked(key, now);
   if (!key) return local;
-  const r = await shared.windowReadMany([{ name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS }, { name: "gwb-bill", key: sharedKey(key), windowMs: WINDOW_MS }], { now });
+  const r = await shared.windowReadMany([
+    { name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS },
+    { name: "gwb-bill", key: sharedKey(key), windowMs: WINDOW_MS },
+    { name: "gwb-ok", key: sharedKey(key), windowMs: WINDOW_MS },
+  ], { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
-  const [f, b] = r.results;
-  if (f.count <= local.fails || !f.entries) return local;
-  const times = f.entries.map((e) => e.score).sort((x, y) => x - y);
-  const out = { blocked: false, fails: f.count, billingFails: Math.max(b.count, local.billingFails) };
-  if (f.count < MAX_FAILS) return out;
-  return { ...out, blocked: true, until: times[times.length - MAX_FAILS] + WINDOW_MS };
+  const [f, b, o] = r.results;
+  const useShared = f.count > local.fails && Array.isArray(f.entries);
+  const failTimes = useShared ? f.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(fails.get(key) || [], now);
+  return verdict(failTimes, Math.max(f.count, local.fails), Math.max(o.count, local.oks), Math.max(b.count, local.billingFails));
 }
 async function sharedGlobalPaused(now) {
   const local = gatewaySettleBreakerGlobalPaused(now);
@@ -164,20 +191,28 @@ export function gatewaySettleBreakerKey(req) {
 }
 
 function inWindow(arr, now) { return arr.filter((t) => now - t < WINDOW_MS); }
+/** The rule: MAX_FAILS failures inside the window, and failures strictly more
+ *  than MIN_FAIL_SHARE of the key's outcomes there. `until` is when the
+ *  (len - MAX + 1)th newest failure ages out. */
+function verdict(failTimes, nFails, nOks, nBills) {
+  const out = { blocked: false, fails: nFails, oks: nOks, billingFails: nBills };
+  if (nFails < MAX_FAILS) return out;
+  if (nFails < HARD_MAX_FAILS && nFails <= MIN_FAIL_SHARE * (nFails + nOks)) return out;
+  const idx = Math.max(0, failTimes.length - MAX_FAILS);
+  return { ...out, blocked: true, until: (failTimes[idx] ?? failTimes[failTimes.length - 1] ?? Date.now()) + WINDOW_MS };
+}
 function pruneGlobal(now) { for (const [k, t] of globalFailKeys) if (now - t >= WINDOW_MS) globalFailKeys.delete(k); }
 
-/** Per-key state: blocked while MAX_FAILS or more failures sit inside the
- *  window; `until` is when the count next drops below the threshold. */
+/** Per-key state (this process): see `verdict`. */
 export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
-  if (!key) return { blocked: false, fails: 0, billingFails: 0 };
+  if (!key) return { blocked: false, fails: 0, oks: 0, billingFails: 0 };
   const arr = inWindow(fails.get(key) || [], now);
   if (arr.length) fails.set(key, arr); else fails.delete(key);
   const bill = inWindow(billingFails.get(key) || [], now);
   if (bill.length) billingFails.set(key, bill); else billingFails.delete(key);
-  if (arr.length < MAX_FAILS) return { blocked: false, fails: arr.length, billingFails: bill.length };
-  // The block lifts when the (len - MAX + 1)th newest failure ages out.
-  const until = arr[arr.length - MAX_FAILS] + WINDOW_MS;
-  return { blocked: true, fails: arr.length, billingFails: bill.length, until };
+  const ok = inWindow(oks.get(key) || [], now);
+  if (ok.length) oks.set(key, ok); else oks.delete(key);
+  return verdict(arr, arr.length, ok.length, bill.length);
 }
 
 /** Global state: paused for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own). */
@@ -220,12 +255,18 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
     bill.push(now);
     billingFails.set(key, bill);
   }
-  if (arr.length >= MAX_FAILS) console.warn(`[gateway-breaker] ${arr.length} settle failures inside the window for one buyer - refusing its gateway calls until the window clears`);
+  const v = verdict(arr, arr.length, inWindow(oks.get(key) || [], now).length, 0);
+  if (v.blocked) console.warn(`[gateway-breaker] ${arr.length} settle failures against ${v.oks} settled calls inside the window for one buyer - refusing its gateway calls until the window clears`);
 }
 
-/** A settled 200 clears the key at once - a good buyer is never impeded. */
-export function recordGatewaySettleSuccess(key) {
-  if (key) { fails.delete(key); billingFails.delete(key); if (SHARED) sharedRecordSuccess(key); }
+/** A settled 200 is an outcome in the window: enough of them keep a key's
+ *  failures under the share that refuses it. */
+export function recordGatewaySettleSuccess(key, now = Date.now()) {
+  if (!key) return;
+  const ok = inWindow(oks.get(key) || [], now);
+  ok.push(now);
+  oks.set(key, ok.length > MAX_OKS_KEPT ? ok.slice(-MAX_OKS_KEPT) : ok);
+  if (SHARED) sharedRecordSuccess(key, now);
 }
 
 function decodeReceipt(res) {
@@ -360,17 +401,17 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     // own): the count the global pause trips on.
     globalFailsInWindow: (pruneGlobal(now), globalFailKeys.size),
     globalPaused: g.paused, globalPausedUntil: g.paused ? new Date(g.until).toISOString() : null, globalTrips,
-    maxFails: MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
+    maxFails: MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
 
 /** Test-only. */
 export function _gatewaySettleBreakerReset() {
   if (SHARED) {
-    for (const k of new Set([...fails.keys(), ...billingFails.keys()])) sharedRecordSuccess(k);
+    for (const k of new Set([...fails.keys(), ...billingFails.keys(), ...oks.keys()])) sharedClearKey(k);
     void shared.flagSet("gwb-pause", "all", 0); void shared.windowClear("gwb-global", "all");
   }
-  fails.clear(); billingFails.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0;
+  fails.clear(); billingFails.clear(); oks.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0;
 }
 /** Whether this process writes the breaker through to the shared store. */
 export const _gatewaySettleBreakerShared = SHARED;

@@ -46,6 +46,7 @@ import { createJsonDocument } from "./json-document.js";
 import { documents, stateDbEnabled } from "./state-db.js";
 import { posOf } from "./seller-funding.js";
 import { blocksForSeconds } from "./chain-block-time.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : d; };
 export const LOG_CACHE_DEFAULTS = Object.freeze({
@@ -439,3 +440,6 @@ export function decodeTransferLog(l) {
   };
 }
 export const transferForFold = (t) => ({ wallet: t.wallet, payer: t.payer, usd: t.micro / 1e6, pos: posOf(t.block, t.logIndex) });
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("leaderboard-log-cache.intern", () => intern, { note: "interned log fields" });

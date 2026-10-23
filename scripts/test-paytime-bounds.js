@@ -719,14 +719,15 @@ try {
   // 2b. A hang-up whose settlement FAILS is counted against the wallet, and a
   // forgiven one is not. The wallet's first nano hang-up is forgiven; two
   // failed ones after it leave it served (the forgiven one would make three);
-  // three failed ones in a row refuse its next call before the handler.
+  // a third failed one, against the wallet's one settled call, refuses its
+  // next call before the handler (three of four outcomes failed).
   {
     const W = wallet(0xb1);
     fac.refuse.add(W.toLowerCase());
     or.chatDelayMs = 1_200;
-    const failedHangUp = async (label, ip) => {
+    const failedHangUp = async (label, ip, w = W) => {
       const r0 = fac.refused;
-      await hangUpMidRun(CHAT, W, ip, "chat");
+      await hangUpMidRun(CHAT, w, ip, "chat");
       await waitFor(() => fac.refused > r0, 5000);
       await sleep(200);
       ok(fac.refused === r0 + 1, `${label}. the buyer left mid-run, past the forgiveness budget, and settlement was refused (refused +${fac.refused - r0})`);
@@ -743,14 +744,29 @@ try {
     ok(mid.status === 200, `b. one forgiven and two failed hang-ups leave the wallet served: the forgiven one is not counted (${mid.status})`);
     fac.refuse.add(W.toLowerCase());
     or.chatDelayMs = 1_200;
-    for (let i = 3; i <= 5; i++) await failedHangUp(`b${i}`, `10.1.1.${2 + i}`);
+    await failedHangUp("b3", "10.1.1.5");
     or.chatDelayMs = 0;
     const c0 = or.chat;
     const r = await pay(CHAT, W, "10.1.1.9");
     const body = await r.json().catch(() => ({}));
-    ok(r.status === 429 && or.chat === c0, `b. after three failed hang-ups the wallet's next call is refused 429 before the handler (status ${r.status}, upstream +${or.chat - c0}: ${String(body.error || "").slice(0, 90)})`);
+    ok(r.status === 429 && or.chat === c0, `b. three failed hang-ups against one settled call: the wallet's next call is refused 429 before the handler (status ${r.status}, upstream +${or.chat - c0}: ${String(body.error || "").slice(0, 90)})`);
     ok(/failed to settle/.test(String(body.error || "")), "b. ... by the settle-failure breaker, which names the cause");
     fac.refuse.delete(W.toLowerCase());
+    // Control: a wallet that mostly settles is not refused by the same three
+    // failed hang-ups. Four settled calls first, then three failed hang-ups:
+    // its next call still runs.
+    const W2 = wallet(0xb2);
+    for (let i = 0; i < 4; i++) ok((await pay(CHAT, W2, "10.1.2.1")).status === 200, `b-control. settled call ${i + 1} on a second wallet`);
+    fac.refuse.add(W2.toLowerCase());
+    or.chatDelayMs = 1_200;
+    await hangUpMidRun(CHAT, W2, "10.1.2.2", "chat"); // its first hang-up: forgiven, not counted
+    await sleep(1_800);
+    for (let i = 1; i <= 3; i++) await failedHangUp(`b-control ${i}`, `10.1.2.${2 + i}`, W2);
+    fac.refuse.delete(W2.toLowerCase());
+    or.chatDelayMs = 0;
+    const c1 = or.chat;
+    const r2 = await pay(CHAT, W2, "10.1.2.9");
+    ok(r2.status === 200 && or.chat === c1 + 1, `b-control. three failed hang-ups against four settled calls: the wallet is still served (status ${r2.status})`);
   }
 
   // 2c. Control: hang-ups that SETTLE (past the forgiveness budget, so the

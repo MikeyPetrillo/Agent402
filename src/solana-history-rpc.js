@@ -37,6 +37,7 @@
 //      when it is set to anything other than a public lane,
 //   3. the remaining SOLANA_RPCS entries (fallback only).
 import { redactSecrets } from "./tools/redact.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 const PUBLIC_MAINNET = "https://api.mainnet-beta.solana.com";
 
@@ -344,3 +345,6 @@ export function __resetSolanaHistoryForTest() {
   laneState.clear(); counters.clear(); callers.clear(); cache.clear(); recent.length = 0;
   cacheHits = 0; allFailed = 0; startedAt = Date.now();
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("solana-history.cache", () => cache, { note: "Solana transaction reads (LRU)" });

@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { registerSqliteStore } from "./memory-stores.js";
 
 // Replay-protection lives in /data (persistent volume) so used PoW tokens
 // stay used across restarts. Falling back to /tmp on prod is unsafe: a
@@ -795,3 +796,6 @@ export function powInfo(baseUrl, computeSlugs) {
       'const res = await fetch(BASE+"/api/hash",{method:"POST",headers:{"Content-Type":"application/json","X-Pow-Solution":c.token+":"+n},body:JSON.stringify({text:"hello"})});',
   };
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("pow.db", () => db, { note: "proof-of-work database" });

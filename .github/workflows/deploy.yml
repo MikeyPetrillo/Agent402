@@ -1415,6 +1415,8 @@ jobs:
           t node scripts/test-index-replicas-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
+          # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
+          t node scripts/test-index-listings-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
           t node scripts/test-index-reprice-replicas-pg.js
           # Index side stores merge per key and fold the other container's changes on the pull
@@ -1826,6 +1828,8 @@ jobs:
           t node scripts/test-query-terms.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
           t node scripts/test-revenue-ledger.js
+          # Every getLogs reader narrows on each result-cap wording a node has sent
+          t node scripts/test-logs-cap-wording.js
           t node scripts/test-block-clock.js
           # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
           t node scripts/test-chain-block-time.js
@@ -1845,6 +1849,8 @@ jobs:
           t node scripts/test-late-settlements.js
           # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check, paid-mode boot with and without the key (stub chain, throwaway keys - offline)
           t node scripts/test-own-relayer.js
+          # Robinhood settle order follows the listed facilitator's relayer gas: dry -> our relayer first, funded -> facilitator first, unread never moves it (offline)
+          t node scripts/test-robinhood-order.js
           # Robinhood outage: an ambiguous facilitator failure is read on chain (used with our transfer -> served once; unused -> our relayer; read failure -> 402 and the authorization booked owed if it lands; other networks and no relayer key unchanged) (stub chain - offline)
           t node scripts/test-rh-outage.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
@@ -3003,6 +3009,8 @@ jobs:
           t node scripts/test-chain-page-cache.js
           # ?seller= views: unknown sellers never build, one build per listed seller, bounded memo, flat heap
           t node scripts/test-chain-seller-view-memo.js
+          # Operator heap read names every large store: sizes track the heap, the read stays bounded at production scale, operator-only (free-mode boot, offline)
+          t node scripts/test-memory-stores.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)
@@ -3153,6 +3161,8 @@ jobs:
           t node scripts/test-price-premium.js
           # Per-chain price floors (eip155:4663 never quotes below its floor; other chains unchanged; metered quotes floored; every surface reads one constant - offline)
           t node scripts/test-network-floors.js
+          # Sales and debts book what was paid on the chain (floor, premium, signed EVM amount; other chains unchanged - offline)
+          t node scripts/test-paid-price.js
           # Canary underfunded classification (empty burner is funding, never an outage — offline)
           t node scripts/test-canary-underfunded.js
           # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)

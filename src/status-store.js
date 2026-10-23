@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { registerSqliteStore } from "./memory-stores.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 // STATUS_DB_PATH lets the offline tests point at a scratch file. Production
@@ -681,3 +682,6 @@ export function statusStoreReady() { return PG ? loader.ready().then(() => true,
 export async function statusStoreFlush() { if (PG) await drain(); }
 /** Postgres mode only: pull other containers' rows now; resolves how many arrived. */
 export async function statusStoreRefresh() { return PG ? refreshMirror() : 0; }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("status-store.db", () => db, { note: "status history database" });

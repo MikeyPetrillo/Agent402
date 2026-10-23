@@ -16,7 +16,7 @@
 // through it after the primary reverts, while one without the key does not.
 
 import { strict as assert } from "node:assert";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -541,7 +541,11 @@ const CDN_SECRET = "cdn-origin-secret-for-tests-0123456789";
 // reverts every settle. With ROBINHOOD_RELAYER_KEY the payment settles
 // through our relayer and the buyer gets 200; without it the buyer gets 402
 // and our relayer sends nothing, as before.
-async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait = "" }) {
+// `hangup` closes the buyer's connection while our relayer's send is in
+// flight; `settledStatus` answers that status after a settle that succeeded
+// (scripts/lib/settled-status-preload.js). Either way the refund ledger's
+// newest row is returned as `owed`.
+async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait = "", hangup = false, settledStatus = 0 }) {
   const [PORT, BASE_FAC, RH1] = await getFreePorts(3);
   const json = (res, s, o) => { res.writeHead(s, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
   const stub = (h) => createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* empty */ } h(req, res, body); }); });
@@ -568,7 +572,8 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
   const tmp = mkdtempSync(join(tmpdir(), "a402-ownrelayer-"));
   const env = { ...process.env };
   for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY"]) delete env[k];
-  const proc = spawn(process.execPath, ["src/server.js"], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "",
+  const preload = settledStatus ? ["--import", "./scripts/lib/settled-status-preload.js"] : [];
+  const proc = spawn(process.execPath, [...preload, "src/server.js"], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
     WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
     ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),
@@ -592,9 +597,46 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
     const cred = Buffer.from(JSON.stringify({ x402Version: 2, resource: accepted.resource, accepted, payload: { signature, authorization: { from: message.from, to: message.to, value: String(message.value), validAfter: "0", validBefore: String(message.validBefore), nonce: message.nonce } } })).toString("base64");
     const sends = st.sends.length;
     const cdnHeaders = cdn ? { "x-origin-auth": CDN_SECRET, "cf-connecting-ip": "203.0.113.9" } : {};
-    const paid = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred, ...cdnHeaders } });
-    await paid.text();
-    return { status: paid.status, ownSends: st.sends.length - sends, primarySettles: rhAsked.settle, log: log.join("") };
+    let paid;
+    if (hangup) {
+      // Close once our relayer's send has reached the node and before it
+      // answers: the settle call itself is in flight.
+      st.sendDelayMs = 1500;
+      try {
+        await new Promise((resolve) => {
+          const rq = httpRequest(`${B}${PATH}`, { headers: { "payment-signature": cred, ...cdnHeaders } }, () => resolve());
+          rq.on("error", () => resolve());
+          rq.end();
+          const iv = setInterval(() => { if (st.sends.length > sends) { clearInterval(iv); setTimeout(() => { rq.destroy(); resolve(); }, 100); } }, 10);
+          setTimeout(() => { clearInterval(iv); rq.destroy(); resolve(); }, 20_000);
+        });
+        await sleep(2500);
+      } finally { st.sendDelayMs = 0; }
+      paid = { status: 0 };
+    } else {
+      const res = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred, ...cdnHeaders, ...(settledStatus ? { "x-test-settled-status": String(settledStatus) } : {}) } });
+      await res.text();
+      paid = { status: res.status };
+    }
+    // The sale is booked when the response finishes; read the newest row.
+    let sale = null;
+    if (paid.status === 200) {
+      const { default: Database } = await import("better-sqlite3");
+      for (let i = 0; i < 40 && !sale; i++) {
+        await sleep(100);
+        try { const db = new Database(join(tmp, "sales.db"), { readonly: true, fileMustExist: true }); sale = db.prepare("SELECT slug, price_usd AS priceUsd, network FROM sales ORDER BY id DESC LIMIT 1").get() || null; db.close(); } catch { /* not written yet */ }
+      }
+    }
+    // A debt is written when the response closes; read the newest row.
+    let owed = null;
+    if (hangup || settledStatus) {
+      const { default: Database } = await import("better-sqlite3");
+      for (let i = 0; i < 50 && !owed; i++) {
+        await sleep(100);
+        try { const db = new Database(join(tmp, "agent402-refunds.db"), { readonly: true, fileMustExist: true }); owed = db.prepare("SELECT slug, network, payer, priceUsd, httpStatus, status, evidence FROM refunds ORDER BY id DESC LIMIT 1").get() || null; db.close(); } catch { /* not written yet */ }
+      }
+    }
+    return { status: paid.status, ownSends: st.sends.length - sends, primarySettles: rhAsked.settle, log: log.join(""), sale, owed, signedUsd: Number(accepted.amount) / 1e6 };
   } finally {
     proc.kill("SIGKILL");
     for (const [srv] of servers) srv.close();
@@ -608,6 +650,11 @@ await check("paid server WITH the key: the primary reverts, our relayer settles 
   assert.equal(r.primarySettles, 1);
   assert.equal(r.ownSends, 1, r.log.slice(-1500));
   assert.equal(r.status, 200, r.log.slice(-1500));
+  // The sale is booked at what the buyer signed on Robinhood (the floor), not
+  // the route's list price.
+  assert.ok(r.sale, "the sale is booked");
+  assert.equal(r.sale.priceUsd, r.signedUsd, `booked ${r.sale.priceUsd}, signed ${r.signedUsd}`);
+  assert.ok(r.signedUsd > 0.005, "the signed amount is the floor, above this route's list price");
 });
 
 await check("paid server WITHOUT the key: one URL behaves as before (402, our relayer sends nothing)", async () => {
@@ -633,6 +680,114 @@ await check("paid server WITH the key behind the CDN: a 20 s answer window is sh
   assert.equal(r.status, 402, r.log.slice(-1500));
   assert.ok(/CDN answer window is shorter than our relayer's worst case/.test(r.log), r.log.slice(-1500));
   assert.ok(/authorization .* nonce .*: outcome unknown; booked until it is read on chain/.test(r.log), "the late book holds the authorization");
+});
+
+// Our relayer settles first because the listed facilitator reads dry, and
+// refuses before sending anything: the payment goes on to the listed
+// fallbacks and then the facilitator it skipped, never back to our relayer.
+await check("own-first: a nothing-sent refusal (balance, lock, gas cap, node refusal) goes on to the listed fallback, then the facilitator", async () => {
+  const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const { createRobinhoodOrder, withRobinhoodGasOrder, withOwnRefusalMemo } = await import("../src/robinhood-order.js");
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  const HOST = "listed-primary.example";
+  const order = createRobinhoodOrder({ host: HOST, log: () => {} });
+  order.update([{ network: RH, facilitator: HOST, runway: 3, status: "low", at: Date.now() }]);
+  assert.equal(order.ownFirst(), true);
+  const savedBal = st.ethBalance.get(relayer.address.toLowerCase());
+  const savedGas = st.gasPrice;
+  const dbDown = async (_name, opts, fn) => (opts?.failOpen ? { ran: true, reason: "db-failopen", result: await fn({ stillHeld: () => true, signal: new AbortController().signal }) } : { ran: false, reason: "db" });
+  const cases = [
+    { label: "own balance", msg: /balance/i, set: () => st.ethBalance.set(relayer.address.toLowerCase(), 1n), reset: () => st.ethBalance.set(relayer.address.toLowerCase(), savedBal) },
+    { label: "lock (db)", msg: /relayer lock not available \(db\)/, extra: { leaseImpl: dbDown } },
+    { label: "gas cap", msg: /over the relayer cap/, set: () => { st.gasPrice = BigInt(settings.maxFeeGwei + 1) * 1_000_000_000n; }, reset: () => { st.gasPrice = savedGas; } },
+    { label: "node refusal", msg: /insufficient funds/, set: () => { st.refuseSendWith = "insufficient funds for gas * price + value"; }, reset: () => { st.refuseSendWith = null; } },
+  ];
+  let seq = 1;
+  try {
+    for (const withListed of [true, false]) {
+      for (const c of cases) {
+        const asked = [];
+        const tx = (b) => "0x" + (b + (seq++).toString(16).padStart(4, "0")).padEnd(64, "0");
+        const own = withOwnRefusalMemo(mk(relayerA, c.extra || {}));
+        const ownSpy = { settle: async (pp, rq) => { asked.push("own"); return own.settle(pp, rq); } };
+        const primary = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: tx("44"), network: RH }; } };
+        withRobinhoodGasOrder(primary, { order, relayer: ownSpy });
+        const hooks = {};
+        const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+        const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: tx("55"), network: RH }; } } };
+        const ownEntry = { name: "own relayer", revertRetry: true, own: true, client: ownSpy };
+        registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [...(withListed ? [listed] : []), ownEntry] });
+        const p = await signedPayment(buyer);
+        const attempts = st.sendAttempts, sends = st.sends.length;
+        c.set?.();
+        let first;
+        try { first = await primary.settle(p.payload, p.requirements); } finally { c.reset?.(); }
+        assert.equal(first.success, false, c.label);
+        assert.equal(first.transaction, "", `${c.label}: no hash`);
+        assert.equal(first.nothingSent, true, `${c.label}: marked nothing sent`);
+        assert.match(String(first.errorMessage), c.msg, c.label);
+        assert.equal(st.sends.length, sends, `${c.label}: the node took nothing`);
+        if (c.label !== "node refusal") assert.equal(st.sendAttempts, attempts, `${c.label}: nothing was sent`);
+        const r = await hooks.sf({ requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { ...first }) });
+        assert.equal(r?.recovered, true, `${c.label} (listed ${withListed}): recovered`);
+        assert.deepEqual(asked, withListed ? ["own", "listed"] : ["own", "facilitator"], `${c.label} (listed ${withListed}): order`);
+      }
+    }
+    // Control: an ambiguous answer from our relayer (a hash, pending) still
+    // stops; neither the listed fallback nor the facilitator is asked.
+    st.neverMine = true;
+    try {
+      const asked = [];
+      const own = withOwnRefusalMemo(mk(relayerA));
+      const ownSpy = { settle: async (pp, rq) => { asked.push("own"); return own.settle(pp, rq); } };
+      const primary = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: "0x" + "44".repeat(32), network: RH }; } };
+      withRobinhoodGasOrder(primary, { order, relayer: ownSpy });
+      const hooks = {};
+      const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+      const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: "0x" + "55".repeat(32), network: RH }; } } };
+      registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [listed, { name: "own relayer", revertRetry: true, own: true, client: ownSpy }] });
+      const p = await signedPayment(buyer);
+      const first = await primary.settle(p.payload, p.requirements);
+      assert.match(String(first.transaction), /^0x[0-9a-f]{64}$/, "pending with its hash");
+      assert.notEqual(first.nothingSent, true);
+      const r = await hooks.sf({ requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { ...first }) });
+      assert.equal(r, undefined, "an ambiguous answer is not recovered elsewhere");
+      assert.deepEqual(asked, ["own"], "nobody after a send that may land");
+    } finally { st.neverMine = false; }
+  } finally {
+    st.ethBalance.set(relayer.address.toLowerCase(), savedBal);
+    st.gasPrice = savedGas;
+    st.refuseSendWith = null;
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+
+// The refund ledger books a debt at what the buyer signed on the floored
+// chain, not the route's list price: once for a hang-up during the settle,
+// once for a settled call that then failed.
+await check("paid server WITH the key: the buyer hangs up while our relayer settles -> the debt is the floor the buyer signed", async () => {
+  const r = await bootAndPay({ withKey: true, hangup: true });
+  assert.equal(r.ownSends, 1, r.log.slice(-1500));
+  assert.ok(r.owed, `a debt is booked\n${r.log.slice(-1500)}`);
+  assert.equal(r.owed.status, "owed");
+  assert.equal(r.owed.httpStatus, 499, "the hang-up marker");
+  assert.equal(r.owed.evidence, st.sends.at(-1).hash, "keyed on our relayer's transaction");
+  assert.equal(r.owed.priceUsd, r.signedUsd, `owed ${r.owed.priceUsd}, signed ${r.signedUsd}`);
+  assert.ok(r.signedUsd > 0.005, "the signed amount is the floor, above this route's list price");
+});
+
+await check("paid server WITH the key: a settled call that then answers 500 -> the debt is the floor the buyer signed", async () => {
+  const r = await bootAndPay({ withKey: true, settledStatus: 500 });
+  assert.equal(r.ownSends, 1, r.log.slice(-1500));
+  assert.equal(r.status, 500, r.log.slice(-1500));
+  assert.ok(/\[settled-status\]/.test(r.log), "the preload changed the answer after the settle");
+  assert.ok(r.owed, `a debt is booked\n${r.log.slice(-1500)}`);
+  assert.equal(r.owed.status, "owed");
+  assert.equal(r.owed.httpStatus, 500);
+  assert.equal(r.owed.evidence, st.sends.at(-1).hash, "keyed on our relayer's transaction");
+  assert.equal(r.owed.priceUsd, r.signedUsd, `owed ${r.owed.priceUsd}, signed ${r.signedUsd}`);
+  assert.ok(r.signedUsd > 0.005, "the signed amount is the floor, above this route's list price");
 });
 
 server.close();

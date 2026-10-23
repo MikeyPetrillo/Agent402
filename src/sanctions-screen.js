@@ -37,6 +37,7 @@ import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { parseSdnXml, sdnEvmAddresses, loadSdnList, sdnListUrl, SDN_LIST_DEFAULT_URL } from "./ofac-sdn.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 export const SANCTIONS_LIST_DEFAULT_URL = SDN_LIST_DEFAULT_URL;
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -484,3 +485,7 @@ export function __resetSanctionsScreenForTests() {
   oneHopLocal = new Map();
   oneHopInFlight = new Map();
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("sanctions-screen.state", () => state, { note: "screening lists" });
+registerMemoryStore("sanctions-screen.oneHop", () => oneHopLocal, { note: "one-hop verdicts" });

@@ -212,7 +212,13 @@ heartbeat page on it under one issue that closes when nothing is owed.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving. Streams commit 200 only on the first `data:` frame.
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
-  per wallet on other wallet-only tools). The `/v1` global pause counts distinct buyers, not
+  per wallet on other wallet-only tools). A wallet is refused only when it holds
+  `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
+  `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
+  stay in the window as outcomes and never erase failures, so a buyer settling hundreds of
+  calls is not cut off by a few replayed authorizations, whatever order the fast reverts and
+  slower settlements land in; `GATEWAY_SETTLE_BREAKER_HARD_MAX` (default 40) failures refuse
+  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` global pause counts distinct buyers, not
   failures. Only a refusal whose offer the next 402 withdraws (`isWithdrawnSubcentRefusal`)
   stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
@@ -223,8 +229,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
   can run through our own relayer; it is static so the paid retry re-derives the same amount.
   A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms.txt,
-  the chain page and the guides read the same floor. Refunds pay list price, so a floored-chain
-  buyer is under-refunded by the difference (the same safe direction as premiums).
+  the chain page and the guides read the same floor. Sales, hang-up debts and charged-failure
+  debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
+  amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
+  reads the premium and the floor and a refund repays what was paid.
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
   sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is

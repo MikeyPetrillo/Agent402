@@ -15,6 +15,7 @@ import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, rena
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createRedisJournal, redisJournalConfigured, journalRedisGateStatus, JOURNAL_LEASE_MS } from "./ledger-journal-redis.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 /** Server-clock milliseconds, the `updated_at` stamp every write sets. */
 export const PG_NOW_MS = "((extract(epoch from clock_timestamp()) * 1000)::bigint)";
@@ -640,3 +641,6 @@ export function makeWarnOnce(prefix, log = console.warn) {
     try { log(`[${prefix}] ${label} failed: ${String(e?.message || e).slice(0, 160)}`); } catch { /* logging never throws */ }
   };
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("ledger-mirror.journals", () => journals, { note: "dead-letter journals" });

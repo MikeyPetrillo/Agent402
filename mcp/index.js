@@ -295,8 +295,10 @@ function acceptsOf(obj) {
  *  leaves the body `{}`; v1 sellers put it in the body. Header first.
  *
  *  Each accept is priced from the known-asset table (./known-assets.js), never
- *  from a decimals value the seller sends. The credits gate debits its own
- *  quote, so the dearest known accept is the price. */
+ *  from a decimals value the seller sends. The credits gate debits the route's
+ *  own quote, and no accept is below it (a chain premium or price floor only
+ *  raises an accept), so the cheapest known accept is the price: counting the
+ *  dearest would charge the budget for another chain's floor. */
 async function quotedUsd(url, init, listUsd) {
   if (!CAPS_CONFIGURED) return { usd: listUsd };
   let q = null;
@@ -312,9 +314,9 @@ async function quotedUsd(url, init, listUsd) {
       q = quoteOf(acceptsOf(body));
     }
   } catch { return { usd: listUsd }; /* no readable 402: the advertised price */ }
-  if (!q || q.max == null) return { usd: listUsd };
+  if (!q || q.min == null) return { usd: listUsd };
   // Larger of the two: an understated catalog must not lower the ceiling.
-  return { usd: Math.max(listUsd, q.max) };
+  return { usd: Math.max(listUsd, q.min) };
 }
 
 // A refused call's tool text. A 402 body from an x402 v2 seller may also carry

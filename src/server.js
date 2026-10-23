@@ -61,6 +61,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
+import { paidPriceUsd, quotedOnNetworkUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -130,6 +131,13 @@ function settledPriceUsd(def, req, res) {
   if (Number.isFinite(metered) && metered > 0) return metered;
   if (priceFnOf(def) && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   return flat;
+}
+// The USD an x402 request actually paid on its settling network (caip2): the
+// gated price above raised by that network's premium and floor, or the amount
+// the buyer signed on an EVM rail (src/paid-price.js). Books and debts read
+// this, so a chain priced above the list records what moved.
+function paidUsdOf(def, req, res, caip2) {
+  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: res?.getHeader?.("X-Metered-Usd"), paymentHeader: paymentHeaderOf(req) });
 }
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
@@ -208,7 +216,7 @@ function recordHangupDebt(req, res) {
       payer: payerFromRequest(req) || payerFromPaymentResponse(settleReceipt),
       tx: txFromPaymentResponse(settleReceipt),
       wire: req.mppCredential ? "mpp" : "x402",
-      priceUsd: settledPriceUsd(def, req, res),
+      priceUsd: paidUsdOf(def, req, res, decodeSettleReceipt(settleReceipt)?.network),
     };
   } else if (req.creditsSettled && Number(req.creditsChargedOnClose) > 0) {
     // A balance debit, not an on-chain payment: the refund executor holds
@@ -366,7 +374,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -395,7 +403,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -779,6 +787,7 @@ import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnow
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
+import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -2791,7 +2800,7 @@ startSharedLimitsProbe();
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "private, no-store").json(await toolFailureMonitor().report());
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView() });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -5519,9 +5528,15 @@ app.get("/__operator/heap.json", async (req, res) => {
   // heap reading); without the flag it is ignored.
   if (req.query.gc === "1" && typeof globalThis.gc === "function") globalThis.gc();
   const mem = process.memoryUsage();
+  // Every registered store, largest first, sampled and inside a time budget
+  // (src/memory-stores.js); a store past the budget reads `skipped`.
+  const storeRead = memoryStoreFigures({ budgetMs: 40 });
   res.set("Cache-Control", "no-store").json({
     heapUsedMb: mb(mem.heapUsed), heapTotalMb: mb(mem.heapTotal), rssMb: mb(mem.rss), externalMb: mb(mem.external), arrayBuffersMb: mb(mem.arrayBuffers),
     spaces: v8.getHeapSpaceStatistics().map((sp) => ({ space: sp.space_name, usedMb: mb(sp.space_used_size), sizeMb: mb(sp.space_size) })),
+    stores: storeRead.stores,
+    storesReadMs: storeRead.readMs,
+    storesSkipped: storeRead.skipped,
     index: indexMemoryFigures({ sampleBytes: true }),
     // Page and API bodies held between rebuilds: a string by its length, an
     // array by its row count (never serialized here, some hold 200k rows).
@@ -7403,6 +7418,21 @@ const chainSellerViewMemo = createBoundedMemo({
   isPartial: () => !stateStoresLoaded(),
   onError: (_key, e) => console.warn(`[market] seller view rebuild failed: ${String(e?.message || e).slice(0, 120)}`),
 });
+// Operator heap read (/__operator/heap.json `stores`): this file's caches.
+registerMemoryStore("server.surfaceMemo", () => surfaceMemo, { note: "page and API bodies between rebuilds" });
+registerMemoryStore("server.chainSellerViews", null, {
+  note: "per-seller chain pages (bounded LRU)",
+  figure: () => ({ rows: chainSellerViewMemo.size(), mb: chainSellerViewMemo.bytes() / 1048576 }),
+});
+registerMemoryStore("server.externalServes", () => externalServesMemo, { note: "outside-seller matches per query" });
+registerMemoryStore("server.chainActivity", () => chainActivityByWallet, { note: "per-wallet chain activity" });
+registerMemoryStore("server.stellarActivity", () => stellarActivityByWallet, { note: "per-wallet Stellar activity" });
+registerMemoryStore("server.algorandActivity", () => algorandActivityByWallet, { note: "per-wallet Algorand activity" });
+registerMemoryStore("server.hostFigures", () => hostFiguresCache, { note: "host figures per chain" });
+registerMemoryStore("server.ogSections", () => ogSectionCache, { note: "rendered share cards" });
+registerMemoryStore("server.toolCards", () => toolCardCache, { note: "rendered tool cards" });
+registerMemoryStore("server.powChallengeHits", () => powChallengeHits, { note: "proof-of-work hits per address" });
+registerMemoryStore("server.fundResolve", () => _fundResolveCache, { note: "funding resolution cache" });
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res, next) => {
     // A gated rail's page (Arc) exists only while the rail is in the live
@@ -7516,7 +7546,7 @@ app.get("/marketplace/tools", async (req, res) => {
     excludeOrigin: BASE_URL,
     ourTools,
   });
-  htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, indexedToolCategories(BASE_URL), { search, category, source, page }));
+  htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, await indexedToolCategoriesAsync(BASE_URL), { search, category, source, page }));
 });
 // Machine-readable twin. Free, like every other discovery surface here.
 app.get("/api/index/tools", async (req, res) => {
@@ -10069,7 +10099,11 @@ app.use((req, res, next) => {
         if (!FREE_MODE) whenTempoLedgerPayerKnown(req, "sales", () => {
           const rail = method;
           const network = method === "usdc" ? networkFor() : method === "credits" ? "stripe" : null;
-          const priceUsd = settledPriceUsd(def, req, res);
+          // An x402 settle books what moved on its chain (premium, floor);
+          // Tempo, card and credits rails have neither and keep the gated price.
+          const priceUsd = method === "usdc" && !req.tempoSettled && !req.stripeSettled
+            ? paidUsdOf(def, req, res, decodeSettleReceipt(settleReceipt)?.network)
+            : settledPriceUsd(def, req, res);
           const synthetic = method === "heartbeat" || isSyntheticRequest(req);
           // Request-payload attribution covers EVM (EIP-3009 authorization.from);
           // SVM/Stellar payloads carry no such field, so fall back to the
@@ -10109,7 +10143,11 @@ app.use((req, res, next) => {
             wire: rail === "usdc" ? wireFor() : null,
             // The quoted ceiling on a metered route, so the ledger can prove the
             // settled amount sat under it (GET /api/proof).
-            quoteUsd: typeof def?.quote === "function" && Number.isFinite(req?.__meteredQuoteUsd) ? req.__meteredQuoteUsd : null,
+            // On an x402 settle it is the quote that chain offered (its premium
+            // and floor applied), the same basis the price above is booked on.
+            quoteUsd: typeof def?.quote === "function" && Number.isFinite(req?.__meteredQuoteUsd)
+              ? (rail === "usdc" && !req.tempoSettled && !req.stripeSettled ? quotedOnNetworkUsd(req.__meteredQuoteUsd, decodeSettleReceipt(settleReceipt)?.network) : req.__meteredQuoteUsd)
+              : null,
             // sha256 of the JSON body served (dispatcher), so POST /api/attest
             // can bind a settlement to the bytes the buyer received.
             responseSha256: req.__responseSha256 || null,
@@ -10144,7 +10182,7 @@ app.use((req, res, next) => {
         // route priced by the model's home tier), never the route's list
         // price: a debt recorded below what the receipt took is a silent
         // write-off of the difference.
-        const priceUsd = settledPriceUsd(def, req, res);
+        const priceUsd = paidUsdOf(def, req, res, receipt?.network);
         const network = networkFromPaymentResponse(settleReceipt);
         const synthetic = isSyntheticRequest(req);
         const payer = payerFromRequest(req) || payerFromPaymentResponse(settleReceipt);
@@ -10645,7 +10683,8 @@ for (const tool of ALL_KIT) {
         // fails after the buyer left counts here too.
         onSettleOutcome(req, res, () => {
           try {
-            // A settled 200 clears the key. A spend-then-fail is a 402 (the
+            // A settled 200 is a settled outcome in the key's window (the
+            // breaker refuses on the failure share). A spend-then-fail is a 402 (the
             // settlement-failure rewrite) or a 5xx AFTER the run (empty
             // synthesis, upstream outage): both burned upstream with no revenue.
             // A 4xx input/evidence error happens before meaningful spend and is
@@ -10699,7 +10738,8 @@ for (const tool of ALL_KIT) {
       // wallet gets MAX_FAILS such outcomes per window before a 429 that runs
       // before the handler (a >= 400 cancels settlement - the refusal is free),
       // and a burst across wallets pauses the paid catalog 503 for one window.
-      // A settled 200 clears the wallet; a 4xx the handler threw is neither.
+      // A settled 200 is a settled outcome in the wallet's window, weighed
+      // against its failures; a 4xx the handler threw is neither.
       // FREE_MODE has no settlement, so nothing to breaker there.
       // global:false - per-wallet only. A catalog read costs a fraction of a
       // cent; pausing every paid tool over twelve of them would be a lever, not
@@ -11132,6 +11172,10 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // while a background crawler is dialling thousands of origins, and CI booted a
 // server on every run and crawled the whole third-party index for nothing -
 // outbound load on other people's hosts that no test ever looked at.
+// The tool directory in the state database (INDEX_LISTINGS_STORE=pg; off by
+// default): configured before the warm start, so every origin it loads is
+// written as it lands and this server's own origin is never listed.
+if (configureListingsStore({ excludeOrigin: BASE_URL })) console.log("[index] tool directory served from the state database (INDEX_LISTINGS_STORE=pg)");
 if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read

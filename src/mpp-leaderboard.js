@@ -50,6 +50,7 @@ export function evidencePayerCount(payerSet, recipient, ours = OUR_EVM_WALLETS) 
   return n;
 }
 import { tempoFeedEnabled, emptyFeedState, syncTempoTransfers, feedStats, feedHistoryDays, persistFeedStateAsync, loadFeedState, feedCovers, loadFeedStateAsync, feedStateUnread } from "./tempo-transfers.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 // Transfer-feed window when the Tempo data API is the source (a time window,
 // not a block window): 24h. The RPC path keeps its ~15h block window.
@@ -429,3 +430,7 @@ export function startMppLeaderboard({ self = null, delayMs = 120_000 } = {}) {
 }
 export function stopMppLeaderboard() { if (timer) clearInterval(timer); timer = null; }
 export function __testReset() { current = null; inFlight = null; feedState = null; stopMppLeaderboard(); }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("mpp-leaderboard.current", () => current, { note: "MPP leaderboard" });
+registerMemoryStore("mpp-leaderboard.feed", () => feedState, { note: "Tempo transfer feed state" });

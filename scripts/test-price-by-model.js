@@ -218,7 +218,7 @@ try {
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const debtStart = serverSrc.indexOf("const receipt = decodeSettleReceipt(settleReceipt);");
   const debt = serverSrc.slice(debtStart, serverSrc.indexOf("recordRefundOwed({", debtStart));
-  ok(/const priceUsd = settledPriceUsd\(def, req, res\);/.test(debt) && !/def\.price/.test(debt), "the charged-failure debt is priced by settledPriceUsd (the gated price), never the route's list price");
+  ok(/const priceUsd = paidUsdOf\(def, req, res, receipt\?\.network\);/.test(debt) && !/def\.price/.test(debt) && /function paidUsdOf\([^)]*\) \{\s*return paidPriceUsd\(\{ basePriceUsd: settledPriceUsd\(def, req, res\)/.test(serverSrc), "the charged-failure debt is priced by paidUsdOf over settledPriceUsd (the gated price), never the route's list price");
   ok(/priceFnOf\(def\) && Number\.isFinite\(req\?\.__meteredQuoteUsd\)/.test(serverSrc), "settledPriceUsd honours a flat route's tierQuote stash, so the books record the home-tier price");
   console.log(`\nPASS - ${pass} checks (price by model, booted paid server)`);
   proc.kill("SIGKILL"); facilitator.close(); process.exit(0);

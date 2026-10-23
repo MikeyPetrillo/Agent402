@@ -38,6 +38,7 @@ import { evmLogsRead } from "./evm-logs-rpc.js";
 import { externalTempoPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
+import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
@@ -477,7 +478,7 @@ export const ledgerChunkBlocks = (c) => Math.min(c.chunkBlocks || 9000, 9000, Ma
 // actually been scanned, so a chunk that can never succeed throws and gets
 // logged rather than silently skipping blocks - the one outcome that would
 // lose revenue permanently.
-const RANGE_ERR = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|query returned more than/i;
+export const RANGE_ERR = /too many blocks|exceeds? range|limited to a \d+ range|range too large|block range|query returned more than|exceeds max results|retry with the range/i;
 const MIN_CHUNK = 100;
 
 /**
@@ -1923,3 +1924,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
   console.log(`revenue-ledger: sync loop started (${USE_PG ? `state database; mirror: ${DB_PATH}` : `db: ${DB_PATH}`})`);
   return true;
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("revenue-ledger.db", () => db, { note: "revenue ledger" });
+registerMemoryStore("revenue-ledger.staged", () => staged, { note: "rows staged per chain wallet" });

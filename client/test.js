@@ -220,6 +220,76 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(out?.ok === true && counters.paid === 1, "credits: a quote under the cap still pays");
   }
 
+  // Another chain's price floor in the offer is not what this buyer pays: a
+  // $0.001 route whose 402 also carries a $0.005 Robinhood (USDG) accept.
+  {
+    const RH_USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+    const flooredHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } },
+      { scheme: "exact", network: "eip155:4663", amount: "5000", asset: RH_USDG, payTo: "0xdead", extra: { name: "Global Dollar" } },
+    ] })).toString("base64");
+    const mkFloored = (opts = {}) => {
+      const counters = { paid: 0, preflights: 0 };
+      const c = new Agent402({
+        baseUrl: "https://seller.example", cache: false,
+        fetch: async () => { counters.paid++; return okResp; },
+        fetchImpl: async (_url, init = {}) => {
+          if (init.headers?.Authorization) { counters.paid++; return okResp; }
+          counters.preflights++;
+          return { ok: false, status: 402, headers: new Headers({ "payment-required": flooredHeader }), json: async () => ({}) };
+        },
+        ...opts,
+      });
+      c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.001" }]]);
+      return { c, counters };
+    };
+    const credits = `a402_${"k".repeat(40)}`;
+    {
+      const { c, counters } = mkFloored({ creditsKey: credits, maxPerCallUsd: 0.004, fetch: undefined });
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(!e && counters.paid === 1, `credits: a $0.004 per-call cap serves the $0.001 route despite a $0.005 floor on another chain (${e?.message || "served"})`);
+    }
+    {
+      // $0.0505, not $0.05: fifty floating-point $0.001s sum a hair over 0.05.
+      const { c, counters } = mkFloored({ creditsKey: credits, dailyLimitUsd: 0.0505, fetch: undefined });
+      for (let i = 0; i < 60; i++) { try { await c.call("cheap", {}); } catch { break; } }
+      ok(counters.paid === 50, `credits: a $0.05 budget pays fifty $0.001 calls, not ten (${counters.paid})`);
+    }
+    {
+      const { c, counters } = mkFloored({ maxPerCallUsd: 0.004, payNetworks: ["base"] });
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(!e && counters.paid === 1, `a pre-wrapped fetch paying on Base counts the Base accept ($0.001), not the Robinhood floor (${e?.message || "served"})`);
+    }
+    {
+      const { c, counters } = mkFloored({ maxPerCallUsd: 0.004, payNetworks: ["robinhood"] });
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.005 && counters.paid === 0, "a pre-wrapped fetch paying on Robinhood still counts the floored $0.005 and is refused over a $0.004 cap");
+    }
+    {
+      const { c, counters } = mkFloored({ maxPerCallUsd: 0.004 });
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && counters.paid === 0, "a pre-wrapped fetch with no payNetworks keeps counting the dearest accept (it may sign any of them)");
+    }
+    {
+      // A 402 with no option on the declared chains: the wallet may still sign
+      // any of them, so the dearest of ALL counts (never the list price).
+      const onlyRh = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+        { scheme: "exact", network: "eip155:4663", amount: "6000", asset: RH_USDG, payTo: "0xdead", extra: { name: "Global Dollar" } } ] })).toString("base64");
+      for (const payNetworks of [["base"], ["optimism"], ["nosuchchain"]]) {
+        let paid = 0;
+        const c = new Agent402({ baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.004, payNetworks,
+          fetch: async () => { paid++; return okResp; },
+          fetchImpl: async () => ({ ok: false, status: 402, headers: new Headers({ "payment-required": onlyRh }), json: async () => ({}) }) });
+        c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.001" }]]);
+        let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+        ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.006 && paid === 0, `payNetworks ${JSON.stringify(payNetworks)} with no option on those chains counts the dearest of all ($0.006) and is refused over a $0.004 cap`);
+      }
+    }
+    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]]) {
+      ok(NETWORK_CAIP2[name] === caip2, `NETWORK_CAIP2 maps ${name} -> ${caip2}`);
+    }
+  }
+
   // the decoder itself: v2 `amount`, v1 `maxAmountRequired`, body fallback, and
   // the max across accepts (the wallet picks the chain, so the dearest bounds it)
   {

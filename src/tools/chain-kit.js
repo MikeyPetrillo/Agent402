@@ -271,7 +271,7 @@ const EVENT_LOGS_MAX_RETURNED = 200;
 // the range we surface the node's verdict; when the range was our default we
 // narrow it and retry - the tool's contract is "always answers", not "always
 // covers the default span".
-const EVENT_LOGS_SIZE_ERR = /too large|response size|limit exceeded|block range|query returned more than/i;
+export const EVENT_LOGS_SIZE_ERR = /too large|response size|limit exceeded|block range|query returned more than|exceeds max results|retry with the range/i;
 
 function formatGwei(wei) {
   const s = wei.toString().padStart(10, "0");

@@ -48,6 +48,7 @@ import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 const docs = new Map();
 const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
 import { scanCoverage } from "./partial-answer.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 export const SOLANA_LB_CACHE_FILE = process.env.SOLANA_LB_CACHE_FILE || "/data/solana-leaderboard.json";
 // Four hours: the board re-reads every settled payment through the keyed
@@ -512,3 +513,6 @@ export function startSolanaLeaderboard({ listPayTos, rpc, creditFromTx, prime, w
   timer = setInterval(run, REFRESH_MS); timer.unref?.();
 }
 export function stopSolanaLeaderboard() { for (const t of [timer, kick, kick2]) if (t) clearTimeout(t), clearInterval(t); timer = kick = kick2 = null; }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("solana-leaderboard.current", () => current, { note: "Solana leaderboard" });

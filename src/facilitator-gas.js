@@ -59,6 +59,77 @@ export function runwayOf(balanceWei, gasPriceWei, gasPerSettlement) {
   return r > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(r);
 }
 
+/** The floor alarm's settings, env-tunable: the share of the chain's price
+ *  floor one settlement's gas may reach before the word reads low, the gas
+ *  units one settlement uses, how long an ETH price is reused before it is
+ *  read again (an upstream with a monthly credit budget), and how long a last
+ *  good ETH price stands in for a failed read (one TTL plus an hour by
+ *  default, so a single failed refresh does not read unknown). */
+export function floorGasSettings(env = process.env) {
+  const share = Number(env.FLOOR_GAS_ALARM_SHARE);
+  return {
+    share: Number.isFinite(share) && share > 0 && share <= 1 ? share : 0.8,
+    gasUnits: num(env.FLOOR_GAS_UNITS, 85_400),
+    priceTtlMs: num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000),
+    priceMaxAgeMs: num(env.FLOOR_GAS_PRICE_MAX_AGE_MS, num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000) + 60 * 60_000),
+  };
+}
+
+/**
+ * Settlement gas against the chain's price floor. A floored chain's calls are
+ * priced at least the floor in USD, but the gas one settlement burns is paid
+ * in ETH, so its USD cost moves with ETH's price. Each check prices one
+ * settlement (gas units x gas price x ETH/USD) and reads "low" with reason
+ * gasNearFloor once that passes `share` of the floor. A failed ETH price read
+ * keeps the last good price for `priceMaxAgeMs`, then reads "unknown" (never
+ * a page by itself). One log line per state change.
+ * @param {object} o
+ * @param {string} o.network - CAIP-2
+ * @param {() => number} o.floorUsd - the floor now (0 = no floor, no row)
+ * @param {() => Promise<number>} o.readEthUsd
+ */
+export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = floorGasSettings(), now = Date.now, log = console.warn } = {}) {
+  let lastPrice = null; // { usd, at }
+  let lastState = null;
+  const row = (fields) => ({ network, facilitator: "price floor", signer: null, balanceEth: null, runway: null, ...fields });
+  async function check(gasPriceWei) {
+    const at = now();
+    const floor = Number(typeof floorUsd === "function" ? floorUsd() : floorUsd) || 0;
+    if (!(floor > 0)) return null;
+    let error = null;
+    // ETH/USD is read at most once per TTL; between reads the last good price
+    // stands. A failed read is retried on the next check.
+    if (!lastPrice || at - lastPrice.at >= settings.priceTtlMs) {
+      try {
+        const usd = Number(await readEthUsd());
+        if (Number.isFinite(usd) && usd > 0) lastPrice = { usd, at };
+        else error = "ETH price read answered no price";
+      } catch (e) { error = String(e?.message || e).slice(0, 120); }
+    }
+    let reading;
+    if (!lastPrice || at - lastPrice.at > settings.priceMaxAgeMs) {
+      reading = row({ status: "unknown", reason: "ethPriceUnread", floorUsd: floor, error: error || "no ETH price yet", at });
+    } else if (gasPriceWei === null || gasPriceWei === undefined) {
+      reading = row({ status: "unknown", reason: "gasPriceUnread", floorUsd: floor, ethUsd: lastPrice.usd, at });
+    } else {
+      const gasUsd = (Number(BigInt(gasPriceWei) * BigInt(Math.round(settings.gasUnits))) / 1e18) * lastPrice.usd;
+      const near = gasUsd > floor * settings.share;
+      reading = row({
+        status: near ? "low" : "ok", ...(near ? { reason: "gasNearFloor" } : {}),
+        gasUsd: Math.round(gasUsd * 1e6) / 1e6, floorUsd: floor, sharePct: Math.round((gasUsd / floor) * 1000) / 10,
+        ethUsd: lastPrice.usd, ...(error ? { error: `last good ETH price kept: ${error}` } : {}), at,
+      });
+    }
+    const state = `${reading.status}:${reading.reason || ""}`;
+    if (state !== lastState) {
+      lastState = state;
+      try { log(`[facilitator-gas] ${network} settlement gas vs price floor: ${reading.status}${reading.reason ? ` (${reading.reason})` : ""}${reading.sharePct !== undefined ? `, ${reading.sharePct}% of the floor` : ""}`); } catch { /* logging only */ }
+    }
+    return reading;
+  }
+  return { check };
+}
+
 const hostOf = (url) => { try { return new URL(url).host; } catch { return String(url || "").slice(0, 80); } };
 
 /**
@@ -72,7 +143,7 @@ const hostOf = (url) => { try { return new URL(url).host; } catch { return Strin
  * @param {Array<{label: string, signer: string}>} [o.ownSigners] - signers we
  *   run ourselves (our own relayer), read directly with no /supported
  */
-export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn, ownSigners = [] } = {}) {
+export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn, ownSigners = [], floorCheck = null } = {}) {
   const namedNoSigner = new Set(); // urls already logged as publishing no signer
   const signersByUrl = new Map(); // url -> last signers read from /supported
   const state = new Map(); // `${url}|${signer}` -> { failures, last }
@@ -97,6 +168,9 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
     let gasPrice = null, gasError = null;
     try { gasPrice = await rpc("eth_gasPrice", []); } catch (e) { gasError = String(e?.message || e).slice(0, 120); }
     const readings = [];
+    if (floorCheck) {
+      try { const f = await floorCheck.check(gasPrice); if (f) readings.push(f); } catch { /* the floor row is advisory */ }
+    }
     // Our own relayer is a facilitator of its own: its signer is known, so
     // there is no /supported to read, only its balance.
     const own = (Array.isArray(ownSigners) ? ownSigners : []).filter((o) => ADDRESS.test(String(o?.signer || "")));

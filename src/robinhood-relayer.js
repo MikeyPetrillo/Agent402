@@ -112,6 +112,12 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
   const treasury = getAddress(payTo);
   const pub = createPublicClient({ transport: http(rpcUrl, { timeout: 15_000, retryCount: 0 }) });
   const receipts = new Map(); // hash -> receipt mined under the lock
+  // Authorizations (payer|nonce) this relayer refused before sending
+  // anything (a relayerRefusal thrown inside writeContract): settle() marks
+  // its answer `nothingSent`, so the settle chain may move on to another
+  // settler (src/robinhood-order.js) knowing no transaction of ours exists.
+  const refusedAuth = new Set();
+  const authKey = (from, nonce) => `${String(from || "").toLowerCase()}|${String(nonce || "").toLowerCase()}`;
 
   async function waitReceipt(hash, timeoutMs) {
     const until = Date.now() + timeoutMs;
@@ -139,7 +145,21 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       if (!code || code === "0x") return false;
       return pub.verifyTypedData(args);
     },
-    async writeContract({ address, abi, functionName, args, dataSuffix }) {
+    async writeContract(call) {
+      try { return await writeContractInner(call); } catch (e) {
+        if (e?.relayerRefusal) refusedAuth.add(authKey(call?.args?.[0], call?.args?.[5]));
+        throw e;
+      }
+    },
+    async sendTransaction() { throw Object.assign(new Error("own relayer sends no other transaction"), { relayerRefusal: true }); },
+    async waitForTransactionReceipt({ hash }) {
+      const done = receipts.get(hash);
+      if (done) { receipts.delete(hash); return done; }
+      return waitReceipt(hash, Math.min(5_000, settings.receiptTimeoutMs));
+    },
+  };
+
+  async function writeContractInner({ address, abi, functionName, args, dataSuffix }) {
       // Our sales only: the token, the call and the recipient are fixed.
       if (!isAddressEqual(address, token) || functionName !== "transferWithAuthorization") throw Object.assign(new Error("own relayer refuses any call but USDG transferWithAuthorization"), { relayerRefusal: true });
       if (!isAddressEqual(String(args?.[1] || "0x0000000000000000000000000000000000000000"), treasury)) throw Object.assign(new Error("own relayer refuses a transfer to any recipient but our treasury"), { relayerRefusal: true });
@@ -173,7 +193,7 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
           await pub.request({ method: "eth_sendRawTransaction", params: [raw] });
         } catch (e) {
           // The node said no: nothing was taken, nothing can land.
-          if (!alreadyKnown(e) && sendRefusedByNode(e)) throw e;
+          if (!alreadyKnown(e) && sendRefusedByNode(e)) throw Object.assign(e, { relayerRefusal: true });
           // Otherwise it may be in the node's pool: answer the hash, so the
           // chain treats the payment as possibly on-chain and stops.
           log(`[own-relayer] send of ${hash} did not answer (${String(e?.shortMessage || e?.message || e).slice(0, 100)}); waiting on its receipt`);
@@ -183,18 +203,11 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
         try { receipts.set(hash, await waitReceipt(hash, settings.receiptTimeoutMs)); } catch { /* the package's wait reports it pending, with the hash */ }
         return hash;
       });
-    },
-    async sendTransaction() { throw Object.assign(new Error("own relayer sends no other transaction"), { relayerRefusal: true }); },
-    async waitForTransactionReceipt({ hash }) {
-      const done = receipts.get(hash);
-      if (done) { receipts.delete(hash); return done; }
-      return waitReceipt(hash, Math.min(5_000, settings.receiptTimeoutMs));
-    },
-  };
+  }
 
   // Only EOA signatures: no ERC-6492 factory deployments from our wallet.
   const scheme = new ExactEvmScheme(signer, { simulateInSettle: true, eip6492AllowedFactories: [] });
-  const refuse = (reason, message, payer) => ({ success: false, errorReason: reason, errorMessage: message, transaction: "", network, payer });
+  const refuse = (reason, message, payer) => ({ success: false, errorReason: reason, errorMessage: message, transaction: "", network, payer, nothingSent: true });
 
   /** Our sale on 4663 in USDG to our treasury, or nothing. */
   function ours(requirements) {
@@ -220,7 +233,13 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       const why = ours(requirements);
       if (why) return refuse("own_relayer_refused", why, payer);
       if (paymentPayload?.accepted?.network && paymentPayload.accepted.network !== network) return refuse("own_relayer_refused", "payload names another network", payer);
-      return scheme.settle(paymentPayload, requirements);
+      const key = authKey(payer, paymentPayload?.payload?.authorization?.nonce);
+      refusedAuth.delete(key);
+      const result = await scheme.settle(paymentPayload, requirements);
+      // A refusal raised before anything was signed or accepted by the node:
+      // marked, so the settle chain knows no transaction of ours exists.
+      if (refusedAuth.delete(key) && result?.success !== true && !String(result?.transaction || "")) return { ...result, nothingSent: true };
+      return result;
     },
   };
 }
