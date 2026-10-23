@@ -13,7 +13,9 @@
 //
 // A reading is "low" under the minimum runway, and "unread" after enough
 // consecutive failed reads that the balance cannot be vouched for; a single
-// failed read keeps the last good reading. Readings feed the facilitatorFunds
+// failed read keeps the last good reading. A facilitator whose /supported
+// answers but names no signer for the network reads "unknown": nothing to
+// watch is not a failure, so it is logged once and never pages. Readings feed the facilitatorFunds
 // word through the tool-failure monitor (noteRelayerGas), which shares them
 // across replicas.
 
@@ -68,7 +70,8 @@ const hostOf = (url) => { try { return new URL(url).host; } catch { return Strin
  * @param {Function} [o.fetchImpl]
  * @param {object} [o.settings] - gasCheckSettings() shape
  */
-export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now } = {}) {
+export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn } = {}) {
+  const namedNoSigner = new Set(); // urls already logged as publishing no signer
   const signersByUrl = new Map(); // url -> last signers read from /supported
   const state = new Map(); // `${url}|${signer}` -> { failures, last }
 
@@ -96,11 +99,21 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
       const facilitator = hostOf(url);
       let signers = signersByUrl.get(url) || [];
       let supportedError = null;
+      let publishesNoSigner = false;
       try {
         const fresh = signersFromSupported(await getJson(`${url.replace(/\/+$/, "")}/supported`), network);
-        if (fresh.length) { signers = fresh; signersByUrl.set(url, fresh); } else if (!signers.length) supportedError = "no signer named for this network";
+        if (fresh.length) { signers = fresh; signersByUrl.set(url, fresh); } else if (!signers.length) publishesNoSigner = true;
       } catch (e) {
         supportedError = String(e?.message || e).slice(0, 120);
+      }
+      if (publishesNoSigner) {
+        if (!namedNoSigner.has(url)) {
+          namedNoSigner.add(url);
+          try { log(`[facilitator-gas] ${facilitator} names no settlement signer for ${network} in /supported: its gas cannot be watched`); } catch { /* logging only */ }
+        }
+        state.delete(`${url}|`);
+        readings.push({ network, facilitator, signer: null, balanceEth: null, runway: null, status: "unknown", error: "no signer named for this network", at });
+        continue;
       }
       // No signer known at all: one row for the facilitator itself.
       const targets = signers.length ? signers : [null];

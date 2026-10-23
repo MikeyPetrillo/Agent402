@@ -297,13 +297,13 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
   const { createRelayerGasCheck, signersFromSupported, runwayOf, gasCheckSettings } = await import("../src/facilitator-gas.js");
   const SIGNER = "0x" + "ab".repeat(20);
   const NET = "eip155:4663";
-  const chain = { gasPrice: 20_000_000n, balance: 0n, down: false, supportedDown: false, calls: [] };
+  const chain = { gasPrice: 20_000_000n, balance: 0n, down: false, supportedDown: false, noSigner: false, calls: [] };
   const listen = (handler) => new Promise((r) => { const s = createServer(handler); s.listen(0, "127.0.0.1", () => r(s)); });
   const body = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
   const fac = await listen(async (req, res) => {
     if (chain.supportedDown) { res.writeHead(503); return res.end("{}"); }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: NET }], extensions: [], signers: { "eip155:*": [SIGNER] } }));
+    res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: NET }], extensions: [], signers: chain.noSigner ? {} : { "eip155:*": [SIGNER] } }));
   });
   const rpc = await listen(async (req, res) => {
     const m = JSON.parse(await body(req) || "{}");
@@ -372,7 +372,8 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       chain.down = false;
       r = await g.check();
       assert.equal(r[0].status, "ok", "a good read clears it");
-      // A facilitator whose /supported never named a signer reads unread too.
+      // A facilitator whose /supported cannot be read (and never named a
+      // signer) reads unread too.
       chain.supportedDown = true;
       const g2 = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now });
       for (let i = 0; i < 3; i++) r = await g2.check();
@@ -380,6 +381,25 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.equal(r[0].status, "unread");
       assert.equal(r[0].signer, null);
       chain.supportedDown = false;
+    });
+    await check("gas: a facilitator that answers /supported but names no signer reads unknown, logs once and never pages", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      const logs = [];
+      chain.noSigner = true;
+      try {
+        const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now, log: (l) => logs.push(l) });
+        let r;
+        for (let i = 0; i < 5; i++) r = await g.check();
+        assert.equal(r.length, 1);
+        assert.equal(r[0].status, "unknown");
+        assert.equal(logs.length, 1, `logged once (${logs.length})`);
+        m.noteRelayerGas(r);
+        assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok", "nothing to watch is not a page");
+        // Alongside a low signer, the word still reads low.
+        m.noteRelayerGas([...r, { network: NET, facilitator: "f.example", signer: SIGNER, balanceEth: 0.0001, runway: 10, status: "low", at: c.t }]);
+        assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
+      } finally { chain.noSigner = false; }
     });
     await check("gas: readings merge across replicas (newest per signer) and age out", async () => {
       const store = (() => { const snaps = new Map(); return { async publish(id, json, t) { snaps.set(id, { id, at: t, ...JSON.parse(json) }); return { ok: true }; }, async readAll() { return { ok: true, snapshots: [...snaps.values()] }; } }; })();

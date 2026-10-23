@@ -616,20 +616,55 @@ await check("robinhood: primary reverts -> the listed fallback settles once; a t
     const log = [];
     const s = fakeServer();
     const okResult = { success: true, transaction: "0x" + "77".repeat(32), network: RH };
-    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "RH2", client: client("RH2", () => okResult, log) }, { name: "RH3", client: client("RH3", () => okResult, log) }] });
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => okResult, log) }, { name: "RH3", revertRetry: true, client: client("RH3", () => okResult, log) }] });
     const r = await s.hooks.settleFailure(ctx(RH, revertErr()));
     assert.equal(r?.recovered, true);
     assert.deepEqual(log, ["RH2"], "the first fallback settled; the second was never asked");
     const log2 = [];
     const s2 = fakeServer();
-    registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "RH2", client: client("RH2", () => { throw timeout(); }, log2) }, { name: "RH3", client: client("RH3", () => okResult, log2) }] });
+    registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => { throw timeout(); }, log2) }, { name: "RH3", revertRetry: true, client: client("RH3", () => okResult, log2) }] });
     assert.equal(await s2.hooks.settleFailure(ctx(RH, revertErr())), undefined);
     assert.deepEqual(log2, ["RH2"], "a timeout at a fallback may have broadcast: nobody after it");
     const log3 = [];
     const s3 = fakeServer();
-    registerFacilitatorFailureHooks(s3, null, null, { [RH]: () => [{ name: "RH2", client: client("RH2", () => okResult, log3) }] });
+    registerFacilitatorFailureHooks(s3, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => okResult, log3) }] });
     assert.equal(await s3.hooks.settleFailure(ctx(RH, timeout())), undefined);
     assert.deepEqual(log3, [], "a primary timeout never reaches a fallback");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+await check("robinhood: one URL (no listed fallback) + a reverted transfer asks nobody, as before the list", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const log = [];
+    const s = fakeServer();
+    const okResult = { success: true, transaction: "0x" + "78".repeat(32), network: RH };
+    registerFacilitatorFailureHooks(s, null, client("Solvador", () => okResult, log), {});
+    assert.equal(await s.hooks.settleFailure(ctx(RH, revertErr())), undefined);
+    assert.deepEqual(log, [], "the default chain is never reached by the revert rule");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+await check("robinhood: a revert reaches only the listed fallbacks; a pre-broadcast refusal there opens the default chain", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const okResult = { success: true, transaction: "0x" + "79".repeat(32), network: RH };
+    const reverted = { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "" };
+    const log = [];
+    const s = fakeServer();
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => reverted, log) }, { name: "Solvador", client: client("Solvador", () => okResult, log) }] });
+    assert.equal(await s.hooks.settleFailure(ctx(RH, revertErr())), undefined);
+    assert.deepEqual(log, ["RH2"], "after two reverts the default chain is not asked");
+    const log2 = [];
+    const s2 = fakeServer();
+    registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => { throw new SettleError(402, { success: false, errorReason: "payment_required", transaction: "", network: RH }); }, log2) }, { name: "Solvador", client: client("Solvador", () => okResult, log2) }] });
+    const r2 = await s2.hooks.settleFailure(ctx(RH, revertErr()));
+    assert.equal(r2?.recovered, true);
+    assert.deepEqual(log2, ["RH2", "Solvador"], "a clean 402 at the listed fallback lets the chain continue as it always did");
   } finally {
     if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
   }
