@@ -703,7 +703,7 @@ await check("a resend whose transfer already has an owed refund row is refused (
   } finally { gw.mode = "ok"; try { chmodSync(dir, 0o755); } catch { /* removed */ } rmSync(dir, { recursive: true, force: true }); }
 });
 
-await check("the resolver: a drop that does not land is counted kept, never owed or served; the owed row carries the slug booked with the entry, else the path (never the last segment); an ambiguous entry Gateway never took is dropped after the grace, a pending one only once its authorization has expired", async () => {
+await check("the resolver: a drop that does not land is counted kept, never owed or served; the owed row carries the slug booked with the entry, else the path (never the last segment); an ambiguous entry Gateway never took is dropped after the grace, a settlement_pending one never on a missing record; an unrecognized record is unreadable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "a402-gw-resolver2-"));
   let t = Date.now();
   const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {}, now: () => t });
@@ -734,7 +734,18 @@ await check("the resolver: a drop that does not land is counted kept, never owed
     assert.ok(await book.get(pend.key), "a settlement_pending entry is not dropped for a missing record while its authorization is valid");
     t += 24 * 3_600_000;
     await resolver.tick();
-    assert.equal(await book.get(pend.key), null, "dropped once its authorization has expired");
+    assert.ok(await book.get(pend.key), "Gateway answered settlement_pending for it: a missing record never drops it, even after its authorization expired (it waits for an operator and the word pages)");
+    // A record for this nonce in a shape we do not recognize reads unreadable, never none.
+    {
+      const odd = await mk({ origin: "ambiguous", cause: "gateway_http_500", validBefore: String(Math.floor(t / 1000) - 10) }, null);
+      const oddEntry = await book.get(odd.key);
+      gw.transfers.push({ id: "not-a-uuid", status: "weird", nonce: oddEntry.nonce, fromAddress: acct.address, toAddress: TREASURY, amount: "5000" });
+      const look = await rc.transferByAuthorization({ payer: acct.address, payTo: TREASURY, amount: "5000", nonce: oddEntry.nonce, network: "eip155:8453" });
+      assert.equal(look.state, "unreadable", `an unrecognized record for the nonce is unreadable (${look.state})`);
+      t += 3_600_000 + 1000;
+      await resolver.tick();
+      assert.ok(await book.get(odd.key), "so an expired ambiguous entry with an unrecognized record is kept, not dropped as not charged");
+    }
     // A confirmed entry is booked owed but its drop does not land -> kept.
     const stuck = await mk({}, "confirmed");
     const failingDrop = createGatewayPendingResolver({ book: { ...book, resolve: async () => ({ ok: false, error: "the pending book could not be written" }) }, client: rc, now: () => t, log: () => {},

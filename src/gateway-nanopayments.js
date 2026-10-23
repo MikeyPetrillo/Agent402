@@ -610,6 +610,10 @@ export class GatewayNanopaymentsClient {
       r = await this._request("transfers", `/v1/x402/transfers?${q}`, { timeoutMs });
     } catch { return { state: "unreadable" }; }
     if (!r.ok || r.parseError || !isObj(r.data) || !Array.isArray(r.data.transfers) || r.data.transfers.length > 100) return { state: "unreadable" };
+    // A record for this nonce in a shape we do not recognize is unreadable,
+    // never "none": reading it as none could drop a payment Gateway took.
+    const sameNonce = (t) => isObj(t) && lc(String(t.nonce || "")) === lc(want.nonce);
+    if (r.data.transfers.some((t) => sameNonce(t) && !normalizeGatewayTransfer(t))) return { state: "unreadable" };
     const matches = r.data.transfers.map(normalizeGatewayTransfer).filter((t) => gatewayTransferMatches(t, want));
     const live = matches.find((t) => t.status !== "failed");
     if (live) return { state: "accepted", transfer: live };
@@ -847,7 +851,7 @@ export function gatewayPendingLost() { return lostPending.map((e) => ({ ...e }))
 /** Test-only. */
 export function _resetGatewayPendingLostForTests() { lostPending = []; }
 
-export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error } = {}) {
+export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error, onChange = null } = {}) {
   let state = { pending: {} };
   const absorb = (s) => { if (isObj(s) && isObj(s.pending)) state = { pending: { ...s.pending } }; };
   const doc = createJsonDocument({ name: "gateway-pending", file, log: () => {} });
@@ -879,7 +883,9 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
     if (r.ok) absorb(r.body);
     return !!r.ok;
   };
-  const change = (fn) => { const run = queue.then(() => changeNow(fn), () => changeNow(fn)); queue = run.catch(() => {}); return run; };
+  // Every write attempt tells the owner, so a word it holds is read afresh.
+  const changed = (r) => { try { onChange?.(); } catch { /* a listener never breaks a write */ } return r; };
+  const change = (fn) => { const run = queue.then(() => changeNow(fn), () => changeNow(fn)).then(changed, (e) => { changed(); throw e; }); queue = run.catch(() => {}); return run; };
   const entries = () => Object.values(state.pending);
   let journalImpl = journal;
   const journalOf = async () => {
@@ -1110,6 +1116,10 @@ export function createGatewayPendingResolver({ book, client, recordOwed, owedExi
       if (found.state === "none") {
         const expired = UINT.test(String(e.validBefore ?? "")) && BigInt(e.validBefore) * 1000n < BigInt(Math.floor(now()));
         const neverTaken = e.origin === "ambiguous" && now() - Number(e.at || 0) >= ambiguousNoneMs;
+        // Gateway itself answered settlement_pending for this one: no record is
+        // never read as not charged; it waits for an operator (the word pages
+        // once it is old).
+        if (e.origin !== "ambiguous") return "kept";
         if (!expired && !neverTaken) return "kept";
         if (!(await drop(e.key, "not_charged", expired ? "no Gateway transfer and the authorization has expired" : "no Gateway transfer for an ambiguous settle call"))) return "kept";
         release = false;

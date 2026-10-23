@@ -354,7 +354,7 @@ export function circlePendingBookForOperator() { return circlePendingBook; }
 // still pages.
 let gatewayPendingBookInstance = null;
 async function gatewayPendingBook() {
-  if (!gatewayPendingBookInstance) gatewayPendingBookInstance = createGatewayPendingBook();
+  if (!gatewayPendingBookInstance) gatewayPendingBookInstance = createGatewayPendingBook({ onChange: () => { gatewayPendingWordCache = { at: 0, word: null }; } });
   return gatewayPendingBookInstance;
 }
 /** True when this process must load the pending book and run its resolver. */
@@ -365,11 +365,17 @@ export function gatewayPendingBookWanted(env = process.env) {
 }
 /** The book's own word, read from the shared store; "off" with no book, or
  *  with the switch off and nothing in the book, its journal or memory. */
-export async function gatewayPendingStatus() {
+// The word is read on the public status surface; held 10 s like the Arc
+// pending word, so uncached requests cost no database read each.
+let gatewayPendingWordCache = { at: 0, word: null };
+export async function gatewayPendingStatus({ now = Date.now(), ttlMs = 10_000 } = {}) {
   if (!gatewayPendingBookInstance) return "off";
+  if (gatewayPendingWordCache.word && now - gatewayPendingWordCache.at < ttlMs) return gatewayPendingWordCache.word;
   try {
-    const word = await gatewayPendingBookInstance.alarmStatus();
-    return word === "ok" && !gatewayNanopaymentsEnabled() ? "off" : word;
+    const raw = await gatewayPendingBookInstance.alarmStatus();
+    const word = raw === "ok" && !gatewayNanopaymentsEnabled() ? "off" : raw;
+    gatewayPendingWordCache = { at: now, word };
+    return word;
   } catch { return "unknown"; }
 }
 export function gatewayPendingBookForOperator() { return gatewayPendingBookInstance; }

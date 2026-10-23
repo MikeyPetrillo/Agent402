@@ -213,7 +213,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
   to credential + route + query + body, committed only after a settled 200. With no explicit key, an
   x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the
   implicit key, so a re-sent signed payment is served from its first answer (`X-Replayed-Answer: 1`,
-  no handler, no settle, no sale), except on a `hasLastingEffect` route or a streamed call; the store
+  no handler, no settle, no sale), except on a `hasLastingEffect` route, an identity-bound route
+  (a settled header can be rebuilt from chain data) or a streamed call; the store
   (`src/idempotency-store.js`) is Redis-shared across replicas. Replays are counted per slug on
   `/__operator/tool-failures.json`.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
