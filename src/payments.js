@@ -147,6 +147,14 @@ const ROBINHOOD_FALLBACK_RECHECK_MS = Math.max(1000, Number(process.env.ROBINHOO
 // The offer, the scheme and what the buyer signs do not depend on the list.
 const ROBINHOOD_FACILITATOR_URLS = facilitatorUrlList(process.env.ROBINHOOD_FACILITATOR_URL);
 const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
+// ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
+// boot; a malformed key turns the feature off with a warning, never a crash.
+function robinhoodRelayerKeySafe() {
+  const k = String(process.env.ROBINHOOD_RELAYER_KEY || "").trim();
+  if (!k) return "";
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: ROBINHOOD_RELAYER_KEY is not a 32-byte hex key - own Robinhood relayer off"); return ""; }
+  return k.startsWith("0x") ? k : `0x${k}`;
+}
 // Monad (chain 143) settles native Circle USDC (in @x402/evm's registry, so the
 // standard ExactEvmScheme handles it — no custom parser). But PayAI and CDP do
 // NOT advertise eip155:143 at their /supported, so Monad must route to its own
@@ -925,6 +933,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // take a payment on any network (several also list Base or Arc) except as
   // a fallback the failure hook hands a refused Robinhood settle to.
   const robinhoodFallbacks = [];
+  // Our own relayer (ROBINHOOD_RELAYER_KEY): the last of Robinhood's settle
+  // fallbacks, after every listed facilitator (src/robinhood-relayer.js).
+  let ownRelayer = null;
   if (robinhoodEnabled) {
     addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
@@ -961,12 +972,24 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       };
       for (const f of [...robinhoodFallbacks]) confirmFallback(f);
     }
+    if (robinhoodRelayerKeySafe()) {
+      try {
+        const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
+        const { evmRpcFor } = await import("./evm-rpcs.js");
+        const client = createOwnRelayerClient({ key: robinhoodRelayerKeySafe(), network: ROBINHOOD_CAIP2, asset: USDG.asset, payTo: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2) });
+        ownRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
+        console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only; pays gas only when the listed facilitators fail)`);
+      } catch (e) {
+        console.warn(`WARNING: own Robinhood relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
+      }
+    }
     // Gas runway of every listed facilitator's settlement signer, so an empty
     // gas wallet reads on facilitatorFunds before settlements start failing.
     if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => [ROBINHOOD_FACILITATOR_URL, ...robinhoodFallbacks.map((f) => f.url)],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
@@ -1554,7 +1577,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Robinhood's listed fallbacks first (those whose /supported confirmed
     // exact on 4663), then the chain it had before. Read at settle time: the
     // boot check may still confirm or drop one.
-    ...(robinhoodFallbacks.length ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
+    // Our own relayer, when configured, comes after them.
+    ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
   });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
@@ -2254,7 +2278,7 @@ setDemotedReader(() => demotedList());
  * replica's facilitatorFunds word through the failure monitor's shared
  * snapshots. `urls` is read at each tick. Returns the tick (tests run it).
  */
-export async function startFacilitatorGasCheck({ network, urls, schedule = true } = {}) {
+export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true } = {}) {
   const { leased } = await import("./state-db.js");
   const { createRelayerGasCheck, gasCheckSettings } = await import("./facilitator-gas.js");
   const { evmRpcFor } = await import("./evm-rpcs.js");
@@ -2262,9 +2286,9 @@ export async function startFacilitatorGasCheck({ network, urls, schedule = true 
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
   const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
     const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);
-    if (!list.length) return [];
+    if (!list.length && !ownSigners.length) return [];
     const key = list.join(",");
-    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings }));
+    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners }));
     const readings = await checkers.get(key).check();
     toolFailureMonitor().noteRelayerGas(readings);
     for (const r of readings) {

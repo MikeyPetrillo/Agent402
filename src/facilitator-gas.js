@@ -69,8 +69,10 @@ const hostOf = (url) => { try { return new URL(url).host; } catch { return Strin
  * @param {string|null} o.rpcUrl - the chain's JSON-RPC endpoint
  * @param {Function} [o.fetchImpl]
  * @param {object} [o.settings] - gasCheckSettings() shape
+ * @param {Array<{label: string, signer: string}>} [o.ownSigners] - signers we
+ *   run ourselves (our own relayer), read directly with no /supported
  */
-export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn } = {}) {
+export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn, ownSigners = [] } = {}) {
   const namedNoSigner = new Set(); // urls already logged as publishing no signer
   const signersByUrl = new Map(); // url -> last signers read from /supported
   const state = new Map(); // `${url}|${signer}` -> { failures, last }
@@ -95,7 +97,29 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
     let gasPrice = null, gasError = null;
     try { gasPrice = await rpc("eth_gasPrice", []); } catch (e) { gasError = String(e?.message || e).slice(0, 120); }
     const readings = [];
-    for (const url of urls) {
+    // Our own relayer is a facilitator of its own: its signer is known, so
+    // there is no /supported to read, only its balance.
+    const own = (Array.isArray(ownSigners) ? ownSigners : []).filter((o) => ADDRESS.test(String(o?.signer || "")));
+    for (const url of [...urls, ...own.map((o) => ({ own: o }))]) {
+      if (url && typeof url === "object" && url.own) {
+        const { label, signer } = url.own;
+        const key = `own:${label}|${signer}`;
+        const s = state.get(key) || { failures: 0, last: null };
+        let error = gasError, reading = null;
+        if (!error) {
+          try {
+            const balance = await rpc("eth_getBalance", [signer, "latest"]);
+            const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement);
+            reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runway !== null && runway < settings.minRunway ? "low" : "ok", at };
+          } catch (e) { error = String(e?.message || e).slice(0, 120); }
+        }
+        if (reading) { s.failures = 0; s.last = reading; state.set(key, s); readings.push(reading); continue; }
+        s.failures++;
+        state.set(key, s);
+        if (s.failures >= settings.failAfter) readings.push({ network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: s.last?.balanceEth ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, at });
+        else if (s.last) readings.push({ ...s.last, failures: s.failures, error });
+        continue;
+      }
       const facilitator = hostOf(url);
       let signers = signersByUrl.get(url) || [];
       let supportedError = null;
