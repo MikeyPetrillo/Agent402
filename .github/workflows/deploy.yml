@@ -4041,6 +4041,8 @@ jobs:
           t node scripts/test-mcp-binary-e2e.js
           # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
           t node scripts/test-hangup-settlement.js
+          # Circle Gateway batched option: the client against a stub (supported, verify, settle, pending, reduced errors), then a paid boot where the batched accept rides beside the plain one on the switch's networks only, a batched payment settles through the stub after the handler and books one sale under its wire, a handler 4xx never settles, settlement_pending answers 402 and books no sale, a plain payment never reaches the stub, the switch off and an unreadable /supported remove the accept (offline stubs)
+          t node scripts/test-gateway-nanopayments.js
           # Per-phase timing of paid calls: verify, handler and settle measured against injected stub delays, filed under the right rail (x402 vs mpp-evm), a hang-up marked gone, summary operator-only (boots a paid server against stub facilitator and market-data stubs - offline)
           t node scripts/test-paid-phase-timing.js
           # A paid run that never gets paid meets a bound: a hang-up whose settle fails is counted, a short EVM authorization on a slow route is refused before the handler, one wallet cannot trip the report pause alone, and concurrent runs must be covered by the balance (boots a paid server against a stub facilitator and a stub OpenRouter - offline)

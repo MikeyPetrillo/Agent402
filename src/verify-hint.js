@@ -25,6 +25,8 @@
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
+import { classifySettlementPending } from "./gateway-wire.js";
+const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const BALANCE_TTL_MS = 60_000;
 const HINT_TTL_MS = 5 * 60_000;
@@ -293,6 +295,14 @@ export function verifyHintMiddleware() {
         if (refused) {
           req.__paymentRejectReason = refused.reason; // for the paywall rollup
           return origJson({ ...body, error: body.error || "Payment rail temporarily unavailable", reason: refused.reason, ...(refused.network ? { network: refused.network } : {}), hint: refused.detail, retry: refused.retry });
+        }
+        // A Circle Gateway batched settlement left pending inside the wait:
+        // nothing served, nothing counted as charged here, booked for
+        // reconciliation (src/gateway-wire.js).
+        const pending = settled ? classifySettlementPending(decodeB64Json(settled)) : null;
+        if (pending) {
+          req.__paymentRejectReason = pending.reason;
+          return origJson({ ...body, reason: pending.reason, ...(pending.network ? { network: pending.network } : {}), hint: pending.detail, retry: pending.retry });
         }
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {

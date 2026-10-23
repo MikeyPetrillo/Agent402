@@ -40,6 +40,7 @@
 // file written after that build ran alone is rolled forward into the tables
 // at the next boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
+import { isGatewayWire, settlementKindOf } from "./gateway-wire.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -585,6 +586,8 @@ export function saleByTx(tx) {
   return {
     id: r.id, ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || 0, rail: r.rail, network: r.network || null,
     payer: r.payer || null, tx: r.tx, internal: !!r.internal, wire: r.wire || null,
+    // A Circle Gateway batched sale settled off chain (its tx is Gateway's id).
+    settlement: settlementKindOf(r.wire), settledOffChain: isGatewayWire(r.wire),
     responseSha256: r.response_sha256 || null, attestUid: r.attest_uid || null, attestTx: r.attest_tx || null,
   };
 }
@@ -1494,6 +1497,9 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
       quoteUsd: l.quote_usd == null ? null : +Number(l.quote_usd).toFixed(6),
       underQuote: l.quote_usd == null ? null : Number(l.price_usd) <= Number(l.quote_usd) + 1e-9,
       network: l.network, wire: l.wire, rail: l.rail,
+      // A Circle Gateway batched row settled off chain: its tx is Gateway's
+      // transaction id, and no block explorer resolves it.
+      settlement: settlementKindOf(l.wire), settledOffChain: isGatewayWire(l.wire),
       // An outside buyer's tx hash resolves to that buyer's wallet on chain,
       // so only our own canary row carries one; the external row is the
       // amount, the quote and the hour.

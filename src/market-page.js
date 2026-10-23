@@ -706,7 +706,7 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
-  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null, premiumUsd = 0, floorUsd = 0, routerChains = null } = opts;
+  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null, premiumUsd = 0, floorUsd = 0, routerChains = null, gatewayBatched = false } = opts;
   const C = CHAIN_PAGES[chainKey];
   const measured = chainKey === LEADERBOARD_CHAIN;
   const lbWindow = leaderboardSnap?.windowLabel || null;
@@ -874,6 +874,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         ${manifestRow("asset", esc(C.asset))}
         ${manifestRow("settled by", esc(C.settledBy))}
         ${manifestRow("buyer gas", Number(premiumUsd) > 0 ? ["none, the buyer only signs", `(a ${esc(usd(premiumUsd))}`, "settlement premium is in the price)"] : ["none, the buyer only signs"])}
+        ${gatewayBatched ? manifestRow("batched option", ["Circle Gateway, gas-free,", "settled off chain in batches"]) : ""}
         <div style="display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1 1 16px;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;margin-left:auto;white-space:nowrap;">${esc(C.explorerUrl)}&nbsp;→</a></div>
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">daily canary</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:${canary.color};">${esc(canary.text)}</span></div>
       </div>
