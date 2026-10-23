@@ -48,11 +48,12 @@ export function isGatewayBatchedRequest(req) {
  *  still settling (the Retry-After on that 402). */
 export const PENDING_RETRY_AFTER_SECONDS = 10;
 
-/** What a buyer is told while Gateway is still settling a batched payment:
- *  the payment was accepted, nothing more is charged, and the SAME payment
+/** What a buyer is told while Gateway has not confirmed a batched payment
+ *  (settlement_pending, or a settle answer that never arrived): nothing more
+ *  is charged, and the SAME payment
  *  resent after a short wait is served once Gateway reports it settled. Never
  *  a new signature: a second authorization could be a second charge. */
-export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway accepted this batched payment and is still settling it, so the answer was withheld. Nothing more is charged for it. Retry the same request with the same payment header after a short wait: once Gateway reports the payment settled, that retry is served without a new charge. Do not sign a new authorization for this request.";
+export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway has not confirmed this batched payment yet (it is still settling, or its answer did not arrive), so the answer was withheld. Nothing more is charged for it. Retry the same request with the same payment header after a short wait: once Gateway reports the payment settled, that retry is served without a new charge. Do not sign a new authorization for this request.";
 
 /** What a buyer is told when Gateway reports the batched payment failed:
  *  Gateway charges nothing for a failed transfer, so a fresh one is safe. */
