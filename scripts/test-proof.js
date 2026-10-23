@@ -56,4 +56,19 @@ ok(txLink("solana", "sig") === "https://solscan.io/tx/sig" && txLink("unknown", 
   ok(creditsSalesEnabled() ? /prepaid credits/.test(page) : !/credits/.test(page.split("</h1>")[1].split("</p>")[0]), "credits named as a payment path only while credit sales are on");
   ok(!/\bCI canary\b|burner wallet/.test(page) && /our own test wallet buys this route every day/.test(page), "no internal tooling names on the page");
 }
+{
+  // A metered sale on a floored or premium chain books the price and the
+  // quote that chain offered, so it reads under its ceiling (never ~500%).
+  process.env.ROBINHOOD_MIN_PRICE_USD = "0.005";
+  process.env.NETWORK_PRICE_PREMIUMS = "eip155:10=0.001";
+  const { paidPriceUsd, quotedOnNetworkUsd } = await import("../src/paid-price.js?proof-floor");
+  for (const [caip2, network, tag] of [["eip155:4663", "robinhood", "e"], ["eip155:10", "optimism", "f"]]) {
+    recordSale({ slug: "v1-chat-metered", priceUsd: paidPriceUsd({ basePriceUsd: 0.0012, caip2 }), rail: "usdc", network, payer: "0x" + "5".repeat(40), tx: "0x" + tag.repeat(64), synthetic: false, wire: "x402", quoteUsd: quotedOnNetworkUsd(0.0012, caip2) });
+    const latest = proofFeed().external.latest;
+    ok(latest.underQuote === true && latest.settledUsd <= latest.quoteUsd, `a metered sale on ${network} (quote 0.0012, offered there at ${latest.quoteUsd}) reads under its ceiling`);
+    const p = proofPage("https://agent402.tools", proofFeed());
+    const m = /\((\d+)% of the ceiling\)/.exec(p);
+    ok(m && Number(m[1]) <= 100, `...and the page shows ${m && m[1]}% of the ceiling, never above`);
+  }
+}
 console.log(`\n${pass} passed`);

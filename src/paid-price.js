@@ -53,3 +53,15 @@ export function paidPriceUsd({ basePriceUsd, caip2 = null, meteredUsd = null, pa
   const priced = num(priceFor(usdString(base), caip2));
   return Number.isFinite(priced) && priced > 0 ? priced : base;
 }
+
+/** The metered quote the buyer saw on `caip2`: the request's quote through the
+ *  same chain premium and floor that priced that accept, so a settled amount
+ *  is compared against the ceiling that chain actually offered. */
+export function quotedOnNetworkUsd(quoteUsd, caip2, priceFor = priceForNetwork) {
+  if (quoteUsd == null || quoteUsd === "") return null;
+  const q = Number(quoteUsd);
+  if (!Number.isFinite(q)) return null;
+  if (q <= 0 || !caip2) return q;
+  const priced = num(priceFor(usdString(q), caip2));
+  return Number.isFinite(priced) && priced > 0 ? priced : q;
+}

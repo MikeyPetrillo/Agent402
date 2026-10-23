@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 
 process.env.ROBINHOOD_MIN_PRICE_USD = "0.005";
 process.env.NETWORK_PRICE_PREMIUMS = "eip155:10=0.001";
-const { paidPriceUsd, signedEvmAmountUsd } = await import("../src/paid-price.js");
+const { paidPriceUsd, signedEvmAmountUsd, quotedOnNetworkUsd } = await import("../src/paid-price.js");
 const { readFileSync } = await import("node:fs");
 
 const RH = "eip155:4663", BASE = "eip155:8453", OP = "eip155:10", SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -56,6 +56,23 @@ check("the server books sales, hang-up debts and charged-failure debts through t
   assert.equal(live(/^\s*priceUsd: paidUsdOf\(def, req, res, decodeSettleReceipt\(settleReceipt\)\?\.network\),/m), 1, "hang-up debt row");
   assert.equal(live(/^\s*\? paidUsdOf\(def, req, res, decodeSettleReceipt\(settleReceipt\)\?\.network\)/m), 1, "sale row");
   assert.equal(live(/^\s*const priceUsd = paidUsdOf\(def, req, res, receipt\?\.network\);/m), 1, "charged-failure debt row");
+});
+
+check("a metered sale's quote is the one its chain offered, so it never reads over its ceiling", () => {
+  // Robinhood floor: a $0.0012 quote is offered (and paid) at $0.005.
+  assert.equal(quotedOnNetworkUsd(0.0012, RH), 0.005);
+  assert.ok(paidPriceUsd({ basePriceUsd: 0.0012, caip2: RH }) <= quotedOnNetworkUsd(0.0012, RH));
+  // Optimism premium.
+  assert.equal(quotedOnNetworkUsd(0.0012, OP), 0.0022);
+  assert.ok(paidPriceUsd({ basePriceUsd: 0.0012, caip2: OP }) <= quotedOnNetworkUsd(0.0012, OP) + 1e-9);
+  // Base unchanged; no network or no quote passes through.
+  assert.equal(quotedOnNetworkUsd(0.0012, BASE), 0.0012);
+  assert.equal(quotedOnNetworkUsd(0.0012, null), 0.0012);
+  assert.equal(quotedOnNetworkUsd(null, RH), null);
+});
+check("the sale row books its metered quote through the chain's premium and floor", () => {
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  assert.equal((src.match(/quotedOnNetworkUsd\(req\.__meteredQuoteUsd, decodeSettleReceipt\(settleReceipt\)\?\.network\)/g) || []).length, 1);
 });
 
 console.log(failures ? `\ntest-paid-price: FAILED (${failures})` : "\ntest-paid-price: all passed");
