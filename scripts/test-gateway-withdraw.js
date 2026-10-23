@@ -7,12 +7,15 @@
 //     plus the documented window (or --expiry-blocks), never max uint256, in
 //     the plan the dry run prints and in the intent --execute signs;
 //   - an unreadable block number refuses the run (no unbounded intent);
-//   - the dry run is the default and prints no key.
+//   - the dry run is the default and prints no key;
+//   - a whole-balance withdrawal leaves room for the fee (value plus maxFee
+//     within the balance), an --amount past that is refused, and the
+//     --max-fee default is 1% of the default withdraw alert.
 import assert from "node:assert/strict";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { maxUint256 } from "viem";
-import { runWithdraw, DEFAULT_EXPIRY_BLOCKS, MAX_EXPIRY_BLOCKS } from "./gateway-withdraw.js";
-import { GATEWAY_API_BASE } from "../src/gateway-nanopayments.js";
+import { maxUint256, parseUnits } from "viem";
+import { runWithdraw, DEFAULT_EXPIRY_BLOCKS, MAX_EXPIRY_BLOCKS, DEFAULT_MAX_FEE_USD } from "./gateway-withdraw.js";
+import { GATEWAY_API_BASE, DEFAULT_WITHDRAW_ALERT_USD } from "../src/gateway-nanopayments.js";
 
 let pass = 0;
 const check = async (name, fn) => {
@@ -100,6 +103,30 @@ await check("an unreadable block refuses the run; an out-of-range window refuses
     assert.equal(x.code, 2, bad);
     assert.equal(x.calls.length, 0, bad);
   }
+});
+
+await check("a whole-balance withdrawal leaves room for Gateway's fee: value = available - max fee, value + maxFee never above the balance; an --amount past that is refused; the default max fee is 1% of the default alert", async () => {
+  assert.equal(DEFAULT_MAX_FEE_USD, DEFAULT_WITHDRAW_ALERT_USD / 100, "the stated rule");
+  const r = await run(["--from", "base", "--execute"]);
+  assert.equal(r.code, 1, "the stub refuses the transfer");
+  const intent = r.calls.find((c) => c.url === `${GATEWAY_API_BASE}/v1/transfer`).body[0].burnIntent;
+  const balance = parseUnits("12.5", 6);
+  assert.equal(BigInt(intent.maxFee), parseUnits(String(DEFAULT_MAX_FEE_USD), 6), "the default ceiling");
+  assert.equal(BigInt(intent.spec.value), balance - BigInt(intent.maxFee), "the whole balance less the fee ceiling");
+  assert.ok(BigInt(intent.spec.value) + BigInt(intent.maxFee) <= balance, "value plus fee fits the balance");
+  const custom = await run(["--from", "base", "--max-fee", "1"]);
+  assert.equal(custom.code, 0, custom.err);
+  assert.match(custom.out, /plan: 11\.5 USDC from the eip155:8453 domain/);
+  const over = await run(["--from", "base", "--amount", "12.4"]);
+  assert.equal(over.code, 2);
+  assert.match(over.err, /leaves no room for the fee: at most 12\.25/);
+  assert.ok(!over.calls.some((c) => c.url.endsWith("/v1/transfer") || c.url === RPC_BASE), "refused before any block read or signature");
+  const fits = await run(["--from", "base", "--amount", "12.25"]);
+  assert.equal(fits.code, 0, fits.err);
+  const tiny = await run(["--from", "base", "--max-fee", "12.5"]);
+  assert.equal(tiny.code, 0);
+  assert.match(tiny.out, /does not cover --max-fee/);
+  assert.match(tiny.out, /nothing to withdraw/);
 });
 
 console.log(process.exitCode ? `FAILED (${pass} passed)` : `${pass} passed`);
