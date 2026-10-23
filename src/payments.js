@@ -31,7 +31,7 @@ import {
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
-import { networkPriceFloors, applyNetworkFloor } from "./network-floors.js";
+import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
@@ -2359,21 +2359,31 @@ export function gasCheckUrls(primary, fallbacks = []) {
   return [primary, ...fallbacks.filter((f) => f?.confirmed === true).map((f) => f.url)].filter(Boolean);
 }
 
-export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true } = {}) {
+/** ETH/USD from the crypto-price tool's own read (its CoinGecko lane and limiter). */
+async function ethUsdFromCryptoPrice() {
+  const { CRYPTO_TOOLS } = await import("./tools/crypto-kit.js");
+  const tool = CRYPTO_TOOLS.find((t) => t.slug === "crypto-price");
+  const out = await tool.handler({ coins: "ETH", currency: "usd" });
+  return Number(out?.coins?.ethereum?.price);
+}
+
+export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice } = {}) {
   const { leased } = await import("./state-db.js");
-  const { createRelayerGasCheck, gasCheckSettings } = await import("./facilitator-gas.js");
+  const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck } = await import("./facilitator-gas.js");
   const { evmRpcFor } = await import("./evm-rpcs.js");
   const settings = gasCheckSettings();
+  // Settlement gas against the chain's price floor (no floor: no row).
+  const floorCheck = networkFloorUsd(network) > 0 ? createFloorGasCheck({ network, floorUsd: () => networkFloorUsd(network), readEthUsd }) : null;
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
   const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
     const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);
     if (!list.length && !ownSigners.length) return [];
     const key = list.join(",");
-    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners }));
+    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners, floorCheck }));
     const readings = await checkers.get(key).check();
     toolFailureMonitor().noteRelayerGas(readings);
     for (const r of readings) {
-      if (r.status === "low" || r.status === "unread") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
+      if ((r.status === "low" || r.status === "unread") && r.facilitator !== "price floor") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
     }
     return readings;
   });

@@ -294,7 +294,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
 // facilitatorFunds; enough failed reads read "low" too, never a silent ok.
 {
   const { createServer } = await import("node:http");
-  const { createRelayerGasCheck, signersFromSupported, runwayOf, gasCheckSettings } = await import("../src/facilitator-gas.js");
+  const { createRelayerGasCheck, signersFromSupported, runwayOf, gasCheckSettings, createFloorGasCheck, floorGasSettings } = await import("../src/facilitator-gas.js");
   const SIGNER = "0x" + "ab".repeat(20);
   const NET = "eip155:4663";
   const chain = { gasPrice: 20_000_000n, balance: 0n, down: false, supportedDown: false, noSigner: false, calls: [] };
@@ -422,8 +422,8 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const { startFacilitatorGasCheck } = await import("../src/payments.js");
       const { toolFailureMonitor } = await import("../src/tool-failure-monitor.js");
       chain.balance = PER * 10n; chain.down = false; chain.calls.length = 0;
-      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC, FAC + "/"], schedule: false });
-      const r = await tick();
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC, FAC + "/"], schedule: false, readEthUsd: async () => 2500 });
+      const r = (await tick()).filter((x) => x.facilitator !== "price floor");
       assert.ok(Array.isArray(r) && r.length >= 1 && r.every((x) => x.status === "low"), JSON.stringify(r));
       assert.ok(chain.calls.includes("eth_gasPrice") && chain.calls.includes("eth_getBalance"));
       assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");
@@ -437,6 +437,71 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const { readFileSync } = await import("node:fs");
       const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
       assert.ok(/^\s*urls: \(\) => gasCheckUrls\(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks\),/m.test(src), "the Robinhood gas check reads its list through gasCheckUrls");
+    });
+    // Settlement gas against the price floor. At 0.02 gwei x 85.4k gas one
+    // settlement burns 1.708e-6 ETH; against a 0.006 floor at an 80% share the
+    // alarm trips above about 2,810 USD per ETH.
+    const floorSettings = { ...floorGasSettings({}), share: 0.8, gasUnits: 85_400, priceMaxAgeMs: 60 * 60_000 };
+    await check("floor gas: under the share of the floor it reads ok; over it, low with gasNearFloor and facilitatorFunds low", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      let eth = 2500;
+      const logs = [];
+      const f = createFloorGasCheck({ network: NET, floorUsd: () => 0.006, readEthUsd: async () => eth, settings: floorSettings, now: c.now, log: (l) => logs.push(l) });
+      let r = await f.check(20_000_000n);
+      assert.equal(r.status, "ok", JSON.stringify(r));
+      assert.ok(r.sharePct > 70 && r.sharePct < 72, `share ${r.sharePct}`);
+      m.noteRelayerGas([r]);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok");
+      eth = 3500;
+      r = await f.check(20_000_000n);
+      assert.equal(r.status, "low");
+      assert.equal(r.reason, "gasNearFloor");
+      m.noteRelayerGas([r]);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
+      const full = await m.status({ fresh: true, full: true });
+      assert.equal(full.facilitatorFunds.gasNearFloor, true);
+      const pub = await m.status({ fresh: true });
+      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status"], "the public word carries no figures");
+      const rep = await m.report();
+      const row = (rep.relayerGas || rep.facilitatorFunds?.relayerGas || []).find((x) => x.reason === "gasNearFloor");
+      assert.ok(row && Number.isFinite(row.gasUsd) && row.floorUsd === 0.006, "the operator detail names the reason and the figures");
+      assert.equal(logs.length, 2, "one log line per state change");
+      await f.check(20_000_000n);
+      assert.equal(logs.length, 2, "no line while the state holds");
+    });
+    await check("floor gas: a failed ETH price read keeps the last good price, then reads unknown (never a page by itself)", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      let fail = false;
+      const f = createFloorGasCheck({ network: NET, floorUsd: () => 0.006, readEthUsd: async () => { if (fail) throw new Error("price down"); return 3500; }, settings: floorSettings, now: c.now, log: () => {} });
+      assert.equal((await f.check(20_000_000n)).status, "low");
+      fail = true;
+      c.t += 30 * 60_000;
+      let r = await f.check(20_000_000n);
+      assert.equal(r.status, "low", "the last good price stands in");
+      assert.match(r.error, /last good ETH price kept/);
+      c.t += 31 * 60_000;
+      r = await f.check(20_000_000n);
+      assert.equal(r.status, "unknown");
+      assert.equal(r.reason, "ethPriceUnread");
+      m.noteRelayerGas([r]);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok", "an unread price alone never pages");
+      const none = createFloorGasCheck({ network: NET, floorUsd: () => 0, readEthUsd: async () => 3500, settings: floorSettings, now: c.now, log: () => {} });
+      assert.equal(await none.check(20_000_000n), null, "no floor, no row");
+    });
+    await check("floor gas: the payments loop prices the floor through the gas check (caller path)", async () => {
+      process.env.EVM_RPC_4663 = RPC;
+      const { startFacilitatorGasCheck } = await import("../src/payments.js");
+      const { toolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+      chain.balance = PER * 100_000n; chain.down = false;
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], schedule: false, readEthUsd: async () => 5000 });
+      const r = await tick();
+      const floorRow = r.find((x) => x.facilitator === "price floor");
+      assert.ok(floorRow && floorRow.status === "low" && floorRow.reason === "gasNearFloor", JSON.stringify(r));
+      assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");
+      toolFailureMonitor()._reset();
+      delete process.env.EVM_RPC_4663;
     });
   } finally {
     fac.close(); rpc.close();
