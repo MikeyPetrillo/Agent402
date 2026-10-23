@@ -366,7 +366,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -7515,7 +7515,7 @@ app.get("/marketplace/tools", async (req, res) => {
     excludeOrigin: BASE_URL,
     ourTools,
   });
-  htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, indexedToolCategories(BASE_URL), { search, category, source, page }));
+  htmlCache(res, 300, 900).send(indexToolsPage(BASE_URL, data, await indexedToolCategoriesAsync(BASE_URL), { search, category, source, page }));
 });
 // Machine-readable twin. Free, like every other discovery surface here.
 app.get("/api/index/tools", async (req, res) => {
@@ -11128,6 +11128,10 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // while a background crawler is dialling thousands of origins, and CI booted a
 // server on every run and crawled the whole third-party index for nothing -
 // outbound load on other people's hosts that no test ever looked at.
+// The tool directory in the state database (INDEX_LISTINGS_STORE=pg; off by
+// default): configured before the warm start, so every origin it loads is
+// written as it lands and this server's own origin is never listed.
+if (configureListingsStore({ excludeOrigin: BASE_URL })) console.log("[index] tool directory served from the state database (INDEX_LISTINGS_STORE=pg)");
 if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
   console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read

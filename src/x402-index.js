@@ -32,6 +32,7 @@ import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { createJsonDocument } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
@@ -571,6 +572,7 @@ class IndexCache extends Map {
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
+    if (listings) listingsChanged(origin);
     if (replicaObserver) replicaObserver("cache", "set", origin, v);
     return this;
   }
@@ -580,7 +582,9 @@ class IndexCache extends Map {
       routeIndexNoteSet(origin, super.get(origin), null);
       if (replicaObserver) replicaObserver("cache", "delete", origin);
     }
-    return super.delete(origin);
+    const had = super.delete(origin);
+    if (had && listings) listingsChanged(origin);
+    return had;
   }
   clear() { cacheVersion++; super.clear(); routeIndexReset(); if (replicaObserver) replicaObserver("cache", "clear"); }
 }
@@ -9552,7 +9556,10 @@ export function allIndexedTools(args = {}) {
 }
 /** allIndexedTools, the filter run across turns of at most DIRECTORY_SLICE_MS
  *  (a search is one pass over the whole directory). Same answer. */
-export function allIndexedToolsAsync(args = {}) { return runSlicedAsync(indexedToolsSteps(args)); }
+export function allIndexedToolsAsync(args = {}) {
+  if (listingsOn()) return listings.directory(args);
+  return runSlicedAsync(indexedToolsSteps(args));
+}
 function* indexedToolsSteps({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
   const rows = interleavedIndexRows(ourTools, excludeOrigin);
   const q = String(search || "").trim().toLowerCase();
@@ -9655,6 +9662,8 @@ function interleavedIndexRows(ourTools, excludeOrigin) {
  * so a visitor rarely waits at all.
  */
 export async function indexRowsReady({ ourTools = [], excludeOrigin = "" } = {}) {
+  // The database-backed directory has nothing to build in memory.
+  if (listingsOn()) return;
   const key = `${excludeOrigin}|${ourTools.length}`;
   if (indexRowsMemo.rows && indexRowsMemo.key === key) return;
   // A cache this small builds in line, as before.
@@ -9735,24 +9744,44 @@ function* interleaveSteps(rows) {
 }
 
 function flatRowsForEntry(origin, v, self, seen, out) {
-  if (!origin.startsWith("https:")) return; // same bar as /api/index/register
-  const normOrigin = origin.replace(/\/+$/, "").toLowerCase();
-  if (self && normOrigin === self) return;
-  if (normOrigin === "https://agent402.tools") return;
-  if (v?.error) return;
-  if (healthScore(v) <= 0) return;
+  // Same bar as /api/index/register.
+  if (!directoryListsEntry(origin, v, self)) return;
   const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    out.push(flatRowOf(origin, t, sellerName));
+  }
+}
+/** Whether an origin's rows belong in the third-party directory at all (the
+ *  bar flatRowsForEntry applies before it reads any tool). */
+function directoryListsEntry(origin, v, self) {
+  if (!origin.startsWith("https:")) return false;
+  const normOrigin = origin.replace(/\/+$/, "").toLowerCase();
+  if (self && normOrigin === self) return false;
+  if (normOrigin === "https://agent402.tools") return false;
+  if (v?.error) return false;
+  return healthScore(v) > 0;
+}
+/** One crawled tool as the directory serves it. The in-memory directory and the
+ *  database-backed one both build their rows here, so they cannot drift.
+ *  `memo: false` screens without keeping the screen on the crawled row: the
+ *  database-backed directory screens each row once when it is written and once
+ *  per page served, so a memo per crawled tool would only hold memory. */
+function flatRowOf(origin, t, sellerName, { memo = true } = {}) {
+  const route = t?.route || "/";
+  {
     // Seller text is cleaned here, at serve time, and a listing the screen
     // flags serves no description or tags (screenListingForServe); the crawled
     // row itself is unchanged.
     // Memoized on the crawled row, so a rebuild of the directory screens only
     // the rows the crawl has replaced since the last one.
-    const served = screenToolForServe(t, t?.category, route);
+    const served = memo ? screenToolForServe(t, t?.category, route)
+      : (t && typeof t === "object"
+        ? Object.freeze(screenListingForServe({ name: t.name, description: t.description, category: t?.category, tags: t.tags }, { fallbackName: route }))
+        : screenToolForServe(t, t?.category, route));
     const description = String(served.description || "").trim();
     const flatRow = {
       ours: false,
@@ -9803,9 +9832,9 @@ function flatRowsForEntry(origin, v, self, seen, out) {
     // A flagged row carries the marker. Added after the literal, so the common
     // unflagged row keeps one shape and builds on the literal's fast path.
     if (served.finding) Object.assign(flatRow, untrustedMarker(served.finding));
-    out.push(flatRow);
+    return flatRow;
   }
-  }
+}
 
 let flatCache = { at: 0, rows: [], self: "" };
 const FLAT_TTL_MS = 60_000;
@@ -9846,7 +9875,9 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
   for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out);
   return finishFlat(out, self);
 }
+let flatBuilds = 0;
 function finishFlat(out, self) {
+  flatBuilds++;
   // No sort: every consumer groups or counts (interleaveBySeller orders the
   // rows itself), and a 100k-row sort was most of a rebuild's longest turn.
   flatCache = { at: Date.now(), rows: out, self };
@@ -9888,7 +9919,89 @@ export function indexedToolCategories(excludeOrigin = "") {
   return value.map((c) => ({ ...c }));
 }
 
-export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; }
+/** indexedToolCategories, from the database-backed directory when it is on. */
+export async function indexedToolCategoriesAsync(excludeOrigin = "") {
+  if (listingsOn()) return listings.categories(excludeOrigin);
+  return indexedToolCategories(excludeOrigin);
+}
+
+// ---------------------------------------------------------------------------
+// Database-backed directory (INDEX_LISTINGS_STORE=pg, src/index-listings-pg.js)
+// ---------------------------------------------------------------------------
+// Off by default. On, no container builds the flattened directory in memory:
+// each writes the origins that changed and a page is a query.
+let listings = null;
+let listingsSelf = "";
+let listingsFlushTimer = null;
+const LISTINGS_FLUSH_MS = 2_000;
+function listingsOn() { return Boolean(listings) && listingsStoreEnabled(); }
+function listingRowsForOrigin(origin) {
+  if (origin === listings.oursOrigin) return listings.oursListing();
+  const v = cache.get(origin);
+  if (!v) return null; // gone from the cache: its rows go too
+  const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
+  const out = { sellerKey: sellerName || origin, sellerName, rows: [] };
+  // Cached but not listed (an error, a failing health score): no rows, but the
+  // origin keeps its place in insertion order, as the cache keeps it.
+  if (!directoryListsEntry(origin, v, listingsSelf)) return out;
+  const seen = new Set();
+  for (const t of v?.tools || []) {
+    const route = t?.route || "/";
+    const method = t?.method || "POST";
+    const key = `${method} ${route}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.rows.push({ method, route, t, flat: flatRowOf(origin, t, sellerName, { memo: false }) });
+  }
+  return out;
+}
+function listingsChanged(origin) {
+  listings.markDirty(origin);
+  if (!listingsFlushTimer) {
+    listingsFlushTimer = setTimeout(() => {
+      listingsFlushTimer = null;
+      listings.flush().catch((e) => console.warn(`[listings] flush failed: ${String(e?.message || e).slice(0, 120)}`));
+    }, LISTINGS_FLUSH_MS);
+    listingsFlushTimer.unref?.();
+  }
+}
+/**
+ * Turn the database-backed directory on for this process (no-op unless
+ * INDEX_LISTINGS_STORE=pg and a state database is configured). Called once at
+ * boot with the server's own origin, which is never listed; every origin
+ * already cached is marked, so the first flush is the backfill (an origin
+ * whose stored rows already match is a hash compare, not a write).
+ */
+export function configureListingsStore({ excludeOrigin = "", ourTools = null } = {}) {
+  if (!listingsStoreEnabled()) return false;
+  listingsSelf = String(excludeOrigin || "").replace(/\/+$/, "").toLowerCase();
+  if (!listings) {
+    listings = createListingsStore({
+      rowsForOrigin: listingRowsForOrigin,
+      keyForOrigin: (origin) => {
+        if (origin === listings?.oursOrigin) return listings.oursListing().sellerKey || null;
+        const v = cache.get(origin);
+        return v ? (servedSellerNameOn(v, v?.manifest?.name, origin) || origin) : null;
+      },
+      projectRow: (origin, t, sellerName) => flatRowOf(origin, t, sellerName, { memo: false }),
+      collate: (a, b) => collate(String(a), String(b)),
+      terms: (q) => queryTerms(q, { max: 8 }),
+      hayOf: directoryHayOf,
+    });
+  }
+  if (Array.isArray(ourTools)) listings.setOurs(ourTools);
+  for (const origin of cache.keys()) listings.markDirty(origin);
+  return true;
+}
+/** Operator detail for the database-backed directory (null when off). */
+export function listingsStoreStatus() { return listingsOn() ? listings.status() : null; }
+/** Test hooks. */
+export function _listingsStoreForTest() { return listings; }
+export function _resetListingsStoreForTest() { listings = null; listingsSelf = ""; if (listingsFlushTimer) clearTimeout(listingsFlushTimer); listingsFlushTimer = null; }
+/** How many times the in-memory flattened directory was built (the store keeps it at zero). */
+export function _flatBuildsForTest() { return flatBuilds; }
+
+export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; categoriesMemo = { rows: null, value: null }; }
 export function _resetIndexRowsForTest() { indexRowsMemo = { key: null, at: 0, rows: null }; }
 // KNOWN ROUTER LIMITATION (found 2026-09-01): the resolver's
 // liveness probe sends an empty `{}` and treats only HTTP 402 as "live". A
