@@ -44,9 +44,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # OpenClaw 2026.9.x requires Node >= 24.16 (2026.8.x still accepted 22.22):
-          # the host must install before the plugin can be judged at all.
+          # OpenClaw 2026.9.x requires Node >= 24.16 (2026.8.x still accepted 22.22)
+          # and 2026.10.6 requires >= 24.22.1: the host must install before the
+          # plugin can be judged at all. check-latest takes the newest 24.x
+          # instead of the runner's cached one, so a host raising its floor
+          # within 24.x does not fail the install again.
           node-version: "24"
+          check-latest: true
       - name: Which version is pinned, and which is newest
         id: versions
         run: |
