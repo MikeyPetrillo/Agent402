@@ -6,6 +6,14 @@ import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
 
+/** Whether a re-sent x402 payment on `def`'s route may replay its first
+ *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
+ *  route whose effect outlives the answer, never on an identity-bound route,
+ *  never for a streamed call. The two predicates are the server's own. */
+export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBound }) {
+  return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
+}
+
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall.
  *  implicitReplay(req): true when a re-sent x402 payment on this route may be
  *  answered from its first answer (the server excludes routes with a lasting

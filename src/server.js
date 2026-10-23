@@ -592,7 +592,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { createIdempotency } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
@@ -9577,10 +9577,7 @@ if (!FREE_MODE) {
 app.use(createIdempotency({
   isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
   freeMode: FREE_MODE,
-  implicitReplay: (req) => {
-    const def = CATALOG[`${req.method} ${req.path}`];
-    return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBoundRoute(def) && req.body?.stream !== true;
-  },
+  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
   onReplay: (req, { implicit }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
