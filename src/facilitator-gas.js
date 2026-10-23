@@ -61,14 +61,17 @@ export function runwayOf(balanceWei, gasPriceWei, gasPerSettlement) {
 
 /** The floor alarm's settings, env-tunable: the share of the chain's price
  *  floor one settlement's gas may reach before the word reads low, the gas
- *  units one settlement uses, and how long a last good ETH price stands in
- *  for a failed read. */
+ *  units one settlement uses, how long an ETH price is reused before it is
+ *  read again (an upstream with a monthly credit budget), and how long a last
+ *  good ETH price stands in for a failed read (one TTL plus an hour by
+ *  default, so a single failed refresh does not read unknown). */
 export function floorGasSettings(env = process.env) {
   const share = Number(env.FLOOR_GAS_ALARM_SHARE);
   return {
     share: Number.isFinite(share) && share > 0 && share <= 1 ? share : 0.8,
     gasUnits: num(env.FLOOR_GAS_UNITS, 85_400),
-    priceMaxAgeMs: num(env.FLOOR_GAS_PRICE_MAX_AGE_MS, 60 * 60_000),
+    priceTtlMs: num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000),
+    priceMaxAgeMs: num(env.FLOOR_GAS_PRICE_MAX_AGE_MS, num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000) + 60 * 60_000),
   };
 }
 
@@ -94,11 +97,15 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
     const floor = Number(typeof floorUsd === "function" ? floorUsd() : floorUsd) || 0;
     if (!(floor > 0)) return null;
     let error = null;
-    try {
-      const usd = Number(await readEthUsd());
-      if (Number.isFinite(usd) && usd > 0) lastPrice = { usd, at };
-      else error = "ETH price read answered no price";
-    } catch (e) { error = String(e?.message || e).slice(0, 120); }
+    // ETH/USD is read at most once per TTL; between reads the last good price
+    // stands. A failed read is retried on the next check.
+    if (!lastPrice || at - lastPrice.at >= settings.priceTtlMs) {
+      try {
+        const usd = Number(await readEthUsd());
+        if (Number.isFinite(usd) && usd > 0) lastPrice = { usd, at };
+        else error = "ETH price read answered no price";
+      } catch (e) { error = String(e?.message || e).slice(0, 120); }
+    }
     let reading;
     if (!lastPrice || at - lastPrice.at > settings.priceMaxAgeMs) {
       reading = row({ status: "unknown", reason: "ethPriceUnread", floorUsd: floor, error: error || "no ETH price yet", at });
