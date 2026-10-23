@@ -434,6 +434,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.equal(await word(), "ok", "their unreadable signer is covered too");
       m.noteRelayerGas([theirs(), ours({ status: "low", runway: 40 })]);
       assert.equal(await word(), "low", "ours low: not covered");
+      assert.equal((await m.status({ fresh: true, full: true })).facilitatorFunds.relayersCovered, 0, "ours low: their wallet is not counted as covered");
       m.noteRelayerGas([theirs(), ours({ status: "unread", runway: null })]);
       assert.equal(await word(), "low", "ours unread: not covered");
       m.noteRelayerGas([theirs({ network: "eip155:8453" }), ours()]);
