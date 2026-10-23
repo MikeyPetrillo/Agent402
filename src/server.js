@@ -61,7 +61,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
-import { paidPriceUsd } from "./paid-price.js";
+import { paidPriceUsd, quotedOnNetworkUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -10143,7 +10143,11 @@ app.use((req, res, next) => {
             wire: rail === "usdc" ? wireFor() : null,
             // The quoted ceiling on a metered route, so the ledger can prove the
             // settled amount sat under it (GET /api/proof).
-            quoteUsd: typeof def?.quote === "function" && Number.isFinite(req?.__meteredQuoteUsd) ? req.__meteredQuoteUsd : null,
+            // On an x402 settle it is the quote that chain offered (its premium
+            // and floor applied), the same basis the price above is booked on.
+            quoteUsd: typeof def?.quote === "function" && Number.isFinite(req?.__meteredQuoteUsd)
+              ? (rail === "usdc" && !req.tempoSettled && !req.stripeSettled ? quotedOnNetworkUsd(req.__meteredQuoteUsd, decodeSettleReceipt(settleReceipt)?.network) : req.__meteredQuoteUsd)
+              : null,
             // sha256 of the JSON body served (dispatcher), so POST /api/attest
             // can bind a settlement to the bytes the buyer received.
             responseSha256: req.__responseSha256 || null,

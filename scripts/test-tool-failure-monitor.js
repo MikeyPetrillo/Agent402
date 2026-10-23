@@ -441,7 +441,20 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
     // Settlement gas against the price floor. At 0.02 gwei x 85.4k gas one
     // settlement burns 1.708e-6 ETH; against a 0.006 floor at an 80% share the
     // alarm trips above about 2,810 USD per ETH.
-    const floorSettings = { ...floorGasSettings({}), share: 0.8, gasUnits: 85_400, priceMaxAgeMs: 60 * 60_000 };
+    // priceTtlMs 0: these checks re-read the price every time; the TTL has its own check below.
+    const floorSettings = { ...floorGasSettings({}), share: 0.8, gasUnits: 85_400, priceTtlMs: 0, priceMaxAgeMs: 60 * 60_000 };
+    await check("floor gas: the ETH price is read at most once per TTL (an hour by default), then again", async () => {
+      const c = clock();
+      let reads = 0;
+      const d = floorGasSettings({});
+      assert.equal(d.priceTtlMs, 60 * 60_000, "default TTL is an hour");
+      assert.ok(d.priceMaxAgeMs > d.priceTtlMs, "a last good price outlives one TTL, so one failed refresh does not read unknown");
+      const f = createFloorGasCheck({ network: NET, floorUsd: () => 0.006, readEthUsd: async () => { reads++; return 2500; }, settings: { ...d, share: 0.8 }, now: c.now, log: () => {} });
+      for (let i = 0; i < 6; i++) { await f.check(20_000_000n); c.t += 10 * 60_000; }
+      assert.equal(reads, 1, `six checks ten minutes apart read the price once (${reads})`);
+      await f.check(20_000_000n);
+      assert.equal(reads, 2, "the next check after the TTL reads it again");
+    });
     await check("floor gas: under the share of the floor it reads ok; over it, low with gasNearFloor and facilitatorFunds low", async () => {
       const c = clock();
       const m = createToolFailureMonitor({ now: c.now, env: {} });
