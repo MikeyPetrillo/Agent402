@@ -48,6 +48,7 @@ const TOKEN_ABI = parseAbi([
   "function name() view returns (string)",
   "function version() view returns (string)",
   "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
 ]);
 const MULTI_ABI = parseAbi(["function tryAggregate(bool requireSuccess, (address target, bytes callData)[] calls) returns ((bool success, bytes returnData)[])"]);
 
@@ -110,6 +111,19 @@ function stubChain() {
     type: "0x2", contractAddress: null, logsBloom: "0x" + "00".repeat(256),
     logs: logs.map((l, i) => ({ ...l, blockNumber: toHex(st.block), blockHash: pad(toHex(st.block), { size: 32 }), transactionHash: hash, transactionIndex: "0x0", logIndex: toHex(i), removed: false })),
   });
+  /** A transfer some other submitter landed for (from, nonce): used, moved, logged. */
+  st.landFor = ({ from, to, value, nonce }) => {
+    st.block++;
+    const hash = keccak256(toHex(`facilitator-${from}-${nonce}`));
+    st.used.add(`${lc(from)}|${nonce}`);
+    st.balances.set(lc(from), bal(from) - BigInt(value));
+    st.balances.set(lc(to), bal(to) + BigInt(value));
+    st.receipts.set(hash, receiptOf(hash, OTHER, true, [
+      { address: TOKEN, topics: encodeEventTopics({ abi: TOKEN_ABI, eventName: "Transfer", args: { from, to } }), data: encodeAbiParameters([{ type: "uint256" }], [BigInt(value)]) },
+      { address: TOKEN, topics: encodeEventTopics({ abi: TOKEN_ABI, eventName: "AuthorizationUsed", args: { authorizer: from, nonce } }), data: "0x" },
+    ]));
+    return hash;
+  };
   async function handle(method, params) {
     switch (method) {
       case "eth_chainId": return toHex(CHAIN_ID);
@@ -160,10 +174,21 @@ function stubChain() {
         st.balances.set(lc(aFrom), bal(aFrom) - value);
         st.balances.set(lc(aTo), bal(aTo) + value);
         const topics = encodeEventTopics({ abi: TOKEN_ABI, eventName: "Transfer", args: { from: aFrom, to: aTo } });
-        st.receipts.set(hash, receiptOf(hash, from, true, [{ address: TOKEN, topics, data: encodeAbiParameters([{ type: "uint256" }], [value]) }]));
+        st.receipts.set(hash, receiptOf(hash, from, true, [{ address: TOKEN, topics, data: encodeAbiParameters([{ type: "uint256" }], [value]) },
+          { address: TOKEN, topics: encodeEventTopics({ abi: TOKEN_ABI, eventName: "AuthorizationUsed", args: { authorizer: aFrom, nonce } }), data: "0x" }]));
         return hash;
       }
       case "eth_getTransactionReceipt": return st.receipts.get(params[0]) || null;
+      case "eth_getBlockByNumber": return { number: params[0], timestamp: toHex(Math.floor(Date.now() / 1000) - Number(st.block - BigInt(params[0]))) };
+      case "eth_getLogs": {
+        const f = params[0]; const lo = BigInt(f.fromBlock), hi = BigInt(f.toBlock); const out = [];
+        for (const r of st.receipts.values()) for (const l of r.logs) {
+          const n = BigInt(l.blockNumber);
+          if (n < lo || n > hi || !isAddressEqual(l.address, f.address)) continue;
+          if ((f.topics || []).every((t, i) => t == null || String(l.topics[i]).toLowerCase() === String(t).toLowerCase())) out.push(l);
+        }
+        return out;
+      }
       case "eth_getTransactionByHash": return null;
       default: throw Object.assign(new Error(`method ${method} not stubbed`), { rpcCode: -32601 });
     }
@@ -511,21 +536,31 @@ await check("the gas check reads our relayer as a facilitator of its own", async
 });
 
 // ---------------------------------------------------------------- paid-mode boot
+const CDN_SECRET = "cdn-origin-secret-for-tests-0123456789";
 // The caller path: a paid server whose one listed Robinhood facilitator
 // reverts every settle. With ROBINHOOD_RELAYER_KEY the payment settles
 // through our relayer and the buyer gets 200; without it the buyer gets 402
 // and our relayer sends nothing, as before.
-async function bootAndPay({ withKey }) {
+async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait = "" }) {
   const [PORT, BASE_FAC, RH1] = await getFreePorts(3);
   const json = (res, s, o) => { res.writeHead(s, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
   const stub = (h) => createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* empty */ } h(req, res, body); }); });
   const rhAsked = { settle: 0 };
+  const res502 = (r) => { r.writeHead(502, { "content-type": "text/plain" }); r.end("bad gateway"); };
   const servers = [
     [stub((q, r) => q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }) : q.url === "/rpc" ? json(r, 200, { jsonrpc: "2.0", id: 1, result: "0x0" }) : json(r, 404, {})), BASE_FAC],
     [stub((q, r, b) => {
       if (q.url === "/supported") return json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: RH }], extensions: [], signers: {} });
       if (q.url === "/verify") return json(r, 200, { isValid: true, payer: b?.paymentPayload?.payload?.authorization?.from });
-      if (q.url === "/settle") { rhAsked.settle++; return json(r, 200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH }); }
+      if (q.url === "/settle") {
+        rhAsked.settle++;
+        if (primary === "502-lands" || primary === "502") {
+          // It broadcast (or not), then its answer is lost: an ambiguous 502.
+          if (primary === "502-lands") { const a = b?.paymentPayload?.payload?.authorization; st.landFor({ from: a.from, to: a.to, value: a.value, nonce: a.nonce }); }
+          res502(r); return;
+        }
+        return json(r, 200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH });
+      }
       return json(r, 404, {});
     }), RH1],
   ];
@@ -538,6 +573,8 @@ async function bootAndPay({ withKey }) {
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
     ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),
     PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
+    LATE_SETTLE_FILE: join(tmp, "late.json"), ...(outageWait ? { ROBINHOOD_AMBIGUOUS_WAIT_MS: outageWait } : {}),
+    ...(cdn ? { CDN_PROXY: "on", CDN_ORIGIN_SECRET: CDN_SECRET, CF_IP_RANGES_EXTRA: "127.0.0.1/32", CDN_SYNC_MAX_SECONDS: "20" } : {}),
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
   const log = [];
   proc.stdout.on("data", (c) => log.push(String(c)));
@@ -554,7 +591,8 @@ async function bootAndPay({ withKey }) {
     const signature = await buyer.signTypedData({ domain: { name: accepted.extra.name, version: accepted.extra.version, chainId: CHAIN_ID, verifyingContract: getAddress(accepted.asset) }, types: AUTH_TYPES, primaryType: "TransferWithAuthorization", message });
     const cred = Buffer.from(JSON.stringify({ x402Version: 2, resource: accepted.resource, accepted, payload: { signature, authorization: { from: message.from, to: message.to, value: String(message.value), validAfter: "0", validBefore: String(message.validBefore), nonce: message.nonce } } })).toString("base64");
     const sends = st.sends.length;
-    const paid = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred } });
+    const cdnHeaders = cdn ? { "x-origin-auth": CDN_SECRET, "cf-connecting-ip": "203.0.113.9" } : {};
+    const paid = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred, ...cdnHeaders } });
     await paid.text();
     return { status: paid.status, ownSends: st.sends.length - sends, primarySettles: rhAsked.settle, log: log.join("") };
   } finally {
@@ -578,6 +616,23 @@ await check("paid server WITHOUT the key: one URL behaves as before (402, our re
   assert.equal(r.primarySettles, 1);
   assert.equal(r.ownSends, 0);
   assert.equal(r.status, 402);
+});
+
+await check("paid server WITH the key: the primary answers 502 after its transfer landed -> read on chain, served once, our relayer sends nothing", async () => {
+  const r = await bootAndPay({ withKey: true, primary: "502-lands", outageWait: "3000" });
+  assert.equal(r.primarySettles, 1);
+  assert.equal(r.ownSends, 0, r.log.slice(-1500));
+  assert.equal(r.status, 200, r.log.slice(-1500));
+  assert.ok(/after primary's ambiguous failure: tx 0x[0-9a-f]{64} \(read on chain\)/.test(r.log), "the outage path recovered it");
+});
+
+await check("paid server WITH the key behind the CDN: a 20 s answer window is shorter than our relayer's worst case -> 402, our relayer not used, the authorization booked", async () => {
+  const r = await bootAndPay({ withKey: true, primary: "502", cdn: true, outageWait: "500" });
+  assert.equal(r.primarySettles, 1);
+  assert.equal(r.ownSends, 0, r.log.slice(-1500));
+  assert.equal(r.status, 402, r.log.slice(-1500));
+  assert.ok(/CDN answer window is shorter than our relayer's worst case/.test(r.log), r.log.slice(-1500));
+  assert.ok(/authorization .* nonce .*: outcome unknown; booked until it is read on chain/.test(r.log), "the late book holds the authorization");
 });
 
 server.close();

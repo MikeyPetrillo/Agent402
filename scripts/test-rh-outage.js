@@ -40,7 +40,7 @@ const TOKEN_ABI = parseAbi([
 ]);
 
 // ------------------------------------------------------------ stub 4663 chain
-const chain = { head: 100_000, used: new Map(), receipts: new Map(), fail: false, reads: 0 };
+const chain = { head: 100_000, used: new Map(), receipts: new Map(), fail: false, reads: 0, hiddenReceipts: new Set() };
 const txh = (s) => keccak256(toHex(String(s)));
 /** A transfer that uses (payer, nonce) and moves `value` to `to` in `tx`. */
 function land({ payer, nonce, to = TREASURY, value = 2500n, tx = txh(`${payer}${nonce}${Math.random()}`), status = "0x1" }) {
@@ -76,7 +76,7 @@ const fetchImpl = async (url, init) => {
     }
     return ok(out);
   }
-  if (method === "eth_getTransactionReceipt") return ok(chain.receipts.get(String(params[0]).toLowerCase()) || null);
+  if (method === "eth_getTransactionReceipt") return ok(chain.hiddenReceipts.has(String(params[0]).toLowerCase()) ? null : (chain.receipts.get(String(params[0]).toLowerCase()) || null));
   return ok(null);
 };
 
@@ -117,19 +117,19 @@ const book = createLateSettleBook({ file: join(dir, "late.json"), rpcFor: (n) =>
 const owed = [];
 
 /** Runs the settle-failure hooks for one failed settlement, core-style. */
-async function settleFails({ p, error, outage, listed = [] }) {
+async function settleFails({ p, error, outage, listed = [], req = null }) {
   const hooks = [];
   const server = { onVerifyFailure() { return this; }, onAfterVerify() { return this; }, onAfterSettle() { return this; }, onSettleFailure(fn) { hooks.push(fn); return this; } };
   const asked = [];
   const listedClients = listed.map((l) => ({ name: l.name, revertRetry: true, confirmed: true, client: { settle: async () => { asked.push(l.name); return l.answer(); } } }));
   registerFacilitatorFailureHooks(server, null, null, { [RH]: () => listedClients }, { outageFor: () => outage });
   registerLateSettleHook(server, async () => book);
-  const ctx = { requirements: p.requirements, paymentPayload: p.paymentPayload, error };
+  const ctx = { requirements: p.requirements, paymentPayload: p.paymentPayload, error, ...(req ? { transportContext: { request: { adapter: { req } } } } : {}) };
   let recovered = null;
   for (const h of hooks) { const r = await h(ctx); if (r?.recovered) { recovered = r; break; } }
   return { ctx, recovered, asked };
 }
-const outageWith = (relayer, waitMs = 400) => createRobinhoodOutage({ network: RH, token: TOKEN, treasury: TREASURY, rpcUrl: RPC_URL, relayer, waitMs, pollMs: 50, fetchImpl, log: () => {} });
+const outageWith = (relayer, waitMs = 400, opts = {}) => createRobinhoodOutage({ network: RH, token: TOKEN, treasury: TREASURY, rpcUrl: RPC_URL, relayer, waitMs, pollMs: 50, fetchImpl, log: () => {}, clientGone: () => false, ...opts });
 
 // ------------------------------------------------------------------- tests
 await check("ambiguous means no transaction, no verdict, not pre-broadcast and not a reverted transfer", () => {
@@ -282,6 +282,61 @@ await check("a listed fallback's ambiguous failure (after the primary reverted) 
   assert.deepEqual(asked, ["listed"]);
   assert.ok(recovered?.result?.success, "served by our relayer after the listed fallback's timeout");
   assert.equal(relayer.sends, 1);
+});
+
+await check("used, its transaction's receipt not readable yet -> 402, the authorization booked and its claim kept (never read as a revert)", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  const tx = land({ payer: p.payer, nonce: p.nonce, tx: txh(`lag-${p.nonce}`) });
+  chain.hiddenReceipts.add(tx.toLowerCase());
+  let r;
+  try { r = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer) }); } finally { chain.hiddenReceipts.delete(tx.toLowerCase()); }
+  assert.equal(r.recovered, null);
+  assert.equal(relayer.sends, 0);
+  assert.equal(r.ctx.__a402LateAuth?.nonce, p.nonce, "booked by authorization");
+  assert.equal(namesUnsettledTx(r.ctx), true, "the authorization stays claimed");
+});
+
+await check("the late book never closes a used authorization as not landed, even when its receipt cannot be read", async () => {
+  const p = payment({ validBefore: Math.floor(Date.now() / 1000) - 10 });
+  const tx = land({ payer: p.payer, nonce: p.nonce, tx: txh(`lagbook-${p.nonce}`) });
+  chain.hiddenReceipts.add(tx.toLowerCase());
+  const booked = await book.book({ network: RH, nonce: p.nonce, payer: p.payer, payTo: TREASURY, asset: TOKEN, amount: "2500", resource: "https://agent402.tools/api/x", validBefore: p.paymentPayload.payload.authorization.validBefore });
+  assert.equal(booked, true);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 2 * 3600_000;
+  try {
+    await book.refresh();
+    for (const e of book.list()) e.nextCheckAt = 0;
+    await book.reconcile();
+    await book.refresh();
+    assert.ok(book.list().some((e) => e.nonce === p.nonce.toLowerCase()), "kept past the window: the authorization was used");
+  } finally { Date.now = realNow; chain.hiddenReceipts.delete(tx.toLowerCase()); }
+});
+
+await check("the buyer left holding a forgiveness ticket -> our relayer is not used, the authorization is booked", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  const { recovered, ctx } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer, 100, { clientGone: () => true }), req: {} });
+  assert.equal(recovered, null);
+  assert.equal(relayer.sends, 0, "no money moved for a buyer who left");
+  assert.equal(ctx.__a402LateAuth?.nonce, p.nonce);
+});
+
+await check("a CDN answer window shorter than our relayer's worst case -> relayer skipped, the authorization booked", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  const req = { cdnSyncDeadlineMs: Date.now() + 20_000 };
+  const { recovered, ctx } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer, 100, { relayerWorstMs: 45_000 }), req });
+  assert.equal(recovered, null);
+  assert.equal(relayer.sends, 0);
+  assert.equal(ctx.__a402LateAuth?.nonce, p.nonce);
+  // A window that covers the worst case lets the relayer settle.
+  __resetSettlementClaims();
+  const p2 = payment(); const relayer2 = makeRelayer("settles", p2);
+  const ok2 = await settleFails({ p: p2, error: ambiguous5xx(), outage: outageWith(relayer2, 100, { relayerWorstMs: 45_000 }), req: { cdnSyncDeadlineMs: Date.now() + 80_000 } });
+  assert.ok(ok2.recovered?.result?.success, "served when the window is wide enough");
+  assert.equal(relayer2.sends, 1);
 });
 
 rmSync(dir, { recursive: true, force: true });

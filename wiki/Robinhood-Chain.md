@@ -60,9 +60,12 @@ unmodified client that takes the first accept it can pay settles on Base. The pr
   With it set, a listed facilitator that errors or times out without saying
   what happened no longer ends the sale: the buyer's authorization is read
   on chain. Used with the transfer to you, the call is served; still unused
-  after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (default 8000, always inside the
-  authorization's own deadline), your settler submits it; if the chain cannot
-  be read, the buyer gets a 402 and the authorization is watched, so a
+  after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (default 8000; the wait always ends
+  inside the authorization's own deadline and, behind a CDN, its answer
+  window), your settler submits it, unless the buyer already left, the
+  deadline leaves no time, or the CDN window is shorter than the settler's
+  lock wait plus receipt wait. When the chain cannot be read, or a decision
+  cannot be made, the buyer gets a 402 and the authorization is watched, so a
   transfer that lands later is recorded as owed.
 - **Tollbooth (≥ 0.4.0)**: `TOLLBOOTH_NETWORK=eip155:4663 TOLLBOOTH_ASSET=USDG`
   quotes crawlers in USDG. To settle it, use the library API -
