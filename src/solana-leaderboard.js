@@ -435,8 +435,20 @@ const refreshSolanaLeaderboardLeased = leased("solana-leaderboard-refresh", { tt
 // The container without the lease skips the scan; it adopts the board the
 // other container saved (when newer) and primes its own gate from it, so both
 // containers hold the same evidence.
+//
+// The lease serializes scans; it does not share them: a tick that landed
+// after the other container's scan had ended held the lease and read every
+// payTo's signatures again, so two containers scanned twice per interval,
+// and every boot kick scanned however fresh the saved board was. A tick now
+// first takes the saved board when its finished scan (`at`) is at least as
+// new as ours and younger than `peerFreshMs` (half the interval), and scans
+// only otherwise; the check runs again under the lease. The cursors in the
+// store keep the next scan incremental. Without a state database nothing
+// changes.
 export async function refreshSolanaLeaderboard(opts = {}) {
-  const r = await refreshSolanaLeaderboardLeased(opts);
+  const peerFreshMs = Number.isFinite(opts.peerFreshMs) ? opts.peerFreshMs : REFRESH_MS / 2;
+  if (!inFlight && await adoptFreshStoredSolanaLeaderboard({ prime: opts.prime, peerFreshMs }).catch(() => false)) return { adopted: true };
+  const r = await refreshSolanaLeaderboardLeased({ ...opts, peerFreshMs });
   if (r && r.skipped) await adoptPeerSolanaLeaderboard({ prime: opts.prime }).catch(() => {});
   return r;
 }
@@ -449,19 +461,38 @@ export async function adoptPeerSolanaLeaderboard(opts = {}) {
   if (inFlight) return false;
   return adoptStoredSolanaLeaderboard(opts);
 }
-async function adoptStoredSolanaLeaderboard({ prime, file = SOLANA_LB_CACHE_FILE } = {}) {
-  const d = docFor(file);
-  const r = await d.read({ quiet: true });
+async function readStoredSolanaLeaderboard(file = SOLANA_LB_CACHE_FILE) {
+  const r = await docFor(file).read({ quiet: true });
   const j = r?.ok && r.exists ? r.body : null;
-  if (!j || !Array.isArray(j.rows)) return false;
+  return j && Array.isArray(j.rows) ? j : null;
+}
+function applyStoredSolanaLeaderboard(j, prime) {
+  current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true };
+  if (typeof prime === "function") for (const row of current.rows) if (!row.unreadable && !row.stale) { try { prime(row.payTo, row.credits); } catch { /* priming is a nicety */ } }
+}
+async function adoptStoredSolanaLeaderboard({ prime, file = SOLANA_LB_CACHE_FILE } = {}) {
+  const j = await readStoredSolanaLeaderboard(file);
+  if (!j) return false;
   const ours = Math.max(Number(current.stateAt) || 0, Number(current.at) || 0);
   const theirs = Math.max(Number(j.stateAt) || 0, Number(j.at) || 0);
   if (!(theirs > ours)) return false;
-  current = { ...emptyBoard(), ...j, state: j.state || {}, warm: true };
-  if (typeof prime === "function") for (const row of current.rows) if (!row.unreadable && !row.stale) { try { prime(row.payTo, row.credits); } catch { /* priming is a nicety */ } }
+  applyStoredSolanaLeaderboard(j, prime);
   return true;
 }
-async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168, checkpointMs = CHECKPOINT_MS } = {}) {
+/**
+ * True when the stored board is this tick's answer: its finished scan is at
+ * least as new as ours (an older one is never taken over a newer one held)
+ * and younger than `peerFreshMs`. Taken when newer; the scan is skipped.
+ */
+async function adoptFreshStoredSolanaLeaderboard({ prime, peerFreshMs, now = Date.now(), file = SOLANA_LB_CACHE_FILE } = {}) {
+  if (!(peerFreshMs > 0) || docFor(file).backend !== "pg") return false;
+  const j = await readStoredSolanaLeaderboard(file);
+  const at = Number(j?.at) || 0, ours = Number(current.at) || 0;
+  if (!(at > 0 && now - at < peerFreshMs) || at < ours) return false;
+  if (at > ours) applyStoredSolanaLeaderboard(j, prime);
+  return true;
+}
+async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx, readFn = null, prime, windowHours = 168, checkpointMs = CHECKPOINT_MS, peerFreshMs = 0 } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
@@ -469,6 +500,8 @@ async function refreshSolanaLeaderboardUnleased({ listPayTos, rpc, creditFromTx,
       // container on the board it loaded at boot, which a checkpoint of the
       // scan the restart cut off (ours or the other container's) can postdate.
       await adoptStoredSolanaLeaderboard({ prime }).catch(() => {});
+      // A scan that ended while the lease was taken: nothing to read.
+      if (await adoptFreshStoredSolanaLeaderboard({ prime, peerFreshMs }).catch(() => false)) return { adopted: true };
       const payTos = await listPayTos();
       const state = (current.state ||= {});
       const budget = { left: BACKFILL_TX_PER_CYCLE };

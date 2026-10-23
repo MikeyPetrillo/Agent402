@@ -339,24 +339,53 @@ let feedState = null; // Tempo transfer-feed state (null until first load/sync)
 let feedStandIn = false; // feedState was started while the stored copy was unreadable
 const refreshMppLeaderboardLeased = leased("mpp-leaderboard-refresh", { ttlMs: 20 * 60_000, failOpen: true }, refreshMppLeaderboardUnleased);
 // The container without the lease adopts the board the other one saved, when newer.
+//
+// The lease serializes rebuilds; it does not share them: a tick that landed
+// after the other container's rebuild had ended held the lease and read the
+// window again, so two containers rebuilt twice per interval, and every boot
+// kick rebuilt however fresh the saved board was. A tick now first takes the
+// saved board when it is at least as new as ours and younger than
+// `peerFreshMs` (half the interval), and rebuilds only otherwise; the check
+// runs again under the lease. Without a state database nothing changes.
 export async function refreshMppLeaderboard(opts = {}) {
-  const r = await refreshMppLeaderboardLeased(opts);
+  const peerFreshMs = Number.isFinite(opts.peerFreshMs) ? opts.peerFreshMs : MPP_LB_REFRESH_MS / 2;
+  if (!inFlight && await adoptFreshPeerMppLeaderboard({ peerFreshMs }).catch(() => false)) return { adopted: true };
+  const r = await refreshMppLeaderboardLeased({ ...opts, peerFreshMs });
   if (r && r.skipped) await adoptPeerMppLeaderboard().catch(() => {});
   return r;
 }
-export async function adoptPeerMppLeaderboard(file = MPP_LB_CACHE_FILE) {
+async function readStoredMppLeaderboard(file = MPP_LB_CACHE_FILE) {
   const d = docFor(file);
-  if (d.backend !== "pg") return false;
+  if (d.backend !== "pg") return null;
   const r = await d.read({ quiet: true });
   const j = r?.ok && r.exists ? r.body : null;
-  if (!wellFormedBoard(j) || !(j.generatedAt > Number(current?.generatedAt || 0))) return false;
+  return wellFormedBoard(j) ? j : null;
+}
+export async function adoptPeerMppLeaderboard(file = MPP_LB_CACHE_FILE) {
+  const j = await readStoredMppLeaderboard(file);
+  if (!j || !(j.generatedAt > Number(current?.generatedAt || 0))) return false;
   current = j;
   return true;
 }
-function refreshMppLeaderboardUnleased(opts = {}) {
+/**
+ * True when the saved board is this tick's answer: at least as new as ours
+ * (an older one is never taken over a newer one held) and younger than
+ * `peerFreshMs`. Taken when newer; the rebuild is skipped.
+ */
+async function adoptFreshPeerMppLeaderboard({ peerFreshMs, now = Date.now(), file = MPP_LB_CACHE_FILE } = {}) {
+  if (!(peerFreshMs > 0)) return false;
+  const j = await readStoredMppLeaderboard(file);
+  const at = Number(j?.generatedAt) || 0, ours = Number(current?.generatedAt) || 0;
+  if (!(at > 0 && now - at < peerFreshMs) || at < ours) return false;
+  if (at > ours) current = j;
+  return true;
+}
+function refreshMppLeaderboardUnleased({ peerFreshMs = 0, ...opts } = {}) {
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
+      // A rebuild that ended while the lease was taken: nothing to read.
+      if (await adoptFreshPeerMppLeaderboard({ peerFreshMs }).catch(() => false)) return current;
       let feed = null;
       if (opts.feed !== undefined) feed = opts.feed; // test injection
       else if (tempoFeedEnabled()) {
