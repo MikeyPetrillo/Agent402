@@ -477,12 +477,22 @@ export function outputSchemaFromExample(example) {
       additionalProperties: true,
     };
   }
+  // Every type written here is a JSON Schema type name: a client compiles
+  // the listed outputSchema (the reference SDK does, at tools/list), and one
+  // name outside the set ("undefined" from an empty example array, "bigint")
+  // makes it refuse the whole listing, not one tool.
+  const jsonType = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+  const JSON_TYPES = new Set(["string", "number", "boolean", "object", "array", "null"]);
   const properties = {};
   for (const [k, v] of Object.entries(example)) {
     if (v === null) properties[k] = { type: ["string", "number", "boolean", "object", "array", "null"] };
-    else if (Array.isArray(v)) properties[k] = { type: "array", items: { type: typeof v[0] === "object" ? "object" : typeof v[0] || "string" } };
+    else if (Array.isArray(v)) {
+      const itemType = v.length ? jsonType(v[0]) : null;
+      properties[k] = { type: "array", ...(itemType && JSON_TYPES.has(itemType) ? { items: { type: itemType } } : {}) };
+    }
     else if (typeof v === "object") properties[k] = { type: "object", additionalProperties: true };
-    else properties[k] = { type: typeof v };
+    else if (JSON_TYPES.has(typeof v)) properties[k] = { type: typeof v };
+    else properties[k] = { description: "Tool JSON value" };
   }
   return { type: "object", properties, additionalProperties: true };
 }
