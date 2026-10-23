@@ -146,6 +146,14 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   while (x._routeIndexStatsForTest().pending || x._routeIndexStatsForTest().partial) await new Promise((r) => setImmediate(r));
   const drained = x.routeQuery({ query: Q, top: 25, ...routeCtx });
   ok(sliced.count > 0 && JSON.stringify([sliced.count, sliced.sellersMatched, sliced.results]) === JSON.stringify([drained.count, drained.sellersMatched, drained.results]), `...and its answer equals the answer once the backlog is indexed (${sliced.count} rows)`);
+  // A pending row is a candidate by the index's own rule: a row that shares
+  // only a non-selecting word ("to", "the") with the query is not one, so a
+  // query whose one real word matches nothing answers nothing, backlog or not.
+  i = 0;
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  const none = await x.routeQueryAsyncInThread({ query: "to the zzqqnomatch", top: 25, include: "external", ...routeCtx });
+  ok(x._routeIndexStatsForTest().pending > 0 || x._routeIndexStatsForTest().partial, "the backlog is still pending for that query");
+  ok(none.count === 0, `a pending row sharing only "to"/"the" with the query is not a candidate (${none.count} rows)`);
 }
 
 // --- 2 + 3. source pins
