@@ -13,7 +13,7 @@
 //   - a price published as an OBJECT is still a price the seller stated; 21
 //     routes published null while carrying {"amountMinor":50,"currency":"USD"}
 import { strict as assert } from "node:assert";
-import { priceToMicroUsd } from "../src/x402-index.js";
+import { priceToMicroUsd } from "../src/price-usd.js";
 
 let n = 0;
 const eq = (a, b, m) => { assert.equal(a, b, m); n++; };
