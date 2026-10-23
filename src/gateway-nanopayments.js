@@ -728,8 +728,15 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
     // so read the refund ledger now. A debt booked for this transfer (its
     // entry's drop may have failed) means the buyer is repaid: never served.
     if (typeof owedExists === "function") {
-      let owed = true;
-      try { owed = !!(await owedExists(found.transfer.id)); } catch { owed = true; }
+      // A ledger that cannot be read says nothing either way: the resend is
+      // told to wait and the entry handed back, never closed as owed (no
+      // debt may exist, and a closed entry is never read again).
+      let owed;
+      try { owed = !!(await owedExists(found.transfer.id)); } catch { owed = null; }
+      if (owed === null) {
+        try { await pendingBook.releaseResume(key, owner); } catch { /* the hold lapses on its own */ }
+        return { outcome: "pending", key };
+      }
       if (owed) {
         let dropped = false;
         try { dropped = (await pendingBook.resolve(key, { outcome: "owed", note: "an owed debt is booked for this transfer" }))?.ok === true; } catch { dropped = false; }

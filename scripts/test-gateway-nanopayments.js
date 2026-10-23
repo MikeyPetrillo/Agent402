@@ -64,12 +64,13 @@ import {
   installGatewayRouting, isGatewayBatchedPayment, preflightGatewayPayment, createGatewayPendingBook, gatewayBalanceStatus,
   refreshGatewayBalance, _resetGatewayBalanceForTests, startGatewayBalanceWatch, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled,
   CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf,
-  gatewayPendingLost, _resetGatewayPendingLostForTests, byTransferIdAnyCase,
+  gatewayPendingLost, _resetGatewayPendingLostForTests, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
 } from "../src/gateway-nanopayments.js";
-import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader } from "../src/gateway-wire.js";
+import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader, isGatewayBatchedRequest, isGatewayWire } from "../src/gateway-wire.js";
 import { hintFor } from "../src/verify-hint.js";
 import { verifyInboundPayment } from "../src/payment-verify.js";
-import { registerFacilitatorFailureHooks } from "../src/payments.js";
+import { registerFacilitatorFailureHooks, gatewayPendingBookWanted, acceptsForItem } from "../src/payments.js";
+import { EventEmitter } from "node:events";
 import { planRefunds, executeRefunds, GATEWAY_NO_ID_HOLD } from "./refund-run.js";
 import { CIRCLE_FACILITATOR_BASE } from "../src/circle-supported.js";
 import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
@@ -102,12 +103,12 @@ const TYPES = { TransferWithAuthorization: [
   { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
 ] };
 /** A payment signed under the Gateway domain (or, with `domain`, another one). */
-async function signed({ accept, chainId, value = accept.amount, to = accept.payTo, domain = null, validBefore = now() + 604900, signer = acct, resource = "https://example.invalid/api/x" } = {}) {
-  const authorization = { from: signer.address, to, value: String(value), validAfter: "0", validBefore: String(validBefore), nonce: nonce() };
+async function signed({ accept, chainId, value = accept.amount, to = accept.payTo, domain = null, validBefore = now() + 604900, validAfter = 0, signer = acct, resource = "https://example.invalid/api/x" } = {}) {
+  const authorization = { from: signer.address, to, value: String(value), validAfter: String(validAfter), validBefore: String(validBefore), nonce: nonce() };
   const signature = await signer.signTypedData({
     domain: domain || { name: GATEWAY_KIND_NAME, version: "1", chainId, verifyingContract: accept.extra.verifyingContract },
     types: TYPES, primaryType: "TransferWithAuthorization",
-    message: { ...authorization, value: BigInt(authorization.value), validAfter: 0n, validBefore: BigInt(authorization.validBefore) },
+    message: { ...authorization, value: BigInt(authorization.value), validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) },
   });
   return { x402Version: 2, resource: typeof resource === "string" ? { url: resource } : resource, accepted: accept, payload: { authorization, signature } };
 }
@@ -207,7 +208,7 @@ const fetchStub = async (url, init = {}) => {
   }
   const body = init.body ? JSON.parse(init.body) : {};
   const payer = body.paymentPayload?.payload?.authorization?.from;
-  if (path === "/v1/x402/verify") return json(200, { isValid: true, payer });
+  if (path === "/v1/x402/verify") return gw.mode === "verifyno" ? json(200, { isValid: false, invalidReason: "insufficient_balance", payer }) : json(200, { isValid: true, payer });
   if (path === "/v1/x402/settle") {
     if (gw.acceptOnSettle) gw.transfers.push(recordFor(body.paymentPayload, gw.acceptOnSettle));
     if (gw.mode === "timeout") throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
@@ -215,6 +216,7 @@ const fetchStub = async (url, init = {}) => {
     if (gw.mode === "json503") return json(503, { errors: [{ reason: "service_unavailable" }] });
     if (gw.mode === "badjson") return json(200, "{not json");
     if (gw.mode === "badshape") return json(200, { ok: "yes" });
+    if (gw.mode === "othernet") return json(200, { success: true, transaction: uuid(), network: "eip155:5042", payer });
     if (gw.mode === "upperid") return json(200, { success: true, transaction: uuid().toUpperCase(), network: body.paymentRequirements.network, payer });
     if (gw.mode === "html500") return json(500, `<html>${MARKER}</html>`, "text/html");
     if (gw.mode === "status402") return json(402, { success: false, errorReason: "insufficient_balance", transaction: "", network: body.paymentRequirements.network });
@@ -906,6 +908,257 @@ await check("a gateway-batched debt is proven by Gateway's transfer record and r
   // Control: the same row under the plain wire takes the chain path (and, with no RPC, is held there).
   const plain = await verify({ ...plan.send[0], wire: "x402" });
   assert.equal(plain.verified, false); assert.match(plain.reason, /no RPC configured|no usable transaction hash/);
+});
+
+// ---- Decision guards: each check below pins one decision the money path makes.
+await check("transfer records: a record is this authorization only on its nonce, payer, payTo, exact amount, USDC and network; an unknown status is unreadable", async () => {
+  const p = await signed({ accept: baseAccept, chainId: 8453 });
+  const want = { payer: acct.address, payTo: TREASURY, amount: "5000", nonce: p.payload.authorization.nonce, network: "eip155:8453" };
+  const norm = (over) => normalizeGatewayTransfer(recordFor(p, "confirmed", over));
+  assert.equal(gatewayTransferMatches(norm({}), want), true, "control: the record for this authorization matches");
+  assert.equal(gatewayTransferMatches(norm({ nonce: nonce() }), want), false, "another nonce");
+  assert.equal(gatewayTransferMatches(norm({ token: "EURC" }), want), false, "another token");
+  assert.equal(gatewayTransferMatches(norm({ amount: "5001" }), want), false, "more than the amount is not this authorization either");
+  assert.equal(normalizeGatewayTransfer(recordFor(p, "reverted")), null, "a status outside Gateway's documented set is not a shape we read");
+  gw.transfers.push(recordFor(p, "reverted"));
+  const look = await client.transferByAuthorization(want);
+  assert.equal(look.state, "unreadable", `an unknown status for this nonce reads unreadable, never accepted (${look.state})`);
+});
+await check("preflight: self-transfer, a value above the price, the validity window edges, a v1 payload, a mismatched accepted network and a high-s signature are refused before Gateway", async () => {
+  const r = async (p, req = baseAccept) => (await preflightGatewayPayment(p, req, kinds))?.reason;
+  const selfAccept = { ...baseAccept, payTo: acct.address };
+  assert.equal(await r(await signed({ accept: selfAccept, chainId: 8453 }), selfAccept), "self_transfer");
+  assert.equal(await r(await signed({ accept: baseAccept, chainId: 8453, value: "5001" })), "amount_mismatch", "a value above the price is refused too");
+  assert.equal(await r(await signed({ accept: baseAccept, chainId: 8453, validAfter: now() })), undefined, "valid from this second: passes");
+  assert.equal(await r(await signed({ accept: baseAccept, chainId: 8453, validAfter: now() + 120 })), "authorization_not_yet_valid");
+  assert.equal(await r(await signed({ accept: baseAccept, chainId: 8453, validBefore: now() + 3 })), "authorization_expired", "inside the six-second margin");
+  const good = await signed({ accept: baseAccept, chainId: 8453 });
+  assert.equal(await r({ ...good, x402Version: 1 }), "invalid_payload", "a v1 payload");
+  assert.equal(await r({ ...good, accepted: { ...baseAccept, network: "eip155:5042" } }), "unsupported_network", "accepted names another network than the requirement");
+  const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+  const sig = good.payload.signature;
+  const highS = `0x${sig.slice(2, 66)}${(N - BigInt(`0x${sig.slice(66, 130)}`)).toString(16).padStart(64, "0")}${sig.slice(130) === "1b" ? "1c" : "1b"}`;
+  assert.equal(await r({ ...good, payload: { ...good.payload, signature: highS } }), "invalid_signature", "the high-s twin of a valid signature (a second encoding of one payment)");
+});
+await check("client: Gateway's isValid:false is a refusal; a settle success naming another network is not proof (booked as unresolved)", async () => {
+  try {
+    gw.mode = "verifyno";
+    const v = await client.verify(await signed({ accept: baseAccept, chainId: 8453 }), baseAccept);
+    assert.deepEqual(v, { isValid: false, invalidReason: "insufficient_balance", payer: acct.address });
+    gw.mode = "othernet"; pendings.length = 0;
+    const s = await client.settle(await signed({ accept: baseAccept, chainId: 8453 }), baseAccept);
+    assert.equal(s.success, false); assert.equal(s.errorReason, "settlement_pending");
+    assert.equal(pendings.length, 1);
+  } finally { gw.mode = "ok"; }
+});
+await check("/supported: a USDC listing with other decimals is no kind; the balance word reads withdraw at exactly the alert", async () => {
+  const d18 = structuredClone(SUPPORTED); d18.kinds[1].extra.assets[0].decimals = 18;
+  assert.equal(gatewayKindsFromSupported(d18).has("eip155:8453"), false);
+  _resetGatewayBalanceForTests();
+  startGatewayBalanceWatch(client, { depositor: TREASURY, domains: [6, 26], intervalMs: 3_600_000 });
+  await refreshGatewayBalance(client, { depositor: TREASURY, domains: [6, 26] });
+  assert.deepEqual(gatewayBalanceStatus({ env: { GATEWAY_WITHDRAW_ALERT_USD: "30.5" } }), { status: "withdraw" });
+  _resetGatewayBalanceForTests();
+});
+await check("wire: the X-PAYMENT header is read when Payment-Signature is absent; only the exact wire name is the batched wire", () => {
+  const h = Buffer.from(JSON.stringify({ accepted: baseAccept })).toString("base64");
+  assert.equal(isGatewayBatchedRequest({ header: (n) => (n === "x-payment" ? h : undefined) }), true);
+  assert.equal(isGatewayWire("gateway-batched-v2"), false);
+  assert.equal(isGatewayWire("gateway"), false);
+  assert.equal(settlementKindOf("gateway-batched-v2"), "onchain");
+});
+await check("payments: the batched accept respects a tool's onlyNetworks; the pending book is wanted with a state database even with the switch off", () => {
+  const gk = new Map([["eip155:8453", baseKind], ["eip155:5042", kinds.get("eip155:5042")]]);
+  const rails = { evmCaip2: ["eip155:8453", "eip155:5042"], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: TREASURY, gatewayKinds: gk };
+  const accepts = acceptsForItem({ slug: "hash", price: "$0.005", onlyNetworks: ["eip155:5042"] }, rails);
+  const batchedNets = accepts.filter((a) => a.extra?.name === GATEWAY_KIND_NAME).map((a) => a.network);
+  assert.deepEqual(batchedNets, ["eip155:5042"], `batched only where the tool can be served (${batchedNets})`);
+  assert.equal(gatewayPendingBookWanted({ STATE_DATABASE_URL: "postgres://x/y", GATEWAY_PENDING_FILE: "/nonexistent/p.json" }), true);
+  assert.equal(gatewayPendingBookWanted({ GATEWAY_PENDING_FILE: "/nonexistent/p.json" }), false, "control");
+});
+
+/** A routed resource server over a fresh pending book. */
+async function routed(opts = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-guard-"));
+  const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {} });
+  await book.ready;
+  const bc = new GatewayNanopaymentsClient({ fetchImpl: fetchStub, networks: ["eip155:8453"], onPending: (e) => book.book(e), pendingWaitMs: 60, pendingPollMs: 30 });
+  await bc.getSupported();
+  const plainClient = { async getSupported() { return { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }; }, async verify() { throw new Error("plain verify must not be asked"); }, async settle() { throw new Error("plain settle must not be asked"); } };
+  const server = new x402ResourceServer([plainClient]).register("eip155:8453", new ExactEvmScheme());
+  await server.initialize();
+  installGatewayRouting(server, bc, new Set(["eip155:8453"]), { pendingBook: opts.bookView ? opts.bookView(book) : book, ...opts.routing });
+  // Books a pending entry for a fresh payment (through a real pending settle).
+  const pend = async (tc) => {
+    gw.mode = "pending";
+    const p = await signed({ accept: baseAccept, chainId: 8453 });
+    await server.verifyPayment(p, baseAccept, undefined, tc);
+    await server.settlePayment(p, baseAccept, undefined, tc);
+    gw.mode = "ok";
+    return { p, key: pendingKey("eip155:8453", acct.address, p.payload.authorization.nonce) };
+  };
+  return { dir, book, server, pend, done: () => { gw.mode = "ok"; rmSync(dir, { recursive: true, force: true }); } };
+}
+await check("resend guards: a forged signature on a booked authorization is refused; an unreadable book, a pending record with no wasServed, and a failing wasServed or owedExists all answer pending and keep the entry", async () => {
+  {
+    const r = await routed({ routing: { wasServed: async () => false } });
+    try {
+      const { p, key } = await r.pend();
+      gw.transfers.push(recordFor(p, "confirmed"));
+      const other = privateKeyToAccount(generatePrivateKey());
+      const forged = { ...p, payload: { ...p.payload, signature: await other.signTypedData({ domain: { name: GATEWAY_KIND_NAME, version: "1", chainId: 8453, verifyingContract: GW_WALLET }, types: TYPES, primaryType: "TransferWithAuthorization", message: { ...p.payload.authorization, value: 5000n, validAfter: 0n, validBefore: BigInt(p.payload.authorization.validBefore) } }) } };
+      const v = await r.server.verifyPayment(forged, baseAccept);
+      assert.deepEqual([v.isValid, v.invalidReason], [false, "invalid_signature"], "the payer and nonce of someone's pending payment never buy a call without its signature");
+      assert.ok(await r.book.get(key), "the entry stays");
+    } finally { r.done(); }
+  }
+  {
+    const r = await routed({ bookView: (b) => ({ ...b, get: async () => { throw new Error("store down"); } }), routing: { wasServed: async () => false } });
+    try {
+      const { p } = await r.pend();
+      gw.calls.length = 0;
+      const v = await r.server.verifyPayment(p, baseAccept);
+      assert.deepEqual([v.isValid, v.invalidReason], [false, "settlement_pending"], "an unreadable book answers pending");
+      assert.equal(gw.calls.filter((c) => /\/v1\/x402\/(verify|settle)$/.test(c.url)).length, 0, "and never asks Gateway to verify the authorization again");
+    } finally { r.done(); }
+  }
+  {
+    const r = await routed({ routing: { owedExists: async () => false } });
+    try {
+      const { p, key } = await r.pend();
+      const v = await r.server.verifyPayment(p, baseAccept);
+      assert.deepEqual([v.isValid, v.invalidReason], [false, "settlement_pending"], "no record yet (no wasServed wired): pending");
+      assert.equal((await r.book.get(key))?.state, "pending", "the entry stays, unheld");
+    } finally { r.done(); }
+  }
+  {
+    const r = await routed({ routing: { wasServed: async () => { throw new Error("ledger down"); }, owedExists: async () => false } });
+    try {
+      const { p, key } = await r.pend();
+      gw.transfers.push(recordFor(p, "confirmed"));
+      const v = await r.server.verifyPayment(p, baseAccept);
+      assert.deepEqual([v.isValid, v.invalidReason], [false, "settlement_pending"], "a sale lookup that fails never serves (it may already be served)");
+      assert.equal((await r.book.get(key))?.state, "pending");
+    } finally { r.done(); }
+  }
+  {
+    const r = await routed({ routing: { wasServed: async () => false, owedExists: async () => { throw new Error("ledger down"); } } });
+    try {
+      const { p, key } = await r.pend();
+      gw.transfers.push(recordFor(p, "confirmed"));
+      const v = await r.server.verifyPayment(p, baseAccept);
+      assert.equal(v.isValid, false, "a debt lookup that fails never serves (it may already be owed)");
+      assert.equal(v.invalidReason, "settlement_pending", "and is told to wait: no debt is known, so the entry is not closed as owed");
+      assert.equal((await r.book.get(key))?.state, "pending", "the entry stays and is handed back for the resolver or the next resend");
+    } finally { r.done(); }
+  }
+});
+await check("resend outcome: a watched resend answered 400 or closed early hands its entry back; an unwatched settle that fails hands it back", async () => {
+  const mkRes = () => Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: false });
+  for (const end of ["400", "close"]) {
+    const r = await routed({ routing: { wasServed: async () => false, owedExists: async () => false } });
+    try {
+      const { p, key } = await r.pend();
+      gw.transfers.push(recordFor(p, "confirmed"));
+      const res = mkRes();
+      const tc = { request: { adapter: { req: { method: "GET", originalUrl: "/api/x", res } } } };
+      // Booked without a request (resource null); this resend names none either.
+      tc.request.adapter.req = { res };
+      assert.equal((await r.server.verifyPayment(p, baseAccept, undefined, tc)).isValid, true);
+      assert.equal((await r.server.settlePayment(p, baseAccept, undefined, tc)).success, true);
+      if (end === "400") { res.statusCode = 400; res.writableFinished = true; res.emit("finish"); } else res.emit("close");
+      await sleep(50);
+      assert.equal((await r.book.get(key))?.state, "pending", `${end}: not served, so the entry is handed back, never dropped`);
+    } finally { r.done(); }
+  }
+  const r = await routed({ routing: { wasServed: async () => false, owedExists: async () => false } });
+  try {
+    const { p, key } = await r.pend();
+    gw.transfers.push(recordFor(p, "confirmed"));
+    assert.equal((await r.server.verifyPayment(p, baseAccept)).isValid, true);
+    const bad = { ...p, payload: { ...p.payload, signature: `0x${"11".repeat(65)}` } };
+    let out; try { out = await r.server.settlePayment(bad, baseAccept); } catch (e) { out = e; }
+    assert.notEqual(out?.success, true);
+    assert.equal((await r.book.get(key))?.state, "pending", "a resume whose settle failed is handed back, never dropped as served");
+  } finally { r.done(); }
+});
+await check("the pending book: full at maxEntries (journaled past it), a resume hold lapses after its lease, and only its owner hands it back", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-cap-"));
+  let t = Date.now();
+  const journal = { add: () => "j1", state: () => ({ total: 0 }), drain: async () => 0 };
+  const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {}, maxEntries: 2, journal, now: () => t });
+  await book.ready;
+  try {
+    const n1 = nonce(), n2 = nonce();
+    assert.equal(await book.book({ payer: acct.address, network: "eip155:8453", nonce: n1, amount: "5000" }), true);
+    assert.equal(await book.book({ payer: acct.address, network: "eip155:8453", nonce: n2, amount: "5000" }), true);
+    assert.equal(await book.alarmStatus(), "full");
+    assert.equal(await book.book({ payer: acct.address, network: "eip155:8453", nonce: nonce(), amount: "5000" }), "journaled", "the book holds maxEntries, no more");
+    const k = pendingKey("eip155:8453", acct.address, n1);
+    assert.equal(await book.claimResume(k, "A"), true);
+    assert.equal(await book.claimResume(k, "B"), false, "held");
+    assert.equal(await book.releaseResume(k, "B"), false, "only the owner hands it back");
+    assert.equal((await book.get(k)).state, "resuming");
+    t += 10 * 60_000 + 1;
+    assert.equal(await book.claimResume(k, "B"), true, "a hold lapses after the lease");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+await check("the resolver: an entry a resend holds is left alone; a failed transfer whose drop does not land is kept; an entry with no amount is never decided", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-resolver3-"));
+  let t = Date.now();
+  const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {}, now: () => t });
+  await book.ready;
+  const rc = new GatewayNanopaymentsClient({ fetchImpl: fetchStub, networks: ["eip155:8453"] });
+  const owed = new Map();
+  const opts = { client: rc, now: () => t, ambiguousNoneMs: 600_000, log: () => {}, recordOwed: async (row) => { owed.set(row.tx, row); return true; }, owedExists: async (tx) => owed.has(tx) };
+  try {
+    const p = await signed({ accept: baseAccept, chainId: 8453 });
+    await book.book({ payer: acct.address, network: "eip155:8453", nonce: p.payload.authorization.nonce, amount: "5000", payTo: TREASURY });
+    const key = pendingKey("eip155:8453", acct.address, p.payload.authorization.nonce);
+    gw.transfers.push(recordFor(p, "confirmed"));
+    assert.equal(await book.claimResume(key, "a-resend"), true);
+    const r1 = await createGatewayPendingResolver({ book, ...opts }).tick();
+    assert.deepEqual([r1.owed, r1.kept], [0, 1], "held by a resend: never booked owed while it may be served");
+    assert.equal(owed.size, 0);
+    assert.equal(await book.releaseResume(key, "a-resend"), true);
+    await book.resolve(key, { outcome: "served" });
+    const q = await signed({ accept: baseAccept, chainId: 8453 });
+    await book.book({ payer: acct.address, network: "eip155:8453", nonce: q.payload.authorization.nonce, amount: "5000", payTo: TREASURY });
+    gw.transfers.push(recordFor(q, "failed"));
+    const r2 = await createGatewayPendingResolver({ book: { ...book, resolve: async () => ({ ok: false }) }, ...opts }).tick();
+    assert.deepEqual([r2.not_charged, r2.kept], [0, 1], "a failed transfer whose drop did not land is counted kept");
+    await book.resolve(pendingKey("eip155:8453", acct.address, q.payload.authorization.nonce), { outcome: "not_charged" });
+    const z = await signed({ accept: baseAccept, chainId: 8453 });
+    await book.book({ payer: acct.address, network: "eip155:8453", nonce: z.payload.authorization.nonce, amount: "not-a-number", origin: "ambiguous", cause: "timeout" });
+    t += 3_600_000;
+    const r3 = await createGatewayPendingResolver({ book, ...opts }).tick();
+    assert.equal(r3.not_charged, 0, "no amount or payTo to match a record on: never dropped as not charged");
+    assert.ok(await book.get(pendingKey("eip155:8453", acct.address, z.payload.authorization.nonce)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+await check("refund proof at Gateway: batched (not confirmed), another token, another payTo, another network, another id, a non-EVM debt, a zero amount and a non-OK lookup are all held", async () => {
+  const payTo = TREASURY.toLowerCase();
+  const p = await signed({ accept: baseAccept, chainId: 8453 });
+  const proof = (rec, over = {}, fetchImpl = fetchStub) => {
+    if (rec) gw.transfers.push(rec);
+    return verifyInboundPayment({ network: "eip155:8453", payer: acct.address, amountUsd: 0.005, tx: rec ? rec.id : uuid(), createdAt: Date.now(), wire: GATEWAY_WIRE,
+      acceptsFor: () => ({ payTo, asset: BASE_USDC }), payToSetFor: () => [payTo], rpcFor: () => null, fetchImpl, ...over });
+  };
+  assert.equal((await proof(recordFor(p, "confirmed"))).verified, true, "control");
+  const held = async (label, pr, re) => { const v = await pr; assert.equal(v.verified, false, label); if (re) assert.match(v.reason, re, label); };
+  await held("batched", proof(recordFor(p, "batched")), /not settled yet/);
+  await held("token", proof(recordFor(p, "confirmed", { token: "EURC" })), /not USDC/);
+  await held("payTo", proof(recordFor(p, "confirmed", { toAddress: `0x${"34".repeat(20)}` })), /not to our payTo/);
+  await held("network", proof(recordFor(p, "confirmed", { sendingNetwork: "eip155:5042", recipientNetwork: "eip155:5042" })), /different network/);
+  const rec = recordFor(p, "confirmed");
+  await held("id", proof(null, { tx: rec.id }, async () => new Response(JSON.stringify({ ...rec, id: uuid() }), { status: 200, headers: { "content-type": "application/json" } })), /different transfer/);
+  await held("non-EVM", proof(recordFor(p, "confirmed"), { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payToSetFor: () => [payTo] }), /not a network the batched option settles/);
+  await held("zero", proof(recordFor(p, "confirmed"), { amountUsd: 0 }), /zero/);
+  await held("500", proof(null, { tx: rec.id }, async () => new Response(JSON.stringify({ error: "x" }), { status: 500, headers: { "content-type": "application/json" } })), /HTTP 500/);
+  // refund-run: only the batched wire is held for a missing Gateway id.
+  const plan = planRefunds([{ id: 9, status: "owed", wire: "x402", network: "base", payer: acct.address.toLowerCase(), priceUsd: 0.005, evidence: `0x${"ab".repeat(32)}`, slug: "hash", createdAt: Date.now() }], { senders: { evm: true }, maxEachUsd: 1, maxTotalUsd: 10, maxPerPayerUsd: 10 });
+  assert.equal((plan.held[GATEWAY_NO_ID_HOLD] || []).length, 0, "a plain row with a chain hash is not held by the Gateway rule");
+  assert.deepEqual(plan.send.map((r) => r.id), [9]);
 });
 
 // ---------------------------------------------------------------- part 2
