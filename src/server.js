@@ -8092,7 +8092,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed every 4 hours (see startLeaderboardRefresh below) — each request is a
+// refreshed every 4 hours (see startLeaderboardRefresh below): each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):

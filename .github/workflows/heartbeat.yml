@@ -820,7 +820,7 @@ jobs:
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.
-          TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
           check_word facilitatorFunds "low" "ok"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
