@@ -95,10 +95,13 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   // and depth are planned again into a new decision; the task stays here.
   const { routes } = await import("../services/decide/server.js");
   const asked = await decide({ task: "hash the text hello with sha256", depth: "quick", constraints: { excludeSellers: ["nobody.example"] } });
-  state.cache = makeDecisionCache(60_000);
+  // The saved plan is still in the decision cache (well inside its TTL): a
+  // re-plan is bought to see current prices and reliability, so it plans fresh.
   const reqOf = (body) => { const b = Buffer.from(JSON.stringify(body)); return { async *[Symbol.asyncIterator]() { yield b; } }; };
   const re = await routes["POST /internal/replan"](reqOf({ decisionId: asked.decisionId, priceUsd: 0.005 }));
   const stored = await state.decisions.get(re.decisionId);
+  const reCost = await state.decisions.getCost(re.decisionId);
+  ok(re.cached === false && reCost?.cached === false, `a re-plan inside the cache TTL plans fresh, not from the cache (cached ${re.cached})`);
   ok(re.decisionId && re.decisionId !== asked.decisionId && re.depth === "quick" && Array.isArray(re.plan) && re.plan.length > 0, `a re-plan is a new decision at the saved depth (${re.decisionId})`);
   ok(stored?.constraints?.excludeSellers?.[0] === "nobody.example" && stored.result.task === "hash the text hello with sha256", "it plans the saved task with the saved constraints");
   let gone = null; try { await routes["POST /internal/replan"](reqOf({ decisionId: "dec_missing" })); } catch (e) { gone = e; }

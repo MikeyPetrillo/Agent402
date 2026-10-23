@@ -241,6 +241,10 @@ export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = n
   return Math.max(floor, roundUsd(budget - credit + replanPriceUsd(body, d)));
 }
 
+// Past the run's deadline: the final ledger writes, then the mint's own
+// one-minute floor (decisionExpiry > now + 60 s at mint).
+const REPLAN_CREDIT_SLACK_MS = 120_000;
+
 /** What `replan: true` adds to an execute quote: the plan price at the saved
  *  decision's own depth, the same as a fresh POST /api/decide at that depth.
  *  It is never spent on steps: a re-plan that does not happen returns it as
@@ -277,7 +281,10 @@ export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0) {
   const planned = Number(d?.costViaUsd) || 0;
   const held = Number(creditUsd) > 0 ? Number(creditUsd) : 0;
   const base = Number.isFinite(asked) && asked > 0 ? asked : Math.max(planned, held);
-  return roundUsd(Math.min(base, cfg.execute.perCallMaxUsd));
+  // A re-plan's price rides on the same quote, which never passes the
+  // published per-call maximum (quoteRange.maxUsd): near it, the steps get
+  // the maximum less the plan price.
+  return roundUsd(Math.min(base, Math.max(0, cfg.execute.perCallMaxUsd - replanPriceUsd(body, d, cfg))));
 }
 
 /** The caller's params for one step, when given. */
@@ -524,6 +531,35 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       throw Object.assign(bad(`This decision already has a run with that key (${prior.id}, ${prior.status}); nothing was charged`, 409), { runId: prior.id, ...(own ? { priorRun: { id: prior.id, status: prior.status, spentUsd: prior.spentUsd, steps: prior.steps } } : {}) });
     }
 
+    // Outside steps are paid from our spending wallet. When its balance reads
+    // low, they are paused before anything is paid (an unreadable balance does
+    // not block: a payment the wallet cannot cover is refused, and not charged).
+    // Caps, checked before anything is spent (a >= 400 is never charged).
+    // These reads refuse early with the right message; the booking below
+    // (bookRun) checks the same ceilings again in the same atomic step as the
+    // insert, so concurrent requests, in this process or in another
+    // container, cannot all pass on the same reading.
+    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
+    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429)
+      : reason === "global" ? bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429)
+      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    const refuseEarly = async (plan) => {
+      const hasOutside = plan.some((p) => [p.tool, ...(p.fallbacks || [])].some((x) => x && !x.firstParty));
+      let outsidePaused = false;
+      if (hasOutside) {
+        try { outsidePaused = (await spendingWalletStatus())?.status === "low"; } catch { outsidePaused = false; }
+        if (outsidePaused && plan.every((p) => [p.tool, ...(p.fallbacks || [])].every((x) => x && !x.firstParty))) {
+          throw bad("Outside steps are paused while our spending wallet is topped up; nothing was charged - retry later", 503);
+        }
+      }
+      if (payer && await ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw capRefused("payerHour");
+      // Only a plan that can pay outside sellers is held to the wallet's
+      // global daily ceiling; our own tools do not draw on that wallet.
+      if (hasOutside && await ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw capRefused("global");
+      if (payer && await ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw capRefused("payerDay");
+      return { hasOutside, outsidePaused };
+    };
+
     // REPLAN: the saved decision's task, constraints and depth go through the
     // planner again and the run executes the new plan. The run stays booked
     // on the saved decision (its run key, credit and budget are the ones the
@@ -535,6 +571,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     let replanned = null;
     if (wantsReplan) {
       const saved = d;
+      // The planner is a paid model call: every refusal that does not depend
+      // on the new plan comes first, so a request refused anyway (>= 400,
+      // never charged) spends nothing on it. These are the saved plan's
+      // checks; the new plan is checked again below. The credit the price
+      // assumed is read here and redeemed at booking (a race in between is
+      // still refused there).
+      await refuseEarly(saved.plan);
+      if (creditAssumed > 0 && await ledger.creditAvailableUsd(input.creditToken, d.id, t) + 1e-9 < creditAssumed) {
+        throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
+      }
       const creditMs = runBudgetMs(req);
       const planMs = Math.min(cfg.budgetMs[saved.depth] ?? cfg.budgetMs.plan, Number.isFinite(creditMs) && creditMs > 0 ? creditMs / 2 : Infinity);
       let fresh = null, why = null;
@@ -556,39 +602,17 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const changes = planChanges(saved.plan, fresh.plan);
         replanned = { ran: true, decisionId: id, feedbackToken, priceUsd: planCharge, unchanged: changes.length === 0, changes, estimatedCostViaAgent402Usd: row.costViaUsd };
         d = { ...saved, plan: fresh.plan, plannerVersion: row.plannerVersion, shapeKey: row.shapeKey };
-      } else if (saved.createdAt + cfg.credit.ttlHours * 3_600_000 > now() + 60_000) {
+      } else if (saved.createdAt + cfg.credit.ttlHours * 3_600_000 > t + Math.min(Number.isFinite(creditMs) && creditMs > 0 ? creditMs : Infinity, cfg.execute.runDeadlineMs ?? 240_000) + REPLAN_CREDIT_SLACK_MS) {
+        // The leftover credit is minted when the run ends (its deadline at the
+        // latest) and only while the decision's window has a minute left, so
+        // the window must outlast the whole run, not just this moment.
         replanned = { ran: false, reason: why, priceUsd: planCharge, returnedAsCredit: true };
       } else {
         throw bad(`The re-plan could not run (${why}); nothing was charged. Retry, or send the same body without "replan" to run the saved plan.`, 503);
       }
     }
 
-    // Outside steps are paid from our spending wallet. When its balance reads
-    // low, they are paused before anything is paid (an unreadable balance does
-    // not block: a payment the wallet cannot cover is refused, and not charged).
-    const hasOutside = d.plan.some((p) => [p.tool, ...(p.fallbacks || [])].some((x) => x && !x.firstParty));
-    let outsidePaused = false;
-    if (hasOutside) {
-      try { outsidePaused = (await spendingWalletStatus())?.status === "low"; } catch { outsidePaused = false; }
-      if (outsidePaused && d.plan.every((p) => [p.tool, ...(p.fallbacks || [])].every((x) => x && !x.firstParty))) {
-        throw bad("Outside steps are paused while our spending wallet is topped up; nothing was charged - retry later", 503);
-      }
-    }
-
-    // Caps, checked before anything is spent (a >= 400 is never charged).
-    // These reads refuse early with the right message; the booking below
-    // (bookRun) checks the same ceilings again in the same atomic step as the
-    // insert, so concurrent requests, in this process or in another
-    // container, cannot all pass on the same reading.
-    const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
-    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429)
-      : reason === "global" ? bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429)
-      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
-    if (payer && await ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw capRefused("payerHour");
-    // Only a plan that can pay outside sellers is held to the wallet's
-    // global daily ceiling; our own tools do not draw on that wallet.
-    if (hasOutside && await ledger.globalExposureUsd(t - 86_400_000) + budget > cfg.execute.globalDayUsd) throw capRefused("global");
-    if (payer && await ledger.payerExposureUsd(payer, t - 86_400_000) + budget > payerDayCap) throw capRefused("payerDay");
+    const { hasOutside, outsidePaused } = await refuseEarly(d.plan);
 
     const runId = `run_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     let redeemed = 0;
