@@ -10683,7 +10683,8 @@ for (const tool of ALL_KIT) {
         // fails after the buyer left counts here too.
         onSettleOutcome(req, res, () => {
           try {
-            // A settled 200 clears the key. A spend-then-fail is a 402 (the
+            // A settled 200 is a settled outcome in the key's window (the
+            // breaker refuses on the failure share). A spend-then-fail is a 402 (the
             // settlement-failure rewrite) or a 5xx AFTER the run (empty
             // synthesis, upstream outage): both burned upstream with no revenue.
             // A 4xx input/evidence error happens before meaningful spend and is
@@ -10737,7 +10738,8 @@ for (const tool of ALL_KIT) {
       // wallet gets MAX_FAILS such outcomes per window before a 429 that runs
       // before the handler (a >= 400 cancels settlement - the refusal is free),
       // and a burst across wallets pauses the paid catalog 503 for one window.
-      // A settled 200 clears the wallet; a 4xx the handler threw is neither.
+      // A settled 200 is a settled outcome in the wallet's window, weighed
+      // against its failures; a 4xx the handler threw is neither.
       // FREE_MODE has no settlement, so nothing to breaker there.
       // global:false - per-wallet only. A catalog read costs a fraction of a
       // cent; pausing every paid tool over twelve of them would be a lever, not

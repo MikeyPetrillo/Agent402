@@ -34,6 +34,7 @@ const MAX = 3; // GATEWAY_SETTLE_BREAKER_MAX below
 
 const PAYER_A = "0x00000000000000000000000000000000000000a1";
 const PAYER_B = "0x00000000000000000000000000000000000000b2";
+const PAYER_C = "0x00000000000000000000000000000000000000c3";
 let settleMode = "fail"; let verifies = 0, settles = 0;
 facilitator = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -151,15 +152,29 @@ try {
     const r = await pay(POW_TOOL, PAYER_A);
     ok(r.status === 402 && settles === before + 1, `a non wallet-only tool is not breakered: blocked wallet A still reaches /api/hash (settles ${settles})`);
   }
-  // A settled 200 clears wallet B; a later burst from B counts from zero again.
+  // A settled 200 is an outcome, not an eraser: wallet B (one failure so far)
+  // settles one call, then fails again; with three failures against one
+  // settled call it is refused, since failures are more than half its outcomes.
   {
     settleMode = "ok";
     const r = await pay(WALLET_ONLY, PAYER_B);
     ok(r.status === 200, `wallet B: a settled call answers 200 (got ${r.status})`);
     settleMode = "fail";
-    let last = 0;
-    for (let i = 1; i <= MAX; i++) { last = (await pay(WALLET_ONLY, PAYER_B)).status; }
-    ok(last === 402, `after a settled 200 the count restarts: ${MAX} new failures from wallet B are all served (last status ${last})`);
+    const statuses = [];
+    for (let i = 1; i <= MAX; i++) statuses.push((await pay(WALLET_ONLY, PAYER_B)).status);
+    ok(statuses.join(",") === "402,402,429", `one settled call does not restart the count: wallet B's failures (1 + ${MAX}) against one settled call refuse it on the third (got ${statuses.join(",")})`);
+  }
+  // A wallet that mostly settles is never refused by a few failures: wallet C
+  // settles four calls, then three fail in a row; every one of them is served.
+  {
+    settleMode = "ok";
+    for (let i = 0; i < 4; i++) ok((await pay(WALLET_ONLY, PAYER_C)).status === 200, `wallet C settles call ${i + 1}`);
+    settleMode = "fail";
+    const statuses = [];
+    for (let i = 1; i <= MAX; i++) statuses.push((await pay(WALLET_ONLY, PAYER_C)).status);
+    ok(statuses.every((st) => st === 402), `${MAX} failures against four settled calls never refuse wallet C (got ${statuses.join(",")})`);
+    const r = await pay(WALLET_ONLY, PAYER_C);
+    ok(r.status === 402, `and its next call still reaches the handler (got ${r.status})`);
     const r2 = await pay(WALLET_ONLY, PAYER_B);
     ok(r2.status === 429, `... and the next is 429 (got ${r2.status})`);
   }
@@ -185,7 +200,7 @@ try {
     const before = settles;
     const burst = await Promise.all(Array.from({ length: 10 }, (_, k) => pay(V1(100 + k), wallet(0x90))));
     const ran = settles - before;
-    ok(ran >= GLOBAL_MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (>= GLOBAL_MAX ${GLOBAL_MAX}, so the old per-failure count would have paused /v1)`);
+    ok(ran >= GLOBAL_MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (>= GLOBAL_MAX ${GLOBAL_MAX}, so the old per-failure count would have paused /v1; statuses ${burst.map((r) => r.status).join(",")})`);
     const b0 = settles;
     const r = await pay(V1(200), wallet(0x91));
     ok(r.status === 402 && settles === b0 + 1, `...and a DIFFERENT wallet's /v1 call still reaches its handler: one buyer cannot pause every /v1 tier (status ${r.status}, settles ${settles})`);

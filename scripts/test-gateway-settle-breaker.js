@@ -65,9 +65,54 @@ ok(b.gatewaySettleBreakerKey(undefined) === null && b.gatewaySettleBreakerKey({}
   const s = b.gatewaySettleBreakerBlocked(K);
   ok(s.blocked && s.fails === 3 && s.until > Date.now(), `the third blocks, with a lift time in the future (got ${JSON.stringify(s)})`);
   b.recordGatewaySettleSuccess(K);
-  ok(!b.gatewaySettleBreakerBlocked(K).blocked, "a settled 200 clears the key at once");
+  ok(b.gatewaySettleBreakerBlocked(K).blocked, "one settled call against three failures does not lift the block (3 of 4 outcomes failed)");
+  b.recordGatewaySettleSuccess(K); b.recordGatewaySettleSuccess(K);
+  ok(!b.gatewaySettleBreakerBlocked(K).blocked, "three settled calls do: failures are no longer more than half the outcomes");
   b.recordGatewaySettleFailure(null);
   ok(!b.gatewaySettleBreakerBlocked(null).blocked, "a null key is never blocked per key (it still counts globally)");
+}
+
+// --- the rate: a paying buyer's replays never cut it off ------------------------
+{
+  // A buyer settling hundreds of calls whose client re-sends requests: each
+  // copy's authorization is already used, so it reverts fast, while the
+  // originals settle slowly. Five such reverts in a row, with the window
+  // holding two hundred settled calls, never refuse the buyer (2026-10-23).
+  b._gatewaySettleBreakerReset();
+  const K = "0xbusybuyer";
+  // Stamps sit inside the test's short window; order is what varies.
+  const t0 = Date.now() - 200;
+  for (let i = 0; i < 200; i++) b.recordGatewaySettleSuccess(K, t0 + i * 0.5);
+  for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(K, t0 + 60 + i * 2);
+  const s = b.gatewaySettleBreakerBlocked(K);
+  ok(!s.blocked && s.fails === 5 && s.oks === 200, `five straight fast failures against two hundred settled calls do not block (got ${JSON.stringify(s)})`);
+  // The same five, arriving BEFORE the successes of the same window, still do not.
+  b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(K, t0 + i * 0.5);
+  for (let i = 0; i < 200; i++) b.recordGatewaySettleSuccess(K, t0 + 10 + i * 0.5);
+  ok(!b.gatewaySettleBreakerBlocked(K).blocked, "order inside the window does not matter: fast failures before slow settlements still do not block");
+  // A key whose payments mostly fail is still stopped: one settled, then five failures.
+  b._gatewaySettleBreakerReset();
+  b.recordGatewaySettleSuccess(K, t0);
+  for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(K, t0 + 10 + i * 2);
+  const s2 = b.gatewaySettleBreakerBlocked(K);
+  ok(s2.blocked && s2.fails === 5 && s2.oks === 1, `one settled call then five failures blocks (got ${JSON.stringify(s2)})`);
+  // Alternating one settled, MAX_FAILS failed, repeated: a settled call no
+  // longer erases the failures, so the pattern is refused.
+  b._gatewaySettleBreakerReset();
+  for (let r = 0; r < 3; r++) { b.recordGatewaySettleSuccess(K, t0 + r * 20); for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(K, t0 + r * 20 + 5 + i * 2); }
+  ok(b.gatewaySettleBreakerBlocked(K).blocked, "one settled call between every three failures does not keep a key served (9 of 12 outcomes failed)");
+  // Exactly at the share is not over it: three failures, three settled.
+  b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 3; i++) { b.recordGatewaySettleFailure(K, t0 + i * 10); b.recordGatewaySettleSuccess(K, t0 + 5 + i * 10); }
+  ok(!b.gatewaySettleBreakerBlocked(K).blocked, "failures must be MORE than the share: three against three is served");
+  ok(b.gatewaySettleBreakerStatus().minFailShare === 0.5, "the share is reported in the status (default 0.5)");
+  // Shared replicas: the settled calls are written to and read from their own
+  // shared window, and each count is the larger of the store's and this
+  // process's, so a settled call on one replica weighs on every replica's verdict.
+  const src = (await import("node:fs")).readFileSync(new URL("../src/gateway-settle-breaker.js", import.meta.url), "utf8");
+  ok(/shared\.windowAdd\("gwb-ok", sharedKey\(key\)/.test(src) && /\{ name: "gwb-ok", key: sharedKey\(key\), windowMs: WINDOW_MS \}/.test(src) && /Math\.max\(o\.count, local\.oks\)/.test(src) && /Math\.max\(f\.count, local\.fails\)/.test(src), "settled calls ride a shared window (gwb-ok) and the shared verdict takes the larger of each count");
+  ok(!/windowClear\("gwb-fail", sharedKey\(key\)\)\);\s*void sharedWrite\(CONTROL, shared\.windowClear\("gwb-bill"/.test(src.replace(/function sharedClearKey[\s\S]*?\n\}/, "")), "a settled call no longer clears the shared failure windows");
 }
 
 // --- the handler refuses BEFORE any upstream call ------------------------------
@@ -203,13 +248,14 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     req.res.emit("finish");
     ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "a settle receipt with success:false counts as a failure");
   }
-  // A settled 200 clears.
+  // A settled 200 is recorded as an outcome beside the failure.
   {
     const req = fakeReq({ from: ADDR });
     await nano.handler(chatBody, req);
     req.res.statusCode = 200;
     req.res.emit("finish");
-    ok(b.gatewaySettleBreakerBlocked(key).fails === 0, "a settled 200 clears the wallet's count");
+    const st = b.gatewaySettleBreakerBlocked(key);
+    ok(st.fails === 1 && st.oks === 1 && !st.blocked, `a settled 200 counts as a settled outcome beside the failure (got ${JSON.stringify(st)})`);
   }
   // A FACILITATOR refusing on a billing quota of OURS. Only the one refusal
   // the offer gate WITHDRAWS (an Algorand sub-cent settle refused
