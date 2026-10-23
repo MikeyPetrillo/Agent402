@@ -58,7 +58,12 @@ function containerA() {
     const rl = (await import("node:readline")).createInterface({ input: process.stdin });
     rl.on("line", async (id) => { const out = await A.recordFromSession(id); console.log(JSON.stringify({ status: out.status })); });
   `;
-  const c = spawn(process.execPath, ["--input-type=module", "-e", src], { env: { ...process.env, SUBS_STORE: STORE }, stdio: ["pipe", "pipe", "pipe"] });
+  // A never runs its own replay. A replay claims the journal's entries under a
+  // lease (LEDGER_JOURNAL_LEASE_MS, 60 s); a SIGKILL between that claim and its
+  // release leaves them leased to a dead holder, and the next container's boot
+  // replay then claims nothing until the lease lapses. That wait is the design
+  // (a later tick lands them); this case is about the boot replay alone.
+  const c = spawn(process.execPath, ["--input-type=module", "-e", src], { env: { ...process.env, SUBS_STORE: STORE, SUBSCRIPTIONS_REPLAY_MS: String(10 * 60_000) }, stdio: ["pipe", "pipe", "pipe"] });
   let err = "";
   c.stderr.on("data", (d) => { err += d; });
   const lines = createInterface({ input: c.stdout });
