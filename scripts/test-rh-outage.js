@@ -82,14 +82,14 @@ const fetchImpl = async (url, init) => {
 
 // ------------------------------------------------------------- the harness
 let seq = 0;
-const payment = ({ network = RH, payTo = TREASURY, validBefore = Math.floor(Date.now() / 1000) + 300 } = {}) => {
+const payment = ({ network = RH, payTo = TREASURY, authTo = payTo, validBefore = Math.floor(Date.now() / 1000) + 300 } = {}) => {
   seq++;
   const payer = `0x${(0xa000 + seq).toString(16).padStart(40, "0")}`;
   const nonce = txh(`nonce-${seq}-${Math.random()}`);
   return {
     payer, nonce,
     requirements: { scheme: "exact", network, asset: TOKEN, amount: "2500", payTo, maxTimeoutSeconds: 300 },
-    paymentPayload: { x402Version: 2, resource: { url: "https://agent402.tools/api/stock-history" }, payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: payTo, value: "2500", validAfter: "0", validBefore: String(validBefore), nonce } } },
+    paymentPayload: { x402Version: 2, resource: { url: "https://agent402.tools/api/stock-history" }, payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: authTo, value: "2500", validAfter: "0", validBefore: String(validBefore), nonce } } },
   };
 };
 const ambiguous5xx = (network = RH) => new SettleError(502, { success: false, errorReason: "", transaction: "", network });
@@ -240,13 +240,38 @@ await check("a payment to another payTo on 4663 is never handled", async () => {
   assert.equal(relayer.sends, 0);
 });
 
-await check("an authorization at its deadline is not handed to our relayer; it is booked", async () => {
+await check("an authorization at its deadline: the wait is cut to its window, our relayer is not tried, it is booked", async () => {
   __resetSettlementClaims();
-  const p = payment({ validBefore: Math.floor(Date.now() / 1000) + 7 }); const relayer = makeRelayer("settles", p);
+  const p = payment({ validBefore: Math.floor(Date.now() / 1000) + 8 }); const relayer = makeRelayer("settles", p);
+  const t0 = Date.now();
   const { recovered, ctx } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer, 8000) });
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 3000, `the wait follows the authorization's window, not the 8 s default (${elapsed} ms)`);
   assert.equal(recovered, null);
   assert.equal(relayer.sends, 0);
   assert.equal(ctx.__a402LateAuth?.nonce, p.nonce);
+});
+
+await check("used, with our transfer SHORT of the price -> 402, not served, nobody else asked", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  land({ payer: p.payer, nonce: p.nonce, value: 1000n });
+  const { recovered, asked } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer), listed: [{ name: "listed", answer: () => ({ success: true, transaction: txh("never") }) }] });
+  assert.equal(recovered, null, "a short transfer is not this payment");
+  assert.equal(relayer.sends, 0);
+  assert.deepEqual(asked, []);
+});
+
+await check("used, signed to and paid to another address while the price names our treasury -> 402, not served", async () => {
+  __resetSettlementClaims();
+  const p = payment({ authTo: OTHER }); const relayer = makeRelayer("settles", p);
+  assert.equal(p.requirements.payTo, TREASURY);
+  land({ payer: p.payer, nonce: p.nonce, to: OTHER });
+  const { recovered, asked, ctx } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer), listed: [{ name: "listed", answer: () => ({ success: true, transaction: txh("never2") }) }] });
+  assert.equal(recovered, null, "only a transfer to our treasury proves our payment");
+  assert.equal(relayer.sends, 0);
+  assert.deepEqual(asked, []);
+  assert.equal(ctx.__a402LateAuth, undefined);
 });
 
 await check("a listed fallback's ambiguous failure (after the primary reverted) is read on chain too", async () => {
