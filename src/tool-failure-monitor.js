@@ -285,6 +285,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       runway: Number.isFinite(r?.runway) ? r.runway : null,
       status: ["ok", "low", "unread", "unknown"].includes(r?.status) ? r.status : "unread",
       ...(r?.error ? { error: String(r.error).slice(0, 120) } : {}),
+      ...(r?.reason ? { reason: String(r.reason).slice(0, 40) } : {}),
+      ...(["gasUsd", "floorUsd", "sharePct", "ethUsd"].reduce((o, k) => (Number.isFinite(r?.[k]) ? { ...o, [k]: r[k] } : o), {})),
       at: Number(r?.at) || now(),
     }));
   }
@@ -511,7 +513,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
-      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low").length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread").length },
+      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low").length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread").length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
     };
   }
