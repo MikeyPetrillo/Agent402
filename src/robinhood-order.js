@@ -13,13 +13,18 @@
 //     settles first and the facilitator is not asked for that payment;
 //   - a later reading above the threshold puts the facilitator first again;
 //   - no fresh read row (unread, unknown, stale, never read): the facilitator
-//     stays first. A missing reading never moves the order.
+//     stays first. A missing reading never moves the order;
+//   - our relayer's own fresh reading is low (status low, or a runway below
+//     the same threshold): the facilitator stays first, so a payment is not
+//     sent to a settler that cannot pay for it either.
 //
 // The skip is per payment and changes nothing else: verification, the 402,
 // claims and the late-settlement book run exactly as they do when the
 // facilitator is asked first. The settle-failure hook reads
 // ownFirstAttemptOf() so our relayer is not asked twice and its own ambiguous
-// answer is not handed back to it.
+// answer is not handed back to it. A refusal from our relayer that
+// sent nothing (ownRefusedOf) lets that hook continue to the listed
+// fallbacks and then the facilitator (facilitatorRetryOf).
 
 export const ROBINHOOD_ORDER_NETWORK = "eip155:4663";
 
@@ -49,6 +54,16 @@ export function facilitatorIsDry(readings, { host, network = ROBINHOOD_ORDER_NET
 }
 
 /**
+ * True when a fresh, read gas row of our own relayer on `network` is low:
+ * status low, or a runway below `threshold`. Unread or stale: false.
+ */
+export function ownRelayerIsLow(readings, { network = ROBINHOOD_ORDER_NETWORK, threshold = skipDryThreshold(), freshMs = readingFreshMs(), now = Date.now() } = {}) {
+  return (Array.isArray(readings) ? readings : []).some((r) =>
+    r && r.own && r.network === network && now - atOf(r) <= freshMs
+    && (r.status === "low" || (r.status === "ok" && Number.isFinite(r.runway) && r.runway < threshold)));
+}
+
+/**
  * The order state for one facilitator host. `update(readings)` re-decides it
  * and logs one line when the order changes; `ownFirst()` is read per settle.
  */
@@ -60,12 +75,15 @@ export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, 
       const t = now();
       state.checkedAt = t;
       const dry = facilitatorIsDry(readings, { host, network, threshold, freshMs, now: t });
-      if (dry === state.ownFirst) return false;
-      state.ownFirst = dry;
+      const ownLow = dry && ownRelayerIsLow(readings, { network, threshold, freshMs, now: t });
+      const first = dry && !ownLow;
+      if (first === state.ownFirst) return false;
+      state.ownFirst = first;
       state.since = t;
       try {
-        log(dry
+        log(first
           ? `Robinhood: ${host} dry, own relayer first`
+          : ownLow ? `Robinhood: ${host} dry but own relayer low, facilitator first`
           : `Robinhood: ${host} funded again, facilitator first`);
       } catch { /* logging only */ }
       return true;
@@ -92,6 +110,43 @@ export function ownFirstAttemptOf(paymentPayload, network) {
   return !!paymentPayload && typeof paymentPayload === "object" && ownFirstAttempts.get(paymentPayload) === network;
 }
 
+// paymentPayload: payments our relayer refused before sending anything
+// (`nothingSent`, src/robinhood-relayer.js). Asked again, it refuses at once.
+const ownRefused = new WeakSet();
+
+/** True when our relayer refused this payload with nothing sent. */
+export function ownRefusedOf(paymentPayload) {
+  return !!paymentPayload && typeof paymentPayload === "object" && ownRefused.has(paymentPayload);
+}
+
+/**
+ * Our relayer, remembering a payload it refused with nothing sent: the same
+ * payload is refused again without a second attempt, so no path in the
+ * settle chain re-asks it for a payment it already gave up.
+ */
+export function withOwnRefusalMemo(relayer) {
+  if (!relayer || typeof relayer.settle !== "function" || relayer.__a402OwnRefusalMemo) return relayer;
+  return Object.assign(Object.create(relayer), {
+    __a402OwnRefusalMemo: true,
+    async settle(payload, requirements, ...rest) {
+      if (ownRefusedOf(payload)) return { success: false, errorReason: "own_relayer_refused", errorMessage: "own relayer already refused this payment", transaction: "", network: requirements?.network, nothingSent: true };
+      const result = await relayer.settle(payload, requirements, ...rest);
+      if (result?.success !== true && result?.nothingSent === true && payload && typeof payload === "object") ownRefused.add(payload);
+      return result;
+    },
+  });
+}
+
+// paymentPayload -> the listed facilitator's own settle, for a payment our
+// relayer settled first: after its nothing-sent refusal the hook asks the
+// facilitator through this, never through the gas-ordered wrapper again.
+const facilitatorRetries = new WeakMap();
+
+/** The facilitator's { name, settle } for a payload our relayer was asked first, or null. */
+export function facilitatorRetryOf(paymentPayload) {
+  return (paymentPayload && typeof paymentPayload === "object" && facilitatorRetries.get(paymentPayload)) || null;
+}
+
 /**
  * Wrap the listed facilitator client's settle: on `network`, while
  * `order.ownFirst()`, the payment goes to `relayer.settle` and the facilitator
@@ -104,7 +159,10 @@ export function withRobinhoodGasOrder(client, { order, relayer, network = ROBINH
   const orig = client.settle;
   const settle = async function gasOrderedSettle(payload, requirements, ...rest) {
     if (requirements?.network !== network || !order.ownFirst()) return orig.call(client, payload, requirements, ...rest);
-    if (payload && typeof payload === "object") ownFirstAttempts.set(payload, network);
+    if (payload && typeof payload === "object") {
+      ownFirstAttempts.set(payload, network);
+      facilitatorRetries.set(payload, { name: order.host || "facilitator", settle: (p, rq) => orig.call(client, p, rq, ...rest) });
+    }
     return relayer.settle(payload, requirements, ...rest);
   };
   settle.__a402GasOrder = true;

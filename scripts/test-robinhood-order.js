@@ -8,6 +8,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import {
   facilitatorIsDry, createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, skipDryThreshold,
+  ownRelayerIsLow, ownRefusedOf, withOwnRefusalMemo,
 } from "../src/robinhood-order.js";
 import { registerFacilitatorFailureHooks } from "../src/payments.js";
 
@@ -191,6 +192,101 @@ await check("the failure hook: after our relayer settled first, it is not asked 
   }
 });
 
+await check("our relayer's own low reading keeps the facilitator first; unread or stale does not", () => {
+  const own = (over = {}) => ({ network: RH, facilitator: "own relayer", signer: "0x" + "22".repeat(20), own: true, balanceEth: 0.01, runway: 5000, status: "ok", at: NOW - 60_000, ...over });
+  assert.equal(ownRelayerIsLow([own({ status: "low", runway: 10 })], { now: NOW }), true);
+  assert.equal(ownRelayerIsLow([own({ runway: 49 })], { now: NOW }), true, "a runway under the threshold is low");
+  assert.equal(ownRelayerIsLow([own()], { now: NOW }), false);
+  assert.equal(ownRelayerIsLow([own({ status: "unread", runway: null })], { now: NOW }), false);
+  assert.equal(ownRelayerIsLow([own({ status: "low", runway: 1, at: NOW - 2 * 3600_000 })], { now: NOW }), false, "stale");
+  assert.equal(ownRelayerIsLow([own({ status: "low", runway: 1, network: "eip155:8453" })], { now: NOW }), false);
+  assert.equal(ownRelayerIsLow(dry(), { now: NOW }), false, "the facilitator's own rows are not ours");
+
+  const lines = [];
+  const order = createRobinhoodOrder({ host: HOST, now: () => NOW, log: (l) => lines.push(l) });
+  order.update([...dry(), own({ status: "low", runway: 2, balanceEth: 0.00001 })]);
+  assert.equal(order.ownFirst(), false, "both low: the facilitator stays first");
+  order.update([...dry(), own()]);
+  assert.equal(order.ownFirst(), true, "ours funded: ours first");
+  order.update([...dry(), own({ status: "low", runway: 2 })]);
+  assert.equal(order.ownFirst(), false, "ours runs low: the facilitator first again");
+  assert.match(lines.at(-1), /own relayer low, facilitator first/);
+  order.update([...dry(), own({ status: "unread", runway: null })]);
+  assert.equal(order.ownFirst(), true, "an unread reading of ours does not block (its refusal falls through to the facilitator)");
+});
+
+await check("own first, our relayer refuses with nothing sent: the listed fallback, then the facilitator; never our relayer again", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const order = createRobinhoodOrder({ host: HOST, now: () => NOW, log: () => {} });
+    order.update(dry());
+    const msgs = ["own relayer balance cannot pay this settlement's gas", "relayer lock not available (db)", "gas price 9 wei is over the relayer cap (1 gwei)"];
+    let n = 0;
+    const tx = () => "0x" + (++n).toString(16).padStart(64, "0");
+    for (const withListed of [true, false]) {
+      for (const msg of msgs) {
+        const asked = [];
+        let ownCalls = 0;
+        const relayer = withOwnRefusalMemo({ settle: async () => { ownCalls++; return { success: false, errorReason: msg, errorMessage: msg, transaction: "", network: RH, nothingSent: true }; } });
+        const facilitator = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: tx(), network: RH }; } };
+        withRobinhoodGasOrder(facilitator, { order, relayer });
+        const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: tx(), network: RH }; } } };
+        const ownCandidate = { name: "own relayer", revertRetry: true, own: true, client: relayer };
+        const s = fakeServer();
+        registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [...(withListed ? [listed] : []), ownCandidate] }, { outageFor: () => null });
+        const payload = { msg, withListed };
+        const res = await facilitator.settle(payload, { network: RH, scheme: "exact" });
+        assert.equal(ownRefusedOf(payload), true, msg);
+        const err = Object.assign(new Error(msg), { errorReason: res.errorReason, errorMessage: res.errorMessage, transaction: "" });
+        const out = await s.hooks.settleFailure({ requirements: { network: RH, scheme: "exact" }, paymentPayload: payload, error: err });
+        assert.equal(out?.recovered, true, `${msg} (listed ${withListed})`);
+        assert.deepEqual(asked, withListed ? ["listed"] : ["facilitator"], `${msg} (listed ${withListed})`);
+        assert.equal(ownCalls, 1, "our relayer was asked once");
+        // The memo: asked again for the same payment, ours refuses at once.
+        const again = await relayer.settle(payload, { network: RH });
+        assert.equal(again.nothingSent, true);
+        assert.equal(ownCalls, 1, "no second attempt");
+      }
+    }
+
+    // The facilitator, asked after our refusal, answers ambiguously: its
+    // answer goes to the outage path, and our relayer is still not re-asked.
+    let ownCalls = 0;
+    let outageCalls = 0;
+    const relayer = withOwnRefusalMemo({ settle: async () => { ownCalls++; return { success: false, errorReason: msgs[0], errorMessage: msgs[0], transaction: "", network: RH, nothingSent: true }; } });
+    const timeoutErr = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const facilitator = { settle: async () => { throw timeoutErr; } };
+    withRobinhoodGasOrder(facilitator, { order, relayer });
+    const outage = { handle: async (ctx) => { outageCalls++; const r = await relayer.settle(ctx.paymentPayload, ctx.requirements); assert.equal(r.nothingSent, true); return { refused: true }; } };
+    const s = fakeServer();
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "own relayer", revertRetry: true, own: true, client: relayer }] }, { outageFor: () => outage });
+    const payload = { amb: 1 };
+    const res = await facilitator.settle(payload, { network: RH, scheme: "exact" });
+    const out = await s.hooks.settleFailure({ requirements: { network: RH, scheme: "exact" }, paymentPayload: payload, error: Object.assign(new Error(res.errorMessage), { errorReason: res.errorReason, transaction: "" }) });
+    assert.notEqual(out?.recovered, true);
+    assert.equal(outageCalls, 1, "the facilitator's ambiguous answer is read on chain");
+    assert.equal(ownCalls, 1, "our relayer is not asked a second time");
+
+    // Control: a refusal from our relayer WITHOUT the nothing-sent mark (it
+    // may have sent) stops as before.
+    const asked = [];
+    const unmarked = withOwnRefusalMemo({ settle: async () => ({ success: false, errorReason: "settlement_pending", errorMessage: "pending", transaction: "", network: RH }) });
+    const facilitator3 = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: tx(), network: RH }; } };
+    withRobinhoodGasOrder(facilitator3, { order, relayer: unmarked });
+    const s3 = fakeServer();
+    registerFacilitatorFailureHooks(s3, null, null, { [RH]: () => [{ name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: tx(), network: RH }; } } }] }, { outageFor: () => null });
+    const p3 = { unmarked: 1 };
+    const r3 = await facilitator3.settle(p3, { network: RH, scheme: "exact" });
+    assert.equal(ownRefusedOf(p3), false);
+    const out3 = await s3.hooks.settleFailure({ requirements: { network: RH, scheme: "exact" }, paymentPayload: p3, error: Object.assign(new Error("pending"), { errorReason: r3.errorReason, transaction: "" }) });
+    assert.equal(out3, undefined);
+    assert.deepEqual(asked, [], "nobody after an answer that is not certain nothing was sent");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+
 await check("the payment middleware wires it: the primary is wrapped, the gas check feeds the order, the refresh runs", () => {
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
   const live = (re) => re.test(src);
@@ -199,6 +295,7 @@ await check("the payment middleware wires it: the primary is wrapped, the gas ch
   assert.ok(live(/^\s*onReadings: robinhoodOrder \? \(readings\) => robinhoodOrder\.update\(readings\) : null,/m));
   assert.ok(live(/^\s*if \(typeof onReadings === "function"\) \{ try \{ onReadings\(readings\); \}/m));
   assert.ok(live(/^\s*startRobinhoodOrderRefresh\(robinhoodOrder\);/m));
+  assert.ok(live(/^\s*const client = withOwnRefusalMemo\(createOwnRelayerClient\(/m), "one memo-wrapped relayer for the order, the fallback list and the outage path");
 });
 
 console.log(failures ? `\ntest-robinhood-order: FAILED (${failures})` : "\ntest-robinhood-order: all passed");

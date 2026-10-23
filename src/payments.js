@@ -45,7 +45,7 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
-import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf } from "./robinhood-order.js";
+import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
@@ -1035,7 +1035,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       try {
         const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
         const { evmRpcFor } = await import("./evm-rpcs.js");
-        const client = createOwnRelayerClient({ key: robinhoodRelayerKeySafe(), network: ROBINHOOD_CAIP2, asset: USDG.asset, payTo: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2) });
+        // One client everywhere (the gas order, the fallback list, the outage
+        // path): a payment it refused with nothing sent is never re-asked.
+        const client = withOwnRefusalMemo(createOwnRelayerClient({ key: robinhoodRelayerKeySafe(), network: ROBINHOOD_CAIP2, asset: USDG.asset, payTo: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2) }));
         ownRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
         const { createRobinhoodOutage } = await import("./robinhood-outage.js");
         robinhoodOutage = createRobinhoodOutage({ network: ROBINHOOD_CAIP2, token: USDG.asset, treasury: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2), relayer: client });
@@ -2573,18 +2575,25 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // (src/robinhood-order.js): it is not asked again below, and its own
     // ambiguous answer is not handed back to it by the outage path.
     const ownFirst = ownFirstAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network);
+    // Our relayer refused before sending anything (no lock, gas over its cap,
+    // its own balance too low): nothing of ours can land, so the payment goes
+    // on to the listed fallbacks and then the facilitator it skipped.
+    const ownRefusedFirst = ownFirst && ownRefusedOf(ctx?.paymentPayload);
     // An ambiguous failure (it may have broadcast) on a network with an outage
     // handler is read on chain rather than stopping here (src/robinhood-outage.js).
-    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return ownFirst ? undefined : settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
+    if (!ownRefusedFirst && !isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return ownFirst ? undefined : settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
     // A refusal that is retryable only because the transfer reverted reaches
     // only the facilitators the operator listed for it (revertRetry), never
     // the default chain: with no listed fallback the chain stops exactly as it
     // always did. The mode follows the latest refusal along the chain.
-    let revertOnly = !isPreBroadcastSettleRejection(ctx?.error);
+    let revertOnly = !ownRefusedFirst && !isPreBroadcastSettleRejection(ctx?.error);
     // A facilitator the demotion wrapper already asked for this payment is
-    // not asked again.
+    // not asked again. After our relayer's nothing-sent refusal the
+    // facilitator takes its place in the chain.
+    const facilitatorRetry = ownRefusedFirst ? facilitatorRetryOf(ctx?.paymentPayload) : null;
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
-      .filter(({ name, own }) => !demotionAttempt?.asked.has(name) && !(ownFirst && own));
+      .flatMap((c) => (ownFirst && c.own ? (facilitatorRetry ? [{ name: facilitatorRetry.name, client: { settle: facilitatorRetry.settle }, revertRetry: true }] : []) : [c]))
+      .filter(({ name }) => !demotionAttempt?.asked.has(name));
     for (const { name, client, revertRetry, own } of candidates) {
       if (revertOnly && revertRetry !== true) continue;
       try {
@@ -2623,7 +2632,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         releaseCoverOnSettled(ctx, result);
         console.warn(
           `[payments] recovered ${ctx?.requirements?.network} settlement via ${name} fallback ` +
-            `(PAYMENT_SETTLE_FALLBACK=true; ${isPreBroadcastSettleRejection(ctx?.error) ? "primary rejected pre-broadcast" : "primary's transfer reverted, nothing moved"})`
+            `(PAYMENT_SETTLE_FALLBACK=true; ${ownRefusedFirst ? "own relayer refused, nothing sent" : isPreBroadcastSettleRejection(ctx?.error) ? "primary rejected pre-broadcast" : "primary's transfer reverted, nothing moved"})`
         );
         return { recovered: true, result };
       } catch (err) {

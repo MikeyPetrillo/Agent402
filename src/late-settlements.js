@@ -40,6 +40,7 @@ import { trackStoreReady } from "./state-db.js";
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
+import { ownFirstAttemptOf } from "./robinhood-order.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -129,7 +130,9 @@ export function lateSettleCandidate(ctx) {
     amount: String(req.amount ?? ""),
     resource: ctx?.paymentPayload?.resource?.url || null,
     validBefore: validBeforeOf(auth.validBefore ?? auth.deadline),
-    via: ctx?.__a402LateTx?.via || "primary",
+    // A payment our relayer settled first (the facilitator read dry) named
+    // its transaction as the primary's answer: the entry says whose it is.
+    via: ctx?.__a402LateTx?.via || (ownFirstAttemptOf(ctx?.paymentPayload, req.network) ? "own relayer" : "primary"),
   };
 }
 
