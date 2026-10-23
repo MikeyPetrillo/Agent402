@@ -78,11 +78,16 @@ async function withRelayerLock(address, { lockWaitMs, leaseImpl }, fn) {
   }
 }
 
-// A JSON-RPC answer (the node said no) proves the transaction was not taken;
-// anything else (a timeout, a dropped connection) may have reached the node.
-function sendRefusedByNode(e) {
+// Only a refusal the node states about THIS transaction proves it was not
+// taken. A JSON-RPC error code alone does not: a proxy can forward the raw
+// transaction and then answer an internal error (-32603 "upstream timeout"),
+// so any other error may have reached the chain and answers the hash.
+const DEFINITE_REFUSAL = /nonce too low|nonce has already been used|replacement (transaction )?underpriced|transaction underpriced|insufficient funds|intrinsic gas too low|gas limit reached|exceeds block gas limit|gas limit exceeded|invalid sender|invalid signature|transaction type not supported|tx type not supported|invalid chain ?id|chain ?id mismatch|wrong chain ?id|max fee per gas less than block base fee|fee cap less than block base fee/i;
+export function sendRefusedByNode(e) {
   for (let c = e; c; c = c.cause) {
-    if (typeof c.code === "number" && c.code < 0 && !/already known|known transaction|already imported/i.test(String(c.message || c.details || ""))) return true;
+    const text = `${c.message || ""} ${c.details || ""} ${c.shortMessage || ""}`;
+    if (/already known|known transaction|already imported/i.test(text)) return false;
+    if (DEFINITE_REFUSAL.test(text)) return true;
   }
   return false;
 }

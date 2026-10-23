@@ -66,6 +66,13 @@ function stubChain() {
     sendAttempts: 0,
     // The node takes the transaction, then the connection drops before it answers.
     resetAfterAccept: false,
+    // The node takes the transaction, then answers a JSON-RPC internal error
+    // (a proxy that forwarded it and timed out upstream).
+    errorAfterAccept: false,
+    // The node refuses every send with this message (a definite refusal).
+    refuseSendWith: null,
+    // A direct authorizationState read fails with an RPC error.
+    failAuthState: false,
   };
   const lc = (a) => String(a).toLowerCase();
   const bal = (a) => st.balances.get(lc(a)) || 0n;
@@ -114,6 +121,7 @@ function stubChain() {
       case "eth_getCode": return isAddressEqual(params[0], TOKEN) || isAddressEqual(params[0], MULTICALL3) ? "0x6080" : "0x";
       case "eth_call": {
         const { to, data } = params[0];
+        if (st.failAuthState && isAddressEqual(to, TOKEN) && decodeFunctionData({ abi: TOKEN_ABI, data }).functionName === "authorizationState") throw Object.assign(new Error("upstream unavailable"), { rpcCode: -32603 });
         if (isAddressEqual(to, MULTICALL3)) {
           const { args } = decodeFunctionData({ abi: MULTI_ABI, data });
           const out = [];
@@ -126,6 +134,7 @@ function stubChain() {
       }
       case "eth_sendRawTransaction": {
         st.sendAttempts++;
+        if (st.refuseSendWith) throw Object.assign(new Error(st.refuseSendWith), { rpcCode: -32000 });
         const raw = params[0];
         const tx = parseTransaction(raw);
         if (tx.maxFeePerGas < st.gasPrice) throw Object.assign(new Error("max fee per gas less than block base fee"), { rpcCode: -32000 });
@@ -171,6 +180,11 @@ function stubChain() {
       };
       const out = Array.isArray(body) ? await Promise.all(body.map(one)) : await one(body);
       if (st.resetAfterAccept && !Array.isArray(body) && body.method === "eth_sendRawTransaction" && out.result) { req.socket.destroy(); return; }
+      if (st.errorAfterAccept && !Array.isArray(body) && body.method === "eth_sendRawTransaction" && out.result) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32603, message: "upstream timeout" } }));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(out));
     });
@@ -394,6 +408,66 @@ await check("post-broadcast: the receipt wait runs out, the result carries the h
     st.resetAfterAccept = false;
     if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
   }
+});
+
+await check("an internal RPC error after the node took the send answers its hash; the chain stops and the late book sees it", async () => {
+  const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  st.neverMine = true;
+  st.errorAfterAccept = true;
+  try {
+    const REVERTED = 'The contract function "transferWithAuthorization" reverted.';
+    const hooks = {};
+    const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+    const asked = [];
+    let ownResult = null;
+    const own = { name: "own relayer", revertRetry: true, client: { settle: async (pp, rq) => { asked.push("own"); ownResult = await A.settle(pp, rq); return ownResult; } } };
+    const tail = { name: "default", client: { settle: async () => { asked.push("default"); return { success: true, transaction: "0x" + "33".repeat(32) }; } } };
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [own, tail] });
+    const sends = st.sends.length;
+    const p = await signedPayment(buyer);
+    const ctx = { requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "", network: RH }) };
+    const r = await hooks.sf(ctx);
+    assert.equal(r, undefined, "not recovered");
+    assert.equal(st.sends.length, sends + 1, "the node took it");
+    assert.equal(ownResult?.transaction, st.sends.at(-1).hash, "the result names the transaction, not a clean refusal");
+    assert.deepEqual(asked, ["own"], "nobody is asked after a send that may land");
+    assert.equal(ctx.__a402LateTx?.transaction, st.sends.at(-1).hash, "the late-settlement book is handed the transaction");
+  } finally {
+    st.neverMine = false;
+    st.errorAfterAccept = false;
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+
+await check("a definite node refusal (nonce too low, insufficient funds) answers no hash: a clean refusal", async () => {
+  const { sendRefusedByNode } = await import("../src/robinhood-relayer.js");
+  assert.equal(sendRefusedByNode({ code: -32603, message: "upstream timeout" }), false, "an internal error is not a refusal");
+  assert.equal(sendRefusedByNode({ code: -32000, message: "already known" }), false);
+  for (const msg of ["nonce too low", "insufficient funds for gas * price + value"]) {
+    st.refuseSendWith = msg;
+    try {
+      const sends = st.sends.length;
+      const p = await signedPayment(buyer);
+      const r = await A.settle(p.payload, p.requirements);
+      assert.equal(r.success, false, msg);
+      assert.equal(r.transaction, "", `${msg}: nothing was taken, so no hash`);
+      assert.equal(st.sends.length, sends);
+    } finally { st.refuseSendWith = null; }
+  }
+});
+
+await check("a failing authorizationState read sends nothing (fails closed)", async () => {
+  st.failAuthState = true;
+  const attempts = st.sendAttempts;
+  try {
+    const p = await signedPayment(buyer);
+    const r = await A.settle(p.payload, p.requirements);
+    assert.equal(r.success, false);
+    assert.equal(r.transaction, "");
+    assert.equal(st.sendAttempts, attempts, "nothing was signed or sent");
+  } finally { st.failAuthState = false; }
 });
 
 await check("chain order: the listed facilitators first, our relayer after them, then the default chain", async () => {
