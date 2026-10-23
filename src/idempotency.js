@@ -2,12 +2,24 @@
 // the credits gate and before the paywall. Lives here so its tests drive the
 // same code the server runs (scripts/test-idempotency-inflight.js).
 import { createHash } from "node:crypto";
-import { paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
+import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
 
-/** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall. */
-export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore() }) {
+/** Whether a re-sent x402 payment on `def`'s route may replay its first
+ *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
+ *  route whose effect outlives the answer, never on an identity-bound route,
+ *  never for a streamed call. The two predicates are the server's own. */
+export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBound }) {
+  return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
+}
+
+/** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall.
+ *  implicitReplay(req): true when a re-sent x402 payment on this route may be
+ *  answered from its first answer (the server excludes routes with a lasting
+ *  effect and streamed calls); absent, no implicit key is derived.
+ *  onReplay(req, { implicit, key }): called once per answer served from the store. */
+export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
   // gate credential it presented (the x402 payment authorization or the
@@ -32,8 +44,30 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // text on a payload nothing has verified yet at this point in the chain, so
     // only the exact original credential can replay (a fresh authorization with
     // the same id is a new payment). Header wins when both are present.
-    const idem = req.header("idempotency-key") || paymentIdentifierOf(req);
-    if (!idem || idem.length > 256) return null;
+    let idem = req.header("idempotency-key") || paymentIdentifierOf(req);
+    if (idem && idem.length > 256) return null;
+    // IMPLICIT KEY (2026-10-23). A client that re-sends a request with the SAME
+    // signed x402 payment (one EIP-3009 authorization, one nonce) after a
+    // timeout was answered twice: the first copy settled and was served, the
+    // second ran the handler again and its settlement reverted (nonce used),
+    // so the buyer read a 402 for a call it had paid for and the settle
+    // breaker counted a failure. The nonce is single-use on chain, so a
+    // payment's identity (network, signed payer, nonce) names exactly one
+    // call: with no explicit key it becomes the key, under the same binding
+    // as an explicit one (this exact credential, route and body), so the
+    // replay is served from the first answer with no handler run and no
+    // settlement. A different body or route under the same nonce is a
+    // different key and takes the normal path. Only an EVM payment has such
+    // a nonce; a PoW token and a credits key never derive one (the token has
+    // its own replay guard, a credits key is reusable, so a repeat is a new
+    // call). Routes the server lists as excluded (a lasting effect, a stream)
+    // keep their explicit-key behavior only.
+    let implicit = false;
+    if (!idem && typeof implicitReplay === "function" && implicitReplay(req)) {
+      const id = paymentNonceIdentityOf(req);
+      if (id) { idem = `nonce:${id.network}:${id.from}:${id.nonce}`; implicit = true; }
+    }
+    if (!idem) return null;
     // Must match @x402/express's OWN precedence exactly (payment-signature wins
     // when both are present, verified against node_modules/@x402/express) - the
     // credential that actually settles the payment is the only one allowed to
@@ -65,17 +99,27 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const bodyHash = req.body && Object.keys(req.body).length
       ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
       : "-";
-    return { key: createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind };
+    // A GET tool takes its input on the query string: bound too (as sent), so
+    // a repeat with another input is a different call. Added only when there
+    // is one, so a query-less key hashes exactly as before.
+    const url = String(req.originalUrl || req.url || "");
+    const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
+    return { key: createHash("sha256").update(`${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
   };
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
     const bound = idemHashKey(req);
     if (!bound) return next();
-    const { key, kind } = bound;
+    const { key, kind, implicit } = bound;
     let hit;
     try { hit = await store.get(key); } catch { hit = null; }
     if (hit !== null && hit !== undefined) {
+      // Answered here, before the paywall and the dispatcher: no handler, no
+      // settlement, and none of the finish-time bookkeeping behind the gates
+      // (the sale, the served-call tally, the tool-answer classes) sees it.
       res.setHeader("X-Idempotent-Replay", "true");
+      if (implicit) res.setHeader("X-Replayed-Answer", "1");
+      if (typeof onReplay === "function") { try { onReplay(req, { implicit, key }); } catch { /* counting only */ } }
       return res.status(200).json(hit);
     }
     // The same keyed call is still running (a client that timed out and retried
@@ -91,7 +135,9 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       res.setHeader("Retry-After", "2");
       return res.status(409).json({
         error: "idempotent_request_in_flight",
-        hint: "A call with this Idempotency-Key, credential and body is still running. Retry shortly with the same Idempotency-Key to receive its answer; this request was not charged.",
+        hint: implicit
+          ? "A call carrying this same signed payment is still running. Retry shortly with the same payment to receive its answer; this request was not charged."
+          : "A call with this Idempotency-Key, credential and body is still running. Retry shortly with the same Idempotency-Key to receive its answer; this request was not charged.",
       });
     }
     const renew = setInterval(() => { store.renew(key).catch(() => {}); }, INFLIGHT_RENEW_MS);

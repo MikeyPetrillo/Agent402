@@ -14,6 +14,8 @@ import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
@@ -796,6 +798,9 @@ export function openapiSpec(baseUrl, catalog) {
           // A captured example (src/tool-output-examples.js) says where it came
           // from: a real paid answer and its date, and model-generated when so.
           description: discovery?.output?.captured && !binaryTypesOf(tool) ? `Success. ${captureNote(discovery.output.captured)}` : "Success",
+          // A replayed answer says so (src/idempotency.js); the replay cache
+          // holds JSON answers only, so a binary tool never carries them.
+          ...(binaryTypesOf(tool) ? {} : { headers: { "X-Idempotent-Replay": { $ref: "#/components/headers/IdempotentReplay" }, "X-Replayed-Answer": { $ref: "#/components/headers/ReplayedAnswer" } } }),
           // A binary tool answers raw bytes (one content type per format it
           // can produce), never the JSON note its discovery example carries.
           content: binaryTypesOf(tool)
@@ -850,6 +855,17 @@ export function openapiSpec(baseUrl, catalog) {
             ...(o.chainId ? { chainId: o.chainId } : {}),
             description: o.description,
           })),
+          // The Circle Gateway batched option, where the live offer carries
+          // it (src/gateway-nanopayments.js): the same price on a second
+          // exact accept the buyer pays from a Gateway balance, no gas per payment.
+          // Identity-bound routes and routes with a lasting effect
+          // (hasLastingEffect) keep the plain accept only. Absent while
+          // the option is off.
+          ...(() => {
+            const gw = gatewayOfferPublic();
+            if (!gw || tool.identityBound || hasLastingEffect(tool.slug)) return {};
+            return { nanopayments: { kind: gw.kind, networks: Object.keys(gw.networks), buyerGas: "none per payment. After a USDC deposit into Gateway (an on-chain transfer the buyer makes and pays gas for), each payment is a signature against that balance, with no gas per payment.", settlement: "batched off chain by Circle Gateway", select: `the accept whose extra.name is ${gw.kind}` } };
+          })(),
         };
       })(),
     };
@@ -998,7 +1014,7 @@ export function openapiSpec(baseUrl, catalog) {
         // not pay-per-call. No credits sentence: credit sales are off by
         // default (CREDITS_SALES), so "buy at /credits" is not an instruction
         // an agent can follow.
-        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free; many tools also accept free proof-of-work (GET /api/pow).",
+        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free; many tools also accept free proof-of-work (GET /api/pow). Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).",
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which
@@ -1013,6 +1029,11 @@ export function openapiSpec(baseUrl, catalog) {
     components: {
       schemas: { User: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } } } },
       parameters: { UserId: { name: "id", in: "path", required: true, schema: { type: "string" } } },
+      // The two replay markers every JSON 200 may carry (src/idempotency.js).
+      headers: {
+        IdempotentReplay: { description: "true when this 200 was replayed from the first answer to the same credential, route and body (an Idempotency-Key, the x402 payment-identifier extension, or a re-sent EVM payment): no handler ran and nothing settled again.", schema: { type: "string", enum: ["true"] } },
+        ReplayedAnswer: { description: "1 when the replay was keyed on a re-sent signed EVM payment (same nonce, route and body) with no Idempotency-Key. Not on identity-bound routes, routes with a lasting effect or streamed calls.", schema: { type: "string", enum: ["1"] } },
+      },
       securitySchemes: {
         x402: { type: "apiKey", in: "header", name: "PAYMENT-SIGNATURE", description: "x402 v2 payment payload (USDC, EIP-3009 authorization) - answer to the 402's PAYMENT-REQUIRED header." },
         mpp: { type: "http", scheme: "Payment", description: "MPP (Machine Payments Protocol) credential answering the 402's WWW-Authenticate: Payment challenge (evm/charge, tempo/charge, stripe/charge)." },

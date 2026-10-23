@@ -27,6 +27,7 @@ import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cade
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
 import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -201,6 +202,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         readsOnly: [
           "authorization.from (signed EVM payer address, public on-chain): the identity of wallet-scoped routes and the payer recorded for a sale",
           "the payment-identifier extension, when sent: an idempotency key bound to the credential, route and body",
+          `the payment's nonce and network: as an idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes`,
           "the signers of a Solana payment transaction: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",

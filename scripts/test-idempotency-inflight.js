@@ -10,7 +10,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCredits } from "../src/credits.js";
-import { createIdempotency } from "../src/idempotency.js";
+import { createIdempotency, implicitReplayAllowed } from "../src/idempotency.js";
+import { paymentNonceIdentityOf } from "../src/payer.js";
+import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 
 let pass = 0, fail = 0;
 // A regression here tends to hang (a duplicate that reaches the handler parks on the
@@ -91,6 +93,54 @@ try {
 } finally {
   server.close();
   rmSync(DIR, { recursive: true, force: true });
+}
+
+// 5. The implicit key: which routes may replay a re-sent payment, and the
+// identity a payment header yields (src/idempotency.js, src/payer.js).
+{
+  const bound = (d) => d.identityBound === true;
+  const allow = (slug, body = {}, extra = {}) => implicitReplayAllowed({ slug, ...extra }, { body }, { hasLastingEffect, isIdentityBound: bound });
+  ok(allow("hash") === true, "a plain tool replays a re-sent payment");
+  ok(allow("route-execute") === false, "a route whose effect outlives the answer never replays implicitly (not identity-bound)");
+  ok(allow("hash", {}, { identityBound: true }) === false, "an identity-bound route never replays implicitly");
+  ok(allow("hash", { stream: true }) === false, "a streamed call never replays implicitly");
+  ok(implicitReplayAllowed(undefined, { body: {} }, { hasLastingEffect, isIdentityBound: bound }) === false, "no catalog entry: no implicit key");
+
+  const FROM = "0x1111111111111111111111111111111111111111";
+  const reqOf = (payload) => { const h = Buffer.from(JSON.stringify(payload)).toString("base64"); return { header: (n) => (n === "payment-signature" ? h : undefined), headers: {} }; };
+  const N1 = `0x${"ab".repeat(32)}`, N2 = `0x${"cd".repeat(32)}`;
+  const v2 = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x00", authorization: { from: FROM, nonce: `0x${"AB".repeat(32)}` } } };
+  const id = paymentNonceIdentityOf(reqOf(v2));
+  ok(id && id.network === "eip155:8453" && id.from === FROM && id.nonce === N1, `an EIP-3009 payment's identity: network from accepted, signed payer, nonce lower case (${JSON.stringify(id)})`);
+  const p2 = { x402Version: 2, accepted: { scheme: "upto", network: "eip155:8453" }, payload: { signature: "0x00", permit2Authorization: { from: FROM, nonce: N2 }, authorization: { from: FROM, nonce: N1 } } };
+  ok(paymentNonceIdentityOf(reqOf(p2))?.nonce === N2, "a Permit2 payment's identity is its Permit2 nonce, never the unsigned authorization block beside it");
+  const noNet = { ...v2, accepted: { scheme: "exact", network: "" } };
+  ok(paymentNonceIdentityOf(reqOf(noNet)) === null, "an empty network yields no identity");
+  const unsigned = { ...p2, payload: { ...p2.payload, permit2Authorization: { nonce: N2 } } };
+  ok(paymentNonceIdentityOf(reqOf(unsigned)) === null, "no signed payer: no identity");
+}
+
+// 6. An implicit key's overlapping copy is told to resend the same payment.
+{
+  let release;
+  const app2 = express();
+  app2.use(express.json());
+  app2.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/hold", freeMode: false, implicitReplay: () => true }));
+  app2.post("/api/hold", async (req, res) => { await new Promise((r) => { release = r; }); res.json({ ok: true }); });
+  const s2 = app2.listen(0);
+  await new Promise((r) => s2.once("listening", r));
+  const B2 = `http://127.0.0.1:${s2.address().port}`;
+  const hdr = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x00", authorization: { from: "0x1111111111111111111111111111111111111111", nonce: `0x${"ef".repeat(32)}` } } })).toString("base64");
+  const send = () => fetch(`${B2}/api/hold`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": hdr }, body: "{}" });
+  try {
+    const first = send();
+    await waitFor(() => typeof release === "function");
+    const dup = await send();
+    const body = await dup.json();
+    ok(dup.status === 409 && /same signed payment/.test(body.hint || "") && !/Idempotency-Key/.test(body.hint || ""), `an implicit copy's 409 names the payment, not a key it never sent (${body.hint})`);
+    release();
+    await first;
+  } finally { s2.close(); }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

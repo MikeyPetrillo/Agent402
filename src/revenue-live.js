@@ -1779,7 +1779,10 @@ const mppRailLabel = (n) => MPP_RAIL_META[n]?.label || netName(n) || n;
 export function railThroughput(snap) {
   const onchain = Number(snap.allTime?.allTimeInboundCount || 0);
   const tempoMpp = Number(snap.mpp?.rails?.tempo?.count || 0);
-  return { onchain, tempoMpp, total: onchain + tempoMpp };
+  // Circle Gateway batched settlements (off chain, from the sales ledger; the
+  // withdrawal mint is not a ledger row, src/revenue-ledger.js).
+  const gatewayBatched = Number(snap.allTime?.gatewayBatched?.count || 0);
+  return { onchain, tempoMpp, gatewayBatched, total: onchain + tempoMpp + gatewayBatched };
 }
 
 // MPP by rail - one row per rail that settles over the wire (offered-but-quiet
@@ -2077,8 +2080,11 @@ export function revenuePage(baseUrl, snap) {
   // External payments across the scanned on-chain rails PLUS Tempo MPP
   // settlements (Tempo is not a scanned chain; ledgerSummary folds it in from
   // the sales ledger). Falls back to the on-chain pair for an older snapshot.
-  const extCount = Number(at.allTimeExternalWithTempoCount ?? at.allTimeExternalCount ?? 0);
-  const extUsd = Number(at.allTimeExternalWithTempoUsd ?? at.allTimeExternalUsd ?? 0);
+  // Circle Gateway batched sales (present once one exists) settle off chain
+  // and join the combined pair with their own label.
+  const gwBatched = at.gatewayBatched && Number(at.gatewayBatched.count) > 0 ? at.gatewayBatched : null;
+  const extCount = Number(at.allTimeExternalAllCount ?? at.allTimeExternalWithTempoCount ?? at.allTimeExternalCount ?? 0);
+  const extUsd = Number(at.allTimeExternalAllUsd ?? at.allTimeExternalWithTempoUsd ?? at.allTimeExternalUsd ?? 0);
   const agents = Number(snap.agents?.buyers || 0);
   const big = (n, label, sub) => `
     <div style="min-width:0;">
@@ -2091,7 +2097,7 @@ export function revenuePage(baseUrl, snap) {
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
       ${agents ? big(agents, `distinct outside wallet${agents === 1 ? " has" : "s have"} paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP), all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">reports and monitors, by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, ${gwBatched ? "x402 rails and Tempo MPP settled on-chain, plus Circle Gateway batched payments settled off chain" : "settled on-chain (x402 rails + Tempo MPP)"}, all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">reports and monitors, by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
@@ -2103,7 +2109,7 @@ export function revenuePage(baseUrl, snap) {
     </p>
     ${standing}
     ${hero}
-    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
+    <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers${gwBatched ? ", Circle Gateway batched buyers" : ""}, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
@@ -2119,6 +2125,7 @@ export function revenuePage(baseUrl, snap) {
       <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
+    ${gwBatched ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">Circle Gateway batched: <strong style="color:var(--ink);">${Number(gwBatched.count).toLocaleString()}</strong> transaction${Number(gwBatched.count) === 1 ? "" : "s"}, ${Number(gwBatched.externalCount).toLocaleString()} external, ${esc(usdCell(gwBatched.externalUsd))} external. Settled off chain at Circle Gateway and withdrawn on chain separately, so they are not in the chain rows above; a withdrawal is not counted again.</p>` : ""}
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (the rail stays live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
     <section>

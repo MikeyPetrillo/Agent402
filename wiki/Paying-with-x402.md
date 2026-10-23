@@ -48,6 +48,39 @@ const res = await payFetch("https://agent402.tools/api/extract", {
 console.log(await res.json());
 ```
 
+## Batched option on Arc and Base (Circle Gateway)
+
+Where an instance turns it on (`GATEWAY_NANOPAYMENTS`, see [[Self-Hosting]]), the
+402 on Arc and Base carries a second `exact` accept beside the plain one, at the
+same price and to the same payTo, whose `extra.name` is `GatewayWalletBatched`
+(with `extra.version` and `extra.verifyingContract`). The plain accept stays
+first, so a client that ignores `extra.name` keeps paying it. Whether it is on
+right now is machine-readable: `/api/pricing` (`payment.acceptKinds`,
+`payment.gatewayNanopayments`), `/.well-known/x402`, `/api/rails`
+(`gatewayBatched`) and `/llms.txt`.
+
+- **Before the first call:** deposit USDC into Circle Gateway (an on-chain
+  transfer the buyer makes and pays gas for).
+- **Each call:** sign the same EIP-3009 `TransferWithAuthorization` under the
+  accept's Gateway domain (its name, version and verifyingContract, with the
+  network's own chainId), for exactly the quoted amount, with the validity
+  window the accept's `maxTimeoutSeconds` sets. No gas per call: Circle Gateway verifies the
+  signature against the deposit and settles it off chain in batches. EOA
+  signatures only on this option.
+- **If Gateway has not confirmed it yet:** the answer is a `402` with
+  `Retry-After` and reason `settlement_pending`. Resend the same request with
+  the same payment header (never a new signature) and it is served once Gateway
+  confirms it, with no second charge. A batched payment Gateway settles and that
+  is never served is recorded as owed to the paying wallet and refunded under
+  the [refund policy](https://agent402.tools/terms).
+- **Where it is not offered:** identity-bound routes (memory, attest, feedback,
+  my-usage) and routes with a lasting effect (such as the route-execute tiers)
+  carry the plain accept only.
+
+`agent402-client` and `agent402-mcp` pay the plain accept (the stock x402
+client takes the first accept it can pay); a client that signs under the
+Gateway domain can choose the batched one.
+
 ## Paying over MPP instead (dual-stack)
 
 Every paid endpoint also speaks **MPP** (Machine Payments Protocol - the
@@ -104,4 +137,4 @@ Client-side caps belong on the buyer:
 
 ## Verifying you weren't cheated
 
-Every settled Base call is an on-chain USDC transfer to **`agent402.base.eth`** (a Base name resolving to the public revenue wallet, which also receives on the other EVM chains) - auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The receiving address for every other rail (Solana, Stellar, Algorand, Tempo) is in [`/.well-known/x402`](https://agent402.tools/.well-known/x402), and settled transactions by rail are on [`/revenue`](https://agent402.tools/revenue). The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.
+Every settled Base call on the plain accept is an on-chain USDC transfer to **`agent402.base.eth`** (a Base name resolving to the public revenue wallet, which also receives on the other EVM chains) - auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The receiving address for every other rail (Solana, Stellar, Algorand, Tempo) is in [`/.well-known/x402`](https://agent402.tools/.well-known/x402), and settled transactions by rail are on [`/revenue`](https://agent402.tools/revenue). A Circle Gateway batched payment settles off chain at Gateway, not as a transfer to that wallet: its receipt names Gateway's transfer id, and `/revenue` counts those sales from the sales ledger with that label. The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.

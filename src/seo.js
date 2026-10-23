@@ -10,6 +10,8 @@ import { ADAPTERS } from "./adapter-docs.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS_OR } from "./rails.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -427,6 +429,20 @@ const decidePrices = () => _decideConfig().prices;
 const decideRoutingFeePct = () => _decideConfig().routingFeePct;
 const decideCreditHours = () => _decideConfig().credit.ttlHours;
 
+/** The Circle Gateway batched option, as one sentence for llms.txt, from the
+ *  live offer (src/gateway-nanopayments.js); empty while it is off. */
+function gatewayNanopaymentsLine() {
+  const gw = gatewayOfferPublic();
+  if (!gw) return "";
+  const nets = Object.keys(gw.networks);
+  const chains = Object.entries(CHAIN_PAGES).filter(([, c]) => nets.includes(c.caip2)).map(([, c]) => c.chainName);
+  // The validity window each network's accept carries, read from the offer
+  // (Gateway's minValiditySeconds plus our buffer), never typed here.
+  const windows = [...new Set(Object.values(gw.networks).map((n) => Number(n.maxTimeoutSeconds)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  const windowWords = windows.length ? ` and a \`maxTimeoutSeconds\` of ${windows.join(" or ")} seconds` : "";
+  return ` **Batched option, no gas per call (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\`${windowWords}): after a USDC deposit into Circle Gateway (an on-chain transfer the buyer makes and pays gas for), the buyer for each call signs the same EIP-3009 authorization under that domain against that balance and pays no gas for the call; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`. Identity-bound routes and routes with a lasting effect (such as memory writes, attest and the route-execute tiers) offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
+}
+
 export function llmsTxt(baseUrl, catalog) {
   // Identity-bound routes, read from the same flag the gates and tool pages read
   // (isIdentityBoundRoute, stamped on each def at catalog build), never typed.
@@ -524,7 +540,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}
 
 **Already hold a prepaid credits key?** New credits are not on sale; a key already issued keeps working. Send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
@@ -543,7 +559,7 @@ Determine it from the response you already hold, without asking us:
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
 
-Every x402 authorization is single-use, so any retry needs a fresh signature. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, and agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
+Every x402 authorization is single-use, so any retry needs a fresh signature. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, and agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself.
 

@@ -65,7 +65,9 @@ import { payerFromRequest } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
+import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
+import { toolFailureMonitor } from "./tool-failure-monitor.js";
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
@@ -120,7 +122,7 @@ const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let sharedSeq = 0;
 const CONTROL = "gateway-settle-breaker";
 function sharedKey(key) { return key.replace(/[\s]/g, "_"); }
-function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
+function sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount = true }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
     void sharedWrite(CONTROL, shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
@@ -134,7 +136,7 @@ function sharedRecordFailure(key, now, { global, billing, withdrawn }) {
       }
     });
   }
-  if (!key) return;
+  if (!key || !walletCount) return;
   void sharedWrite(CONTROL, shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
   if (billing) void sharedWrite(CONTROL, shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
 }
@@ -223,8 +225,8 @@ export function gatewaySettleBreakerGlobalPaused(now = Date.now()) {
 }
 
 /** A payment was presented, the handler served, and settlement FAILED. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false } = {}) {
-  if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn });
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false, walletCount = true } = {}) {
+  if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount });
   // `global:false` (the wallet-only catalog consult): the failure counts
   // against the WALLET only. A catalog read costs a fraction of a cent, so
   // twelve of them must never pause the LLM tiers - that would hand anyone
@@ -246,7 +248,9 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
       console.warn(`[gateway-breaker] unsettled gateway calls from ${parts.join(", ")} inside ${Math.round(WINDOW_MS / 1000)} s - pausing every /v1 tier until ${new Date(globalPausedUntil).toISOString()}`);
     }
   }
-  if (!key) return;
+  // walletCount:false (a Circle Gateway settlement still pending): one buyer
+  // toward the global pause, nothing against the wallet.
+  if (!key || !walletCount) return;
   const arr = inWindow(fails.get(key) || [], now);
   arr.push(now);
   fails.set(key, arr);
@@ -321,6 +325,17 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
         if (global) recordGatewaySettleFailure(null, Date.now(), { global: true, withdrawn: true });
         return;
       }
+      // A Circle Gateway batched payment Gateway is still settling
+      // (src/gateway-wire.js): the buyer was told to resend the same payment,
+      // and nothing about it is the wallet's doing, so it is kept off the
+      // WALLET's count (and is not a clear either). The run was served and
+      // not yet paid, so it still counts toward the /v1 global pause when
+      // this consult takes part in it, as this buyer (distinct buyers trip
+      // that pause, so one buyer's pending payments count once).
+      if (isGatewayPendingAnswer(req, receipt)) {
+        if (global) recordGatewaySettleFailure(key, Date.now(), { global: true, walletCount: false });
+        return;
+      }
       // Any OTHER facilitator billing refusal (free_tier_exhausted, a credits
       // wall, the gate switched off) has nothing withdrawing its offer, so it
       // counts exactly like a failed settle - per wallet and globally - and is
@@ -369,6 +384,12 @@ function decide(req, key, now, global, g, b) {
     throw e;
   }
   if (b.blocked) {
+    // A key that settled a call inside the window is a paying buyer: its
+    // refusal is noted on the failure monitor (a count per bucket, shared
+    // across replicas, no key), and /api/gateway-status reads buyerRefusals
+    // as refusing while one is recent, so a refused buyer is seen instead of
+    // read from a log afterward. A key with no settled call is not counted.
+    if (b.oks > 0) { try { toolFailureMonitor().noteBuyerRefusal({ at: now }); } catch { /* counting only */ } }
     const secs = Math.max(1, Math.ceil((b.until - now) / 1000));
     const mins = Math.round(WINDOW_MS / 60_000);
     const until = `paid tools refuse new calls from it until ${new Date(b.until).toISOString()} (about ${secs} s). Nothing was charged for this request.`;

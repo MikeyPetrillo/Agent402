@@ -1719,8 +1719,23 @@ const refreshOnceLeased = leased("leaderboard-refresh", { ttlMs: 30 * 60_000, fa
 // The container that does not hold the lease skips the scan, and used to keep
 // its boot snapshot for good: router evidence then differed by container. A
 // skipped tick adopts the snapshot the other container saved, when newer.
+//
+// The lease serializes scans; it does not share them. A tick that landed
+// after the other container's scan had ended held the lease and read the
+// same window again, so two containers scanned twice per interval, and every
+// boot kick scanned however fresh the saved board was. A tick now first takes
+// the saved board when it is at least as new as ours and younger than
+// `peerFreshMs` (half the interval: a tick of this cadence built it moments
+// ago, the other container's or the one before a restart), and scans only
+// otherwise; the check runs again under the lease, for a scan that ended
+// while the lease was taken. The log cache keeps the window, so the next
+// scan reads only the blocks since its cursor. Without a state database
+// nothing changes.
 async function refreshOnce(opts) {
-  const r = await refreshOnceLeased(opts);
+  const base = !opts.chain || opts.chain === "base";
+  const peerFreshMs = base ? (Number.isFinite(opts.peerFreshMs) ? opts.peerFreshMs : (cached.refreshIntervalMs || REFRESH_INTERVAL_MS) / 2) : 0;
+  if (await adoptFreshPeerLeaderboardSnapshot({ peerFreshMs }).catch(() => false)) return { adopted: true };
+  const r = await refreshOnceLeased({ ...opts, peerFreshMs });
   if (r && r.skipped) await adoptPeerLeaderboardSnapshot().catch(() => {});
   return r;
 }
@@ -1733,8 +1748,25 @@ export async function adoptPeerLeaderboardSnapshot(file = LEADERBOARD_SNAPSHOT_F
   cached.snapshot = { ...s, adoptedFromPeer: true };
   return true;
 }
-async function refreshOnceUnleased(opts) {
+/**
+ * True when the saved board is this tick's answer: at least as new as ours
+ * (an older one is never taken over a newer one held) and younger than
+ * `peerFreshMs`. It is taken as the board served here; the scan is skipped.
+ */
+async function adoptFreshPeerLeaderboardSnapshot({ peerFreshMs, now = Date.now(), file = LEADERBOARD_SNAPSHOT_FILE } = {}) {
+  const d = docFor(file);
+  if (d.backend !== "pg" || !(peerFreshMs > 0)) return false;
+  const r = await d.read({ quiet: true });
+  const s = r?.ok && r.exists ? wellFormedSnapshot(r.body) : null;
+  if (!s) return false;
+  const at = Date.parse(s.asOf || "");
+  if (!(Number.isFinite(at) && now - at < peerFreshMs) || String(s.asOf) < String(cached.snapshot?.asOf || "")) return false;
+  cached.snapshot = { ...s, adoptedFromPeer: true };
+  return true;
+}
+async function refreshOnceUnleased({ peerFreshMs = 0, ...opts } = {}) {
   if (cached.warming) return; // overlapping refreshes would just rate-limit each other
+  if (await adoptFreshPeerLeaderboardSnapshot({ peerFreshMs }).catch(() => false)) return { adopted: true };
   cached.warming = true;
   cached.lastTriedAt = new Date().toISOString();
   try {

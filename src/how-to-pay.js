@@ -23,6 +23,8 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { powCostPhrase, POW_DIFFICULTY, isComputePayable } from "./pow.js";
 import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { ORG_SAME_AS } from "./repo-link.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
@@ -315,6 +317,7 @@ ${section("failed", `
   ${h2("What happens to the money, rail by rail.")}
   ${table(["rail", "a 4xx or 5xx", "a 200 whose settlement fails", "an answer that never reached you"], [
     row([tdMono("x402"), td("Not charged: the error cancels settlement before any facilitator call."), td("The result is withheld and you get a 402; nothing settled."), td("Not charged while the hang-up budget holds (below); past it, the charge is booked as owed.")]),
+    ...(gatewayOfferPublic() ? [row([tdMono("Gateway batched"), td("Not charged: the same settlement path as x402."), td("A 402 with Retry-After; resend the same payment to be served; a payment that settles and is never served is booked as owed."), td("Same budget rule as x402.")])] : []),
     row([tdMono("MPP evm"), td("Not charged: the same settlement path as x402."), td("Same as x402."), td("Same as x402.")]),
     row([tdMono("Tempo charge"), td("Not charged: the credential is broadcast only after a response below 400."), td("A 402 and nothing broadcast."), td("Same budget rule as x402.")]),
     row([tdMono("Tempo push"), td("The transfer was already on chain: the amount is booked as owed to you."), td("Booked as owed."), td("Booked as owed.")]),
@@ -323,7 +326,7 @@ ${section("failed", `
     row([tdMono("proof-of-work"), td("The solution is spent; fetch a new challenge."), td("Not applicable: nothing settles."), td("Fetch a new challenge.")]),
   ].join(""))}
   ${p(`<strong style="color:var(--ink);font-weight:700;">The hang-up budget is bounded on purpose.</strong> A buyer whose connection closes before the first response byte is not settled while the service holds a forgiveness ticket for that request, priced at what it would have charged, against a per-wallet, per-IP and service-wide budget that a paid success never refills. The budget never refuses service: once it is spent, the call is settled as it would be without the rule, and the charge is booked as owed and repaid from the refund ledger after on-chain proof. Routes whose effect outlives the answer (memory writes, attestations, purchases from outside sellers) never take a ticket.`)}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">Retries.</strong> Send an ${code("Idempotency-Key")} header (or the x402 ${code("payment-identifier")} extension) and a repeat of the same credential, route and body within ${idemMinutes} minutes replays the settled 200 without a second settlement. On the x402 wallet path the key is bound to the exact signed authorization: a fresh signature is a fresh payment, so keep the signed request and resend it yourself, or use a credits key for the calls you retry.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">Retries.</strong> Send an ${code("Idempotency-Key")} header (or the x402 ${code("payment-identifier")} extension) and a repeat of the same credential, route and body within ${idemMinutes} minutes replays the settled 200 (answers up to ${esc(IDEM_MAX_BODY_LABEL)}) without a second settlement. On the x402 wallet path the key is bound to the exact signed authorization: a fresh signature is a fresh payment, so keep the signed request and resend it yourself, or use a credits key for the calls you retry. A request re-sent with the same signed EVM payment and no key is replayed the same way inside that window (${code("X-Replayed-Answer: 1")}); routes with a lasting effect and streamed calls are the exception.`)}
   ${p(`<strong style="color:var(--ink);font-weight:700;">Refunds.</strong> A charged-but-undelivered call is recorded as a debt with its settlement transaction as evidence and repaid from a separate, capped job after review; the server never holds a spending key. A refused payment is free to get wrong: ${link("/x402-test", "/x402-test")} decodes each refusal.`)}
 `, true)}
 

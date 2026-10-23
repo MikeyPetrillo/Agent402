@@ -24,9 +24,9 @@ export const EVM_RPCS = {
 };
 
 /** The RPC URL for an EVM network (CAIP-2), or null. */
-export function evmRpcFor(network) {
+export function evmRpcFor(network, env = process.env) {
   const n = String(network || "");
   if (!n.startsWith("eip155:")) return null;
   const id = n.split(":")[1];
-  return (process.env[`EVM_RPC_${id}`] || process.env[`REFUND_RPC_${id}`] || EVM_RPCS[n] || "").trim() || null;
+  return (env[`EVM_RPC_${id}`] || env[`REFUND_RPC_${id}`] || EVM_RPCS[n] || "").trim() || null;
 }

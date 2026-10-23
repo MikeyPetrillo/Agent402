@@ -174,6 +174,10 @@ Operator-only surfaces live under `/__operator/*` (token-authed).
   `tollbooth/test.js` + `edge.test.js` + `features.test.js`, and the many `scripts/test-*.js`.
 - Raise the MCP free-tier limit for sweeps:
   `AGENT402_MCP_MAX_PER_MIN=999999 AGENT402_MCP_MAX_PER_HOUR=9999999`.
+- Independent MCP client: `scripts/mcp-client-check.js` reads `/mcp` with the reference SDK
+  client (a handful of free calls, no wallet); `scripts/test-mcp-client-check.js` runs it against
+  a port-0 boot and a drifted stub, and `mcp-clients.yml` runs it against production every 6
+  hours (`MCP_CHECK_TARGET=prod`), paging one issue.
 - A skipped integration test is not coverage: under `CI`, a missing dependency must fail.
 
 ## x402 settlement ordering (CRITICAL)
@@ -206,7 +210,13 @@ heartbeat page on it under one issue that closes when nothing is owed.
   Through the CDN proxy (`req.viaCdn`), a paid call without the header to a route whose run budget is past `CDN_SYNC_MAX_SECONDS` (default 90) runs as a job only for a client that follows a 202 on its own (agent402-client 0.8.16+) and is otherwise refused with a 504 before any gate, while LLM attempts, image fallback links and route-execute's seller waits are bounded by `cdnSyncLeftMs(req)` (`src/cdn-sync-window.js`).
 - **Client address:** `src/cdn-client-ip.js` redefines `req.ip` right after `trust proxy`: CF-Connecting-IP is the client only when the edge-reported peer is inside the embedded CDN ranges (plus `CF_IP_RANGES_EXTRA`) and the header parses as an address; from any other peer it is ignored. `CDN_PROXY` (`cloudflare` or `on`, default off) turns the resolver and the CDN sync window on, and while on a peer's CF-Connecting-IP counts (and the request is `req.viaCdn`) only when it also carries `CDN_ORIGIN_SECRET` in `X-Origin-Auth` (constant-time compare, stripped before handlers), so off or without the secret `req.ip` is the trust-proxy address. Read the client address only through `req.ip`.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
-  to credential + route + body, committed only after a settled 200.
+  to credential + route + query + body, committed only after a settled 200. With no explicit key, an
+  x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the
+  implicit key, so a re-sent signed payment is served from its first answer (`X-Replayed-Answer: 1`,
+  no handler, no settle, no sale), except on a `hasLastingEffect` route, an identity-bound route
+  (a settled header can be rebuilt from chain data) or a streamed call; the store
+  (`src/idempotency-store.js`) is Redis-shared across replicas. Replays are counted per slug on
+  `/__operator/tool-failures.json`.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
   (Anthropic Messages), `llm-responses-kit.js` (OpenAI Responses); flat tiers plus a metered
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the

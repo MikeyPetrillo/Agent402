@@ -186,6 +186,15 @@ function whenVerdict(r, then) {
   then(r);
   return Boolean(r);
 }
+// The wire an x402-settled request is booked under: the Circle Gateway
+// batched option when its accept carried the Gateway domain (settled off
+// chain into the Gateway balance), MPP when the credential rode the MPP
+// shim, else plain x402. One reader for the sale, the hang-up debt and the
+// charged-failure debt, so the three books agree.
+function x402WireOf(req) {
+  if (isGatewayBatchedRequest(req)) return GATEWAY_WIRE;
+  return req.mppCredential ? "mpp" : "x402";
+}
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
@@ -215,7 +224,7 @@ function recordHangupDebt(req, res) {
       network: networkFromPaymentResponse(settleReceipt),
       payer: payerFromRequest(req) || payerFromPaymentResponse(settleReceipt),
       tx: txFromPaymentResponse(settleReceipt),
-      wire: req.mppCredential ? "mpp" : "x402",
+      wire: x402WireOf(req),
       priceUsd: paidUsdOf(def, req, res, decodeSettleReceipt(settleReceipt)?.network),
     };
   } else if (req.creditsSettled && Number(req.creditsChargedOnClose) > 0) {
@@ -403,7 +412,9 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
+import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
@@ -581,7 +592,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { createIdempotency } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
@@ -782,7 +793,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
-import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
+import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
@@ -3597,6 +3608,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // near_capacity / full / unresolved. One word; the heartbeat pages on
     // unresolved and full.
     circlePending: { status: await circlePendingStatus() },
+    // The Circle Gateway batched option (src/gateway-nanopayments.js):
+    // gatewayPending reads off / ok / pending / near_capacity / unresolved /
+    // full for settlements Gateway answered settlement_pending (the heartbeat
+    // and the status Worker page on unresolved and full; a settled, unserved
+    // entry becomes an owed debt that refundsOwed covers); gatewayBalance reads
+    // off / unknown / ok / withdraw (our Gateway balance is past
+    // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
+    // the per-domain split on the operator view only.
+    gatewayPending: { status: await gatewayPendingStatus() },
+    gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
     redisPersistence: (() => { try { return redisPersistenceStatus({ full }); } catch { return { status: "unknown" }; } })(),
@@ -3664,7 +3685,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // are on /__operator/tool-failures.json.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" } }))),
+    // buyerRefusals reads ok / refusing: the settle breaker refused a key that
+    // had settled a call in its window (src/gateway-settle-breaker.js) inside
+    // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -5792,7 +5816,13 @@ app.get("/__operator/refunds.json", async (req, res) => {
   res.set("Cache-Control", "no-store").json({
     totals: refundTotals(),
     status,
-    refunds: listRefunds({ status, limit: Math.min(500, parseInt(req.query.limit, 10) || 200) }),
+    // A Circle Gateway batched debt names how it is proven: by Gateway's
+    // transfer record when the row holds Gateway's transfer id (refund-run
+    // holds it until Gateway reports the transfer confirmed), and held by
+    // name when it holds none (scripts/refund-run.js GATEWAY_NO_ID_HOLD).
+    refunds: listRefunds({ status, limit: Math.min(500, parseInt(req.query.limit, 10) || 200) }).map((r) => (isGatewayWire(r?.wire)
+      ? { ...r, settlement: "offchain", proof: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(r.evidence || "")) ? "circle-gateway-transfer (repaid once Gateway reports it confirmed or completed)" : "held: no Gateway transfer id recorded - resolve by hand from Gateway's transfer history" }
+      : r)),
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
@@ -5931,6 +5961,28 @@ app.get("/__operator/circle-pending.json", async (req, res) => {
   if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
   try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
   catch { return res.status(503).json({ error: "the pending book could not be read" }); }
+});
+// Batched settlements Circle Gateway answered settlement_pending, by
+// authorization (src/gateway-nanopayments.js). Reconciled by hand against
+// Gateway's transfer history; an entry is resolved here once it is repaid,
+// known failed, or found served. Token-authed; every action is logged.
+app.get("/__operator/gateway-pending.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = gatewayPendingBookForOperator();
+  if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
+  try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
+  catch { return res.status(503).json({ error: "the pending book could not be read" }); }
+});
+app.post("/__operator/gateway-pending", express.json(), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const book = gatewayPendingBookForOperator();
+  if (!book) return res.status(409).json({ error: "the Circle Gateway batched option is not on" });
+  const { action, key, outcome, note } = req.body || {};
+  if (action !== "resolve") return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","outcome":"refunded"|"not_charged"|"served","note":"what was checked"}' });
+  try {
+    const r = await book.resolve(key, { outcome, note });
+    return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json(r);
+  } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
 });
 app.post("/__operator/circle-pending", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -6232,6 +6284,26 @@ function payToByRouteNow() {
 }
 let MANIFEST = buildManifest();
 onGatedRailOffered(() => { MANIFEST = buildManifest(); });
+// The accept kinds each offered network's 402 carries, keyed by the short
+// network name: "exact" on every rail, "upto" where it is on, and the Circle
+// Gateway batched kind ("exact:GatewayWalletBatched") where that option is
+// on. Read from the same rails the 402 builder reads (paymentRailsLive), so
+// /api/pricing cannot name a kind the 402 withholds. Null before the paywall
+// is built and in FREE_MODE.
+function acceptKindsByNetwork() {
+  const rails = paymentRailsLive();
+  if (!rails) return null;
+  const nameOf = (caip2) => Object.entries(PAY_NETWORKS).find(([, c]) => c === caip2)?.[0] || caip2;
+  const out = {};
+  const all = [...(rails.evmCaip2 || []), ...(rails.svmCaip2 || []), ...(rails.stellarCaip2 || []), ...(rails.avmCaip2 || [])];
+  for (const caip2 of all) {
+    const kinds = ["exact"];
+    if ((rails.uptoCaip2 || []).includes(caip2)) kinds.push("upto");
+    if (rails.gatewayKinds instanceof Map && rails.gatewayKinds.has(caip2)) kinds.push("exact:GatewayWalletBatched");
+    out[nameOf(caip2)] = kinds;
+  }
+  return out;
+}
 // Shared helper: builds a small 24h performance signal from the analytics
 // table (cache hit rate, error rate, p50/p95 latency, dashboard URL). Used by
 // /api/stats and /.well-known/x402 so a discovery agent fetching either one
@@ -6299,8 +6371,16 @@ const serveManifest = (_req, res) => {
   // boot /supported probe); absent until the probe has run. The
   // settlementFacilitators block never carries a facilitator label.
   const settlement = settlementFacilitatorsPublic(facilitatorsByNetworkPublic());
-  if (perf) res.json({ ...MANIFEST, ...settlement, performance24h: perf });
-  else res.json({ ...MANIFEST, ...settlement });
+  // The Circle Gateway batched option, from the live offer (it is decided
+  // after the manifest is first built): the accept kinds per network and the
+  // option's own block under payment.x402, absent while it is off.
+  const gw = gatewayOfferPublic();
+  const kinds = acceptKindsByNetwork();
+  const payment = gw || kinds
+    ? { payment: { ...MANIFEST.payment, x402: { ...MANIFEST.payment.x402, ...(kinds ? { acceptKinds: kinds } : {}), ...(gw ? { gatewayNanopayments: gw } : {}) } } }
+    : {};
+  if (perf) res.json({ ...MANIFEST, ...payment, ...settlement, performance24h: perf });
+  else res.json({ ...MANIFEST, ...payment, ...settlement });
 };
 // Indexers guess these names for the manifest (sentinel402, mpp32-indexer,
 // bare "node" crawlers - 2026-08-28 HTTP log); a 404 there reads as "no
@@ -6337,6 +6417,10 @@ app.get("/api/rails", (_req, res) => {
     // sub-cent allowance is spent (src/avm-sponsorship.js). Status words and
     // times only. Empty when nothing is restricted.
     restrictions: avmSubcentOfferStatus(),
+    // The Circle Gateway batched option, where it is live: one more accept on
+    // these networks beside the plain one (src/gateway-nanopayments.js).
+    // Absent while it is off.
+    ...(gatewayOfferPublic() ? { gatewayBatched: { kind: gatewayOfferPublic().kind, networks: gatewayOfferNetworkNames(), settlement: gatewayOfferPublic().settlement } } : {}),
   });
 });
 app.get("/api/reliability", async (_req, res) =>
@@ -7631,7 +7715,9 @@ function offeredChainCount() {
 }
 function chainPageExtras(chainKey) {
   const caip2 = CHAIN_PAGES[chainKey]?.caip2;
-  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, floorUsd: caip2 ? networkFloorUsd(caip2) : 0, routerChains: spendChainsConfigured() };
+  // gatewayBatched: the Circle Gateway batched option is live on this chain
+  // (read from the boot offer, so the page says it only while the 402 does).
+  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, floorUsd: caip2 ? networkFloorUsd(caip2) : 0, routerChains: spendChainsConfigured(), gatewayBatched: !!caip2 && gatewayOfferedOn(caip2) };
 }
 // The ledger reads behind every host entry are the same four whichever page
 // asks: the 30-day and recorded summaries and the per-network split over the
@@ -8597,12 +8683,23 @@ app.get("/api/chain", chainIndex);
 // and it was rebuilt and re-stringified on every fetch, which put its tail
 // latency in seconds under indexer bursts (measured 2026-09-22). An ETag
 // lets an indexer that re-reads it hourly get a 304 instead.
-const OPENAPI_JSON = JSON.stringify(openapiSpec(BASE_URL, CATALOG));
-const OPENAPI_ETAG = `"${createHash("sha256").update(OPENAPI_JSON).digest("hex").slice(0, 32)}"`;
+// Built on the first read, not at this line: the payment offer the document
+// describes (the Circle Gateway batched option per route) is decided by the
+// paywall further down, after a /supported read, and the first request
+// arrives only once the server listens.
+let OPENAPI_CACHE = null;
+const openapiDocument = () => {
+  if (!OPENAPI_CACHE) {
+    const json = JSON.stringify(openapiSpec(BASE_URL, CATALOG));
+    OPENAPI_CACHE = { json, etag: `"${createHash("sha256").update(json).digest("hex").slice(0, 32)}"` };
+  }
+  return OPENAPI_CACHE;
+};
 app.get("/openapi.json", (req, res) => {
-  res.set("Cache-Control", "public, max-age=3600").set("ETag", OPENAPI_ETAG);
-  if (String(req.headers["if-none-match"] || "").includes(OPENAPI_ETAG)) return res.status(304).end();
-  res.type("application/json").send(OPENAPI_JSON);
+  const { json, etag } = openapiDocument();
+  res.set("Cache-Control", "public, max-age=3600").set("ETag", etag);
+  if (String(req.headers["if-none-match"] || "").includes(etag)) return res.status(304).end();
+  res.type("application/json").send(json);
 });
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
 // The task-indexed shop page retired into the catalog; /api/find answers a task.
@@ -9092,7 +9189,12 @@ app.get("/api/pricing", (_req, res) => {
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks(),
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
-      ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}) },
+      ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // The accept kinds each network's 402 carries, read from the live offer
+      // (exact everywhere; upto where it is on; the Circle Gateway batched
+      // kind where that option is on). Absent before the paywall is built.
+      ...(acceptKindsByNetwork() ? { acceptKinds: acceptKindsByNetwork() } : {}),
+      ...(gatewayOfferPublic() ? { gatewayNanopayments: gatewayOfferPublic() } : {}) },
     altPayment: {
       protocol: "proof-of-work",
       summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead - no money, no AI tokens, no model involved.",
@@ -9469,7 +9571,22 @@ if (!FREE_MODE) {
 
 // Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
 // credits gate and before the paywall, so a replay hit skips settlement.
-app.use(createIdempotency({ isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]), freeMode: FREE_MODE }));
+// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
+// replays its first answer the same way, except on a route whose effect
+// outlives the answer (hasLastingEffect), on an identity-bound route (its
+// answer is one payer's own data, and a settled payment header can be rebuilt
+// from public chain data, so only a key the buyer chose may replay it), and on
+// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
+// (/__operator/tool-failures.json), never per payer.
+app.use(createIdempotency({
+  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
+  freeMode: FREE_MODE,
+  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
+  onReplay: (req, { implicit }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+  },
+}));
 
 // x402 paywall for the catalog routes
 // POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
@@ -10074,7 +10191,7 @@ app.use((req, res, next) => {
         // mislabeled wire:"x402" below. req.tempoSettled is set by the gate
         // itself, only after a real broadcast succeeded.
         const networkFor = () => (req.tempoSettled ? "tempo" : req.stripeSettled ? "stripe" : networkFromPaymentResponse(settleReceipt));
-        const wireFor = () => (req.tempoSettled ? "mpp-tempo" : req.stripeSettled ? "mpp-stripe" : req.mppCredential ? "mpp" : "x402");
+        const wireFor = () => (req.tempoSettled ? "mpp-tempo" : req.stripeSettled ? "mpp-stripe" : x402WireOf(req));
         // For USDC, also attribute the settlement chain from the settle receipt
         // (multi-chain x402: Base vs Solana vs Polygon…) so /api/stats can
         // answer "did anyone pay on <chain>" without per-chain explorer scans.
@@ -10225,7 +10342,7 @@ app.use((req, res, next) => {
             tx: txFromPaymentResponse(settleReceipt),
             httpStatus: res.statusCode,
             synthetic,
-            wire: req.mppCredential ? "mpp" : "x402",
+            wire: x402WireOf(req),
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -10695,8 +10812,12 @@ for (const tool of ALL_KIT) {
             // and on any other rail nothing withdraws the refused offer - this
             // guard's per-payer and global bounds are all that stop a billing
             // lapse becoming an unbounded run of served, never-charged reports.
+            // A Circle Gateway batched payment Gateway is still settling is
+            // not the buyer's failure (they were told to resend the same
+            // payment): it still feeds the global bound, never the payer's.
             const st = res.statusCode;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
+            else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
             else if (st === 402 || st >= 500) recordCompositeSpendFailure(guardKey, { global: !ownGlobalBound });
           } catch { /* never break a response */ }
         });
@@ -11105,7 +11226,10 @@ setUnloadedStoresProbe(unloadedStores);
 revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
-  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`);
+  // The bound port, so a PORT=0 boot (a test reading the port back) prints
+  // the port the kernel assigned, not the 0 it asked with.
+  const boundPort = httpServer.address()?.port ?? PORT;
+  console.log(`Agent402 listening on :${boundPort} with ${Object.keys(CATALOG).length} paid tools`);
 });
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a

@@ -47,6 +47,9 @@ import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
+import { isGatewayBatchedPayment } from "./gateway-wire.js";
+import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
+import { existsSync } from "node:fs";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -341,6 +344,41 @@ export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } =
 }
 /** The pending book, for the operator route; null without an Arc client. */
 export function circlePendingBookForOperator() { return circlePendingBook; }
+
+// Batched settlements whose outcome Gateway left unknown, by authorization
+// (src/gateway-nanopayments.js). One book per process, the store shared. It
+// is loaded, and its resolver run, whenever the option is on OR a book may
+// hold entries (a state database, or the book's file on disk), whatever the
+// switch and Gateway's boot /supported read say: an entry booked before a
+// switch-off or on a replica whose boot read failed is still resolved and
+// still pages.
+let gatewayPendingBookInstance = null;
+async function gatewayPendingBook() {
+  if (!gatewayPendingBookInstance) gatewayPendingBookInstance = createGatewayPendingBook({ onChange: () => { gatewayPendingWordCache = { at: 0, word: null }; } });
+  return gatewayPendingBookInstance;
+}
+/** True when this process must load the pending book and run its resolver. */
+export function gatewayPendingBookWanted(env = process.env) {
+  if (gatewayNanopaymentsEnabled(env) || String(env.STATE_DATABASE_URL || "").trim()) return true;
+  const file = gatewayPendingFile(env);
+  try { return existsSync(file) || existsSync(`${file}.pending.ndjson`); } catch { return false; }
+}
+/** The book's own word, read from the shared store; "off" with no book, or
+ *  with the switch off and nothing in the book, its journal or memory. */
+// The word is read on the public status surface; held 10 s like the Arc
+// pending word, so uncached requests cost no database read each.
+let gatewayPendingWordCache = { at: 0, word: null };
+export async function gatewayPendingStatus({ now = Date.now(), ttlMs = 10_000 } = {}) {
+  if (!gatewayPendingBookInstance) return "off";
+  if (gatewayPendingWordCache.word && now - gatewayPendingWordCache.at < ttlMs) return gatewayPendingWordCache.word;
+  try {
+    const raw = await gatewayPendingBookInstance.alarmStatus();
+    const word = raw === "ok" && !gatewayNanopaymentsEnabled() ? "off" : raw;
+    gatewayPendingWordCache = { at: now, word };
+    return word;
+  } catch { return "unknown"; }
+}
+export function gatewayPendingBookForOperator() { return gatewayPendingBookInstance; }
 // The late-settlement book (src/late-settlements.js), built on first use.
 let lateBook = null;
 async function lateSettleBook() {
@@ -643,6 +681,24 @@ export function acceptsForItem(item, rails) {
   // rail these routes structurally cannot serve - it fails closed at a 400 with
   // nobody charged, but a rail that cannot work should not be advertised.
   if (item.identityBound) return evm;
+  // The Circle Gateway batched option (src/gateway-nanopayments.js): one more
+  // `exact` accept on each network the boot offer kept it for, at the same
+  // price and payTo as that network's plain accept, carrying the Gateway
+  // domain in `extra` and a validity window of at least the kind's
+  // minValiditySeconds. LAST in the list, after every rail: a stock client
+  // that takes the first accept it can sign keeps taking the plain one, and a
+  // Gateway-aware client picks this one by extra.name. Never on an
+  // identity-bound route (above): those keep the plain EVM accept only.
+  // Never on a route whose effect outlives the answer (hasLastingEffect:
+  // memory writers, attest, feedback, the route-execute tiers,
+  // seller-payability): a batched payment Gateway leaves pending is answered
+  // 402 AFTER the handler ran (x402 runs the handler before it settles), and
+  // its resend runs the handler again, so the effect would happen twice.
+  const gatewayKinds = rails.gatewayKinds instanceof Map && !hasLastingEffect(item.slug) ? rails.gatewayKinds : null;
+  const batched = gatewayKinds
+    ? evmCaip2.filter((caip2) => gatewayKinds.has(caip2) && (!allowed || allowed.has(caip2)))
+      .map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, ...gatewayAcceptFields(gatewayKinds.get(caip2)) }))
+    : [];
   // Long-running composites (research/dossier/fund/domain/token-risk: 2-4 min
   // handlers, settlement AFTER) stay EVM-`exact` ONLY: EIP-3009 validBefore is
   // sized by maxTimeoutSeconds (300s) and covers the run; the SVM challenge
@@ -651,7 +707,9 @@ export function acceptsForItem(item, rails) {
   // is done, settlement fails, and the buyer is never charged. A rail that
   // structurally cannot settle these must not be advertised for them.
   // x402EvmOnly (src/rails.js) is this same rule, read by the docs surfaces.
-  if (x402EvmOnly(item)) return evm;
+  // The batched accept is an EVM exact authorization with a longer window, so
+  // it stays on these routes.
+  if (x402EvmOnly(item)) return [...evm, ...batched];
   return [
     ...evm,
     ...upto,
@@ -663,6 +721,7 @@ export function acceptsForItem(item, rails) {
     // challenge-filtered views hide untagged merchants entirely. Scheme-level
     // fields (decimals/feePayer) are merged in by the facilitator downstream.
     ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
+    ...batched,
   ];
 }
 
@@ -1498,6 +1557,76 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       evmCaip2 = evmCaip2.filter((c) => c !== ARC_CAIP2);
     }
   }
+  // The Circle Gateway batched option (GATEWAY_NANOPAYMENTS=on): a second
+  // exact accept on the networks GATEWAY_NANOPAYMENT_NETWORKS names that are
+  // in the plain offer above AND that Gateway's /v1/x402/supported lists at
+  // boot. FAILS CLOSED on Gateway's own answer: an unreadable, malformed or
+  // silent /supported, or a skipped boot probe, offers it nowhere, and the
+  // plain accepts are untouched. The client is never a routing facilitator
+  // (src/gateway-nanopayments.js installGatewayRouting hands it a batched
+  // payment by scope), so it can never take a plain payment on any chain.
+  let gatewayKinds = new Map();
+  let gatewayClient = null;
+  if (gatewayNanopaymentsEnabled()) {
+    const wanted = gatewayNanopaymentNetworks().filter((c) => evmCaip2.includes(c));
+    const skipped = gatewayNanopaymentNetworks().filter((c) => !evmCaip2.includes(c));
+    if (skipped.length) console.warn(`[gateway] batched option not offered on ${skipped.join(", ")}: not in the plain offer`);
+    // Each entry carries the catalog slug of the route it paid for, read
+    // from the request's method and path, so a debt it becomes is booked
+    // under that slug (the resolver falls back to the path for a route the
+    // catalog does not list).
+    const slugForResource = (resource) => {
+      const def = typeof resource === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, resource) ? catalog[resource] : null;
+      return typeof def?.slug === "string" ? def.slug : null;
+    };
+    const bookPending = async (entry) => (await gatewayPendingBook()).book({ ...entry, slug: slugForResource(entry.resource) });
+    gatewayClient = new GatewayNanopaymentsClient({ networks: wanted, onPending: bookPending });
+    let why = "boot probe skipped (X402_SYNC_ON_START=false)";
+    if (wanted.length && syncOnStart) {
+      try {
+        await Promise.race([
+          gatewayClient.getSupported(),
+          new Promise((_, reject) => {
+            const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { reason: "timeout" })), 8000);
+            if (typeof t.unref === "function") t.unref();
+          }),
+        ]);
+        gatewayKinds = new Map([...gatewayClient.kinds()].filter(([c]) => wanted.includes(c)));
+        const unlisted = wanted.filter((c) => !gatewayKinds.has(c));
+        why = unlisted.length ? `Gateway's /supported does not list the batched kind on ${unlisted.join(", ")}` : "";
+      } catch (e) {
+        // Only our own reason code is printed (src/gateway-nanopayments.js).
+        why = `Gateway's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
+      }
+    }
+    if (gatewayKinds.size) {
+      console.log(`Circle Gateway batched option: offered on ${[...gatewayKinds.keys()].join(", ")} (gas-free for the buyer; settled off chain into the Gateway balance)`);
+      if (syncOnStart && walletAddress) {
+        startGatewayBalanceWatch(gatewayClient, { depositor: walletAddress, domains: [...gatewayKinds.keys()].map((c) => GATEWAY_DOMAINS[c]).filter((d) => Number.isInteger(d)) });
+      }
+    }
+    if (why) console.warn(`WARNING: Circle Gateway batched option ${gatewayKinds.size ? "partly" : "not"} offered - ${why}. The plain accepts are unaffected.`);
+  }
+  setGatewayOffer(gatewayKinds);
+  // The pending book and its resolver do not wait on the offer: loaded
+  // whenever the option is on or a book may hold entries (a state database,
+  // or the book's file), so entries booked before a switch-off, or on a
+  // replica whose boot /supported read failed, are still resolved and the
+  // gatewayPending word still reads them. The resolver runs under a lease,
+  // so one replica ticks; its transfer read is keyless and needs no offer.
+  // Sales and debts are looked up by transfer id in any case.
+  const saleByTransferId = byTransferIdAnyCase(async (id) => (await import("./sales-ledger.js")).saleByTxFresh(id));
+  const owedByTransferId = byTransferIdAnyCase(async (id) => (await import("./refund-ledger.js")).refundByEvidenceFresh(id));
+  if (gatewayPendingBookWanted()) {
+    const book = await gatewayPendingBook();
+    const { recordRefundOwed } = await import("./refund-ledger.js");
+    startGatewayPendingResolver({
+      book, client: gatewayClient || new GatewayNanopaymentsClient({ networks: [] }), payTo: walletAddress || null,
+      recordOwed: async (row) => recordRefundOwed({ ...row, tx: gatewayTransferId(row.tx) }),
+      owedExists: async (tx) => !!(await owedByTransferId(tx)),
+      wasServed: async ({ tx }) => !!(await saleByTransferId(tx)),
+    });
+  }
   // Which networks may offer `upto`. Two gates, both required:
   //   1. Operator opt-in — X402_UPTO_NETWORKS (CSV of CAIP-2 ids, or "all").
   //      Unset means the scheme is never registered and every 402 is
@@ -1587,6 +1716,20 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // that name a facilitator read the request's scope first; an untagged
   // request takes the vendor's own lookup (src/settle-preference.js).
   installSettlePreference(server);
+  // A batched payment is verified and settled by the Gateway client; every
+  // other payment takes the vendor's own lookup (installed after the settle
+  // preference, so a tagged plain request still reads its own scope).
+  // A resend of a payment Gateway left pending is resolved against Gateway's
+  // transfer record first; a sale already booked for that transfer refuses
+  // it, and so does an owed debt booked for it (the buyer is repaid). The
+  // resolver (started above) settles entries nobody resends.
+  if (gatewayClient && gatewayKinds.size) {
+    installGatewayRouting(server, gatewayClient, new Set(gatewayKinds.keys()), {
+      pendingBook: await gatewayPendingBook(),
+      wasServed: async ({ tx }) => !!(await saleByTransferId(tx)),
+      owedExists: async (tx) => !!(await owedByTransferId(tx)),
+    });
+  }
   for (const caip2 of evmCaip2) {
     const scheme = caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme()
       : caip2 === MONAD_CAIP2 ? makeMonadUsdcScheme()
@@ -1750,7 +1893,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     if (clean.length <= 32) return clean;
     return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
   };
-  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2 });
+  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   const acceptsFor = (item) => acceptsForItem(item, railsNow());
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
   // is reflected in what discovery publishes as well as in the 402.
@@ -2445,6 +2588,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator VERIFY failed on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${reason}`
     );
+    // A Circle Gateway batched payment is Gateway's alone: no other
+    // facilitator can read a GatewayWalletBatched authorization, so it is
+    // never offered to one, and its failure stands as Gateway's.
+    if (isBatchedCtx(ctx)) { await recordVerifyFailure(ctx, reason); return; }
     // Before writing this off as a failed payment: was the facilitator merely
     // UNREACHABLE? @x402/core resolves one client per network and does not fall
     // back when that client throws, so a connect timeout at CDP - which is
@@ -2522,6 +2669,17 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   }
   server.onSettleFailure(async (ctx) => {
     const failure = summarizeFacilitatorError(ctx?.error);
+    // A Circle Gateway batched payment never reaches the chain recovery, the
+    // settle fallback, the outage read or our relayer: a GatewayWalletBatched
+    // authorization is settled by Gateway alone, and handing it to a chain
+    // facilitator (an HTTP 402 from Gateway reads as pre-broadcast) would be
+    // a second settle path for one payment. Gateway's failure stands, and a
+    // refusal about the buyer's Gateway balance is not a funds alarm on any
+    // facilitator account of ours.
+    if (isBatchedCtx(ctx)) {
+      console.warn(`[payments] Circle Gateway batched SETTLE failed on ${ctx?.requirements?.network}: ${failure}; no other settle path is tried`);
+      return;
+    }
     // A facilitator QUOTA refusal is not an outage and must not read as one:
     // PayAI answers 403 free_tier_exhausted once the free monthly settlements
     // are spent (1,000 per receiving wallet). Say so in the log so the alarm
@@ -2657,6 +2815,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       }
     }
   });
+}
+
+/** True for a hook context whose payment or requirement is the Circle
+ *  Gateway batched kind (src/gateway-wire.js). */
+function isBatchedCtx(ctx) {
+  return isGatewayBatchedPayment(ctx?.paymentPayload) || isGatewayBatchedPayment(ctx?.requirements);
 }
 
 /**

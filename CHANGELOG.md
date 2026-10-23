@@ -7,6 +7,35 @@ carries its own version on npm.
 ## v2.8.0 - 2026-10-20
 
 ### 2026-10-23
+- A self-hosted server can offer a Circle Gateway batched option on Arc and
+  Base (`GATEWAY_NANOPAYMENTS`, off by default): a second `exact` accept beside
+  the plain one, at the same price and to the same payTo, whose `extra.name` is
+  `GatewayWalletBatched`. A buyer who deposited USDC into Circle Gateway signs
+  each call with no gas, and Gateway settles off chain in batches. A payment
+  Gateway has not confirmed yet is answered `402` with `Retry-After`; resending
+  the same payment serves it once with no second charge. Where it is on,
+  `/api/pricing`, `/.well-known/x402`, `/api/rails`, `/llms.txt`, `/how-to-pay`
+  and `payment.info` describe it, and `/revenue` counts its sales from the
+  sales ledger as settled off chain, with a withdrawal to the wallet not
+  counted again. `scripts/gateway-withdraw.js` moves the Gateway balance on
+  chain (a dry run unless `--execute`).
+- A request re-sent with the same signed EVM payment, to the same route with
+  the same body, is answered from its first answer with no second settlement,
+  even without an `Idempotency-Key`, and carries `X-Replayed-Answer: 1`.
+  Identity-bound routes, routes with a lasting effect and streamed calls keep
+  the explicit-key behavior.
+- The settle-failure breaker refuses a wallet only while failures are more
+  than a share of its outcomes in the window
+  (`GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE`), with a hard ceiling whatever its
+  settled count (`GATEWAY_SETTLE_BREAKER_HARD_MAX`). A new `buyerRefusals`
+  word on `/api/gateway-status` reads `refusing` while the breaker turns away a
+  wallet that had settled a call in its window.
+- The hosted MCP connector is checked on a schedule by an independent client
+  built on the reference MCP SDK, which validates every tool's schemas and
+  answer shapes the way a host does.
+- A seller's OpenAPI price whose `currency` is a token contract is read in the
+  token's base units, so `{ currency: <USDC contract>, amount: "10000" }` is
+  $0.01.
 - `agent402-client` 0.8.17 and `agent402-mcp` 0.13.19: with a prepaid credits
   key, a spending cap counts the route's own price, not a higher price another
   chain's payment option carries, so a budget lasts as long as it should.

@@ -1422,6 +1422,8 @@ jobs:
           # Index side stores merge per key and fold the other container's changes on the pull
           t node scripts/test-index-side-stores-pg.js
           t node scripts/test-leaderboard-peer-adopt-pg.js
+          # Two containers, one chain scan per cadence on the Base, Solana and MPP boards: a tick adopts the saved board when it is fresh and never older than its own; a boot kick after a fresh scan reads nothing
+          t node scripts/test-board-scan-once-pg.js
           # Two containers, one live rail scan: the real lease lets one scan, the snapshot is saved as a state document and adopted by the other and by a boot
           t node scripts/test-revenue-shared-scan-pg.js
           # The seller-funding operator switch set on one container applies on the other after one re-read.
@@ -3149,6 +3151,9 @@ jobs:
           t node scripts/test-reveal-no-hero-flash.js
           # Revenue buyers series (distinct-count semantics; seeded ledger — offline)
           t node scripts/test-revenue-buyers.js
+          # Circle Gateway batched sales on /revenue (off-chain label, no figure
+          # with none, a withdrawal mint never counted again; seeded, offline)
+          t node scripts/test-revenue-gateway.js
           # Marketplace activity scan bounds (a paged walk must report the whole window,
           # not its own page ceiling; stubbed sources — offline, spends nothing)
           t node scripts/test-scan-cap.js
@@ -3668,6 +3673,9 @@ jobs:
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-all.js
 
+      - name: "Independent MCP client (the reference SDK client reads a local boot; a stub drift fails it)"
+        run: node scripts/test-mcp-client-check.js
+
       - name: "Self-consistency — every tool and route our own text names must exist"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-self-consistency.js
 
@@ -4036,6 +4044,10 @@ jobs:
           t node scripts/test-mcp-binary-e2e.js
           # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
           t node scripts/test-hangup-settlement.js
+          # Circle Gateway batched option: the client against a stub (supported, verify, settle, pending resolved on the transfer record, no fallback for a batched payment, gateway-batched debts proven at Gateway, reduced errors), then a paid boot where the batched accept rides beside the plain one on the switch's networks only, a batched payment settles through the stub after the handler and books one sale under its wire, a handler 4xx never settles, settlement_pending answers 402 and books no sale, a plain payment never reaches the stub, the switch off and an unreadable /supported remove the accept (offline stubs)
+          t node scripts/test-gateway-nanopayments.js
+          # Gateway withdraw script: --amount without --from refuses and names the domains, the signed burn intent expires at the source block plus a bounded window, an unreadable block refuses, the dry run prints no key (stub Gateway and RPC - offline)
+          t node scripts/test-gateway-withdraw.js
           # Per-phase timing of paid calls: verify, handler and settle measured against injected stub delays, filed under the right rail (x402 vs mpp-evm), a hang-up marked gone, summary operator-only (boots a paid server against stub facilitator and market-data stubs - offline)
           t node scripts/test-paid-phase-timing.js
           # A paid run that never gets paid meets a bound: a hang-up whose settle fails is counted, a short EVM authorization on a slow route is refused before the handler, one wallet cannot trip the report pause alone, and concurrent runs must be covered by the balance (boots a paid server against a stub facilitator and a stub OpenRouter - offline)

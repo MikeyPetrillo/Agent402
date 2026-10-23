@@ -40,6 +40,7 @@
 // file written after that build ran alone is rolled forward into the tables
 // at the next boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
+import { GATEWAY_WIRE, isGatewayWire, settlementKindOf } from "./gateway-wire.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -585,6 +586,8 @@ export function saleByTx(tx) {
   return {
     id: r.id, ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || 0, rail: r.rail, network: r.network || null,
     payer: r.payer || null, tx: r.tx, internal: !!r.internal, wire: r.wire || null,
+    // A Circle Gateway batched sale settled off chain (its tx is Gateway's id).
+    settlement: settlementKindOf(r.wire), settledOffChain: isGatewayWire(r.wire),
     responseSha256: r.response_sha256 || null, attestUid: r.attest_uid || null, attestTx: r.attest_tx || null,
   };
 }
@@ -1450,6 +1453,32 @@ export function externalTempoPayments() {
   } catch { return []; }
 }
 
+// Circle Gateway batched sales (wire gateway-batched): settled off chain at
+// Gateway and credited to our Gateway balance, so no on-chain transfer to the
+// treasury carries them and the revenue ledger's chain scan never sees them.
+// Their tx is Gateway's transfer id. Aggregates only (no payer, no tx): the
+// revenue figures need a count and a sum, ours and external apart.
+const qGatewayBatched = db.prepare(`
+  SELECT internal, COUNT(*) AS n, SUM(price_usd) AS usd FROM sales
+  WHERE rail IN ${PAYING_RAILS_SQL} AND wire = '${GATEWAY_WIRE}'
+  GROUP BY internal`);
+
+/** { count, usd, externalCount, externalUsd } over every Circle Gateway
+ *  batched sale (count and usd include our own; external* are others' only). */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function gatewayBatchedPayments() {
+  const out = { count: 0, usd: 0, externalCount: 0, externalUsd: 0 };
+  try {
+    for (const r of qGatewayBatched.all()) {
+      const n = Number(r.n) || 0, usd = Number(r.usd) || 0;
+      out.count += n; out.usd += usd;
+      if (!r.internal) { out.externalCount += n; out.externalUsd += usd; }
+    }
+  } catch { /* an unreadable ledger reads as no batched sales */ }
+  out.usd = +out.usd.toFixed(6); out.externalUsd = +out.externalUsd.toFixed(6);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Public receipts for the metered tier (GET /api/proof, /proof).
 //
@@ -1494,6 +1523,9 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
       quoteUsd: l.quote_usd == null ? null : +Number(l.quote_usd).toFixed(6),
       underQuote: l.quote_usd == null ? null : Number(l.price_usd) <= Number(l.quote_usd) + 1e-9,
       network: l.network, wire: l.wire, rail: l.rail,
+      // A Circle Gateway batched row settled off chain: its tx is Gateway's
+      // transaction id, and no block explorer resolves it.
+      settlement: settlementKindOf(l.wire), settledOffChain: isGatewayWire(l.wire),
       // An outside buyer's tx hash resolves to that buyer's wallet on chain,
       // so only our own canary row carries one; the external row is the
       // amount, the quote and the hour.

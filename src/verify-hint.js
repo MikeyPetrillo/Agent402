@@ -25,6 +25,8 @@
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
+import { classifySettlementPending, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
+const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const BALANCE_TTL_MS = 60_000;
 const HINT_TTL_MS = 5 * 60_000;
@@ -182,6 +184,11 @@ export function balanceBucket(balanceUsd, priceUsd) {
 /** The plain-language hint. Pure; exported for tests. */
 export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
   const r = String(reason || "");
+  // A Circle Gateway batched payment resent while Gateway is still settling
+  // it (src/gateway-nanopayments.js): the same payment, later; never a new
+  // signature. Read before every other word.
+  if (/^settlement_pending$/.test(r)) return { reason: "settlement-pending", retry: "same-payment", retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, hint: SETTLEMENT_PENDING_DETAIL };
+  if (/^settlement_failed$/.test(r)) return { reason: "settlement-failed", retry: "fresh-authorization", hint: SETTLEMENT_FAILED_DETAIL };
   const price = Number.isFinite(priceUsd) ? `$${priceUsd.toFixed(priceUsd < 0.01 ? 4 : 3)}` : "the listed price";
   const short = payer ? `${payer.slice(0, 6)}...${payer.slice(-4)}` : "your wallet";
   const reverted = /execution reverted|contract call failed|insufficient|balance/i.test(r);
@@ -246,7 +253,8 @@ export async function noteVerifyFailure({ paymentPayload, payer, network, reason
   const from = /^0x[0-9a-f]{40}$/.test(rawFrom) ? rawFrom : null;
   const key = paymentPayload ? credentialKeyOf(paymentPayload) : null;
   if (!from && !key) return null;
-  const isBase = /^eip155:8453$/.test(String(network || ""));
+  // A Gateway settlement word is not about the wallet's balance: no read.
+  const isBase = /^eip155:8453$/.test(String(network || "")) && !/^settlement_(pending|failed)$/.test(String(reason || ""));
   const balanceUsd = isBase && from ? await balanceReader(from) : null;
   const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from });
   // `reason` on the entry is the facilitator's text (telemetry reads it);
@@ -294,9 +302,19 @@ export function verifyHintMiddleware() {
           req.__paymentRejectReason = refused.reason; // for the paywall rollup
           return origJson({ ...body, error: body.error || "Payment rail temporarily unavailable", reason: refused.reason, ...(refused.network ? { network: refused.network } : {}), hint: refused.detail, retry: refused.retry });
         }
+        // A Circle Gateway batched settlement still settling after the wait:
+        // nothing served, the payment booked by its authorization, and the
+        // same payment resent later is resolved against Gateway first
+        // (src/gateway-wire.js, src/gateway-nanopayments.js).
+        const pending = settled && isGatewayBatchedRequest(req) ? classifySettlementPending(decodeB64Json(settled)) : null;
+        if (pending) {
+          req.__paymentRejectReason = pending.reason;
+          if (!res.headersSent) res.setHeader("Retry-After", String(pending.retryAfterSeconds));
+          return origJson({ ...body, reason: pending.reason, ...(pending.network ? { network: pending.network } : {}), hint: pending.detail, retry: pending.retry });
+        }
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {
-          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" ? "60" : "5");
+          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
           // A hint that names its class carries it as `reason`, the field
           // every refusal class is read from (and the paywall rollup).
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;

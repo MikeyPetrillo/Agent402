@@ -263,11 +263,11 @@ async function newPayment(base, { tx = null } = {}) {
 async function send(base, p) {
   const t0 = Date.now();
   const r = await fetch(`${base}${TOOL.path}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": p.cred }, body: TOOL.body });
-  await r.arrayBuffer();
+  const body = Buffer.from(await r.arrayBuffer()).toString("utf8");
   let receipt = null;
   const hdr = r.headers.get("payment-response");
   if (hdr) { try { receipt = JSON.parse(Buffer.from(hdr, "base64").toString("utf-8")); } catch { /* */ } }
-  return { status: r.status, receipt, ms: Date.now() - t0 };
+  return { status: r.status, receipt, ms: Date.now() - t0, body, replayed: r.headers.get("x-replayed-answer") === "1" };
 }
 async function one(base, label, opts) {
   const p = await newPayment(base, opts);
@@ -326,7 +326,10 @@ try {
   settleMode = "on-chain";
   let before = settles;
   let again = await send(A, orig);
-  ok(again.status !== 200 && settles === before, `the same payload again -> refused before the facilitator (status ${again.status}, settles +${settles - before})`);
+  // On this plain catalog route an identical resend is either refused or
+  // answered from its first answer (marked, byte-identical); never settled again.
+  const replayOk = again.status === 200 && again.replayed && again.body === first.body;
+  ok((again.status !== 200 || replayOk) && settles === before, `the same payload again -> refused or replayed from its first answer, before the facilitator (status ${again.status}, replayed ${again.replayed}, settles +${settles - before})`);
 
   // Two concurrent replays, both told "already on-chain": at most one answer.
   async function concurrent(label, baseX, baseY, mode) {
@@ -353,7 +356,11 @@ try {
     first = await send(A, origX);
     settleMode = "on-chain"; before = settles;
     again = await send(Bsrv, origX);
-    ok(first.status === 200 && again.status !== 200 && settles === before, `a payload settled on A, replayed on B -> refused before the facilitator (statuses ${first.status}, ${again.status})`);
+    // The shared idempotency store answers the copy on B from A's first answer
+    // (marked, byte-identical), or B refuses it; either way the facilitator is
+    // never asked again.
+    const crossReplay = again.status === 200 && again.replayed && again.body === first.body;
+    ok(first.status === 200 && (again.status !== 200 || crossReplay) && settles === before, `a payload settled on A, replayed on B -> refused or replayed from A's first answer, before the facilitator (statuses ${first.status}, ${again.status}, replayed ${again.replayed}, settles +${settles - before})`);
     await stop(PORT_B);
   } else {
     console.log("# REDIS_URL unset: the cross-replica cases run in CI's redis step");

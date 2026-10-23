@@ -11,7 +11,7 @@ import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
-import { createToolFailureMonitor, toolClassOf, upstreamKindOfError, upstreamKindOfStatus, BUCKET_MS } from "../src/tool-failure-monitor.js";
+import { createToolFailureMonitor, toolClassOf, upstreamKindOfError, upstreamKindOfStatus, BUCKET_MS, DAY_MS } from "../src/tool-failure-monitor.js";
 import { withSettleDemotion, isDemoted, demotedList, isFundsRefusal, _resetSettleDemotion } from "../src/settle-demotion.js";
 
 let pass = 0, fail = 0;
@@ -239,6 +239,75 @@ await check("facilitator refusals: the word reads refused inside the hour, demot
   assert.ok(isFundsRefusal({ errorReason: "free_tier_exhausted" }));
   assert.ok(!isFundsRefusal("subcent_quota_exceeded"), "the sub-cent quota has its own gate");
   assert.ok(!isFundsRefusal("insufficient_funds"), "the buyer's own balance is not the facilitator's");
+});
+
+await check("buyer refusals: the word reads refusing for 15 to 20 minutes after one, counts have no key, and another replica's refusal counts here", async () => {
+  const c = clock();
+  const m = createToolFailureMonitor({ now: c.now, env: {} });
+  let s = await m.status({ fresh: true });
+  assert.deepEqual(s.buyerRefusals, { status: "ok" }, "the public word is one word");
+  assert.equal(m.noteBuyerRefusal(), 1);
+  assert.equal(m.noteBuyerRefusal(), 2, "counted per bucket");
+  s = await m.status({ fresh: true });
+  assert.equal(s.buyerRefusals.status, "refusing");
+  assert.deepEqual(Object.keys(s.buyerRefusals), ["status"], "publicly the word only, never a count");
+  const full = await m.status({ full: true, fresh: true });
+  assert.equal(full.buyerRefusals.status, "refusing");
+  assert.equal(full.buyerRefusals.refusalsWindow, 2);
+  assert.equal(full.buyerRefusals.refusals24h, 2);
+  assert.equal(full.buyerRefusals.windowMinutes, 15);
+  assert.doesNotMatch(JSON.stringify(full.buyerRefusals), /0x|slug|payer|key/i, "counts only");
+  // A refusal at the start of a bucket is read for the window plus the rest
+  // of its bucket; one at the end of a bucket for the window itself.
+  c.t = T0 - (T0 % BUCKET_MS); // the start of a bucket
+  const m2 = createToolFailureMonitor({ now: c.now, env: {} });
+  m2.noteBuyerRefusal();
+  c.t += 15 * 60_000 - 1;
+  assert.equal((await m2.status({ fresh: true })).buyerRefusals.status, "refusing", "inside 15 minutes");
+  c.t += BUCKET_MS;
+  assert.equal((await m2.status({ fresh: true })).buyerRefusals.status, "refusing", "its bucket ended inside the window");
+  c.t += 2;
+  assert.equal((await m2.status({ fresh: true })).buyerRefusals.status, "ok", "past 20 minutes");
+  assert.equal((await m2.status({ full: true, fresh: true })).buyerRefusals.refusals24h, 1, "still in the day's count");
+  c.t += DAY_MS;
+  assert.equal((await m2.status({ full: true, fresh: true })).buyerRefusals.refusals24h, 0, "and gone after a day");
+  // Shared: a refusal on another replica reads refusing here.
+  const other = createToolFailureMonitor({ replicaId: "other", now: c.now, env: {} });
+  other.noteBuyerRefusal();
+  const store = { async publish() { return { ok: true }; }, async readAll() { return { ok: true, snapshots: [{ id: "other", ...other.snapshot(c.t) }] }; } };
+  const me = createToolFailureMonitor({ replicaId: "me", now: c.now, env: {}, store });
+  const mine = await me.status({ full: true, fresh: true });
+  assert.equal(mine.buyerRefusals.status, "refusing", "merged from the other replica's snapshot");
+  assert.equal(mine.buyerRefusals.refusalsWindow, 1);
+  me.noteBuyerRefusal();
+  assert.equal((await me.status({ full: true, fresh: true })).buyerRefusals.refusalsWindow, 2, "its own count adds to the merge");
+});
+
+await check("replays: counted per slug by kind, summed across replicas, detail only (no word, no payer)", async () => {
+  const c = clock();
+  const m = createToolFailureMonitor({ replicaId: "a", now: c.now, env: {} });
+  assert.equal(m.noteReplay("demand-radar", { implicit: true }), "implicit");
+  assert.equal(m.noteReplay("demand-radar", { implicit: true }), "implicit");
+  assert.equal(m.noteReplay("demand-radar"), "keyed");
+  assert.equal(m.noteReplay("hash", { implicit: false }), "keyed");
+  assert.equal(m.noteReplay(""), null);
+  const e = m.evaluate(c.t);
+  assert.deepEqual(e.replays.map((r) => [r.slug, r.hour.implicit, r.hour.keyed]), [["demand-radar", 2, 1], ["hash", 0, 1]]);
+  assert.deepEqual(e.replayTotals.hour, { implicit: 2, keyed: 2 });
+  const pub = await m.status({ fresh: true });
+  assert.ok(!("replays" in pub) && !("replayTotals" in pub), "no public word for replays");
+  const other = createToolFailureMonitor({ replicaId: "b", now: c.now, env: {} });
+  other.noteReplay("demand-radar", { implicit: true });
+  const store = { async publish() { return { ok: true }; }, async readAll() { return { ok: true, snapshots: [{ id: "b", ...other.snapshot(c.t) }] }; } };
+  const me = createToolFailureMonitor({ replicaId: "me", now: c.now, env: {}, store });
+  me.noteReplay("demand-radar", { implicit: true });
+  const rep = await me.report();
+  const row = rep.replays.find((r) => r.slug === "demand-radar");
+  assert.deepEqual(row.hour, { implicit: 2, keyed: 0 }, "both replicas' replays are summed");
+  assert.equal(rep.scope, "shared");
+  c.t += 3_600_001;
+  const later = me.evaluate(c.t).replays.find((r) => r.slug === "demand-radar");
+  assert.deepEqual([later.hour.implicit, later.day.implicit], [0, 2], "out of the hour, still in the day");
 });
 
 await check("settle demotion: three consecutive out-of-funds refusals demote; alternates then settle first; a success clears", async () => {

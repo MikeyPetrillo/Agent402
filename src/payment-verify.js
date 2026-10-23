@@ -31,6 +31,12 @@ export const TIP20_TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc
 /** Tempo mainnet: an EVM chain id, but its own verifier (TIP-20 tokens, more than one accepted currency). */
 export const TEMPO_NETWORK = "eip155:4217";
 
+import { isGatewayWire } from "./gateway-wire.js";
+
+/** Circle Gateway's API (the batched x402 option, src/gateway-nanopayments.js). */
+export const GATEWAY_API_BASE_URL = "https://gateway-api.circle.com";
+const GATEWAY_MAX_BODY_BYTES = 64 * 1024;
+
 const fail = (reason) => ({ verified: false, reason });
 const pass = (detail) => ({ verified: true, ...detail });
 
@@ -254,6 +260,50 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
 }
 
 /**
+ * Circle Gateway batched payment (wire gateway-batched): the row's evidence is
+ * Gateway's transfer id, not a chain hash, so the proof is Gateway's own
+ * transfer record (GET /v1/x402/transfers/{id}, keyless), held to the same
+ * rule as a chain receipt: the SAME payer, to a payTo WE control, at least
+ * the amount, in USDC, on the row's network, and SETTLED. Gateway's own
+ * advice is to wait for `confirmed` before crediting for accounting; a
+ * transfer still `received` or `batched` may yet fail (and a failed one was
+ * never charged), so only `confirmed` and `completed` prove a debt. Anything
+ * else holds the row with the reason.
+ */
+async function verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network, fetchImpl, timeoutMs, gatewayBase = GATEWAY_API_BASE_URL }) {
+  const id = String(tx || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return fail("Circle Gateway debt with no Gateway transfer id recorded - cannot be proven; resolve by hand from Gateway's transfer history");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
+  const ours = new Set([...payToSet].map((a) => String(a).toLowerCase()).filter((a) => /^0x[0-9a-f]{40}$/.test(a)));
+  if (!ours.size) return fail("no EVM payTo to check against");
+  let res, text = "";
+  try {
+    res = await fetchImpl(`${gatewayBase}/v1/x402/transfers/${id}`, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+    if (!/\bjson\b/i.test(String(res.headers?.get?.("content-type") || ""))) return fail(`Circle Gateway transfer lookup answered HTTP ${res.status} without JSON`);
+    text = String(await res.text());
+  } catch (e) { return fail(`could not read the Circle Gateway transfer: ${String(e?.name || "error").slice(0, 40)}`); }
+  if (res.status === 404) return fail("Circle Gateway has no transfer with that id");
+  if (!res.ok) return fail(`Circle Gateway transfer lookup answered HTTP ${res.status}`);
+  if (Buffer.byteLength(text) > GATEWAY_MAX_BODY_BYTES) return fail("Circle Gateway transfer record too large");
+  let t;
+  try { t = JSON.parse(text); } catch { return fail("Circle Gateway transfer record is not JSON"); }
+  if (!t || typeof t !== "object" || String(t.id || "").toLowerCase() !== id) return fail("Circle Gateway answered a different transfer");
+  const status = String(t.status || "");
+  if (status === "failed") return fail("Circle Gateway reports the transfer failed - it was never charged, nothing to repay (void with a note)");
+  if (status !== "confirmed" && status !== "completed") return fail(`Circle Gateway transfer not settled yet (status ${/^[a-z_]{1,20}$/.test(status) ? status : "unknown"}) - held until it is confirmed`);
+  if (t.token !== undefined && t.token !== "USDC") return fail("Circle Gateway transfer is not USDC");
+  if (String(t.fromAddress || "").toLowerCase() !== String(payer).toLowerCase()) return fail("Circle Gateway transfer is from a different payer");
+  if (!ours.has(String(t.toAddress || "").toLowerCase())) return fail("Circle Gateway transfer is not to our payTo");
+  if (t.recipientNetwork !== network && t.sendingNetwork !== network) return fail("Circle Gateway transfer is on a different network than this debt");
+  if (!/^[0-9]{1,78}$/.test(String(t.amount ?? ""))) return fail("Circle Gateway transfer amount unreadable");
+  const expected = BigInt(Math.round(Number(amountUsd) * 1e6)); // USDC, 6 decimals on Gateway
+  if (expected <= 0n) return fail("expected amount is zero");
+  const moved = BigInt(t.amount);
+  if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
+  return pass({ movedAtomic: moved.toString(), decimals: 6, tx: id, via: "circle-gateway", status });
+}
+
+/**
  * Confirm the inbound payment a refund row claims. Returns
  * `{ verified:true, … }` or `{ verified:false, reason }` - never throws.
  *
@@ -263,6 +313,8 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
  */
 export async function verifyInboundPayment({
   network, payer, amountUsd, tx, createdAt,
+  wire = null,                 // the row's payment wire; gateway-batched is proven at Gateway
+  gatewayBase = GATEWAY_API_BASE_URL,
   acceptsFor = () => null,
   rpcFor = () => null,
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
@@ -287,6 +339,13 @@ export async function verifyInboundPayment({
     const payTo = accepts?.payTo || [...payToSet][0];
     if (!payToSet.size) return fail(`no live payTo for ${network} - cannot prove where the money went`);
     const n = String(network || "");
+
+    // A Circle Gateway batched sale settled off chain: its evidence is
+    // Gateway's transfer id, proven by Gateway's record, never by an RPC.
+    if (isGatewayWire(wire)) {
+      if (!n.startsWith("eip155:")) return fail(`Circle Gateway debt on ${n || "an unknown network"} - not a network the batched option settles`);
+      return await verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network: n, fetchImpl, timeoutMs, gatewayBase });
+    }
 
     if (n === TEMPO_NETWORK) {
       const rpcUrl = rpcFor(network);

@@ -146,6 +146,17 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(r.ok === false && r.status === 503, "and on B");
   r = await A.send({ op: "gwb.check", ip: "198.51.100.9", global: false });
   ok(r.ok === true, "a wallet-only consult (global:false) is not held by the pause");
+  // A Circle Gateway pending answer (walletCount:false) is kept off the
+  // wallet's SHARED count too.
+  await A.send({ op: "gwb.fail", key: "ip:203.0.113.41", n: 3, global: false, walletCount: false });
+  r = await B.send({ op: "gwb.check", ip: "203.0.113.41", global: false });
+  ok(r.ok === true, "three pending answers recorded on A count nothing against the wallet on B");
+  // The lift time comes from the shared failure times, not B's empty list.
+  const T0 = Date.now() - 60_000;
+  await A.send({ op: "gwb.fail", key: "ip:203.0.113.42", n: 3, global: false, at: T0 });
+  r = await B.send({ op: "gwb.check", ip: "203.0.113.42", global: false });
+  const lift = Date.parse(r.until || "");
+  ok(r.ok === false && Math.abs(lift - (T0 + 15 * 60_000)) < 2000, `B lifts the refusal when A's oldest counted failure ages out (until ${r.until})`);
 }
 // --- the composite spend guard ---
 {

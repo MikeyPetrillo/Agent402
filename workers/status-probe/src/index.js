@@ -453,6 +453,24 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
+    // Circle Gateway batched settlements Gateway answered settlement_pending
+    // (src/gateway-nanopayments.js): the resolver reads each entry every ten
+    // minutes and books a settled, unserved one as an owed debt (refundsOwed
+    // covers it from there). unresolved (an entry still waiting past its
+    // bound) and full page; ok and off clear; pending, near_capacity and
+    // unknown do neither. Same title as heartbeat.yml.
+    title: "Gateway pending settlements need attention",
+    verdict: ({ gateway: b }) => {
+      const w = b.gatewayPending?.status;
+      if (w === "unresolved" || w === "full") return "bad";
+      return w === "ok" || w === "off" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = b.gatewayPending?.status === "full" ? "full" : "unresolved";
+      return `/api/gateway-status reports gatewayPending.status=${w}. unresolved: a batched payment Circle Gateway answered as pending is still waiting past its bound; the resolver reads it every ten minutes and keeps it until Gateway reports it settled or failed. Read it on /__operator/gateway-pending.json and look its nonce up in Gateway's transfer history. full: the pending book reached its bound and refused a new entry (the server log names it). A settled, unserved entry becomes an owed refund (refundsOwed). Auto-closes when the word is ok.`;
+    },
+  },
+  {
     // A buyer paid and got an error. The server keeps the log and publishes one
     // word (chargedFailures on /api/gateway-status, 402 refusals excluded); the
     // charged-failure workflow ran every 4-6 h in practice (measured
@@ -547,6 +565,14 @@ Auto-closes when the word is ok.`;
     title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
     body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor, or its balance could not be read three times running; the operator detail says which (relayersLow, relayersUnread).`,
+  },
+  {
+    // The settle breaker refused a buyer that had settled a call in its
+    // window (buyerRefusals, src/gateway-settle-breaker.js): refusing pages,
+    // ok clears, unknown does neither. Title matches heartbeat.yml's.
+    title: "buyerRefusals: a paying buyer was refused by the settle breaker",
+    verdict: ({ gateway: b }) => wordVerdict(b.buyerRefusals?.status, ["refusing"], ["ok"]),
+    body: () => `${failureWordBody("buyerRefusals", "refusing")} refusing means a wallet, Tempo sender, credits key or address that had settled at least one call inside the breaker's window was then refused for its settle failures; the operator detail has the count, the server log the [gateway-breaker] line.`,
   },
   {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
