@@ -2,8 +2,7 @@
 // Offline test for per-chain price floors (src/network-floors.js) and the one
 // funnel every accept is priced through (priceForNetwork in src/payments.js).
 //
-// The rule: a call settled on a chain whose settlement can run on our own gas
-// (Robinhood Chain) is never priced below that chain's floor. Pinned here: the
+// The rule: a call on a floored chain (Robinhood Chain) is never priced below that chain's floor. Pinned here: the
 // eip155:4663 accept is raised for a cheap tool and untouched for a dear one,
 // no other chain moves, the metered per-request quote is floored too, a
 // premium still only adds, and every surface that states the floor reads it.
@@ -24,7 +23,7 @@ const priceOn = async (opt, req = {}) => (typeof opt.price === "function" ? opt.
 
 console.log("per-chain price floors");
 
-await check("the default Robinhood floor is $0.006 (a settlement there must pay for its own gas)", () => {
+await check("the default Robinhood floor is $0.006", () => {
   assert.equal(ROBINHOOD_MIN_PRICE_DEFAULT_USD, 0.006);
 });
 

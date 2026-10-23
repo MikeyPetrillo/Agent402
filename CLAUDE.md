@@ -221,7 +221,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
-  can run on our own relayer's gas; it is static so the paid retry re-derives the same amount.
+  can run through our own relayer; it is static so the paid retry re-derives the same amount.
   A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms.txt,
   the chain page and the guides read the same floor. Refunds pay list price, so a floored-chain
   buyer is under-refunded by the difference (the same safe direction as premiums).
