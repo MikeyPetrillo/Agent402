@@ -22,6 +22,7 @@
 // A claim is a SET NX with a TTL on the shared Redis when REDIS_URL is set, so
 // two replicas cannot both own one key; without Redis, or when it does not
 // answer, the same claim is made in this process.
+import { GATEWAY_PENDING_BOOKED } from "./gateway-wire.js";
 import { randomUUID } from "node:crypto";
 import { getSharedRedisClient } from "./shared-limit.js";
 
@@ -200,6 +201,13 @@ export function registerSettlementClaimRelease(server) {
       // (for as long as a settled one), so the same signed payment cannot be
       // resent and served while its first settlement is unresolved; the
       // pending book (src/circle-pending.js) settles what is owed.
+      // The exception: a Circle Gateway batched payment the Gateway pending
+      // book holds. That book, not this claim, guards the authorization from
+      // here (src/gateway-nanopayments.js resolves a resend against Gateway's
+      // transfer record before any verify or settle, and lets one request
+      // serve it), so the claim is released for that resend to take.
+      const req = reqOf(ctx);
+      if (isPendingSettlement(ctx) && req && req[GATEWAY_PENDING_BOOKED] === true) { await releaseSettlementKey(s.nonceKey, s.id); return; }
       if (isPendingSettlement(ctx) || namesUnsettledTx(ctx)) { await extendSettlementKey(s.nonceKey, s.id); return; }
       await releaseSettlementKey(s.nonceKey, s.id);
     } catch { /* never touch a payment */ }

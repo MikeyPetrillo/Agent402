@@ -47,6 +47,7 @@ import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
+import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
@@ -1665,7 +1666,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // A batched payment is verified and settled by the Gateway client; every
   // other payment takes the vendor's own lookup (installed after the settle
   // preference, so a tagged plain request still reads its own scope).
-  if (gatewayClient && gatewayKinds.size) installGatewayRouting(server, gatewayClient, new Set(gatewayKinds.keys()));
+  // A resend of a payment Gateway left pending is resolved against Gateway's
+  // transfer record first; a sale already booked for that transfer refuses it.
+  if (gatewayClient && gatewayKinds.size) {
+    const { saleByTxFresh } = await import("./sales-ledger.js");
+    installGatewayRouting(server, gatewayClient, new Set(gatewayKinds.keys()), {
+      pendingBook: await gatewayPendingBook(),
+      wasServed: async ({ tx }) => !!(await saleByTxFresh(tx)),
+    });
+  }
   for (const caip2 of evmCaip2) {
     const scheme = caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme()
       : caip2 === MONAD_CAIP2 ? makeMonadUsdcScheme()
@@ -2524,6 +2533,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator VERIFY failed on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${reason}`
     );
+    // A Circle Gateway batched payment is Gateway's alone: no other
+    // facilitator can read a GatewayWalletBatched authorization, so it is
+    // never offered to one, and its failure stands as Gateway's.
+    if (isBatchedCtx(ctx)) { await recordVerifyFailure(ctx, reason); return; }
     // Before writing this off as a failed payment: was the facilitator merely
     // UNREACHABLE? @x402/core resolves one client per network and does not fall
     // back when that client throws, so a connect timeout at CDP - which is
@@ -2601,6 +2614,17 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   }
   server.onSettleFailure(async (ctx) => {
     const failure = summarizeFacilitatorError(ctx?.error);
+    // A Circle Gateway batched payment never reaches the chain recovery, the
+    // settle fallback, the outage read or our relayer: a GatewayWalletBatched
+    // authorization is settled by Gateway alone, and handing it to a chain
+    // facilitator (an HTTP 402 from Gateway reads as pre-broadcast) would be
+    // a second settle path for one payment. Gateway's failure stands, and a
+    // refusal about the buyer's Gateway balance is not a funds alarm on any
+    // facilitator account of ours.
+    if (isBatchedCtx(ctx)) {
+      console.warn(`[payments] Circle Gateway batched SETTLE failed on ${ctx?.requirements?.network}: ${failure}; no other settle path is tried`);
+      return;
+    }
     // A facilitator QUOTA refusal is not an outage and must not read as one:
     // PayAI answers 403 free_tier_exhausted once the free monthly settlements
     // are spent (1,000 per receiving wallet). Say so in the log so the alarm
@@ -2736,6 +2760,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       }
     }
   });
+}
+
+/** True for a hook context whose payment or requirement is the Circle
+ *  Gateway batched kind (src/gateway-wire.js). */
+function isBatchedCtx(ctx) {
+  return isGatewayBatchedPayment(ctx?.paymentPayload) || isGatewayBatchedPayment(ctx?.requirements);
 }
 
 /**

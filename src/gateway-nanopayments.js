@@ -36,16 +36,33 @@
 // takes no ERC-1271 signature on this path).
 //
 // `settlement_pending` from /settle is a distinct outcome: neither paid nor
-// failed inside the call. It answers the buyer a 402 with nothing served
+// failed inside the call. The client first reads Gateway's transfer record
+// for the authorization (GET /v1/x402/transfers?nonce=, keyless) for a
+// bounded time, inside the CDN answer window when the request came through
+// it (src/cdn-sync-window.js): a transfer Gateway accepted is served and
+// booked like any settle success, one Gateway reports failed is refused (not
+// charged). Still unresolved, it answers the buyer a 402 with nothing served
 // (transaction empty, so the vendor's own pending retry does not resend the
 // same nonce), is booked by its authorization in the pending book, and the
-// 402 body says why (src/gateway-wire.js classifySettlementPending).
+// 402 body asks for the SAME payment again after a short wait, never a new
+// signature (src/gateway-wire.js classifySettlementPending). That resend is
+// resolved against Gateway's record BEFORE anything is verified or settled
+// again (installGatewayRouting): accepted, it is served and booked exactly
+// once (the book entry is taken by one request and dropped on its final
+// 200); still pending, it is refused at verify with the same words; failed,
+// the entry is dropped and the buyer told nothing was charged.
+//
+// A batched payment never reaches a chain facilitator, the settle fallback,
+// the verify failover or our relayer (src/payments.js): Gateway alone can
+// settle a GatewayWalletBatched authorization.
 import { SettleError, VerifyError } from "@x402/core/types";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
-import { GATEWAY_KIND_NAME, GATEWAY_WIRE, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment } from "./gateway-wire.js";
+import { randomUUID } from "node:crypto";
+import { cdnSyncLeftMs } from "./cdn-sync-window.js";
+import { GATEWAY_KIND_NAME, GATEWAY_PENDING_BOOKED, GATEWAY_WIRE, SETTLEMENT_FAILED_REASON, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment } from "./gateway-wire.js";
 
 export { GATEWAY_KIND_NAME, GATEWAY_WIRE, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment, isGatewayBatchedHeader, isGatewayBatchedRequest, settlementKindOf } from "./gateway-wire.js";
 
@@ -66,6 +83,20 @@ const SUPPORTED_TIMEOUT_MS = 10_000;
 const VERIFY_TIMEOUT_MS = 15_000;
 const SETTLE_TIMEOUT_MS = 30_000;
 const BALANCE_TIMEOUT_MS = 10_000;
+const TRANSFER_TIMEOUT_MS = 8_000;
+/** How long a settle Gateway answered settlement_pending waits for Gateway's
+ *  transfer record before answering pending (GATEWAY_PENDING_WAIT_MS). */
+export const DEFAULT_PENDING_WAIT_MS = 8_000;
+export const PENDING_POLL_MS = 1_000;
+/** Kept free at the end of a CDN request's answer window for the settle
+ *  hooks and the write after the wait. */
+export const CDN_PENDING_RESERVE_MS = 5_000;
+/** A transfer in one of these states holds the buyer's Gateway balance for
+ *  us: what a /settle success reports, so it is served the same way. Only
+ *  confirmed and completed prove a debt for a refund (src/payment-verify.js),
+ *  Gateway's own advice for accounting. */
+export const ACCEPTED_TRANSFER_STATUSES = Object.freeze(["received", "batched", "confirmed", "completed"]);
+const TRANSFER_STATUSES = new Set([...ACCEPTED_TRANSFER_STATUSES, "failed"]);
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -114,6 +145,43 @@ export function gatewayNanopaymentNetworks(env = process.env, log = console.warn
 }
 
 /** The dollar figure past which the balance word reads "withdraw". */
+export function gatewayPendingWaitMs(env = process.env) {
+  const n = Number(env.GATEWAY_PENDING_WAIT_MS);
+  return Number.isFinite(n) && n >= 0 && n <= 60_000 ? n : DEFAULT_PENDING_WAIT_MS;
+}
+
+/**
+ * One Gateway transfer record (GET /v1/x402/transfers/{id}, or an element of
+ * the search answer), reduced to the fields we check, or null when its shape
+ * is not the documented one. Never trusted beyond what it is matched against.
+ */
+export function normalizeGatewayTransfer(t) {
+  if (!isObj(t)) return null;
+  const id = String(t.id || "");
+  const status = String(t.status || "");
+  if (!UUID.test(id) || !TRANSFER_STATUSES.has(status)) return null;
+  if (!ADDR.test(String(t.fromAddress || "")) || !ADDR.test(String(t.toAddress || ""))) return null;
+  if (!UINT.test(String(t.amount ?? "")) || !B32.test(String(t.nonce || ""))) return null;
+  const net = (v) => (typeof v === "string" && /^eip155:[0-9]{1,12}$/.test(v) ? v : null);
+  return {
+    id: id.toLowerCase(), status, token: typeof t.token === "string" ? t.token : null,
+    from: lc(t.fromAddress), to: lc(t.toAddress), amount: String(t.amount), nonce: lc(t.nonce),
+    sendingNetwork: net(t.sendingNetwork), recipientNetwork: net(t.recipientNetwork),
+  };
+}
+
+/** True when a normalized transfer is THIS authorization: same nonce, same
+ *  payer, to our payTo, for exactly the amount, in USDC, on this network. */
+export function gatewayTransferMatches(t, { payer, payTo, amount, nonce, network }) {
+  if (!t) return false;
+  if (t.nonce !== lc(nonce) || t.from !== lc(payer) || t.to !== lc(payTo)) return false;
+  if (t.token !== null && t.token !== "USDC") return false;
+  if (!UINT.test(String(amount ?? "")) || BigInt(t.amount) !== BigInt(amount)) return false;
+  return t.recipientNetwork === network || t.sendingNetwork === network;
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+
 export function gatewayWithdrawAlertUsd(env = process.env) {
   const n = Number(env.GATEWAY_WITHDRAW_ALERT_USD);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_WITHDRAW_ALERT_USD;
@@ -239,6 +307,25 @@ export async function preflightGatewayPayment(paymentPayload, requirements, kind
   return null;
 }
 
+/**
+ * The check a resend of a booked pending payment passes before it is served
+ * on Gateway's transfer record: the preflight without the clock (the
+ * authorization was already spent at Gateway; its validity window no longer
+ * decides anything). Returns null, or a refusal reason.
+ */
+async function resumeCheck(paymentPayload, requirements, kinds) {
+  const kind = kinds instanceof Map ? kinds.get(requirements?.network) : null;
+  if (!kind || !isObj(requirements) || requirements.scheme !== "exact" || !isGatewayBatchedPayment(paymentPayload)) return "unsupported_network";
+  if (lc(requirements.asset) !== kind.asset || paymentPayload.accepted.network !== requirements.network) return "unsupported_network";
+  const auth = paymentPayload?.payload?.authorization;
+  const sig = paymentPayload?.payload?.signature;
+  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(String(auth.from || "")) || !UINT.test(String(auth.value ?? "")) || !UINT.test(String(requirements.amount ?? ""))) return "invalid_payload";
+  if (lc(auth.to) !== lc(requirements.payTo)) return "address_mismatch";
+  if (BigInt(auth.value) !== BigInt(requirements.amount)) return "amount_mismatch";
+  if (!(await isGatewayEoaSignature(kind, auth, sig))) return "invalid_signature";
+  return null;
+}
+
 /** The first machine reason in an error body ({errors:[{reason}]} or {errorReason}), or a status code. */
 function reasonFromErrorBody(data, status) {
   const first = isObj(data) && Array.isArray(data.errors) ? data.errors[0] : null;
@@ -287,11 +374,13 @@ async function readJsonCapped(res, op) {
  * constructor): installGatewayRouting hands it a batched payment by scope.
  */
 export class GatewayNanopaymentsClient {
-  constructor({ fetchImpl, now, networks = Object.values(GATEWAY_NETWORK_NAMES), onPending = null } = {}) {
+  constructor({ fetchImpl, now, networks = Object.values(GATEWAY_NETWORK_NAMES), onPending = null, pendingWaitMs = gatewayPendingWaitMs(), pendingPollMs = PENDING_POLL_MS } = {}) {
     this._fetch = fetchImpl || ((...a) => globalThis.fetch(...a));
     this._now = now || (() => Date.now());
     this._wanted = [...networks];
     this._kinds = new Map();
+    this._pendingWaitMs = pendingWaitMs;
+    this._pendingPollMs = pendingPollMs;
     // Called with { payer, network, nonce, amount, resource } for a settle
     // Gateway answered settlement_pending (src/gateway-nanopayments.js book).
     this._onPending = typeof onPending === "function" ? onPending : null;
@@ -336,6 +425,15 @@ export class GatewayNanopaymentsClient {
   }
 
   async verify(paymentPayload, paymentRequirements) {
+    // A resend of a payment the pending book holds: decided from Gateway's
+    // transfer record (installGatewayRouting), never verified at Gateway again.
+    const resume = scope.getStore()?.resume;
+    if (resume) {
+      const payer = paymentPayload?.payload?.authorization?.from;
+      if (resume.outcome !== "accepted") return { isValid: false, invalidReason: resume.outcome === "failed" ? SETTLEMENT_FAILED_REASON : resume.outcome === "served" ? "nonce_already_used" : SETTLEMENT_PENDING_REASON, payer };
+      const bad = await resumeCheck(paymentPayload, paymentRequirements, this._kinds);
+      return bad ? { isValid: false, invalidReason: bad, payer } : { isValid: true, payer };
+    }
     const refused = await preflightGatewayPayment(paymentPayload, paymentRequirements, this._kinds, Math.floor(this._now() / 1000));
     if (refused) return { isValid: false, invalidReason: refused.reason, payer: refused.payer };
     const r = await this._request("verify", "/v1/x402/verify", {
@@ -355,6 +453,15 @@ export class GatewayNanopaymentsClient {
   async settle(paymentPayload, paymentRequirements) {
     const network = paymentRequirements?.network;
     const signedFrom = paymentPayload?.payload?.authorization?.from;
+    const store = scope.getStore();
+    // A resend Gateway already accepted (installGatewayRouting): served on its
+    // transfer record, with no second settle call.
+    if (store?.resume) {
+      const r = store.resume;
+      const bad = r.outcome !== "accepted" ? SETTLEMENT_PENDING_REASON : await resumeCheck(paymentPayload, paymentRequirements, this._kinds);
+      if (bad) return { success: false, errorReason: bad, transaction: "", network, payer: ADDR.test(String(signedFrom || "")) ? signedFrom : undefined };
+      return { success: true, transaction: r.transfer.id, network, payer: signedFrom };
+    }
     const refused = await preflightGatewayPayment(paymentPayload, paymentRequirements, this._kinds, Math.floor(this._now() / 1000));
     if (refused) return { success: false, errorReason: refused.reason, transaction: "", network, payer: refused.payer };
     const r = await this._request("settle", "/v1/x402/settle", {
@@ -379,18 +486,65 @@ export class GatewayNanopaymentsClient {
     }
     const reason = safeReason(d.errorReason);
     if (reason === SETTLEMENT_PENDING_REASON) {
-      // Neither paid nor failed inside the call: refused to the buyer now,
-      // booked by its authorization so a later completion is repaid. The
-      // transaction is left empty so @x402/core's own pending retry never
-      // resends this nonce.
+      // Neither paid nor failed inside the call. Gateway's transfer record
+      // for this authorization is read for a bounded time first.
+      const auth = paymentPayload?.payload?.authorization;
+      const want = { payer, payTo: paymentRequirements?.payTo, amount: paymentRequirements?.amount, nonce: auth?.nonce, network };
+      const found = await this._awaitTransfer(want, store?.req || null);
+      if (found.state === "accepted") return { success: true, transaction: found.transfer.id, network, payer };
+      if (found.state === "failed") return { success: false, errorReason: SETTLEMENT_FAILED_REASON, transaction: "", network, payer };
+      // Still unresolved: refused to the buyer now, booked by its
+      // authorization so the same payment resent later is resolved against
+      // Gateway first. The transaction is left empty so @x402/core's own
+      // pending retry never resends this nonce.
       if (this._onPending) {
         try {
-          await this._onPending({ payer, network, nonce: paymentPayload?.payload?.authorization?.nonce, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
+          const booked = await this._onPending({ payer, network, nonce: auth?.nonce, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
+          if (booked === true && store?.req && typeof store.req === "object") store.req[GATEWAY_PENDING_BOOKED] = true;
         } catch { /* booking never breaks the settle path */ }
       }
-      console.warn(`[gateway] batched settlement on ${network} still pending at Gateway; not reported as settled`);
+      console.warn(`[gateway] batched settlement on ${network} still pending at Gateway after the wait; not reported as settled`);
     }
     return { success: false, errorReason: reason, transaction: "", network, payer };
+  }
+
+  /** The wait for a pending settlement: Gateway's transfer record for the
+   *  authorization, polled until it answers or the budget ends. The budget
+   *  is GATEWAY_PENDING_WAIT_MS, cut to the CDN answer window (less a
+   *  reserve) for a request that came through the CDN proxy. */
+  async _awaitTransfer(want, req) {
+    let budget = this._pendingWaitMs;
+    const left = cdnSyncLeftMs(req, this._now());
+    if (left !== null) budget = Math.min(budget, left - CDN_PENDING_RESERVE_MS);
+    const deadline = this._now() + budget;
+    let last = { state: "none" };
+    // Each read follows a pause (Gateway needs a moment to write the record)
+    // and the last one lands at the deadline; a read never outlasts the
+    // budget by more than a second.
+    while (this._now() < deadline) {
+      await sleepMs(Math.min(this._pendingPollMs, deadline - this._now()));
+      last = await this.transferByAuthorization(want, { timeoutMs: Math.max(1000, Math.min(TRANSFER_TIMEOUT_MS, deadline - this._now())) });
+      if (last.state === "accepted" || last.state === "failed") return last;
+    }
+    return last;
+  }
+
+  /** Gateway's transfer for one authorization (GET /v1/x402/transfers?nonce=,
+   *  keyless): { state: "accepted" | "failed" | "none" | "unreadable",
+   *  transfer }. Only a record that matches the authorization counts. */
+  async transferByAuthorization(want, { timeoutMs = TRANSFER_TIMEOUT_MS } = {}) {
+    if (!B32.test(String(want?.nonce || "")) || !ADDR.test(String(want?.payer || ""))) return { state: "unreadable" };
+    let r;
+    try {
+      const q = new URLSearchParams({ nonce: lc(want.nonce), network: String(want.network || "") });
+      r = await this._request("transfers", `/v1/x402/transfers?${q}`, { timeoutMs });
+    } catch { return { state: "unreadable" }; }
+    if (!r.ok || r.parseError || !isObj(r.data) || !Array.isArray(r.data.transfers) || r.data.transfers.length > 100) return { state: "unreadable" };
+    const matches = r.data.transfers.map(normalizeGatewayTransfer).filter((t) => gatewayTransferMatches(t, want));
+    const live = matches.find((t) => t.status !== "failed");
+    if (live) return { state: "accepted", transfer: live };
+    if (matches.length) return { state: "failed", transfer: matches[0] };
+    return { state: "none" };
   }
 
   /**
@@ -436,21 +590,107 @@ export function activeGatewayClient() { return scope.getStore()?.client || null;
  * of CAIP-2 ids the batched option is offered on: a batched payload for any
  * other network is refused by the client's own preflight (unsupported_network)
  * rather than handed to the plain facilitator.
+ *
+ * With `pendingBook` (createGatewayPendingBook), a batched payment whose
+ * authorization the book holds is resolved against Gateway's transfer record
+ * BEFORE any verify or settle call reaches Gateway:
+ *   accepted -> one request takes the entry (claimResume), is verified and
+ *               settled on the record (no Gateway call), and drops the entry
+ *               on its final 200; any other end hands the entry back.
+ *               `wasServed({ tx, network })` (a sale already booked for that
+ *               transfer) drops the entry and refuses the resend instead.
+ *   failed   -> the entry is dropped (Gateway charged nothing) and the resend
+ *               is refused with settlement_failed.
+ *   pending, unreadable, or another request holds the entry -> refused at
+ *               verify with settlement_pending; the entry stays.
  */
-export function installGatewayRouting(server, client, networks) {
+export function installGatewayRouting(server, client, networks, { pendingBook = null, wasServed = null, log = console.warn } = {}) {
   if (!server || server[INSTALLED]) return server;
   const nets = networks instanceof Set ? networks : new Set(networks || []);
   const batched = (paymentPayload, requirements) => isGatewayBatchedPayment(paymentPayload) || (isObj(requirements) && isObj(requirements.extra) && requirements.extra.name === GATEWAY_KIND_NAME);
   const origVerify = server.verifyPayment.bind(server);
   const origSettle = server.settlePayment.bind(server);
   const origClient = server.getFacilitatorClient.bind(server);
-  server.verifyPayment = (paymentPayload, requirements, ...rest) => {
+  const reqOfTransport = (tc) => tc?.request?.adapter?.req || null;
+  // Resumes taken by a verify in this process, for the settle of the same
+  // request: by request when the transport names one, else by entry key.
+  const byReq = new WeakMap();
+  const byKey = new Map();
+
+  async function resolvePending(paymentPayload, requirements, req) {
+    if (!pendingBook) return null;
+    const a = paymentPayload?.payload?.authorization;
+    if (!isObj(a) || !ADDR.test(String(a.from || "")) || !B32.test(String(a.nonce || ""))) return null;
+    const network = requirements?.network;
+    const key = pendingKey(network, a.from, a.nonce);
+    let entry = null;
+    try { entry = await pendingBook.get(key); } catch { return { outcome: "pending", key }; }
+    if (!entry) return null;
+    const found = await client.transferByAuthorization({ payer: a.from, payTo: requirements?.payTo, amount: requirements?.amount, nonce: a.nonce, network });
+    if (found.state === "failed") {
+      try { await pendingBook.resolve(key, { outcome: "not_charged", note: "Gateway reports the transfer failed" }); } catch { /* the entry stays; nothing is served either way */ }
+      return { outcome: "failed", key };
+    }
+    if (found.state !== "accepted") return { outcome: "pending", key };
+    if (typeof wasServed === "function") {
+      let served = false;
+      try { served = !!(await wasServed({ tx: found.transfer.id, network })); } catch { return { outcome: "pending", key }; }
+      if (served) {
+        try { await pendingBook.resolve(key, { outcome: "served", note: "a sale is already booked for this transfer" }); } catch { /* refused either way */ }
+        return { outcome: "served", key };
+      }
+    }
+    const owner = randomUUID();
+    let took = false;
+    try { took = await pendingBook.claimResume(key, owner); } catch { took = false; }
+    if (!took) return { outcome: "pending", key };
+    const resume = { outcome: "accepted", key, owner, transfer: found.transfer, done: false };
+    // The entry is dropped on this request's final 200 (served, and booked
+    // once by the sale ledger) and handed back on any other end.
+    const finish = async (served) => {
+      if (resume.done) return;
+      resume.done = true;
+      byKey.delete(key);
+      try {
+        if (served) await pendingBook.resolve(key, { outcome: "served", note: "resent and served on Gateway's transfer record" });
+        else await pendingBook.releaseResume(key, owner);
+      } catch (e) { log(`[gateway] pending entry ${key} could not be ${served ? "dropped" : "handed back"}: ${String(e?.message || e).slice(0, 120)}`); }
+    };
+    resume.finish = finish;
+    const res = req?.res;
+    if (res && typeof res.once === "function") {
+      byReq.set(req, resume);
+      res.once("finish", () => { void finish(res.statusCode === 200); });
+      res.once("close", () => { if (!res.writableFinished) void finish(false); });
+    } else {
+      byKey.set(key, resume);
+    }
+    return resume;
+  }
+
+  server.verifyPayment = async (paymentPayload, requirements, ...rest) => {
     if (!batched(paymentPayload, requirements)) return origVerify(paymentPayload, requirements, ...rest);
-    return scope.run({ client, network: requirements?.network }, () => origVerify(paymentPayload, requirements, ...rest));
+    const req = reqOfTransport(rest[1]);
+    const resume = await resolvePending(paymentPayload, requirements, req);
+    return scope.run({ client, network: requirements?.network, req, resume }, () => origVerify(paymentPayload, requirements, ...rest));
   };
-  server.settlePayment = (paymentPayload, requirements, ...rest) => {
+  server.settlePayment = async (paymentPayload, requirements, ...rest) => {
     if (!batched(paymentPayload, requirements)) return origSettle(paymentPayload, requirements, ...rest);
-    return scope.run({ client, network: requirements?.network }, () => origSettle(paymentPayload, requirements, ...rest));
+    const req = reqOfTransport(rest[1]);
+    const a = paymentPayload?.payload?.authorization;
+    const key = isObj(a) ? pendingKey(requirements?.network, a.from, a.nonce) : null;
+    const resume = (req && byReq.get(req)) || (key && byKey.get(key)) || null;
+    // Without a response to watch, the settle's own outcome ends the resume.
+    const watched = !!(req?.res && typeof req.res.once === "function");
+    let result;
+    try {
+      result = await scope.run({ client, network: requirements?.network, req, resume }, () => origSettle(paymentPayload, requirements, ...rest));
+    } catch (e) {
+      if (resume && !watched) await resume.finish(false);
+      throw e;
+    }
+    if (resume && !watched) await resume.finish(result?.success === true);
+    return result;
   };
   server.getFacilitatorClient = (x402Version, network, scheme) => {
     const ctx = scope.getStore();
@@ -463,12 +703,16 @@ export function installGatewayRouting(server, client, networks) {
 
 // ---------------------------------------------------------------------------
 // The pending book: settlements Gateway answered settlement_pending, keyed by
-// the authorization (network, payer, nonce). Reconciled by hand from Gateway's
-// transfer history (the seller reconciliation guide); listed on
+// the authorization (network, payer, nonce). A resend of the same payment
+// resolves its entry against Gateway's transfer record (installGatewayRouting);
+// an entry no buyer comes back for is reconciled by hand from Gateway's
+// transfer history (the seller reconciliation guide), listed on
 // /__operator/gateway-pending.json. Bounded; a full book refuses new entries
 // loudly rather than dropping old ones.
 // ---------------------------------------------------------------------------
 export const PENDING_MAX_ENTRIES = 2000;
+/** How long one resend may hold a pending entry before another may take it. */
+export const RESUME_LEASE_MS = 10 * 60_000;
 export const pendingKey = (network, payer, nonce) => `${String(network)}|${lc(payer)}|${lc(nonce)}`;
 
 export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FILE || "/data/gateway-pending.json", now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES } = {}) {
@@ -484,12 +728,19 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
       if (isObj(b)) absorb(b); else state = { pending: {} };
     } catch { /* keep the last body read */ }
   };
-  const change = async (fn) => {
+  // One change at a time in this process (a file read between another
+  // change's mutation and its save would lose that mutation); across
+  // replicas the database update is the compare-and-set. A mutator may run
+  // more than once under the database, so each run starts from the body it
+  // is handed and decides afresh.
+  let queue = Promise.resolve();
+  const changeNow = async (fn) => {
     if (!PG) { await refresh(); fn(state.pending); await doc.save(state); return true; }
-    const r = await doc.update((b) => { const pending = { ...((isObj(b) && isObj(b.pending)) || {}) }; fn(pending); return { pending }; }, { fallback: null });
+    const r = await doc.update((b) => { const pending = isObj(b) && isObj(b.pending) ? { ...b.pending } : {}; fn(pending); return { pending }; }, { fallback: null });
     if (r.ok) absorb(r.body);
     return !!r.ok;
   };
+  const change = (fn) => { const run = queue.then(() => changeNow(fn), () => changeNow(fn)); queue = run.catch(() => {}); return run; };
   const entries = () => Object.values(state.pending);
   return {
     ready,
@@ -500,6 +751,7 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
       const key = pendingKey(network, payer, nonce);
       let made = false;
       await change((pending) => {
+        made = false;
         if (pending[key]) return;
         if (Object.keys(pending).length >= maxEntries) { log(`[gateway] pending book full (${maxEntries}); a pending settlement on ${network} was not booked`); return; }
         pending[key] = { key, network, payer: lc(payer), nonce: lc(nonce), amount: UINT.test(String(amount ?? "")) ? String(amount) : null, resource: typeof resource === "string" ? resource.slice(0, 300) : null, at: now(), state: "pending" };
@@ -514,6 +766,39 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
       await change((pending) => { delete pending[key]; });
       log(`[gateway] pending entry ${key} resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
       return { ok: true, key, outcome };
+    },
+    /** The entry for one authorization key, read from the shared store. */
+    async get(key) {
+      await refresh();
+      return typeof key === "string" && state.pending[key] ? { ...state.pending[key] } : null;
+    },
+    /** Take an entry for one resend (installGatewayRouting): true when this
+     *  owner now holds it. Another owner's hold lapses after `leaseMs`, so a
+     *  replica that died mid-request cannot strand the entry. */
+    async claimResume(key, owner, { leaseMs = RESUME_LEASE_MS } = {}) {
+      let took = false;
+      await change((pending) => {
+        took = false;
+        const e = pending[key];
+        if (!e) return;
+        if (e.state === "resuming" && e.owner !== owner && now() - Number(e.resumeAt || 0) < leaseMs) return;
+        pending[key] = { ...e, state: "resuming", owner, resumeAt: now() };
+        took = true;
+      });
+      return took;
+    },
+    /** Hand an entry back after a resend that was not served. */
+    async releaseResume(key, owner) {
+      let back = false;
+      await change((pending) => {
+        back = false;
+        const e = pending[key];
+        if (!e || e.owner !== owner) return;
+        const { owner: _o, resumeAt: _r, ...rest } = e;
+        pending[key] = { ...rest, state: "pending" };
+        back = true;
+      });
+      return back;
     },
     list() { return entries(); },
     /** One word for /api/gateway-status: ok / pending / near_capacity / full. */

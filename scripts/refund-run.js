@@ -65,6 +65,10 @@
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
+import { isGatewayWire } from "../src/gateway-wire.js";
+
+const GATEWAY_TRANSFER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const GATEWAY_NO_ID_HOLD = "Circle Gateway debt with no Gateway transfer id recorded - cannot be proven; resolve by hand from Gateway's transfer history";
 
 // This repo is PUBLIC, so every Actions log is world-readable. The project's
 // standing rule for buyer identities is "counts only, never addresses - a
@@ -250,6 +254,12 @@ export function planRefunds(rawRows, {
     if (!(usd <= maxEachUsd)) { hold(`over per-refund cap $${maxEachUsd}`, row); continue; }
     const family = familyOf(row.network);
     if (family === "unknown") { hold(`unsupported network ${row.network}`, row); continue; }
+    // A Circle Gateway batched debt is proven by Gateway's transfer record,
+    // keyed by the transfer id the row holds (src/payment-verify.js). A row
+    // without one can never be proven, so it is held here, by name, rather
+    // than failing verification on every run. Repaid on chain like any EVM
+    // debt: the treasury sends USDC on the network the buyer paid on.
+    if (isGatewayWire(row.wire) && !GATEWAY_TRANSFER_ID.test(String(row.evidence || "").trim())) { hold(GATEWAY_NO_ID_HOLD, row); continue; }
     if (!senders[family]) { hold(`no sender/key for ${family} - debt stays on the ledger`, row); continue; }
     if (usd < minRefundUsd) { hold(`below the dust floor $${minRefundUsd} - costs more in gas than it repays; batch or void with a note`, row); continue; }
     // PER-PAYER BOUND. Gas is sponsored for buyers on the EVM rails, so a
@@ -832,6 +842,8 @@ async function main() {
       verifyInbound: (row) => verifyInboundPayment({
         network: row.network, payer: row.payer, amountUsd: row.priceUsd,
         tx: row.evidence, createdAt: row.createdAt,
+        // gateway-batched rows are proven by Gateway's transfer record.
+        wire: row.wire,
         acceptsFor: (n) => accepts[n],
         payToSetFor: (n) => payToSets.get(n) || [],
         rpcFor,

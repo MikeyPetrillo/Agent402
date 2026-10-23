@@ -506,5 +506,46 @@ delete process.env.OPENAI_API_KEY;
   b._gatewaySettleBreakerReset();
 }
 
+// A Circle Gateway batched payment Gateway is still settling: the buyer was
+// told to resend the SAME payment (src/gateway-wire.js), so the pending
+// answer is never counted against the wallet, three in a row block nothing,
+// and it still counts once toward the /v1 global pause as that buyer. The
+// control: Gateway refusing the same wallet's payment (insufficient_balance)
+// counts exactly as before.
+{
+  b._gatewaySettleBreakerReset();
+  const key = ADDR.toLowerCase();
+  const pendingReceipt = Buffer.from(JSON.stringify({ success: false, errorReason: "settlement_pending", transaction: "", network: "eip155:8453" })).toString("base64");
+  // The paywall reads the batched kind from the payment header's accepted.extra.name.
+  const batchedHdr = Buffer.from(JSON.stringify({ accepted: { scheme: "exact", network: "eip155:8453", extra: { name: "GatewayWalletBatched" } }, payload: { authorization: { from: ADDR } } })).toString("base64");
+  const batchedReq = () => Object.assign(fakeReq({ from: ADDR }), { header: (n) => (String(n).toLowerCase() === "payment-signature" ? batchedHdr : undefined) });
+  for (let i = 0; i < 3; i++) {
+    const req = batchedReq();
+    b.armGatewaySettleBreaker(req, key);
+    req.res.statusCode = 402;
+    req.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
+    req.res.emit("finish");
+  }
+  const st = b.gatewaySettleBreakerBlocked(key);
+  ok(st.fails === 0 && !st.blocked, `three settlement_pending answers count nothing against the wallet (got ${JSON.stringify(st)})`);
+  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "...and count once toward the /v1 global pause, as that one buyer");
+  // Control: the same word on a PLAIN payment (Circle's Arc facilitator,
+  // whose resend its held claim refuses) is not this exemption.
+  const plainReq = fakeReq({ from: ADDR });
+  b.armGatewaySettleBreaker(plainReq, key);
+  plainReq.res.statusCode = 402;
+  plainReq.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
+  plainReq.res.emit("finish");
+  ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: settlement_pending on a plain payment still counts against the wallet");
+  b._gatewaySettleBreakerReset();
+  const req = batchedReq();
+  b.armGatewaySettleBreaker(req, key);
+  req.res.statusCode = 402;
+  req.res.setHeader("PAYMENT-RESPONSE", Buffer.from(JSON.stringify({ success: false, errorReason: "insufficient_balance", transaction: "", network: "eip155:8453" })).toString("base64"));
+  req.res.emit("finish");
+  ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: Gateway refusing the same wallet (insufficient_balance) still counts against it");
+  b._gatewaySettleBreakerReset();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

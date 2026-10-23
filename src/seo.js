@@ -435,7 +435,11 @@ function gatewayNanopaymentsLine() {
   if (!gw) return "";
   const nets = Object.keys(gw.networks);
   const chains = Object.entries(CHAIN_PAGES).filter(([, c]) => nets.includes(c.caip2)).map(([, c]) => c.chainName);
-  return ` **Gas-free batched option (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\` and a seven-day \`maxTimeoutSeconds\`): a buyer that holds a Circle Gateway USDC balance signs the same EIP-3009 authorization under that domain and pays no gas; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`. Identity-bound routes offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
+  // The validity window each network's accept carries, read from the offer
+  // (Gateway's minValiditySeconds plus our buffer), never typed here.
+  const windows = [...new Set(Object.values(gw.networks).map((n) => Number(n.maxTimeoutSeconds)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  const windowWords = windows.length ? ` and a \`maxTimeoutSeconds\` of ${windows.join(" or ")} seconds` : "";
+  return ` **Gas-free batched option (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\`${windowWords}): a buyer that holds a Circle Gateway USDC balance signs the same EIP-3009 authorization under that domain and pays no gas; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`. Identity-bound routes offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
 }
 
 export function llmsTxt(baseUrl, catalog) {

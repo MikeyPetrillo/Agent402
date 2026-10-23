@@ -44,15 +44,49 @@ export function isGatewayBatchedRequest(req) {
   try { return isGatewayBatchedHeader(req?.header?.("payment-signature") || req?.header?.("x-payment") || null); } catch { return false; }
 }
 
-/** A settle receipt that says Gateway had not confirmed the batched payment
- *  inside this server's wait: the answer was withheld and nothing is counted
- *  as charged here. Returns the 402's reason, retry verb and detail, or null. */
-export function classifySettlementPending(receipt) {
-  if (!receipt || typeof receipt !== "object" || receipt.success !== false) return null;
-  if (receipt.errorReason !== SETTLEMENT_PENDING_REASON) return null;
-  const network = typeof receipt.network === "string" && receipt.network ? receipt.network : null;
-  return {
-    reason: "settlement-pending", retry: "fresh-authorization", network,
-    detail: "Circle Gateway accepted the batched authorization but had not confirmed it inside this server's wait, so the answer was withheld and no charge is counted for it here. The authorization is booked for reconciliation: if Gateway settles it later, the amount is repaid as an owed refund. Sign a fresh authorization to retry, or pay the same route's plain accept.",
-  };
+/** Seconds a buyer is asked to wait before resending a payment Gateway is
+ *  still settling (the Retry-After on that 402). */
+export const PENDING_RETRY_AFTER_SECONDS = 10;
+
+/** What a buyer is told while Gateway is still settling a batched payment:
+ *  the payment was accepted, nothing more is charged, and the SAME payment
+ *  resent after a short wait is served once Gateway reports it settled. Never
+ *  a new signature: a second authorization could be a second charge. */
+export const SETTLEMENT_PENDING_DETAIL = "Circle Gateway accepted this batched payment and is still settling it, so the answer was withheld. Nothing more is charged for it. Retry the same request with the same payment header after a short wait: once Gateway reports the payment settled, that retry is served without a new charge. Do not sign a new authorization for this request.";
+
+/** What a buyer is told when Gateway reports the batched payment failed:
+ *  Gateway charges nothing for a failed transfer, so a fresh one is safe. */
+export const SETTLEMENT_FAILED_REASON = "settlement_failed";
+export const SETTLEMENT_FAILED_DETAIL = "Circle Gateway reports that this batched payment failed, and a failed Gateway transfer is not charged. Sign a fresh authorization to retry.";
+
+/** True for a settle receipt (decoded PAYMENT-RESPONSE) that says Gateway is
+ *  still settling the payment: neither served nor refused by the buyer's own
+ *  doing, so no breaker counts it against the wallet. */
+export function isSettlementPendingReceipt(receipt) {
+  return !!receipt && typeof receipt === "object" && receipt.success === false && receipt.errorReason === SETTLEMENT_PENDING_REASON;
 }
+
+/** True for the answer to a Circle Gateway batched payment that Gateway is
+ *  still settling: the request carried the batched kind AND its receipt says
+ *  settlement_pending. (Circle's Arc facilitator answers the same word for a
+ *  plain Arc payment, whose resend is refused by its held claim; that answer
+ *  is not this one.) */
+export function isGatewayPendingAnswer(req, receipt) {
+  return isGatewayBatchedRequest(req) && isSettlementPendingReceipt(receipt);
+}
+
+/** A settle receipt that says Gateway had not settled the batched payment
+ *  inside this server's wait: the answer was withheld, the payment is booked
+ *  by its authorization, and the same payment resent later is resolved
+ *  against Gateway before anything is verified or settled again. Returns the
+ *  402's reason, retry verb and detail, or null. */
+export function classifySettlementPending(receipt) {
+  if (!isSettlementPendingReceipt(receipt)) return null;
+  const network = typeof receipt.network === "string" && receipt.network ? receipt.network : null;
+  return { reason: "settlement-pending", retry: "same-payment", network, retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, detail: SETTLEMENT_PENDING_DETAIL };
+}
+
+/** Set on the request (by the Gateway client) when a pending batched payment
+ *  was booked in the pending book: from then on that book, not the
+ *  settlement claim, guards the authorization (src/settlement-claims.js). */
+export const GATEWAY_PENDING_BOOKED = Symbol.for("agent402.gatewayPendingBooked");
