@@ -869,8 +869,8 @@ exists:
 - **Algorand** - USDC via a dedicated AVM facilitator; every payment carries a
   signed validity window sized to the tool it's paying for, so a slow tool can
   never receive a payment that expires mid-call.
-- **Robinhood Chain** - the one non-USDC rail: USDG.${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` Its settlement can run on
-  gas we pay, so its quote never goes below $${networkFloorUsd(ROBINHOOD_CAIP2)} a call, shown in the \`402\`.` : ""}
+- **Robinhood Chain** - the one non-USDC rail: USDG.${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` Its quote
+  never goes below $${networkFloorUsd(ROBINHOOD_CAIP2)} a call, shown in the \`402\`.` : ""}
 
 Every facilitator is health-checked at boot. A facilitator that fails its boot
 check drops only its own rail from the offer - the other rails, and the free

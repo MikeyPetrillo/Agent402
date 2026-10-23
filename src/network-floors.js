@@ -1,9 +1,8 @@
-// Per-chain price floors: the least any call costs on a chain whose settlement
-// we may pay for ourselves. Robinhood Chain (eip155:4663) settles through the
-// listed facilitators first and through our own relayer when they fail, and
-// that relayer pays the chain's gas per settlement; a call priced below that
-// would be served at a loss. So every eip155:4663 accept quotes at least the
-// floor, and every other chain quotes exactly what it quoted before.
+// Per-chain price floors: the least any call costs on a given chain.
+// Robinhood Chain (eip155:4663) settles through the listed facilitators first
+// and through our own relayer when they fail, so every eip155:4663 accept
+// quotes at least the floor; every other chain quotes exactly what it quoted
+// before.
 //
 // The floor is a PRICE, published in the 402 and on the chain's pages, never
 // a cost figure. It is static on purpose: @x402/core re-derives the price on

@@ -147,10 +147,12 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     process.env.STATE_STORE_RETRY_MS = "60000";
     relay.cut();
     const cutSave = await bad.save({ ok: 2 });
-    if (retryMs === undefined) delete process.env.STATE_STORE_RETRY_MS; else process.env.STATE_STORE_RETRY_MS = retryMs;
     await heal();
     ok(cutSave === false && bad.lastError, "a save during an outage resolves false and records the error");
     ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");
+    // Restored only after the read: the retry is scheduled once the failed
+    // save's loop ends, so restoring earlier let a 1 s re-send land first.
+    if (retryMs === undefined) delete process.env.STATE_STORE_RETRY_MS; else process.env.STATE_STORE_RETRY_MS = retryMs;
 
     // ---- update(): two writers never drop each other (H8) --------------------
     const u1 = createJsonDocument({ name: "upd.json", log: () => {} });
