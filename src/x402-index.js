@@ -5392,6 +5392,24 @@ async function packManifestBody(body) {
   if (typeof body !== "string" || !body) return null;
   try { return await gzipAsync(Buffer.from(body, "utf8")); } catch { return null; }
 }
+// The same for an OpenAPI seller's derived rows: the next crawl needs them
+// only when /openapi.json answers 304, so between crawls they are one packed
+// buffer per seller instead of every row as heap objects.
+async function packOpenapiRows(tools, routes) {
+  if (!Array.isArray(tools)) return null;
+  try { return await gzipAsync(Buffer.from(JSON.stringify({ tools, routes: Array.isArray(routes) ? routes : [] }), "utf8")); } catch { return null; }
+}
+/** The previous crawl's OpenAPI rows, for a 304: unpacked from the entry, or
+ *  the arrays an entry seeded by a test still holds; null when there are none
+ *  (the crawl then reads the document afresh). */
+async function previousOpenapiRows(prev) {
+  if (Array.isArray(prev?.openapiTools)) return { tools: prev.openapiTools, routes: prev.openapiRoutes || [] };
+  if (!Buffer.isBuffer(prev?.openapiPacked)) return null;
+  try {
+    const { tools, routes } = JSON.parse((await gunzipAsync(prev.openapiPacked)).toString("utf8"));
+    return Array.isArray(tools) ? { tools, routes: Array.isArray(routes) ? routes : [] } : null;
+  } catch { return null; }
+}
 /** The previous crawl's parsed manifest, for a 304: the full document when the
  *  entry still holds one (a synthesized manifest, an entry seeded by a test),
  *  else its packed body, else null (probeDoc then reads the document afresh). */
@@ -5477,14 +5495,19 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     // normalised tool rows and the full operation-route list, and both are
     // small. So those are what the cache carries.
     let openapiTools = null, openapiRoutes = null;
+    // The rows as derived, packed before the crawl's probes write into them,
+    // so a 304 reuses the derivation and learned quotes come from carryForward.
+    let openapiPacked = null;
     // The OpenAPI's probe examples: read from the document, or on a 304 from
     // probeExampleMemo (the document is not kept). null = no OpenAPI read.
     let openapiExamples = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
-      if (res.notModified && prev?.openapiTools) {
-        openapiTools = prev.openapiTools;
-        openapiRoutes = prev.openapiRoutes || [];
+      const prevRows = res.notModified ? await previousOpenapiRows(prev) : null;
+      if (prevRows) {
+        openapiTools = prevRows.tools;
+        openapiRoutes = prevRows.routes;
+        openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
         openapiExamples = probeExampleMemo.get(originUrl, "openapi") || new Map();
@@ -5496,6 +5519,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         openapi = body;
         openapiTools = normaliseOpenapiTools(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
+        openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
         openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
@@ -5541,8 +5565,8 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // and the packed document for a 304.
       manifest: slimManifestForMemory(manifest),
       manifestBody,
-      // Kept so a 304 on the next cycle has something to reuse.
-      openapiTools, openapiRoutes,
+      // Kept, packed, so a 304 on the next cycle has something to reuse.
+      openapiPacked,
       openapiSummary: openapiTools
         ? (openapi && Object.keys(openapi.paths || {}).length
             ? { paths: Object.keys(openapi.paths).length }
@@ -8764,7 +8788,7 @@ export function _routerReplicaApply(msg) {
  *  304 path are left out (nothing a query reads is in them). */
 export function _routerReplicaEntryOf(v) {
   if (!v || typeof v !== "object") return v;
-  const { openapiTools, openapiRoutes, manifestBody, ...rest } = v;
+  const { openapiTools, openapiRoutes, openapiPacked, manifestBody, ...rest } = v;
   if (rest.manifest && typeof rest.manifest === "object") rest.manifest = slimManifestForPersist(rest.manifest);
   return rest;
 }
@@ -9364,7 +9388,7 @@ export function economySectionHtml(snap, leaderboardSnap) {
 const MEMORY_SAMPLE_ENTRIES = 120;
 const jsonLength = (x) => { try { return x == null ? 0 : JSON.stringify(x).length; } catch { return 0; } };
 export function indexMemoryFigures({ sampleBytes = false } = {}) {
-  let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0;
+  let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0, openapiPacked = 0, openapiPackedBytes = 0;
   const stride = Math.max(1, Math.floor(cache.size / MEMORY_SAMPLE_ENTRIES));
   const sampled = { entries: 0, tools: 0, openapiTools: 0, openapiRoutes: 0, manifest: 0, rest: 0 };
   const sampledRows = { tools: 0, openapiTools: 0, openapiRoutes: 0 };
@@ -9374,7 +9398,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
     if (sampleBytes && i++ % stride === 0) {
       sampled.entries++;
       for (const [key, value] of Object.entries(v)) {
-        if (key === "manifestBody") continue; // counted exactly below
+        if (key === "manifestBody" || key === "openapiPacked") continue; // counted exactly below
         const n = jsonLength(value);
         if (key in sampled && key !== "entries" && key !== "rest") sampled[key] += n; else sampled.rest += n;
         if (key in sampledRows && Array.isArray(value)) sampledRows[key] += value.length;
@@ -9385,6 +9409,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
     openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
     openapiRoutes += Array.isArray(v.openapiRoutes) ? v.openapiRoutes.length : 0;
     if (Buffer.isBuffer(v.manifestBody)) { manifestBodies++; manifestBodyBytes += v.manifestBody.length; }
+    if (Buffer.isBuffer(v.openapiPacked)) { openapiPacked++; openapiPackedBytes += v.openapiPacked.length; }
     if (v.manifest?.slimmed) slimManifests++;
     else if (v.manifest && typeof v.manifest === "object") {
       fullManifests++;
@@ -9392,7 +9417,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
       if (Array.isArray(r)) manifestResources += r.length;
     }
   }
-  const out = { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  const out = { entries, tools, openapiTools, openapiRoutes, openapiPacked, openapiPackedBytes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
   if (!sampleBytes) return out;
   // Serialized size from the sample: a floor on what the heap holds (object
   // headers and hidden classes come on top), comparable across fields. Row
