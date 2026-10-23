@@ -73,8 +73,8 @@ export class PgDecisionStore {
     return rows[0]?.cost || null;
   }
   async get(id) {
-    const { rows } = await this.pool.query("SELECT result, payer, rail, price_usd, created_at FROM decide_decisions WHERE id = $1", [id]);
-    return rows[0] ? { result: rows[0].result, payer: rows[0].payer, rail: rows[0].rail, priceUsd: Number(rows[0].price_usd), createdAt: new Date(rows[0].created_at).getTime() } : null;
+    const { rows } = await this.pool.query("SELECT result, constraints, payer, rail, price_usd, created_at FROM decide_decisions WHERE id = $1", [id]);
+    return rows[0] ? { result: rows[0].result, constraints: rows[0].constraints || {}, payer: rows[0].payer, rail: rows[0].rail, priceUsd: Number(rows[0].price_usd), createdAt: new Date(rows[0].created_at).getTime() } : null;
   }
 }
 
