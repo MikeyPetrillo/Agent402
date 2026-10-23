@@ -31,6 +31,7 @@ import {
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
+import { networkPriceFloors, applyNetworkFloor } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
@@ -505,6 +506,17 @@ export function parseNetworkPremiums(raw = process.env.NETWORK_PRICE_PREMIUMS ||
 }
 const NETWORK_PREMIUMS = parseNetworkPremiums();
 
+// Per-chain price floors (src/network-floors.js): on a chain whose settlement
+// we may pay for ourselves the accept quotes at least the floor. Applied after
+// the premium, so a premium still only ever adds.
+const NETWORK_FLOORS = networkPriceFloors();
+/** The price one network's accept quotes: list (or the request's quote) plus
+ *  that network's premium, raised to its floor. The one funnel every accept,
+ *  flat or metered, exact or upto, is priced through. */
+export function priceForNetwork(price, network, premiums = NETWORK_PREMIUMS, floors = NETWORK_FLOORS) {
+  return applyNetworkFloor(priceWithPremium(price, network, premiums), network, floors);
+}
+
 /** "$0.001" + premium micro-dollars -> "$0.002". Exact in integer micro-dollars.
  *  A price this parser cannot read is returned UNCHANGED (never a NaN quote). */
 export function priceWithPremium(price, network, premiums = NETWORK_PREMIUMS) {
@@ -580,7 +592,7 @@ export function acceptsForItem(item, rails) {
   // the handler serves that tier only when the stash covers it.
   const quoteFn = typeof item.quote === "function" ? item.quote : typeof item.tierQuote === "function" ? item.tierQuote : null;
   const priceOf = (caip2) => {
-    if (!quoteFn) return priceWithPremium(item.price, caip2);
+    if (!quoteFn) return priceForNetwork(item.price, caip2);
     return async (ctx) => {
       let usd = null;
       try {
@@ -602,7 +614,7 @@ export function acceptsForItem(item, rails) {
         }
       } catch { usd = null; }
       const price = Number.isFinite(usd) && usd > 0 ? "$" + usd.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") : item.price;
-      return priceWithPremium(price, caip2);
+      return priceForNetwork(price, caip2);
     };
   };
   // A tool may name the only networks it can serve (`onlyNetworks`): offering
@@ -1520,6 +1532,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // route on every chain. So each candidate is priced here, once, at boot,
     // and anything that throws is dropped with the same loud refusal.
     for (const caip2 of claimed) {
+      // upto settles the usage under the quote, which can fall below a
+      // chain's price floor: a floored network is never offered upto.
+      if (NETWORK_FLOORS.has(caip2)) {
+        console.warn(`x402 upto: REFUSING ${caip2}, it carries a price floor and upto could settle below it.`);
+        continue;
+      }
       try {
         await withMoney(new UptoEvmScheme(), caip2).parsePrice(0.001, caip2);
         uptoCaip2.push(caip2);

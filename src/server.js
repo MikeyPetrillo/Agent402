@@ -396,6 +396,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -7600,7 +7601,7 @@ function offeredChainCount() {
 }
 function chainPageExtras(chainKey) {
   const caip2 = CHAIN_PAGES[chainKey]?.caip2;
-  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, routerChains: spendChainsConfigured() };
+  return { premiumUsd: caip2 ? (parseNetworkPremiums().get(caip2) || 0) / 1e6 : 0, floorUsd: caip2 ? networkFloorUsd(caip2) : 0, routerChains: spendChainsConfigured() };
 }
 // The ledger reads behind every host entry are the same four whichever page
 // asks: the 30-day and recorded summaries and the per-network split over the
@@ -9058,7 +9059,10 @@ app.get("/api/pricing", (_req, res) => {
         .map((t) => ({ ...t, note: V1_TIER_NOTES[t.path] || undefined })),
       docs: `${BASE_URL}/tools/category/llm`,
     },
-    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks() },
+    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks(),
+      // The least one call costs on a chain with a price floor (its 402
+      // quotes max(listed price, floor)); every other chain quotes the list.
+      ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}) },
     altPayment: {
       protocol: "proof-of-work",
       summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead - no money, no AI tokens, no model involved.",
