@@ -8,7 +8,7 @@
 // restriction is scoped STRICTLY to identity routes. Every other tool keeps ALL
 // configured chains, so no rail loses the ability to sell the rest of the
 // catalog. Pure functions, no server boot, no network.
-import { acceptsForItem, isIdentityBoundRoute } from "../src/payments.js";
+import { acceptsForItem, isIdentityBoundRoute, priceForNetwork } from "../src/payments.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -49,8 +49,10 @@ const nets = (accepts) => accepts.map((a) => a.network);
     `identity route is EVM-only (got ${n.join(",")})`);
   ok(!n.some((c) => c.startsWith("solana:") || c.startsWith("stellar:") || c.startsWith("algorand:")),
     "identity route advertises NO non-EVM rail (the charged-failure fix)");
-  ok(accepts.every((a) => a.payTo === RAILS.walletAddress && a.price === "$0.002"),
-    "identity route keeps the EVM wallet + its price");
+  // Each chain quotes its own price for the route (a per-chain premium or
+  // floor applies on identity routes like any other).
+  ok(accepts.every((a) => a.payTo === RAILS.walletAddress && a.price === priceForNetwork("$0.002", a.network)),
+    "identity route keeps the EVM wallet + its per-chain price");
 }
 
 // ---- 3. isIdentityBoundRoute classifies exactly the intended routes ----
