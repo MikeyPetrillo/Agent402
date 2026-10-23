@@ -345,7 +345,10 @@ await (async () => {
     if (req.url === "/settle") {
       st.svSettles++; st.svBody = body;
       if (req.headers["x-api-key"] !== "solvador-test-key") return json(res, 401, { error: "unauthorized" });
-      return json(res, 200, { success: true, transaction: SV_TX, network: CELO, payer: payerOf(body) });
+      // A real settlement is one transaction each: a recovered tx another
+      // request already holds is never served twice (settlement claims).
+      const tx = st.svSettles === 1 ? SV_TX : "0x" + st.svSettles.toString(16).padStart(64, "0");
+      return json(res, 200, { success: true, transaction: tx, network: CELO, payer: payerOf(body) });
     }
     return json(res, 404, {});
   });
