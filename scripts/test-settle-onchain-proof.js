@@ -356,7 +356,11 @@ try {
     first = await send(A, origX);
     settleMode = "on-chain"; before = settles;
     again = await send(Bsrv, origX);
-    ok(first.status === 200 && again.status !== 200 && settles === before, `a payload settled on A, replayed on B -> refused before the facilitator (statuses ${first.status}, ${again.status})`);
+    // The shared idempotency store answers the copy on B from A's first answer
+    // (marked, byte-identical), or B refuses it; either way the facilitator is
+    // never asked again.
+    const crossReplay = again.status === 200 && again.replayed && again.body === first.body;
+    ok(first.status === 200 && (again.status !== 200 || crossReplay) && settles === before, `a payload settled on A, replayed on B -> refused or replayed from A's first answer, before the facilitator (statuses ${first.status}, ${again.status}, replayed ${again.replayed}, settles +${settles - before})`);
     await stop(PORT_B);
   } else {
     console.log("# REDIS_URL unset: the cross-replica cases run in CI's redis step");

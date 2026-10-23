@@ -126,6 +126,9 @@
     "@solana/program-client-core": "8.5.0",
     "e2b": {
       "undici8": "npm:undici@8.11.2"
+    },
+    "@modelcontextprotocol/sdk": {
+      "zod": "4.6.7"
     }
   }
 }

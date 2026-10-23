@@ -48,7 +48,10 @@ const BASELINE_MS = (() => {
 const bound = (floor, k) => ({ ms: Math.max(floor, Math.round(k * BASELINE_MS)), note: `bound ${Math.max(floor, Math.round(k * BASELINE_MS))} ms: ${floor} ms or ${k}x the ${BASELINE_MS.toFixed(1)} ms baseline` });
 const GAP = bound(Number(process.env.STALL_GAP_MS || 120), 3);
 const GAP_MS = GAP.ms;
-const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 4);
+// A first request after boot also compiles the route's code, which a shared
+// runner slows far more than the hot baseline loop (209 ms against a 21 ms
+// baseline seen on one); the stalls this pin exists for were seconds long.
+const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 12);
 const ROUTE_BOUND_MS = ROUTE.ms;
 // One step of a sliced page: measured at 3.4 ms on a laptop for the longest
 // (?all=1, 5,800 sellers); the floor allows a runner several times slower.

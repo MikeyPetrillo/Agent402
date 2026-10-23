@@ -64,12 +64,13 @@ const ADVISORY_TYPES = new Set([
   "socketUpgradeAvailable", "unmaintained", "unpopularPackage", "newAuthor",
   "missingTarball", "deprecated", "majorRefactor", "unstableOwnership",
 ]);
-// Documented false positives, keyed "namespace/name:alertType". Each entry
-// needs a REASON - an allowlist without justification is just a mute button.
-// Currently empty: the one entry it held (@noble/hashes obfuscatedFile) became
-// redundant when obfuscatedFile moved to REPORTED_TYPES, and a stale allowlist
-// entry is worse than none - it hides the day that package trips something new.
-const ACCEPTED = new Map([]);
+// Documented accepts, keyed "namespace/name@version:alertType" (one exact
+// version, so a later version of the same package is judged afresh) or
+// "namespace/name:alertType". Each entry needs a REASON - an allowlist
+// without justification is just a mute button.
+const ACCEPTED = new Map([
+  ["zod@3.25.76:cve", "GHSA-mrhx-c7xc-m3w5 (memory on a large failing array) is patched only in zod 4.6.6+; no patched 3.x exists. zod 3 is held by the x402, CDP and image libraries, which parse header-sized or our own inputs; the MCP SDK, which parses request bodies, is pinned to zod 4.6.7 by overrides. Drop this entry when those libraries move to zod 4."],
+]);
 
 const warn = (msg) => console.log(`\n::warning::${msg}\n[socket] ${msg}`);
 
@@ -162,6 +163,8 @@ for (const r of rows) {
     if (ADVISORY_TYPES.has(a.type)) { advisory.push(`${id}: ${a.type}`); continue; }
     if (REPORTED_TYPES.has(a.type)) { reported.push(`${id}@${r.version}: ${a.type}${a.file ? ` (${a.file})` : ""}`); continue; }
     const key = `${id}:${a.type}`;
+    const exact = `${id}@${r.version}:${a.type}`;
+    if (ACCEPTED.has(exact)) { accepted.push(exact); continue; }
     if (ACCEPTED.has(key)) { accepted.push(key); continue; }
     // Unknown type at high severity blocks too - fail closed on the unfamiliar.
     if (MALICIOUS_TYPES.has(a.type) || !ADVISORY_TYPES.has(a.type)) {
@@ -184,7 +187,7 @@ if (advisory.length) {
   console.log(`[socket] ${advisory.length} advisory alert(s) ignored (not security): ${[...new Set(advisory.map((a) => a.split(": ")[1]))].join(", ")}`);
 }
 for (const key of new Set(accepted)) {
-  console.log(`[socket] accepted known false positive: ${key}\n         reason: ${ACCEPTED.get(key)}`);
+  console.log(`[socket] accepted (documented): ${key}\n         reason: ${ACCEPTED.get(key)}`);
 }
 
 if (blocking.length) {
