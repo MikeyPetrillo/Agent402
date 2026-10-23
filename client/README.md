@@ -116,7 +116,17 @@ What the server does with it depends on how the call was paid:
   dedupe). So on the wallet path a retry after a lost response can settle twice;
   the `Idempotency-Key` cannot prevent that on its own. If that matters for your
   workload, use a credits key for the tools you retry, or keep the signed
-  request and resend it yourself.
+  request and resend it yourself. A resent signed request needs no key: the
+  server answers a request re-sent with the same signed EVM payment, to the same
+  route with the same body, from its first answer inside the replay window,
+  with no second settlement, and marks it `X-Replayed-Answer: 1` (identity-bound
+  routes, routes with a lasting effect and streamed calls excepted).
+- **Circle Gateway batched option:** where the server offers it on Arc or Base,
+  the 402 carries a second accept whose `extra.name` is `GatewayWalletBatched`.
+  This package pays the plain accept on those networks (the stock x402 client
+  takes the first accept it can pay, and the plain one is first); the batched
+  one needs a client that signs under the Gateway domain against a Circle
+  Gateway deposit.
 
 ## Workflows (skill packs)
 

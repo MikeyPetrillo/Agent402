@@ -222,7 +222,9 @@ curl -X POST https://agent402.tools/api/hash \
   -d '{"text":"hello"}'
 ```
 
-Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential + sha256(body))`. Without the header, every request is treated as unique.
+Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential + sha256(body))`. Replays carry `X-Idempotent-Replay: true`.
+
+**A re-sent EVM payment is replayed without a key.** An x402 EVM authorization is single-use (one nonce), so it names exactly one call: a request re-sent with the same signed payment, to the same route with the same body, inside the replay window, is answered from its first answer with no handler run and no second settlement, and carries `X-Replayed-Answer: 1` beside `X-Idempotent-Replay: true`. A copy sent while the first is still running gets `409` with `Retry-After` and is not charged. Identity-bound routes (memory, attest, feedback, my-usage), routes with a lasting effect (such as the route-execute tiers) and streamed calls keep the explicit-key behavior only. A proof-of-work token and a credits key never derive a key this way: without an `Idempotency-Key`, a repeat on those is a new call.
 
 The cache is **settlement-aware**: a response body is captured when the handler produces it but is only committed to the cache once the *final* status is `200`, i.e. after settlement succeeded. A `200` whose settlement then failed (and therefore became a `402`) is never cached and never replayed. Streamed responses are never replayable.
 

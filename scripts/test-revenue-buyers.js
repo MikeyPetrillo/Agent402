@@ -395,7 +395,7 @@ check("the external payment headline adds Tempo only, never Base/Celo MPP", () =
 
 check("throughput adds Tempo once and Base/Celo MPP zero extra times", () => {
   const t = railThroughput({ allTime: { allTimeInboundCount: 10 }, mpp: { rails: { tempo: { count: 3 }, base: { count: 5 }, celo: { count: 2 } } } });
-  assert.deepEqual(t, { onchain: 10, tempoMpp: 3, total: 13 });
+  assert.deepEqual(t, { onchain: 10, tempoMpp: 3, gatewayBatched: 0, total: 13 });
 });
 
 // A sub-cent lookalike transfer (address poisoning) paid for no call: under

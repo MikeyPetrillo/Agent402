@@ -170,9 +170,14 @@ export function isExternalPayment(row, { ourWallets, maxUsd }) {
   if (!row || !row.payer) return false;
   const p = row.payer.toLowerCase();
   if (ourWallets.has(p)) return false;
+  // A mint (Transfer from the zero address) is nobody's payment: a Circle
+  // Gateway withdrawal mints our own batched revenue, already counted from
+  // the sales ledger, and a bridge mint is a move of our own funds.
+  if (p === ZERO_EVM_ADDRESS) return false;
   if (!(row.usd > 0) || row.usd > maxUsd) return false;
   return true;
 }
+export const ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 // --- RPC --------------------------------------------------------------------
 

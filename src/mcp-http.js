@@ -1,4 +1,5 @@
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
+import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
 // checkout module imports this one.
@@ -1180,6 +1181,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               // retired figures by name, so do not quote them back in here.
               prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
+              retries: "an Idempotency-Key header (or the x402 payment-identifier extension) replays a served paid call instead of charging again; a request re-sent with the same signed EVM payment and no key is answered from its first answer too (X-Replayed-Answer: 1), except on identity-bound routes, routes with a lasting effect and streamed calls",
+              // The Circle Gateway batched option, read from the live offer
+              // (src/gateway-nanopayments.js); absent while it is off.
+              ...(gatewayOfferPublic() ? { batched: `on ${gatewayOfferNetworkNames().join(" and ")} the 402 also carries a Circle Gateway batched accept (extra.name ${gatewayOfferPublic().kind}) at the same price: after a USDC deposit into Circle Gateway, each payment is a signature against that balance with no gas per call, settled off chain in batches. agent402-mcp and agent402-client pay the plain accept; a client that signs under the Gateway domain can choose the batched one` } : {}),
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
             spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call (on by default; off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (opt-in; unset means no session cap)", enforced: "on the payment that is signed" },

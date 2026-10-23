@@ -413,7 +413,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
-import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
+import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
@@ -6417,6 +6417,10 @@ app.get("/api/rails", (_req, res) => {
     // sub-cent allowance is spent (src/avm-sponsorship.js). Status words and
     // times only. Empty when nothing is restricted.
     restrictions: avmSubcentOfferStatus(),
+    // The Circle Gateway batched option, where it is live: one more accept on
+    // these networks beside the plain one (src/gateway-nanopayments.js).
+    // Absent while it is off.
+    ...(gatewayOfferPublic() ? { gatewayBatched: { kind: gatewayOfferPublic().kind, networks: gatewayOfferNetworkNames(), settlement: gatewayOfferPublic().settlement } } : {}),
   });
 });
 app.get("/api/reliability", async (_req, res) =>
