@@ -28,6 +28,18 @@
 //              TOOL_ANSWER_MIN_DAY). The operator view also lists live-data
 //              slugs whose outside sales all returned one identical body
 //              (the sales ledger's response_sha256; detail only, no word).
+//   replays    per slug, every answer the idempotency middleware served from
+//              its store (src/idempotency.js): implicit (a re-sent x402
+//              payment, same nonce) or keyed (an Idempotency-Key or
+//              payment-identifier). Detail only, never a word; by slug,
+//              never by payer.
+//   buyer refusals  a settle-breaker refusal (src/gateway-settle-breaker.js)
+//              of a key that had settled at least one call inside the
+//              breaker's window: a paying buyer was turned away. A count per
+//              bucket with no slug and no key. buyerRefusals reads refusing
+//              while one landed in a bucket that ended inside the last
+//              BUYER_REFUSAL_WINDOW_MS (15 minutes), so the word holds for 15
+//              to 20 minutes after the refusal; ok otherwise.
 //
 // Counts sit in five-minute buckets kept for 24 hours. The words read the
 // last hour; the operator view also carries the 24-hour totals.
@@ -48,8 +60,8 @@
 // on a merge.
 //
 // Public surface: /api/gateway-status carries toolFailures, upstreamHealth,
-// facilitatorFunds and toolAnswers as one word each. Slugs, upstream names, counts and
-// messages are on /__operator/tool-failures.json only.
+// facilitatorFunds, toolAnswers and buyerRefusals as one word each. Slugs,
+// upstream names, counts and messages are on /__operator/tool-failures.json only.
 import { randomUUID } from "node:crypto";
 import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -62,6 +74,8 @@ export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", 
 export const WORDS = ["ok", "degraded", "failing"];
 export const FUNDS_WORDS = ["ok", "low", "refused", "demoted"];
 export const ANSWER_WORDS = ["ok", "degraded"];
+export const BUYER_REFUSAL_WORDS = ["ok", "refusing"];
+export const REPLAY_KINDS = ["implicit", "keyed"];
 export { ANSWER_CLASSES };
 const LAST_ANSWERS_PER_SLUG = 5;
 const MAX_SLUGS = 2_000;
@@ -97,6 +111,9 @@ export function thresholds(env = process.env) {
     // outside sales in the window, every one the same response digest.
     sameAnswerMinSales: num(env.TOOL_ANSWER_SAME_MIN_SALES, 5),
     sameAnswerWindowMs: num(env.TOOL_ANSWER_SAME_WINDOW_H, 24) * HOUR_MS,
+    // buyerRefusals reads refusing while a refused paying buyer landed in a
+    // bucket that ended inside this window.
+    buyerRefusalWindowMs: num(env.BUYER_REFUSAL_WINDOW_MS, 15 * 60_000),
   };
 }
 
@@ -143,6 +160,7 @@ const FIXED_UPSTREAMS = [
 const emptyTool = () => TOOL_CLASSES.map(() => 0);
 const emptyUp = () => UPSTREAM_KINDS.map(() => 0);
 const emptyAns = () => ANSWER_CLASSES.map(() => 0);
+const emptyReplay = () => REPLAY_KINDS.map(() => 0);
 const add = (a, b) => { for (let i = 0; i < a.length; i++) a[i] += Number(b?.[i]) || 0; return a; };
 
 /** The default cross-replica store: Redis through the shared client. */
@@ -181,6 +199,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const lastAnswer = new Map(); // slug -> [{ at, klass, reasons, synthetic }] (non-ok, newest last)
   const lastUpstream = new Map();  // name -> { at, kind, host, status }
   const refusals = [];          // { at, network, facilitator, reason }
+  const replays = new Map();    // slug -> Map(bucket -> [implicit, keyed])
+  const buyerRefusals = new Map(); // bucket -> count (no slug, no key)
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
   let remote = { at: 0, snapshots: [], ok: false, merged: null };
@@ -297,6 +317,27 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     while (refusals.length > MAX_REFUSALS) refusals.shift();
   }
 
+  /** One answer the idempotency middleware served from its store, by slug. */
+  function noteReplay(slug, { implicit = false, at = now() } = {}) {
+    const s = String(slug || "");
+    if (!s) return null;
+    let m = replays.get(s);
+    if (!m) { if (replays.size >= MAX_SLUGS) return null; m = new Map(); replays.set(s, m); }
+    const b = bucketOf(at);
+    let row = m.get(b);
+    if (!row) { row = emptyReplay(); m.set(b, row); prune(m, at); }
+    row[implicit ? 0 : 1]++;
+    return implicit ? "implicit" : "keyed";
+  }
+
+  /** The settle breaker refused a key that had settled a call in its window. */
+  function noteBuyerRefusal({ at = now() } = {}) {
+    const b = bucketOf(at);
+    buyerRefusals.set(b, (buyerRefusals.get(b) || 0) + 1);
+    prune(buyerRefusals, at);
+    return buyerRefusals.get(b);
+  }
+
   // ---- snapshots and the merge ----------------------------------------------
   function snapshot(t = now()) {
     const floor = bucketOf(t - DAY_MS);
@@ -319,6 +360,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       lastUpstream: Object.fromEntries([...lastUpstream].filter(([, v]) => v.at > t - DAY_MS)),
       refusals: refusals.filter((r) => r.at > t - DAY_MS),
       gas: relayerGas.filter((r) => r.at > t - DAY_MS),
+      replays: pack(replays),
+      buyerRefusals: Object.fromEntries([...buyerRefusals].filter(([b]) => b > floor)),
     };
   }
 
@@ -349,7 +392,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     const gasM = {}; // newest reading per (network, facilitator, signer)
+    const repM = {}, brM = {};
     for (const s of all) {
+      for (const [slug, rows] of Object.entries(s.replays || {})) {
+        const dst = (repM[slug] ||= {});
+        for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyReplay()), row);
+      }
+      for (const [b, n] of Object.entries(s.buyerRefusals || {})) brM[b] = (brM[b] || 0) + (Number(n) || 0);
       for (const [slug, rows] of Object.entries(s.tools || {})) {
         const dst = (toolsM[slug] ||= {});
         for (const [b, row] of Object.entries(rows)) {
@@ -381,7 +430,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM) };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -477,12 +526,35 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "unread") && ownOk.has(r.network));
     const gasLow = gas.filter((r) => (r.status === "low" || r.status === "unread") && !covered.includes(r));
     const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : "ok";
+    // A refused paying buyer: a bucket counts while it ended inside the window
+    // (its start is after t - window - BUCKET_MS), so a refusal is read for at
+    // least the window and at most one bucket longer.
+    const brFloor = bucketOf(t - th.buyerRefusalWindowMs - BUCKET_MS);
+    let buyerRefusalsWindow = 0, buyerRefusalsDay = 0;
+    for (const [b, n] of Object.entries(m.buyerRefusals || {})) {
+      if (Number(b) > brFloor) buyerRefusalsWindow += n;
+      if (Number(b) > dayFloor) buyerRefusalsDay += n;
+    }
+    const buyerWord = buyerRefusalsWindow > 0 ? "refusing" : "ok";
+    // Replays served from the idempotency store, by slug (detail only).
+    const replayRows = [];
+    const replayTotals = { hour: named(REPLAY_KINDS, emptyReplay()), day: named(REPLAY_KINDS, emptyReplay()) };
+    for (const [slug, rows] of Object.entries(m.replays || {})) {
+      const h = emptyReplay(), d = emptyReplay();
+      for (const [b, row] of Object.entries(rows)) { if (Number(b) > hourFloor) add(h, row); if (Number(b) > dayFloor) add(d, row); }
+      if (!d.some(Boolean)) continue;
+      replayRows.push({ slug, hour: named(REPLAY_KINDS, h), day: named(REPLAY_KINDS, d) });
+      for (const k of REPLAY_KINDS) { replayTotals.hour[k] += named(REPLAY_KINDS, h)[k]; replayTotals.day[k] += named(REPLAY_KINDS, d)[k]; }
+    }
+    replayRows.sort((a, b) => (b.day.implicit + b.day.keyed) - (a.day.implicit + a.day.keyed) || a.slug.localeCompare(b.slug));
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
     ansRows.sort((a, b) => rank[a.status] - rank[b.status] || b.day.outsideBad - a.day.outsideBad || a.slug.localeCompare(b.slug));
     return {
-      toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord,
+      toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
+      buyerRefusalsWindow, buyerRefusalsDay,
+      replays: replayRows, replayTotals,
       thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
       answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
@@ -514,7 +586,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
    *  now instead of reading the cache (tests and one-off reads). */
   async function status({ full = false, t = now(), fresh = false } = {}) {
     const e = fresh ? await recompute(t) : await cachedEvaluation(t);
-    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds }, toolAnswers: { status: e.toolAnswers } };
+    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds }, toolAnswers: { status: e.toolAnswers }, buyerRefusals: { status: e.buyerRefusals } };
     const failingTools = e.tools.filter((r) => r.status !== "ok");
     const badUps = e.upstreams.filter((r) => r.status !== "ok");
     return {
@@ -522,6 +594,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
       facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low" && !r.coveredByOwnRelayer).length, relayersCovered: e.relayerGas.filter((r) => r.coveredByOwnRelayer).length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread" && !r.coveredByOwnRelayer).length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
+      // Counts only: no key, no address, no slug.
+      buyerRefusals: { status: e.buyerRefusals, refusalsWindow: e.buyerRefusalsWindow, refusals24h: e.buyerRefusalsDay, windowMinutes: e.thresholds.buyerRefusalWindowMs / 60_000 },
     };
   }
 
@@ -567,9 +641,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 

@@ -39,7 +39,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-20.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-23.</p>
 </section>
 
 <section>
@@ -75,8 +75,10 @@ so every claim below is verifiable in code.</p>
     <li>the <code>/api/memory</code> tools, whose purpose <i>is</i> storage (see below);</li>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
     by the input that produced it (a domain, an address to geocode, a URL), so a repeat call is faster;
-    identical repeat calls to the AI gateway and identical retries carrying an
-    <code>Idempotency-Key</code> (or the x402 payment-identifier) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
+    identical repeat calls to the AI gateway, identical retries carrying an
+    <code>Idempotency-Key</code> (or the x402 payment-identifier), and the JSON answer of a call paid
+    with a signed EVM x402 payment (keyed by that payment's nonce, so a re-sent copy is answered without
+    a second settlement) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
     <li>a search on <code>/api/find</code> or the connector's <code>catalog.find</code> that finds no
     matching tool, and a request sent to <code>/api/wish</code>, is kept as text on our demand board
     together with a hash of your IP address combined with the day (never the address itself); an entry

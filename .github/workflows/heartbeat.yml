@@ -783,10 +783,10 @@ jobs:
               ;;
           esac
 
-      # Tool and upstream failures (src/tool-failure-monitor.js): three words
+      # Tool and upstream failures (src/tool-failure-monitor.js): four words
       # on /api/gateway-status. toolFailures and upstreamHealth page on
-      # degraded / failing; facilitatorFunds pages on low / refused / demoted; ok
-      # closes; unknown does neither. The issues are public, so a body carries
+      # degraded / failing; facilitatorFunds pages on low / refused / demoted;
+      # buyerRefusals pages on refusing; ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
       # runs the same checks every five minutes under the same titles.
@@ -822,6 +822,10 @@ jobs:
           # A settlement signer short of gas, before any refusal: its own title.
           TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
           check_word facilitatorFunds "low" "ok"
+          # The settle breaker refused a buyer that had settled a call in its
+          # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
+          TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"
+          check_word buyerRefusals "refusing" "ok"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on
