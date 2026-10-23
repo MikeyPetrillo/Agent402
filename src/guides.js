@@ -2,6 +2,7 @@
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
 import { REPO_URL, repoUrl } from "./repo-link.js";
+import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { marked } from "marked";
 // Headings carry ids (GitHub-style slugs) so the dev shortlinks (/claude ->
 // /guides/agent-hosts#claude-code) and readers can deep-link a section.
@@ -443,7 +444,8 @@ HTTP **402** whose \`accepts\` includes an \`eip155:4663\` option carrying the
 USDG contract address and its EIP-712 domain, signs an **EIP-3009
 \`transferWithAuthorization\`** with its own key, and retries. A facilitator
 submits the transfer on-chain and pays the gas - the buyer needs only USDG,
-no ETH, no bridge, no account.
+no ETH, no bridge, no account.${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` On Agent402 the \`eip155:4663\` option quotes
+the tool's price or $${networkFloorUsd(ROBINHOOD_CAIP2)}, whichever is higher.` : ""}
 
 ## Buy something on Robinhood Chain (JavaScript)
 
@@ -867,7 +869,8 @@ exists:
 - **Algorand** - USDC via a dedicated AVM facilitator; every payment carries a
   signed validity window sized to the tool it's paying for, so a slow tool can
   never receive a payment that expires mid-call.
-- **Robinhood Chain** - the one non-USDC rail: USDG.
+- **Robinhood Chain** - the one non-USDC rail: USDG.${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` Its settlement can run on
+  gas we pay, so its quote never goes below $${networkFloorUsd(ROBINHOOD_CAIP2)} a call, shown in the \`402\`.` : ""}
 
 Every facilitator is health-checked at boot. A facilitator that fails its boot
 check drops only its own rail from the offer - the other rails, and the free
