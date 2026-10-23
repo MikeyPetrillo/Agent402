@@ -1032,6 +1032,15 @@ await check("resend guards: a forged signature on a booked authorization is refu
     } finally { r.done(); }
   }
   {
+    const r = await routed({ routing: {} });
+    try {
+      const { p, key } = await r.pend();
+      const v = await r.server.verifyPayment(p, baseAccept);
+      assert.deepEqual([v.isValid, v.invalidReason], [false, "settlement_pending"], "no record yet and no ledger lookups wired: still pending, never served");
+      assert.equal((await r.book.get(key))?.state, "pending");
+    } finally { r.done(); }
+  }
+  {
     const r = await routed({ routing: { wasServed: async () => { throw new Error("ledger down"); }, owedExists: async () => false } });
     try {
       const { p, key } = await r.pend();
