@@ -521,6 +521,13 @@ export const records = {
     const r = await stateQuery(`SELECT count(*)::bigint AS n FROM ${T("records")} WHERE collection = $1`, [checkName(collection, "collection")]);
     return Number(r.rows[0].n);
   },
+  /** The ids among `ids` that have a row in `collection`, as a Set. */
+  async existing(collection, ids) {
+    const list = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
+    if (!list.length) return new Set();
+    const r = await stateQuery(`SELECT id FROM ${T("records")} WHERE collection = $1 AND id = ANY($2::text[])`, [checkName(collection, "collection"), list]);
+    return new Set(r.rows.map((x) => x.id));
+  },
 };
 
 export const logLines = {
