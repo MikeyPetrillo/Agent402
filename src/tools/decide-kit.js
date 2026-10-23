@@ -470,6 +470,9 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       d = await ledger.getDecision(decisionId);
       if (!d) throw bad(UNKNOWN_DECISION_MESSAGE, 404);
       if (!d.settled) throw bad("That decision's payment has not settled, so it cannot be executed", 409);
+      // A sketch run's decision holds tool slugs, not a task: nothing to plan
+      // again. Refused before any planner call, so nothing is charged.
+      if (wantsReplan && !DEPTHS.includes(d.depth)) throw bad('"replan" plans a saved decision\'s task again, and this decision is a plan sketch (tool slugs, no task). Send it without "replan", or plan the task with POST /api/decide.', 400);
     } else if (Array.isArray(input?.steps)) {
       if (wantsReplan) throw bad('"replan" plans a saved decision again: pass its decisionId (a sketch has no task to plan from)');
       // The steps of a free plan sketch become a decision of their own: kept

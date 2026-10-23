@@ -427,6 +427,14 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       toolFailureMonitor()._reset();
       delete process.env.EVM_RPC_4663;
     });
+    await check("gas: only the primary and confirmed fallbacks are watched; an unconfirmed one never pages", async () => {
+      const { gasCheckUrls } = await import("../src/payments.js");
+      const listed = [{ url: "https://confirmed.stub", confirmed: true }, { url: "https://unreachable.stub", confirmed: false }, { url: "https://unchecked.stub" }];
+      assert.deepEqual(gasCheckUrls("https://primary.stub", listed), ["https://primary.stub", "https://confirmed.stub"]);
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+      assert.ok(/^\s*urls: \(\) => gasCheckUrls\(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks\),/m.test(src), "the Robinhood gas check reads its list through gasCheckUrls");
+    });
   } finally {
     fac.close(); rpc.close();
   }

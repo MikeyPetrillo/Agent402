@@ -69,6 +69,21 @@ function slugOf(resourceUrl) {
   } catch { return "unknown"; }
 }
 
+/**
+ * An authorization's validBefore as unix seconds, or null when it is missing,
+ * unreadable or past any date a clock reaches (a "never expires" value such
+ * as 2^64-1). Null means NOT expired: such an entry is never closed as not
+ * landed, only marked unresolved for a human at MAX_AGE_MS.
+ */
+export const VALID_BEFORE_NEVER = null;
+export function validBeforeOf(v) {
+  let n;
+  try { n = BigInt(String(v ?? "").trim()); } catch { return VALID_BEFORE_NEVER; }
+  if (n <= 0n || n > 10_000_000_000n) return VALID_BEFORE_NEVER; // beyond year 2286
+  return Number(n);
+}
+const authorizationExpired = (validBefore, t) => validBefore != null && Number(validBefore) > 0 && t > Number(validBefore) * 1000;
+
 export const lateKey = (network, tx) => `${String(network)}|${String(tx).toLowerCase()}`;
 
 const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), MAX_BACKOFF_MS);
@@ -92,7 +107,7 @@ export function lateSettleCandidate(ctx) {
     asset: String(req.asset || ""),
     amount: String(req.amount ?? ""),
     resource: ctx?.paymentPayload?.resource?.url || null,
-    validBefore: /^[0-9]{1,12}$/.test(String(auth.validBefore ?? auth.deadline ?? "")) ? Number(auth.validBefore ?? auth.deadline) : null,
+    validBefore: validBeforeOf(auth.validBefore ?? auth.deadline),
     via: ctx?.__a402LateTx?.via || "primary",
   };
 }
@@ -109,6 +124,11 @@ export function createLateSettleBook({
   now = () => Date.now(),
   log = console.warn,
   maxEntries = MAX_ENTRIES,
+  // Where a booking whose store write failed is kept until it lands: the
+  // money journals' dead-letter (local disk, or Redis with
+  // LEDGER_JOURNAL_REDIS=on), built on first use.
+  journal = null,
+  alarm = console.error,
 } = {}) {
   let state = { pending: {} };
   const absorb = (s) => { if (s && typeof s === "object" && s.pending && typeof s.pending === "object") state = { pending: { ...s.pending } }; };
@@ -131,8 +151,10 @@ export function createLateSettleBook({
   const change = async (fn) => {
     if (!PG) {
       await refresh();
-      fn(state.pending);
-      await doc.save(state);
+      const next = { pending: { ...state.pending } };
+      fn(next.pending);
+      if (!(await doc.save(next))) return false;
+      state = next;
       return true;
     }
     const r = await doc.update((b) => {
@@ -144,6 +166,25 @@ export function createLateSettleBook({
     return !!r.ok;
   };
   const entries = () => Object.values(state.pending);
+  let journalImpl = journal;
+  const journalOf = async () => {
+    if (journalImpl) return journalImpl;
+    const { createDeadLetter } = await import("./ledger-mirror.js");
+    const { stateDbSchema } = await import("./state-db.js");
+    journalImpl = createDeadLetter({ file: `${file}.pending.ndjson`, name: "lateSettlements", journalKey: PG ? `${stateDbSchema()}:lateSettlements` : "" });
+    return journalImpl;
+  };
+  const write = async (entry) => {
+    try { return await change((p) => { if (!p[entry.key]) p[entry.key] = entry; }); } catch { return false; }
+  };
+  // Lands what the journal holds (a booking whose store write failed earlier,
+  // in this process or one that has since stopped).
+  const drainJournal = async () => {
+    let j;
+    try { j = await journalOf(); } catch { return 0; }
+    if (!j || !(j.size?.() > 0)) return 0;
+    try { return await j.drain(async (e) => (e?.payload?.key ? ((await write(e.payload)) ? "landed" : "stop") : "drop")); } catch { return 0; }
+  };
   const call = (url, method, params) => rpc(url, method, params, fetchImpl, RPC_TIMEOUT_MS, []);
 
   return {
@@ -172,11 +213,23 @@ export function createLateSettleBook({
       const t = now();
       const entry = {
         key, network, tx: String(c.tx).toLowerCase(), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
-        amount: String(c.amount), validBefore: Number(c.validBefore) > 0 ? Number(c.validBefore) : null, slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
+        amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
-      log(`[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
-      return change((p) => { if (!p[key]) p[key] = entry; });
+      if (await write(entry)) {
+        log(`[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
+        return true;
+      }
+      // The store did not take it: kept in the journal and landed by the next
+      // reconcile pass, never dropped in silence.
+      let id = null;
+      try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
+      if (id == null) {
+        alarm(`[late-settle] ${network} tx ${c.tx} failed naming a transaction and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
+        return false;
+      }
+      log(`[late-settle] ${network} tx ${c.tx} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
+      return true;
     },
     /** The entries as last read; call refresh() first for the shared view. */
     list() { return entries(); },
@@ -198,7 +251,8 @@ export function createLateSettleBook({
      * continues with the next.
      */
     async reconcile({ maxChecks = 50, maxPassMs = MAX_PASS_MS } = {}) {
-      const out = { checked: 0, owed: 0, served: 0, reverted: 0, notOurs: 0, absent: 0, pending: 0, unreadable: 0, unresolved: 0, errors: 0 };
+      const out = { checked: 0, owed: 0, served: 0, reverted: 0, notOurs: 0, absent: 0, pending: 0, unreadable: 0, unresolved: 0, errors: 0, journaled: 0 };
+      out.journaled = await drainJournal();
       await refresh();
       const started = now();
       const due = entries()
@@ -277,7 +331,7 @@ export function createLateSettleBook({
       // Absent can be closed only once the chain answered (this read) AND the
       // authorization can no longer move money: past the window and past its
       // validBefore, a transaction mined later reverts.
-      const authExpired = !(Number(e.validBefore) > 0) || t > Number(e.validBefore) * 1000;
+      const authExpired = authorizationExpired(e.validBefore, t);
       if (t - e.at >= WINDOW_MS && readable && authExpired) {
         await drop();
         out.absent++;

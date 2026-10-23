@@ -200,7 +200,7 @@ export function registerSettlementClaimRelease(server) {
       // (for as long as a settled one), so the same signed payment cannot be
       // resent and served while its first settlement is unresolved; the
       // pending book (src/circle-pending.js) settles what is owed.
-      if (isPendingSettlement(ctx)) { await extendSettlementKey(s.nonceKey, s.id); return; }
+      if (isPendingSettlement(ctx) || namesUnsettledTx(ctx)) { await extendSettlementKey(s.nonceKey, s.id); return; }
       await releaseSettlementKey(s.nonceKey, s.id);
     } catch { /* never touch a payment */ }
   });
@@ -212,6 +212,37 @@ export const SETTLEMENT_PENDING = "settlement_pending";
 export function isPendingSettlement(ctx) {
   const reasons = [ctx?.error?.errorReason, ctx?.result?.errorReason, ctx?.error?.reason];
   return reasons.some((r) => r === SETTLEMENT_PENDING);
+}
+
+/**
+ * A failed settle that still names a transaction (the primary's answer, or a
+ * fallback's that stopped the chain, src/payments.js noteLateTx) may land
+ * later: the late-settlement book reads it (src/late-settlements.js). Its
+ * authorization stays claimed like a pending one, so a resend cannot be
+ * served while that transaction is unresolved.
+ */
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+export function namesUnsettledTx(ctx) {
+  return TX_HASH.test(String(ctx?.__a402LateTx?.transaction || "")) || TX_HASH.test(String(ctx?.error?.transaction || ""));
+}
+
+/**
+ * A settlement a settle-failure hook recovered fires no afterSettle hook, so
+ * its transaction is claimed here for this request, as afterSettle does for
+ * the primary's. Returns true when another holder already has that
+ * transaction (a request that served it, or the late-settlement book that
+ * booked it owed): the recovery must not serve it.
+ */
+export async function recoveredTxHeldElsewhere(ctx, result) {
+  try {
+    const network = String(result?.network || ctx?.requirements?.network || "");
+    const tx = result?.transaction;
+    if (typeof tx !== "string" || !tx || !network.startsWith("eip155:")) return false;
+    const s = stamp(reqOf(ctx));
+    const r = await claimSettlementKey(txClaimKey(network, tx), s?.id || `settled:${randomUUID()}`);
+    if (r.claimed && s?.nonceKey) await extendSettlementKey(s.nonceKey, s.id);
+    return !r.claimed;
+  } catch { return false; /* never touch a payment */ }
 }
 
 /** Is a settlement tx already claimed by a request that served it? Claims the

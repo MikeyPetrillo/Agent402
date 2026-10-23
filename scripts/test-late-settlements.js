@@ -155,6 +155,49 @@ await check("never mined but its authorization still valid: kept past the window
   assert.equal(book.list().length, 1);
 });
 
+await check("an authorization that never expires (2^64-1) or names no validBefore is never closed as not landed", async () => {
+  const book = makeBook({ recordOwed: async () => { throw new Error("nothing is owed yet"); } });
+  await book.book(entry(19, { validBefore: "18446744073709551615" }));
+  await book.book(entry(20, { validBefore: undefined }));
+  assert.deepEqual(book.list().map((e) => e.validBefore), [null, null], "an unreadable or far validBefore reads as no expiry");
+  clock += WINDOW_MS + 2 * 60_000;
+  let r = await book.reconcile();
+  assert.equal(r.absent, 0, "absence is not proven while the authorization may still move money");
+  clock += MAX_AGE_MS;
+  r = await book.reconcile();
+  assert.equal(r.absent, 0);
+  assert.ok(book.list().every((e) => e.state === "unresolved"), "left for a human, never closed");
+});
+
+await check("a booking whose store write fails is kept in the journal, logged, and landed by the next pass", async () => {
+  const { writeFileSync } = await import("node:fs");
+  // A store path under a regular file: every write to it fails.
+  const blocker = join(dir, `blocker-${Date.now()}`);
+  writeFileSync(blocker, "not a directory");
+  const held = [];
+  const journal = {
+    add: (kind, payload) => { held.push({ id: held.length + 1, kind, payload }); return held.length; },
+    size: () => held.length,
+    drain: async (apply) => { let n = 0; for (const e of [...held]) { const r = await apply(e); if (r === "stop") break; if (r === "landed" || r === "drop") { held.splice(held.indexOf(e), 1); if (r === "landed") n++; } } return n; },
+  };
+  const logs = [];
+  const broken = createLateSettleBook({ file: join(blocker, "late.json"), now, log: (m) => logs.push(m), alarm: (m) => logs.push(`ALARM ${m}`), fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  assert.equal(await broken.book(entry(21)), true, "the booking is kept");
+  assert.equal(held.length, 1, "in the journal");
+  assert.ok(logs.some((m) => /store write failed; kept in the journal/.test(m)), "and the log says so");
+  assert.ok(!logs.some((m) => /booked until its receipt is read/.test(m)), "never logged as booked when the store refused it");
+  // The store answers again (a writable path): the next pass lands it.
+  const healed = createLateSettleBook({ file: bookFile(), now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  const r = await healed.reconcile();
+  assert.equal(r.journaled, 1);
+  assert.equal(held.length, 0);
+  assert.deepEqual(healed.list().map((e) => e.tx), [txh(21)]);
+  // Neither the store nor the journal takes it: an alarm, and it says so.
+  const none = createLateSettleBook({ file: join(blocker, "late2.json"), now, log: (m) => logs.push(m), alarm: (m) => logs.push(`ALARM ${m}`), fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal: { add: () => null, size: () => 0, drain: async () => 0 } });
+  assert.equal(await none.book(entry(22)), false);
+  assert.ok(logs.some((m) => /^ALARM .*could NOT be recorded/.test(m)), "an unrecordable booking raises an alarm");
+});
+
 await check("an RPC that never answers keeps the entry, then marks it unresolved for a human (never dropped)", async () => {
   const book = makeBook();
   await book.book(entry(8));
@@ -242,6 +285,69 @@ await check("a recovered settlement (a fallback settled it) books nothing", asyn
   const r = await fail(ctxFor(18, reverted));
   assert.equal(r?.recovered, true);
   assert.equal(book.list().length, 0);
+});
+
+// ---- The authorization claim (src/settlement-claims.js) on the same path.
+const claims = await import("../src/settlement-claims.js");
+function fullHost() {
+  const h = { beforeVerify: [], beforeSettle: [], fail: [] };
+  const server = { onBeforeVerify: (f) => h.beforeVerify.push(f), onBeforeSettle: (f) => h.beforeSettle.push(f), onAfterSettle: () => {}, onAfterVerify: () => {}, onSettleFailure: (f) => h.fail.push(f), onVerifyFailure: () => {} };
+  // One request: stamp, claim its authorization, then (when the primary
+  // fails) every settle-failure hook in order, stopping at a recovery.
+  const request = async (ctx, primaryError) => {
+    for (const f of h.beforeVerify) await f(ctx);
+    for (const f of h.beforeSettle) { const r = await f(ctx); if (r?.abort) return { aborted: r.reason }; }
+    const fctx = { ...ctx, error: primaryError };
+    for (const f of h.fail) { const r = await f(fctx); if (r?.recovered) return { recovered: r }; }
+    return { refused: true, ctx: fctx };
+  };
+  return { server, request };
+}
+const reqCtx = (i, nonce) => ({ ...ctxFor(i, undefined), transportContext: { request: { adapter: { req: {} } } }, paymentPayload: { resource: { url: "https://agent402.tools/api/stock-history" }, payload: { authorization: { from: payer(i), to: TREASURY, value: "2500", validAfter: "0", validBefore: String(Math.floor(clock / 1000) + 300), nonce } } } });
+const revertedPrimary = () => Object.assign(new Error('invalid_exact_evm_transaction_failed: The contract function "transferWithAuthorization" reverted.'), { errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "" });
+
+await check("a resend of an authorization our relayer left pending is refused: the claim is kept while its transaction may land", async () => {
+  claims.__resetSettlementClaims();
+  const book = makeBook();
+  const { server, request } = fullHost();
+  // A settler that, like a cached pending result, would answer success for the
+  // same signature on a resend.
+  let calls = 0;
+  const relayer = { settle: async () => (++calls === 1
+    ? { success: false, errorReason: "settlement_pending", errorMessage: "no receipt within 30 s", transaction: txh(31), network: RH }
+    : { success: true, transaction: txh(31), network: RH }) };
+  claims.registerSettlementClaimHooks(server);
+  registerFacilitatorFailureHooks(server, null, null, { [RH]: () => [{ name: "own relayer", client: relayer, revertRetry: true }] });
+  claims.registerSettlementClaimRelease(server);
+  registerLateSettleHook(server, async () => book);
+  const nonce = txh(9301);
+  const first = await request(reqCtx(31, nonce), revertedPrimary());
+  assert.ok(first.refused, "the first request is refused with its transaction pending");
+  assert.deepEqual(book.list().map((e) => e.tx), [txh(31)], "and its transaction is booked for the reconcile");
+  const resend = await request(reqCtx(31, nonce), revertedPrimary());
+  assert.equal(resend.aborted, claims.DUPLICATE_AUTHORIZATION, "the resend never reaches a settler");
+  assert.equal(calls, 1, "our relayer was asked once");
+});
+
+await check("a fallback that answers a transaction already held (served, or booked owed) is not served again", async () => {
+  claims.__resetSettlementClaims();
+  const { server, request } = fullHost();
+  const good = (tx) => ({ settle: async () => ({ success: true, transaction: tx, network: RH }) });
+  claims.registerSettlementClaimHooks(server);
+  registerFacilitatorFailureHooks(server, null, null, { [RH]: () => [{ name: "listed", client: good(txh(32)), revertRetry: true }] });
+  claims.registerSettlementClaimRelease(server);
+  // The late-settlement book took this transaction when it booked it owed.
+  assert.equal((await claims.claimSettlementKey(claims.txClaimKey(RH, txh(32)), "late-settle:x")).claimed, true);
+  const held = await request(reqCtx(32, txh(9302)), revertedPrimary());
+  assert.ok(held.refused, "a transaction the book holds is never served as this request's payment");
+  // Control: a fresh transaction is recovered, and is then held for this request.
+  const { server: s2, request: r2 } = fullHost();
+  claims.registerSettlementClaimHooks(s2);
+  registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "listed", client: good(txh(33)), revertRetry: true }] });
+  claims.registerSettlementClaimRelease(s2);
+  const ok2 = await r2(reqCtx(33, txh(9303)), revertedPrimary());
+  assert.ok(ok2.recovered, "a fresh transaction is recovered");
+  assert.equal((await claims.claimSettlementKey(claims.txClaimKey(RH, txh(33)), "late-settle:y")).claimed, false, "and the book can no longer book it owed");
 });
 
 await check("the paid server registers the booking hook after every hook that can recover a payment", async () => {
