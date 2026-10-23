@@ -706,7 +706,7 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
-  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null, premiumUsd = 0, routerChains = null } = opts;
+  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null, premiumUsd = 0, floorUsd = 0, routerChains = null } = opts;
   const C = CHAIN_PAGES[chainKey];
   const measured = chainKey === LEADERBOARD_CHAIN;
   const lbWindow = leaderboardSnap?.windowLabel || null;
@@ -788,11 +788,14 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // row discloses them ("+N") instead of hiding them.
   const extraOf = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; return gid ? extraByGid.get(gid) || 0 : 0; };
   // What the 402 asks on THIS chain: the catalog price plus the chain's
-  // settlement premium, when it carries one.
-  const prices = tools.map((t) => withPremium(Number(t.price), premiumUsd)).filter((n) => Number.isFinite(n) && n > 0);
-  const low = prices.length ? Math.min(...prices) : withPremium(0.001, premiumUsd);
-  const high = prices.length ? Math.max(...prices) : withPremium(0.5, premiumUsd);
-  const premiumNote = Number(premiumUsd) > 0 ? ` (each price includes a ${usd(premiumUsd)} settlement premium on ${esc(C.chainName)}, as its 402 states)` : "";
+  // settlement premium, raised to the chain's price floor, when it has them.
+  const floor = Number(floorUsd) > 0 ? Number(floorUsd) : 0;
+  const onChain = (p) => { const v = withPremium(p, premiumUsd); return Number.isFinite(v) ? Math.max(v, floor) : v; };
+  const prices = tools.map((t) => onChain(Number(t.price))).filter((n) => Number.isFinite(n) && n > 0);
+  const low = prices.length ? Math.min(...prices) : onChain(0.001);
+  const high = prices.length ? Math.max(...prices) : onChain(0.5);
+  const premiumNote = (Number(premiumUsd) > 0 ? ` (each price includes a ${usd(premiumUsd)} settlement premium on ${esc(C.chainName)}, as its 402 states)` : "")
+    + (floor > 0 ? ` (no call on ${esc(C.chainName)} is priced below ${usd(floor)}, as its 402 states)` : "");
   const groups = categoryGroups(tools);
   // Our own newest settle (canary or volume run), never an outside buyer's:
   // a transaction hash resolves to its payer on chain.

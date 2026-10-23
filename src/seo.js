@@ -1,4 +1,5 @@
 import { whyPointsPlain } from "./why.js";
+import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
@@ -523,7 +524,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
 
 **Already hold a prepaid credits key?** New credits are not on sale; a key already issued keeps working. Send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 

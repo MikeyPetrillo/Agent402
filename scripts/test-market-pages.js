@@ -630,6 +630,8 @@ for (const c of NEW_CHAINS) {
   const op = marketPage("optimism", "https://agent402.tools", { snapshot: { sellers: [{ ...LOCAL, tools }] }, premiumUsd: 0.001 });
   ok(/from \$0\.002 to \$3\.301 a call/.test(op), "optimism: the price range carries the premium the 402 adds");
   ok(/settlement premium is in the price/.test(op), "optimism: the manifest says the buyer pays a settlement premium");
+  const rh = marketPage("robinhood", "https://agent402.tools", { snapshot: { sellers: [{ ...LOCAL, tools }] }, floorUsd: 0.006 });
+  ok(/from \$0\.006 to \$3\.30 a call/.test(rh) && /no call on Robinhood Chain is priced below \$0\.006, as its 402 states/.test(rh), "robinhood: the price range starts at the floor its 402 quotes, and says so");
   const plain = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [{ ...LOCAL, tools }] } });
   ok(/from \$0\.001 to \$3\.30 a call/.test(plain) && !/premium/.test(plain.split("RAIL MANIFEST")[1] || ""), "base: no premium, no premium wording");
   // Router claims match the chains the router spends on.

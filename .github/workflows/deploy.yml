@@ -3151,6 +3151,8 @@ jobs:
           t node scripts/test-buyers-trend.js
           # Per-chain price premiums (fee-charging rails priced in; dormant default byte-identical — offline)
           t node scripts/test-price-premium.js
+          # Per-chain price floors (eip155:4663 never quotes below its floor; other chains unchanged; metered quotes floored; every surface reads one constant - offline)
+          t node scripts/test-network-floors.js
           # Canary underfunded classification (empty burner is funding, never an outage — offline)
           t node scripts/test-canary-underfunded.js
           # Catalog buy (every tool bought at list price: grade, cap, rotation slice, funding preflight, exit codes - stub server + fake payer, offline)
