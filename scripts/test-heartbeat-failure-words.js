@@ -82,7 +82,7 @@ try {
   const OP = { issueSummary: { tools: ["stock-quote (failing)", "render (degraded)"], upstreams: ["databento (degraded)"], facilitatorNetworks: ["eip155:42220"] },
     tools: [{ slug: "stock-quote", hour: { outside5xx: 7 } }], facilitatorRefusals: [{ network: "eip155:42220", facilitator: "SomeVendor", reason: "insufficient settlement funds" }] };
   const PRIVATE = /stock-quote|render \(|databento|SomeVendor|42220|\b7\b|fund|account|free tier|payment method|Failing slugs/i;
-  for (const [field, word] of [["toolFailures", "degraded"], ["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"]]) {
+  for (const [field, word] of [["toolFailures", "degraded"], ["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"], ["facilitatorFunds", "low"]]) {
     await check(`${field} ${word}: one issue, the word and the operator endpoint only`, async () => {
       const { calls } = await run({ gateway: { ...OK, [field]: { status: word } }, op: OP });
       const c = created(calls);
@@ -96,8 +96,8 @@ try {
     });
   }
 
-  await check("upstreamHealth failing and facilitatorFunds refused / demoted page under their own titles", async () => {
-    for (const [gw, title] of [[{ upstreamHealth: { status: "failing" } }, TITLES.upstreamHealth], [{ upstreamHealth: { status: "degraded" } }, TITLES.upstreamHealth], [{ facilitatorFunds: { status: "refused" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "demoted" } }, TITLES.facilitatorFunds]]) {
+  await check("upstreamHealth failing and facilitatorFunds low / refused / demoted page under their own titles", async () => {
+    for (const [gw, title] of [[{ upstreamHealth: { status: "failing" } }, TITLES.upstreamHealth], [{ upstreamHealth: { status: "degraded" } }, TITLES.upstreamHealth], [{ facilitatorFunds: { status: "refused" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "demoted" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "low" } }, TITLES.facilitatorFunds]]) {
       const { calls } = await run({ gateway: { ...OK, ...gw } });
       assert.deepEqual(created(calls).map((c) => c.title), [title], JSON.stringify(gw));
     }
@@ -123,7 +123,7 @@ try {
       assert.equal(j({ toolFailures: { status: w } })[TITLES.toolFailures], "bad");
       assert.equal(j({ upstreamHealth: { status: w } })[TITLES.upstreamHealth], "bad");
     }
-    for (const w of ["refused", "demoted"]) assert.equal(j({ facilitatorFunds: { status: w } })[TITLES.facilitatorFunds], "bad");
+    for (const w of ["low", "refused", "demoted"]) assert.equal(j({ facilitatorFunds: { status: w } })[TITLES.facilitatorFunds], "bad");
     for (const t of Object.keys(TITLES)) {
       assert.equal(j({ [t]: { status: "ok" } })[TITLES[t]], "good");
       assert.equal(j({ [t]: { status: "unknown" } })[TITLES[t]], "quiet");
@@ -132,7 +132,7 @@ try {
     const body = ALARMS.find((a) => a.title === TITLES.toolFailures).body({ gateway: { toolFailures: { status: "<b>" } } });
     assert.match(body, /toolFailures\.status=degraded/, "the body echoes only a known word");
     assert.match(body, /\/__operator\/tool-failures\.json/);
-    for (const [field, word] of [["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"]]) {
+    for (const [field, word] of [["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"], ["facilitatorFunds", "low"]]) {
       const b = ALARMS.find((a) => a.title === TITLES[field]).body({ gateway: { [field]: { status: word } } });
       assert.match(b, new RegExp(`${field}\\.status=${word}\\.`));
       assert.doesNotMatch(b.replace(/facilitatorFunds/g, ""), /fund|account|free tier|payment method|slug/i, `the Worker body for ${field} carries no detail: ${b}`);

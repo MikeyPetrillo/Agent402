@@ -288,6 +288,130 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
   _resetSettleDemotion();
 });
 
+// ---- settlement-signer gas (src/facilitator-gas.js) -----------------------------
+// A stub facilitator names its signer on /supported; a stub chain RPC answers
+// eth_gasPrice and eth_getBalance. Runway under the minimum reads "low" on
+// facilitatorFunds; enough failed reads read "low" too, never a silent ok.
+{
+  const { createServer } = await import("node:http");
+  const { createRelayerGasCheck, signersFromSupported, runwayOf, gasCheckSettings } = await import("../src/facilitator-gas.js");
+  const SIGNER = "0x" + "ab".repeat(20);
+  const NET = "eip155:4663";
+  const chain = { gasPrice: 20_000_000n, balance: 0n, down: false, supportedDown: false, calls: [] };
+  const listen = (handler) => new Promise((r) => { const s = createServer(handler); s.listen(0, "127.0.0.1", () => r(s)); });
+  const body = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
+  const fac = await listen(async (req, res) => {
+    if (chain.supportedDown) { res.writeHead(503); return res.end("{}"); }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: NET }], extensions: [], signers: { "eip155:*": [SIGNER] } }));
+  });
+  const rpc = await listen(async (req, res) => {
+    const m = JSON.parse(await body(req) || "{}");
+    chain.calls.push(m.method);
+    if (chain.down) { res.writeHead(502); return res.end("{}"); }
+    res.writeHead(200, { "content-type": "application/json" });
+    const result = m.method === "eth_gasPrice" ? "0x" + chain.gasPrice.toString(16) : m.method === "eth_getBalance" ? "0x" + chain.balance.toString(16) : "0x";
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }));
+  });
+  const FAC = `http://127.0.0.1:${fac.address().port}`, RPC = `http://127.0.0.1:${rpc.address().port}`;
+  const settings = { ...gasCheckSettings({}), minRunway: 500, gasPerSettlement: 100_000, failAfter: 3 };
+  // One settlement at 20,000,000 wei gas price x 100k gas = 2e12 wei.
+  const PER = 2_000_000_000_000n;
+  try {
+    await check("gas: signers come from /supported (network key, then eip155:*), runway is balance / (price x gas)", () => {
+      assert.deepEqual(signersFromSupported({ signers: { "eip155:*": [SIGNER, "nope", SIGNER.toUpperCase().replace("0X", "0x")] } }, NET), [SIGNER]);
+      assert.deepEqual(signersFromSupported({ signers: { [NET]: ["0x" + "cd".repeat(20)], "eip155:*": [SIGNER] } }, NET), ["0x" + "cd".repeat(20), SIGNER]);
+      assert.deepEqual(signersFromSupported({}, NET), []);
+      assert.equal(runwayOf(PER * 499n, 20_000_000n, 100_000), 499);
+      assert.equal(runwayOf(0n, 0n, 100_000), null, "no gas price, no runway figure");
+    });
+    await check("gas: a funded signer reads ok; under the minimum it reads low and facilitatorFunds says low", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now });
+      chain.balance = PER * 2_000n;
+      let r = await g.check();
+      assert.equal(r.length, 1);
+      assert.equal(r[0].status, "ok");
+      assert.equal(r[0].runway, 2000);
+      assert.equal(r[0].signer, SIGNER);
+      m.noteRelayerGas(r);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "ok");
+      chain.balance = PER * 120n;
+      r = await g.check();
+      assert.equal(r[0].status, "low");
+      m.noteRelayerGas(r);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
+      const full = await m.status({ fresh: true, full: true });
+      assert.equal(full.facilitatorFunds.relayersLow, 1);
+      const rep = await m.report({ t: c.t });
+      assert.equal(rep.relayerGas[0].runway, 120);
+      assert.equal(rep.relayerGas[0].facilitator, new URL(FAC).host);
+      assert.ok(rep.issueSummary.facilitatorNetworks.includes(NET));
+      const pub = await m.status({ fresh: true });
+      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status"], "the public word carries no figure");
+      // A refusal outranks low.
+      m.noteFacilitatorRefusal({ network: NET, facilitator: "x", reason: "Out of mainnet settlement funds" });
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
+    });
+    await check("gas: one failed read keeps the last reading; repeated failures read unread (low), never a silent ok", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now });
+      chain.balance = PER * 2_000n; chain.down = false;
+      await g.check();
+      chain.down = true;
+      let r = await g.check();
+      assert.equal(r[0].status, "ok", "one failure keeps the last good reading");
+      assert.equal(r[0].failures, 1);
+      await g.check();
+      r = await g.check();
+      assert.equal(r[0].status, "unread");
+      m.noteRelayerGas(r);
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
+      chain.down = false;
+      r = await g.check();
+      assert.equal(r[0].status, "ok", "a good read clears it");
+      // A facilitator whose /supported never named a signer reads unread too.
+      chain.supportedDown = true;
+      const g2 = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now });
+      for (let i = 0; i < 3; i++) r = await g2.check();
+      assert.equal(r.length, 1);
+      assert.equal(r[0].status, "unread");
+      assert.equal(r[0].signer, null);
+      chain.supportedDown = false;
+    });
+    await check("gas: readings merge across replicas (newest per signer) and age out", async () => {
+      const store = (() => { const snaps = new Map(); return { async publish(id, json, t) { snaps.set(id, { id, at: t, ...JSON.parse(json) }); return { ok: true }; }, async readAll() { return { ok: true, snapshots: [...snaps.values()] }; } }; })();
+      const c = clock();
+      const a = createToolFailureMonitor({ now: c.now, env: {}, store });
+      const b = createToolFailureMonitor({ now: c.now, env: {}, store });
+      a.noteRelayerGas([{ network: NET, facilitator: "f.example", signer: SIGNER, balanceEth: 0.0002, runway: 100, status: "low", at: c.t }]);
+      await a.publish(c.t);
+      await b.refreshRemote(c.t, { maxAgeMs: 0 });
+      assert.equal((await b.status({ fresh: true })).facilitatorFunds.status, "low", "the replica that did not check sees the low reading");
+      c.t += 45 * 60_000 + 1;
+      await b.refreshRemote(c.t, { maxAgeMs: 0 });
+      assert.equal((await b.status({ fresh: true })).facilitatorFunds.status, "ok", "a reading older than the window counts for nothing");
+    });
+    await check("gas: the payments loop reads every listed facilitator and feeds the process monitor (caller path)", async () => {
+      process.env.EVM_RPC_4663 = RPC;
+      const { startFacilitatorGasCheck } = await import("../src/payments.js");
+      const { toolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+      chain.balance = PER * 10n; chain.down = false; chain.calls.length = 0;
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC, FAC + "/"], schedule: false });
+      const r = await tick();
+      assert.ok(Array.isArray(r) && r.length >= 1 && r.every((x) => x.status === "low"), JSON.stringify(r));
+      assert.ok(chain.calls.includes("eth_gasPrice") && chain.calls.includes("eth_getBalance"));
+      assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");
+      toolFailureMonitor()._reset();
+      delete process.env.EVM_RPC_4663;
+    });
+  } finally {
+    fac.close(); rpc.close();
+  }
+}
+
 // ---- booted: the surfaces ------------------------------------------------------
 // The render worker is configured at a port nothing listens on yet, so the
 // first render call meets a cold start: refused connections, then an answer.
