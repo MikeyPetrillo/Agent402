@@ -49,6 +49,7 @@ import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
+import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -1598,3 +1599,8 @@ export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
     generatedAt: new Date(now).toISOString(),
   };
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("sales-ledger.db", () => db, { note: "sales ledger (in memory with a state database)" });
+registerSqliteStore("sales-ledger.fileDb", () => fileDb, { note: "sales ledger write-through file" });
+registerMemoryStore("sales-ledger.answerDigests", () => qAnswerDigests, { note: "answer digests" });

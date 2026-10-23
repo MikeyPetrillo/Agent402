@@ -35,6 +35,7 @@
 // FORMAT GUARD. A parse with no entry, or with no digital currency address at
 // all, is a format change, not an empty list: loadSdnList throws and keeps
 // nothing, and each reader keeps its previous good copy.
+import { registerMemoryStore } from "./memory-stores.js";
 
 export const SDN_LIST_DEFAULT_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML";
 export const SDN_MAX_BYTES = 96 * 1024 * 1024; // the export is ~30 MB; far past that is a surprise worth refusing
@@ -151,3 +152,6 @@ export async function loadSdnList({ maxAgeMs = 0, fetchImpl = globalThis.fetch, 
 
 /** Test seam: forget the held parse. */
 export function __resetSdnListForTests() { held = null; inFlight = null; }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("ofac-sdn.held", () => held, { note: "last good list" });

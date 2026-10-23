@@ -779,6 +779,7 @@ import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnow
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
+import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -5519,9 +5520,15 @@ app.get("/__operator/heap.json", async (req, res) => {
   // heap reading); without the flag it is ignored.
   if (req.query.gc === "1" && typeof globalThis.gc === "function") globalThis.gc();
   const mem = process.memoryUsage();
+  // Every registered store, largest first, sampled and inside a time budget
+  // (src/memory-stores.js); a store past the budget reads `skipped`.
+  const storeRead = memoryStoreFigures({ budgetMs: 40 });
   res.set("Cache-Control", "no-store").json({
     heapUsedMb: mb(mem.heapUsed), heapTotalMb: mb(mem.heapTotal), rssMb: mb(mem.rss), externalMb: mb(mem.external), arrayBuffersMb: mb(mem.arrayBuffers),
     spaces: v8.getHeapSpaceStatistics().map((sp) => ({ space: sp.space_name, usedMb: mb(sp.space_used_size), sizeMb: mb(sp.space_size) })),
+    stores: storeRead.stores,
+    storesReadMs: storeRead.readMs,
+    storesSkipped: storeRead.skipped,
     index: indexMemoryFigures({ sampleBytes: true }),
     // Page and API bodies held between rebuilds: a string by its length, an
     // array by its row count (never serialized here, some hold 200k rows).
@@ -7403,6 +7410,21 @@ const chainSellerViewMemo = createBoundedMemo({
   isPartial: () => !stateStoresLoaded(),
   onError: (_key, e) => console.warn(`[market] seller view rebuild failed: ${String(e?.message || e).slice(0, 120)}`),
 });
+// Operator heap read (/__operator/heap.json `stores`): this file's caches.
+registerMemoryStore("server.surfaceMemo", () => surfaceMemo, { note: "page and API bodies between rebuilds" });
+registerMemoryStore("server.chainSellerViews", null, {
+  note: "per-seller chain pages (bounded LRU)",
+  figure: () => ({ rows: chainSellerViewMemo.size(), mb: chainSellerViewMemo.bytes() / 1048576 }),
+});
+registerMemoryStore("server.externalServes", () => externalServesMemo, { note: "outside-seller matches per query" });
+registerMemoryStore("server.chainActivity", () => chainActivityByWallet, { note: "per-wallet chain activity" });
+registerMemoryStore("server.stellarActivity", () => stellarActivityByWallet, { note: "per-wallet Stellar activity" });
+registerMemoryStore("server.algorandActivity", () => algorandActivityByWallet, { note: "per-wallet Algorand activity" });
+registerMemoryStore("server.hostFigures", () => hostFiguresCache, { note: "host figures per chain" });
+registerMemoryStore("server.ogSections", () => ogSectionCache, { note: "rendered share cards" });
+registerMemoryStore("server.toolCards", () => toolCardCache, { note: "rendered tool cards" });
+registerMemoryStore("server.powChallengeHits", () => powChallengeHits, { note: "proof-of-work hits per address" });
+registerMemoryStore("server.fundResolve", () => _fundResolveCache, { note: "funding resolution cache" });
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res, next) => {
     // A gated rail's page (Arc) exists only while the rail is in the live

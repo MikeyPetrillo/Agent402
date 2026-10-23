@@ -33,6 +33,7 @@ const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocum
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
+import { registerMemoryStore } from "./memory-stores.js";
 
 export { validateOriginInput };
 
@@ -814,3 +815,10 @@ export function mppIndexSnapshot() {
     generatedAt: Date.now(),
   };
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("mpp-index.entries", () => cache, { note: "crawled MPP seller entries" });
+registerMemoryStore("mpp-index.registry", () => registryByOrigin, { note: "registry rows by origin" });
+registerMemoryStore("mpp-index.scan", () => mppScanByOrigin, { note: "MPP scan rows by origin" });
+registerMemoryStore("mpp-index.discoveryDocs", () => discoveryDocCache, { note: "discovery documents read" });
+registerMemoryStore("mpp-index.docs", () => docs, { note: "state documents held by the MPP index" });

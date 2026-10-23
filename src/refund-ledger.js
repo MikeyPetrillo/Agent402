@@ -50,6 +50,7 @@ import { join } from "node:path";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
+import { registerSqliteStore } from "./memory-stores.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
@@ -880,3 +881,7 @@ export function __resetRefunds() {
   }
   db.exec("DELETE FROM refunds");
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerSqliteStore("refund-ledger.db", () => db, { note: "refund ledger (in memory with a state database)" });
+registerSqliteStore("refund-ledger.fileDb", () => fileDb, { note: "refund ledger write-through file" });

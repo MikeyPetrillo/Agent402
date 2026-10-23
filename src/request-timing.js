@@ -10,6 +10,7 @@
 // a query string or a value, and are capped in number.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { registerMemoryStore } from "./memory-stores.js";
 
 const als = new AsyncLocalStorage();
 const RING = 512;
@@ -159,3 +160,7 @@ export function inFlightCount() { return inflight.size; }
 
 /** Test hook. */
 export function __resetTimingForTest() { routes.clear(); inflight.clear(); ended.length = 0; for (const b of minuteBuckets) b.at = 0; }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("request-timing.routes", () => routes, { note: "per-route timing rings" });
+registerMemoryStore("request-timing.ended", () => ended, { note: "recently ended requests" });

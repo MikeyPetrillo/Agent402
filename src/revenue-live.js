@@ -261,6 +261,7 @@ export const EVM = {
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
 import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence } from "./refresh-cadence.js";
+import { registerMemoryStore } from "./memory-stores.js";
 export { SOLANA_RPCS };
 
 // Stellar/Algorand REST endpoints. Alchemy doesn't serve these chains, so each
@@ -2152,3 +2153,7 @@ export function railsCoveredByLiveView() {
   const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"]);
   return [...RAILS, ...GATED_RAILS].every((r) => covered.has(r.name));
 }
+
+// Operator heap read (/__operator/heap.json `stores`).
+registerMemoryStore("revenue-live.snapshot", () => cached, { note: "live rail scan" });
+registerMemoryStore("revenue-live.lastGood", () => diskLastGood, { note: "last good rail reading" });
