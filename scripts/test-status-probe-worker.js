@@ -369,7 +369,7 @@ for (const [name, over, detail] of failCases) {
   const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
-    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" } };
+    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, buyerRefusals: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
@@ -637,7 +637,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, buyerRefusals: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
@@ -666,6 +666,8 @@ for (const [name, over, detail] of failCases) {
       ["Payment-party screen STALE or MISSING (OFAC SDN)", "sanctionsScreen", ["stale", "missing"], ["fresh"]],
       ["Transactional email is not sending", "email", ["exhausted", "failing"], ["ok"]],
       ["Upstream cost table missing or incomplete in production", "upstreamCosts", ["missing", "partial"], ["ok"]],
+      // A paying buyer refused by the settle breaker (src/gateway-settle-breaker.js).
+      ["buyerRefusals: a paying buyer was refused by the settle breaker", "buyerRefusals", ["refusing"], ["ok"]],
     ];
     for (const [T, field, bad, good] of cases) {
       assert.ok(ALARMS.some((a) => a.title === T), `the Worker has "${T}"`);
@@ -690,6 +692,10 @@ for (const [name, over, detail] of failCases) {
     assert.match(body("Payment-party screen STALE or MISSING (OFAC SDN)", { sanctionsScreen: { status: "missing" } }), /reads missing on/);
     assert.match(body("Transactional email is not sending", { email: { status: "<x>" } }), /email\.status=exhausted\./);
     assert.match(body("Upstream cost table missing or incomplete in production", { upstreamCosts: { status: "partial" } }), /upstreamCosts\.status=partial\./);
+    const br = body("buyerRefusals: a paying buyer was refused by the settle breaker", { buyerRefusals: { status: "<x>", refusalsWindow: 7 } });
+    assert.match(br, /buyerRefusals\.status=refusing\./);
+    assert.match(br, /\/__operator\/tool-failures\.json/);
+    assert.doesNotMatch(br, /\b7\b|0x|<x>/, "the body carries the word and the operator endpoint, never a count or an address");
     const rec = body("MPP reconciliation MISMATCH", { mppReconcile: { status: "mismatch", day: "2026-10-14", categories: { paid_unrecorded: "mismatch", served_unpaid: "ok", "<b>": "mismatch" } } });
     assert.match(rec, /for 2026-10-14 found/);
     assert.match(rec, /categories: paid_unrecorded\)/);

@@ -549,6 +549,14 @@ Auto-closes when the word is ok.`;
     body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor, or its balance could not be read three times running; the operator detail says which (relayersLow, relayersUnread).`,
   },
   {
+    // The settle breaker refused a buyer that had settled a call in its
+    // window (buyerRefusals, src/gateway-settle-breaker.js): refusing pages,
+    // ok clears, unknown does neither. Title matches heartbeat.yml's.
+    title: "buyerRefusals: a paying buyer was refused by the settle breaker",
+    verdict: ({ gateway: b }) => wordVerdict(b.buyerRefusals?.status, ["refusing"], ["ok"]),
+    body: () => `${failureWordBody("buyerRefusals", "refusing")} refusing means a wallet, Tempo sender, credits key or address that had settled at least one call inside the breaker's window was then refused for its settle failures; the operator detail has the count, the server log the [gateway-breaker] line.`,
+  },
+  {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.

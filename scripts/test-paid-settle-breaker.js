@@ -31,6 +31,7 @@ const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog.sl
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX = 3; // GATEWAY_SETTLE_BREAKER_MAX below
+const OP_TOKEN = "settle-breaker-test-operator-token-0123456789";
 
 const PAYER_A = "0x00000000000000000000000000000000000000a1";
 const PAYER_B = "0x00000000000000000000000000000000000000b2";
@@ -65,9 +66,11 @@ proc = spawn("node", ["--import", "./scripts/lib/upstream-stub-preload.js", "src
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     GATEWAY_SETTLE_BREAKER_MAX: String(MAX), GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    AGENT402_OPERATOR_TOKEN: OP_TOKEN,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
+const OP_HEADERS = { Authorization: `Bearer ${OP_TOKEN}` };
 const serverLog = [];
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 80) serverLog.splice(0, serverLog.length - 80); };
 proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
@@ -163,6 +166,14 @@ try {
     const statuses = [];
     for (let i = 1; i <= MAX; i++) statuses.push((await pay(WALLET_ONLY, PAYER_B)).status);
     ok(statuses.join(",") === "402,402,429", `one settled call does not restart the count: wallet B's failures (1 + ${MAX}) against one settled call refuse it on the third (got ${statuses.join(",")})`);
+    // Wallet B had settled a call, so its refusal is a refused PAYING buyer:
+    // buyerRefusals reads refusing on /api/gateway-status (the word only) and
+    // the operator detail carries the count. Wallet A, with no settled call,
+    // was refused above and counts for nothing: the count is exactly one.
+    const gw = await (await fetch(`${B}/api/gateway-status`)).json();
+    ok(JSON.stringify(gw.buyerRefusals) === JSON.stringify({ status: "refusing" }), `a refused paying buyer reads buyerRefusals=refusing, the word only (${JSON.stringify(gw.buyerRefusals)})`);
+    const op = await (await fetch(`${B}/__operator/tool-failures.json`, { headers: OP_HEADERS })).json();
+    ok(op.buyerRefusalsWindow === 1 && op.buyerRefusals === "refusing", `the operator detail counts one refused paying buyer, none for the wallet that never settled (${op.buyerRefusalsWindow})`);
   }
   // A wallet that mostly settles is never refused by a few failures: wallet C
   // settles four calls, then three fail in a row; every one of them is served.

@@ -65,6 +65,7 @@ import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } fr
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
+import { toolFailureMonitor } from "./tool-failure-monitor.js";
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
@@ -364,6 +365,12 @@ function decide(req, key, now, global, g, b) {
     throw e;
   }
   if (b.blocked) {
+    // A key that settled a call inside the window is a paying buyer: its
+    // refusal is noted on the failure monitor (a count per bucket, shared
+    // across replicas, no key), and /api/gateway-status reads buyerRefusals
+    // as refusing while one is recent, so a refused buyer is seen instead of
+    // read from a log afterward. A key with no settled call is not counted.
+    if (b.oks > 0) { try { toolFailureMonitor().noteBuyerRefusal({ at: now }); } catch { /* counting only */ } }
     const secs = Math.max(1, Math.ceil((b.until - now) / 1000));
     const mins = Math.round(WINDOW_MS / 60_000);
     const until = `paid tools refuse new calls from it until ${new Date(b.until).toISOString()} (about ${secs} s). Nothing was charged for this request.`;
