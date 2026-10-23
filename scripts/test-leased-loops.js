@@ -58,7 +58,13 @@ try {
     "sanctions-screen-refresh",
     // Pre-reads end-of-day bars into the cache under its own daily call ceiling;
     // a second container warming at the same time reads the same bars twice.
-    "databento-quote-warmer"]);
+    "databento-quote-warmer",
+    // Reads the settlement signers' gas balances into our own alarm store; a
+    // second container reading at the same time reads the same balances twice.
+    "facilitator-gas-${network}",
+    // The shared live rail scan; without the lease each container scans for
+    // itself, which is how every container worked before the scan was shared.
+    "revenue-snapshot-refresh"]);
   const { readdirSync } = await import("node:fs");
   const leasedCall = /\b(?:leased|withLease)\(\s*([`"][^`"]+[`"])\s*,\s*\{([^}]*)\}/g;
   let sites = 0;
