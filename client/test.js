@@ -270,6 +270,24 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
       ok(e?.name === "SpendingLimitError" && counters.paid === 0, "a pre-wrapped fetch with no payNetworks keeps counting the dearest accept (it may sign any of them)");
     }
+    {
+      // A 402 with no option on the declared chains: the wallet may still sign
+      // any of them, so the dearest of ALL counts (never the list price).
+      const onlyRh = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+        { scheme: "exact", network: "eip155:4663", amount: "6000", asset: RH_USDG, payTo: "0xdead", extra: { name: "Global Dollar" } } ] })).toString("base64");
+      for (const payNetworks of [["base"], ["optimism"], ["nosuchchain"]]) {
+        let paid = 0;
+        const c = new Agent402({ baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.004, payNetworks,
+          fetch: async () => { paid++; return okResp; },
+          fetchImpl: async () => ({ ok: false, status: 402, headers: new Headers({ "payment-required": onlyRh }), json: async () => ({}) }) });
+        c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.001" }]]);
+        let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+        ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.006 && paid === 0, `payNetworks ${JSON.stringify(payNetworks)} with no option on those chains counts the dearest of all ($0.006) and is refused over a $0.004 cap`);
+      }
+    }
+    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]]) {
+      ok(NETWORK_CAIP2[name] === caip2, `NETWORK_CAIP2 maps ${name} -> ${caip2}`);
+    }
   }
 
   // the decoder itself: v2 `amount`, v1 `maxAmountRequired`, body fallback, and

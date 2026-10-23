@@ -670,7 +670,10 @@ export class Agent402 {
       if (pre?.status !== 402) return listUsd;
       let accepts = await challengeAccepts(pre);
       if (mode === "wallet" && this._payNetworks && Array.isArray(accepts)) {
-        accepts = accepts.filter((a) => this._payNetworks.has(String(a?.network || "").toLowerCase()));
+        const onChains = accepts.filter((a) => this._payNetworks.has(String(a?.network || "").toLowerCase()));
+        // No option on the declared chains (or a name that maps to none): the
+        // wallet may still sign any of them, so the dearest of all counts.
+        if (onChains.length) accepts = onChains;
       }
       q = quoteOf(accepts);
     } catch (e) {
@@ -969,8 +972,15 @@ export const NETWORK_CAIP2 = {
   "base-sepolia": "eip155:84532",
   robinhood: "eip155:4663",
   arc: "eip155:5042",
+  monad: "eip155:143",
+  celo: "eip155:42220",
+  avalanche: "eip155:43114",
+  sei: "eip155:1329",
+  optimism: "eip155:10",
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+  stellar: "stellar:pubnet",
+  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
 };
 
 export function withNetworkPreference(client, networks) {
