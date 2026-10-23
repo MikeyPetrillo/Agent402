@@ -152,7 +152,9 @@ await check("the failure hook: after our relayer settled first, it is not asked 
     let outageCalls = 0;
     const outage = { settleAfterAmbiguous: async () => { outageCalls++; return null; }, handle: async () => { outageCalls++; return null; } };
     const ownCandidate = { name: "own relayer", revertRetry: true, confirmed: true, own: true, client: { settle: async () => { asked.push("own-again"); return { success: true, transaction: "0x" + "cc".repeat(32), network: RH }; } } };
-    const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: "0x" + "dd".repeat(32), network: RH }; } } };
+    // The listed fallback reverts too (retryable), so the chain would reach
+    // our relayer's own candidate next: it must not be asked a second time.
+    const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "", network: RH }; } } };
     const s = fakeServer();
     registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [listed, ownCandidate] }, { outageFor: () => outage });
 
@@ -165,7 +167,7 @@ await check("the failure hook: after our relayer settled first, it is not asked 
     const res = await facilitator.settle(payload, { network: RH, scheme: "exact" });
     const err = Object.assign(new Error(REVERTED), { errorReason: res.errorReason, errorMessage: res.errorMessage, transaction: "" });
     const out = await s.hooks.settleFailure({ requirements: { network: RH, scheme: "exact" }, paymentPayload: payload, error: err });
-    assert.equal(out?.recovered, true);
+    assert.notEqual(out?.recovered, true);
     assert.deepEqual(asked, ["listed"], "the facilitator was skipped and our relayer not asked twice");
 
     // An ambiguous answer from our relayer (a timeout): the outage path,
