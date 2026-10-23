@@ -792,6 +792,11 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   // Input checks, and the path without replan is unchanged.
   await throwsWith(() => exr({ decisionId: "rp1", replan: "yes" }, mkReq("0xr6")), 400, '"replan" must be true or false', "replan must be a boolean");
   await throwsWith(() => exr({ steps: ["a", "b"], replan: true }, mkReq("0xr7")), 400, "pass its decisionId", "a sketch cannot be re-planned");
+  ledger.saveDecision({ decisionId: "skt_rp", depth: "sketch", priceUsd: 0, payer: "0xr7", plan: savedPlan, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("skt_rp");
+  replanCalls.length = 0; calls.length = 0;
+  await throwsWith(() => exr({ decisionId: "skt_rp", replan: true }, mkReq("0xr7b")), 400, "plan sketch", "a sketch run's decisionId cannot be re-planned either: refused, uncharged");
+  ok(replanCalls.length === 0 && calls.length === 0, "...before the planner or any step");
   calls.length = 0; replanCalls.length = 0;
   const plain = await exr({ decisionId: "rp1" }, mkReq("0xr8"));
   ok(!("replanned" in plain) && replanCalls.length === 0 && plain.paidUsd === 0.02 && calls.some((c) => c[0] === "a"), "without replan nothing is re-planned and the answer has no replanned field");

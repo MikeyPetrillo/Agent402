@@ -33,7 +33,7 @@ import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
-import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
+import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
@@ -368,8 +368,10 @@ function startLateSettleReconcile() {
       const b = await lateSettleBook();
       await b.ready;
       await b.refresh();
-      if (!b.list().length) return null;
+      // Run even with nothing open: a pass first lands what the journal holds
+      // (a booking whose store write failed).
       const r = await b.reconcile();
+      if (r.journaled) console.warn(`[late-settle] reconcile: ${r.journaled} journaled booking(s) landed in the store`);
       if (r.owed || r.reverted || r.notOurs || r.absent || r.served || r.unresolved || r.errors) console.warn(`[late-settle] reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.reverted} reverted, ${r.notOurs} without this transfer, ${r.absent} never mined, ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still open`);
       return r;
     });
@@ -1028,7 +1030,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
-        urls: () => [ROBINHOOD_FACILITATOR_URL, ...robinhoodFallbacks.map((f) => f.url)],
+        urls: () => gasCheckUrls(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks),
         ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
@@ -2324,6 +2326,16 @@ setDemotedReader(() => demotedList());
  * replica's facilitatorFunds word through the failure monitor's shared
  * snapshots. `urls` is read at each tick. Returns the tick (tests run it).
  */
+/**
+ * The facilitators whose settlement gas is watched: the primary and every
+ * listed fallback its /supported has confirmed. A fallback that never
+ * answered is never tried for a settlement, so its unknown gas is not a
+ * reason to page (its state is in the boot and recheck log lines).
+ */
+export function gasCheckUrls(primary, fallbacks = []) {
+  return [primary, ...fallbacks.filter((f) => f?.confirmed === true).map((f) => f.url)].filter(Boolean);
+}
+
 export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true } = {}) {
   const { leased } = await import("./state-db.js");
   const { createRelayerGasCheck, gasCheckSettings } = await import("./facilitator-gas.js");
@@ -2524,7 +2536,15 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
-        // it as-is), so the in-flight cover's release is called here.
+        // it as-is): its transaction is claimed here, and one another request
+        // served or the late-settlement book booked owed is never served
+        // again (a settler that answers a cached result for a resent
+        // authorization cannot turn one transfer into two answers).
+        if (await recoveredTxHeldElsewhere(ctx, result)) {
+          console.warn(`[payments] ${name} settle fallback on ${ctx?.requirements?.network} answered tx ${result?.transaction}, already held by another request or booked owed; not served`);
+          return;
+        }
+        // The in-flight cover's release is called here for the same reason.
         releaseCoverOnSettled(ctx, result);
         console.warn(
           `[payments] recovered ${ctx?.requirements?.network} settlement via ${name} fallback ` +
