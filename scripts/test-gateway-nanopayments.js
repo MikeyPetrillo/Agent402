@@ -1056,6 +1056,15 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     assert.match(llms, /GatewayWalletBatched/);
     assert.match(llms, /`maxTimeoutSeconds` of 604900 seconds/, "the validity window is read from the offer (Gateway's minValiditySeconds plus the buffer)");
     assert.doesNotMatch(llms, /seven-day/, "never typed");
+    // The copy names the buyer's one-time Gateway deposit beside "no gas",
+    // and every surface that describes the implicit replay names the
+    // identity-bound exclusion.
+    assert.match(llms, /first deposits USDC into Circle Gateway \(one on-chain deposit, which the buyer makes and pays gas for\)/);
+    assert.match(llms, /Identity-bound routes and routes with a lasting effect \(such as memory writes, attest and the route-execute tiers\) offer the plain accept only/);
+    assert.match(llms, /\(identity-bound routes, routes with a lasting effect and streamed calls excepted\)/);
+    assert.match(pricing.payment.gatewayNanopayments.buyerGas, /one-time USDC deposit into Gateway/);
+    const privacy = (await (await fetch(`${base}/privacy`)).text()).replace(/\s+/g, " ");
+    assert.match(privacy, /not on identity-bound routes such as memory, on routes with a lasting effect, or for streamed calls/);
     const openapi = await (await fetch(`${base}/openapi.json`)).json();
     const hashInfo = openapi.paths["/api/hash"].post["x-payment-info"];
     assert.deepEqual(hashInfo.nanopayments.networks.sort(), ["eip155:5042", "eip155:8453"]);
