@@ -62,6 +62,10 @@ function stubChain() {
   const st = {
     balances: new Map(), used: new Set(), nonces: new Map(), ethBalance: new Map(), receipts: new Map(),
     gasPrice: 20_000_000n, block: 100n, sendDelayMs: 0, neverMine: false, sends: [], refusedSends: 0,
+    // Every eth_sendRawTransaction that reached the node, taken or not.
+    sendAttempts: 0,
+    // The node takes the transaction, then the connection drops before it answers.
+    resetAfterAccept: false,
   };
   const lc = (a) => String(a).toLowerCase();
   const bal = (a) => st.balances.get(lc(a)) || 0n;
@@ -119,8 +123,10 @@ function stubChain() {
         return r.data;
       }
       case "eth_sendRawTransaction": {
+        st.sendAttempts++;
         const raw = params[0];
         const tx = parseTransaction(raw);
+        if (tx.maxFeePerGas < st.gasPrice) throw Object.assign(new Error("max fee per gas less than block base fee"), { rpcCode: -32000 });
         const hash = keccak256(raw);
         const from = await import("viem").then((v) => v.recoverTransactionAddress({ serializedTransaction: raw }));
         const expected = st.nonces.get(lc(from)) || 0;
@@ -161,6 +167,7 @@ function stubChain() {
         catch (e) { return { jsonrpc: "2.0", id: m.id, error: { code: e.rpcCode ?? -32603, message: e.message, ...(e.rpcCode === 3 ? { data: "0x" } : {}) } }; }
       };
       const out = Array.isArray(body) ? await Promise.all(body.map(one)) : await one(body);
+      if (st.resetAfterAccept && !Array.isArray(body) && body.method === "eth_sendRawTransaction" && out.result) { req.socket.destroy(); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(out));
     });
@@ -291,14 +298,86 @@ await check("an empty relayer refuses before signing", async () => {
   const C = mk(relayerA);
   const saved = st.ethBalance.get(relayer.address.toLowerCase());
   st.ethBalance.set(relayer.address.toLowerCase(), 1n);
-  const sends = st.sends.length;
+  const sends = st.sends.length, attempts = st.sendAttempts;
   try {
     const p = await signedPayment(buyer);
     const r = await C.settle(p.payload, p.requirements);
     assert.equal(r.success, false);
     assert.equal(r.transaction, "");
     assert.equal(st.sends.length, sends);
+    assert.equal(st.sendAttempts, attempts, "nothing was signed or sent: the balance is checked first");
+    assert.match(String(r.errorMessage), /balance/i);
   } finally { st.ethBalance.set(relayer.address.toLowerCase(), saved); }
+});
+
+await check("a gas price over the cap refuses before signing", async () => {
+  const saved = st.gasPrice;
+  st.gasPrice = BigInt(settings.maxFeeGwei + 1) * 1_000_000_000n;
+  const attempts = st.sendAttempts;
+  try {
+    const p = await signedPayment(buyer);
+    const r = await A.settle(p.payload, p.requirements);
+    assert.equal(r.success, false);
+    assert.equal(r.transaction, "");
+    assert.equal(st.sendAttempts, attempts, "nothing was sent at a fee the cap does not allow");
+    assert.match(String(r.errorMessage), /over the relayer cap/);
+  } finally { st.gasPrice = saved; }
+});
+
+await check("with the state database down the lease refuses and nothing is sent (never fails open)", async () => {
+  // The real withLease answers { ran: false, reason: "db" } on a database
+  // error unless the caller opted into failOpen, when it runs anyway.
+  const dbDown = async (_name, opts, fn) => (opts?.failOpen ? { ran: true, reason: "db-failopen", result: await fn({ stillHeld: () => true, signal: new AbortController().signal }) } : { ran: false, reason: "db" });
+  const D = mk(relayerA, { leaseImpl: dbDown });
+  const attempts = st.sendAttempts;
+  const p = await signedPayment(buyer);
+  const r = await D.settle(p.payload, p.requirements);
+  assert.equal(r.success, false);
+  assert.equal(r.transaction, "");
+  assert.equal(st.sendAttempts, attempts);
+  assert.match(String(r.errorMessage), /relayer lock not available \(db\)/);
+});
+
+await check("a send the node took but whose answer was lost still answers its hash", async () => {
+  st.resetAfterAccept = true;
+  const sends = st.sends.length;
+  try {
+    const p = await signedPayment(buyer);
+    const r = await A.settle(p.payload, p.requirements);
+    assert.equal(st.sends.length, sends + 1, "the node took it");
+    assert.equal(r.transaction, st.sends.at(-1).hash, "the result names the transaction that was sent");
+    assert.equal(r.success, true, "and it mined, so it settled");
+  } finally { st.resetAfterAccept = false; }
+});
+
+await check("post-broadcast: the receipt wait runs out, the result carries the hash, nobody is asked after it", async () => {
+  const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  st.neverMine = true;
+  st.resetAfterAccept = true; // and the send's own answer was lost too
+  try {
+    const REVERTED = 'The contract function "transferWithAuthorization" reverted.';
+    const hooks = {};
+    const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+    const asked = [];
+    let ownResult = null;
+    const own = { name: "own relayer", revertRetry: true, client: { settle: async (pp, rq) => { asked.push("own"); ownResult = await A.settle(pp, rq); return ownResult; } } };
+    const tail = { name: "default", client: { settle: async () => { asked.push("default"); return { success: true, transaction: "0x" + "22".repeat(32) }; } } };
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [own, tail] });
+    const sends = st.sends.length;
+    const p = await signedPayment(buyer);
+    const r = await hooks.sf({ requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "", network: RH }) });
+    assert.equal(r, undefined, "not recovered: the buyer is not told it settled");
+    assert.equal(st.sends.length, sends + 1, "one transaction went out");
+    assert.equal(ownResult?.success, false);
+    assert.equal(ownResult?.transaction, st.sends.at(-1).hash, "the pending result carries that transaction's hash");
+    assert.deepEqual(asked, ["own"], "nobody after a send that may land");
+  } finally {
+    st.neverMine = false;
+    st.resetAfterAccept = false;
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
 });
 
 await check("chain order: the listed facilitators first, our relayer after them, then the default chain", async () => {
