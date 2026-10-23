@@ -16,6 +16,7 @@ import { CAIP2_NAMES } from "./stats.js";
 import { powCostPhrase } from "./pow.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
+import { leaderboardCadence } from "./refresh-cadence.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -267,7 +268,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       </table>
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-faint);">
-      ${boardSellers ? `<span>${esc(boardSellers)} sellers scanned · ${esc(windowLabel)} window · hourly snapshot</span>` : `<span>seller count unavailable this snapshot</span>`}
+      ${boardSellers ? `<span>${esc(boardSellers)} sellers scanned · ${esc(windowLabel)} window · snapshot ${esc(leaderboardCadence())}</span>` : `<span>seller count unavailable this snapshot</span>`}
       <a href="/leaderboard" style="color:var(--accent-lit);text-decoration:none;">full leaderboard →</a>
       <a href="/marketplace" style="color:var(--accent-lit);text-decoration:none;">browse every seller →</a>
     </div>

@@ -785,7 +785,7 @@ jobs:
 
       # Tool and upstream failures (src/tool-failure-monitor.js): three words
       # on /api/gateway-status. toolFailures and upstreamHealth page on
-      # degraded / failing; facilitatorFunds pages on refused / demoted; ok
+      # degraded / failing; facilitatorFunds pages on low / refused / demoted; ok
       # closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
@@ -819,6 +819,9 @@ jobs:
           check_word upstreamHealth "degraded failing" "ok"
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
+          # A settlement signer short of gas, before any refusal: its own title.
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          check_word facilitatorFunds "low" "ok"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on

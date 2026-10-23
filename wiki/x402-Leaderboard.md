@@ -24,7 +24,7 @@ neutral Smart Order Router across every seller).
 In an open marketplace, anyone can claim anything in a manifest. **What you
 can't fake is settlement on a public chain.** Every x402 paid call leaves a
 USDC `Transfer` log on Base. The leaderboard reads those logs directly - no
-self-reports and no API keys involved: an hourly snapshot of public chain data that anyone can re-read.
+self-reports and no API keys involved: a snapshot of public chain data, refreshed every 4 hours, that anyone can re-read.
 
 ## Pipeline
 
@@ -54,7 +54,7 @@ self-reports and no API keys involved: an hourly snapshot of public chain data t
 5. **Rank** - by `totalUsd` (then `callsSettled`, then seller name) and assign
    a `rank` 1..N.
 
-The snapshot **refreshes hourly server-side**. Requests hit the cache; if the
+The snapshot **refreshes every 4 hours server-side**. Requests hit the cache; if the
 refresh ever fails, the last good snapshot is preserved.
 
 ## Calling it

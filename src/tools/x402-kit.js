@@ -43,6 +43,7 @@ async function boundedText(res, maxBytes = X402_MAX_BODY_BYTES) {
 }
 import { assertPublicUrl, ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
+import { leaderboardCadence } from "../refresh-cadence.js";
 
 // ENS (Ethereum mainnet) — namehash + registry/resolver selectors for forward
 // resolution (name -> address). keccak256 over UTF-8 labels per EIP-137.
@@ -582,7 +583,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/x402-trending", name: "x402 trending sellers", slug: "x402-trending", category: "payments", price: "$0.005",
     description:
-      "Momentum radar for the x402 seller ecosystem - which sellers are heating up, graded for wash-trade resistance. Reads the hourly on-chain leaderboard (real Base USDC settlements) and adds per-seller signals the raw board doesn't have: organicScore (uniqueBuyers/callsSettled - 1000 calls from 2 buyers smells like self-dealing, 1000 from 400 is organic demand) and avgTicketUsd. Rank by sort: 'usd' (revenue, default), 'calls' (volume), 'organic' (buyer diversity - the honest-demand lens), or 'buyers' (reach). include='external' (default) excludes Agent402's own row; 'all' keeps it. Once ~7 days of persisted snapshots accrue, each row also carries deltaVsPrevWeek + trend (rising/flat/cooling/new) - the wow envelope says whether those are live; deltas are never faked. ?sort=organic&limit=10",
+      "Momentum radar for the x402 seller ecosystem - which sellers are heating up, graded for wash-trade resistance. Reads the on-chain leaderboard, refreshed " + leaderboardCadence() + " (real Base USDC settlements) and adds per-seller signals the raw board doesn't have: organicScore (uniqueBuyers/callsSettled - 1000 calls from 2 buyers smells like self-dealing, 1000 from 400 is organic demand) and avgTicketUsd. Rank by sort: 'usd' (revenue, default), 'calls' (volume), 'organic' (buyer diversity - the honest-demand lens), or 'buyers' (reach). include='external' (default) excludes Agent402's own row; 'all' keeps it. Once ~7 days of persisted snapshots accrue, each row also carries deltaVsPrevWeek + trend (rising/flat/cooling/new) - the wow envelope says whether those are live; deltas are never faked. ?sort=organic&limit=10",
     tags: ["x402", "trending", "momentum", "sellers", "leaderboard", "organic", "wash-trading", "ecosystem", "discovery"],
     discovery: {
       input: { sort: "usd", limit: 10, include: "external" },

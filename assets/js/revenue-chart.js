@@ -1,6 +1,9 @@
   (function(){
-    var SLOTS={base:1,algorand:2,solana:3,polygon:4,stellar:5,arbitrum:6,celo:7};
-    var NAMES={1:"Base",2:"Algorand",3:"Solana",4:"Polygon",5:"Stellar",6:"Arbitrum",7:"Celo",8:"Other",free:"Free tier (PoW)",tempo:"Tempo",newbuyers:"New buyers",retbuyers:"Returning buyers",cumbuyers:"Distinct buyers to date"};
+    // Named slots go to the chains that earn: Robinhood took Arbitrum's slot
+    // when it became the second-largest outside-revenue chain (Arbitrum folds
+    // into "Other", which still itemizes it).
+    var SLOTS={base:1,algorand:2,solana:3,polygon:4,stellar:5,robinhood:6,celo:7};
+    var NAMES={1:"Base",2:"Algorand",3:"Solana",4:"Polygon",5:"Stellar",6:"Robinhood",7:"Celo",8:"Other",free:"Free tier (PoW)",tempo:"Tempo",newbuyers:"New buyers",retbuyers:"Returning buyers",cumbuyers:"Distinct buyers to date"};
     // Draw order. "free" and "tempo" are lanes, not chains - free calls settle
     // nowhere, and Tempo is never x402-settleable (excluded from RAILS on
     // purpose), so its revenue lives in a separate table the on-chain scan

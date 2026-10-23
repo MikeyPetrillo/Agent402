@@ -21,6 +21,7 @@ import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
+import { leaderboardCadence, cadenceBadge, LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
 const HTML_ROWS = 12;
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
@@ -180,7 +181,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   ];
 
   const steps = [
-    "Discover sellers from the x402 Bazaar discovery listing plus our own crawl, refreshed hourly.",
+    "Discover sellers from the x402 Bazaar discovery listing plus our own crawl, refreshed " + leaderboardCadence() + ".",
     "Read each seller's advertised payTo addresses out of its x402 manifest.",
     "Pull settlement transfers to those addresses from Base event logs with eth_getLogs.",
     `Count a transfer when it matches a price that seller publishes, up to a price-match ceiling (${fmtUsd(snapshot?.priceMatchMaxUsd ?? LEADERBOARD_DEFAULTS.priceMatchMaxUsd)}). Anything matching none of their prices is held to a per-call ceiling (${fmtUsd(snapshot?.maxCallUsd ?? LEADERBOARD_DEFAULTS.maxCallUsd)}), so treasury movements, gift cards and stablecoin conversions are not counted as tool calls.`,
@@ -190,7 +191,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   const faqs = [
     {
       q: "How is the x402 leaderboard calculated?",
-      a: "Sellers are discovered from the x402 Bazaar discovery listing plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes hourly and the raw JSON is free at /api/leaderboard.",
+      a: "Sellers are discovered from the x402 Bazaar discovery listing plus Agent402's own crawl, their payTo addresses are read from their x402 manifests, and settlement transfers to those addresses are aggregated from Base event logs via eth_getLogs. A transfer counts when it matches a price that seller advertises, up to a price-match ceiling; a transfer matching none of their published prices is held to a lower per-call ceiling, so treasury movements, gift cards and stablecoin conversions do not inflate a seller. That ceiling used to be the whole rule, which made a seller priced just above it invisible here rather than ranked low. The snapshot refreshes " + leaderboardCadence() + " and the raw JSON is free at /api/leaderboard.",
     },
     {
       q: "Why is Agent402 excluded from its own leaderboard?",
@@ -236,7 +237,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
       <div class="lb-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:50px;align-items:start;">
         <div>
           <h1 class="lb-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.95;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
-          <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed hourly, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
+          <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed ${leaderboardCadence()}, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
           <p style="font-size:var(--fs-base);line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default. An index that puts itself first is not evidence of anything, so our own figure is published separately below.</p>
           ${partialNote ? `<p style="font-size:var(--fs-sm);font-family:var(--font-mono);color:var(--accent);max-width:76ch;margin:0 0 20px;">${esc(partialNote)}</p>` : ""}
           <div style="display:flex;flex-wrap:wrap;gap:11px;">
@@ -247,7 +248,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
         <div style="border:1px solid var(--hairline);background:var(--panel);">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">
             <span>SNAPSHOT</span>
-            <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>HOURLY</span>
+            <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>${cadenceBadge(LEADERBOARD_REFRESH_MS)}</span>
           </div>
           <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${metaRowsHtml}</tbody></table>
         </div>
@@ -328,14 +329,14 @@ ${solanaSectionHtml(solana)}
   const canonical = `${baseUrl}/leaderboard`;
   const title = "x402 seller leaderboard - ranked by real on-chain USDC settled";
   const description =
-    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Hourly snapshot, built from the x402 Bazaar discovery listing and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
+    "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Snapshot refreshed " + leaderboardCadence() + ", built from the x402 Bazaar discovery listing and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Leaderboard", item: canonical },
   ] };
-  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: x402 Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
+  const datasetLd = { "@type": "Dataset", "@id": `${canonical}#dataset`, name: "x402 seller leaderboard - Base USDC settled volume", description: "On-chain snapshot, refreshed " + leaderboardCadence() + ", ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Pipeline: x402 Bazaar discovery, eth_getLogs over recent blocks, a per-call USD ceiling to exclude non-payment transfers, then aggregation by payTo address. Agent402 is excluded from the default view.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, temporalCoverage: "P7D", measurementTechnique: "On-chain event log aggregation by recipient address", variableMeasured: [
     { "@type": "PropertyValue", name: "totalUsd", description: "USDC settled to the seller's payTo addresses in the window" },
     { "@type": "PropertyValue", name: "callsSettled", description: "Count of settlement transfers observed" },
     { "@type": "PropertyValue", name: "uniqueBuyers", description: "Distinct paying wallets" },

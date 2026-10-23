@@ -24,6 +24,9 @@ import {
   registerFacilitatorFailureHooks,
   fallbackCandidatesFor,
   isPreBroadcastSettleRejection,
+  isRevertedAuthorizationTransfer,
+  isRetryableSettleRefusal,
+  facilitatorUrlList,
 } from "../src/payments.js";
 
 let failures = 0;
@@ -342,7 +345,10 @@ await (async () => {
     if (req.url === "/settle") {
       st.svSettles++; st.svBody = body;
       if (req.headers["x-api-key"] !== "solvador-test-key") return json(res, 401, { error: "unauthorized" });
-      return json(res, 200, { success: true, transaction: SV_TX, network: CELO, payer: payerOf(body) });
+      // A real settlement is one transaction each: a recovered tx another
+      // request already holds is never served twice (settlement claims).
+      const tx = st.svSettles === 1 ? SV_TX : "0x" + st.svSettles.toString(16).padStart(64, "0");
+      return json(res, 200, { success: true, transaction: tx, network: CELO, payer: payerOf(body) });
     }
     return json(res, 404, {});
   });
@@ -566,6 +572,221 @@ await (async () => {
     if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
     proc.kill("SIGKILL");
     for (const s of [baseFac, celoFac, svFac]) s.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+})();
+
+// ROBINHOOD: an ordered facilitator list, and a reverted transfer passes on.
+// A facilitator whose settlement signer has no gas answers every settle with
+// invalid_exact_evm_transaction_failed / "transferWithAuthorization" reverted;
+// that moves no tokens and leaves the authorization's nonce unused, so on
+// eip155:4663 the same payment goes to the next listed facilitator. Anywhere
+// else, and for any answer that names a transaction or is a transport error,
+// nothing changes.
+const RH = "eip155:4663";
+const REVERTED = 'The contract function "transferWithAuthorization" reverted. Contract Call: function: transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)';
+const revertErr = (extra = {}) => Object.assign(new SettleError(500, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "", network: RH }), extra);
+await check("robinhood: the URL list keeps order, drops blanks, duplicates and non-http entries; one URL is one URL", () => {
+  assert.deepEqual(facilitatorUrlList("https://a.example"), ["https://a.example"]);
+  assert.deepEqual(facilitatorUrlList(" https://a.example/ , https://b.example,,https://a.example, ftp://x.example "), ["https://a.example", "https://b.example"]);
+  assert.deepEqual(facilitatorUrlList(""), []);
+  assert.deepEqual(facilitatorUrlList(undefined), []);
+});
+await check("robinhood: a reverted transfer with no transaction is retryable on 4663 only", () => {
+  assert.equal(isRevertedAuthorizationTransfer(revertErr()), true);
+  assert.equal(isRetryableSettleRefusal(revertErr(), RH), true);
+  assert.equal(isRetryableSettleRefusal(revertErr(), "eip155:8453"), false, "Base keeps the old gate");
+  assert.equal(isPreBroadcastSettleRejection(revertErr()), false, "the general gate is unchanged");
+});
+await check("robinhood: a revert naming a transaction, a transport error or other wording is not retryable", () => {
+  assert.equal(isRetryableSettleRefusal(revertErr({ transaction: "0x" + "ab".repeat(32) }), RH), false);
+  assert.equal(isRetryableSettleRefusal(Object.assign(new Error(REVERTED), { errorReason: "invalid_exact_evm_transaction_failed", code: "ETIMEDOUT" }), RH), false);
+  assert.equal(isRetryableSettleRefusal(new SettleError(500, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: "execution timed out", transaction: "", network: RH }), RH), false);
+  assert.equal(isRetryableSettleRefusal(new SettleError(500, { success: false, errorReason: "unexpected_error", errorMessage: REVERTED, transaction: "", network: RH }), RH), false);
+  assert.equal(isRetryableSettleRefusal(timeout(), RH), false);
+});
+await check("robinhood: a function override is read at each settle", () => {
+  const list = [{ name: "A" }, { name: "B" }];
+  const o = { [RH]: () => [...list, { name: "tail" }] };
+  assert.deepEqual(fallbackCandidatesFor(RH, null, null, o).map((c) => c.name), ["A", "B", "tail"]);
+  list.splice(0, 1);
+  assert.deepEqual(fallbackCandidatesFor(RH, null, null, o).map((c) => c.name), ["B", "tail"]);
+});
+await check("robinhood: primary reverts -> the listed fallback settles once; a timeout there stops the chain", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const log = [];
+    const s = fakeServer();
+    const okResult = { success: true, transaction: "0x" + "77".repeat(32), network: RH };
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => okResult, log) }, { name: "RH3", revertRetry: true, client: client("RH3", () => okResult, log) }] });
+    const r = await s.hooks.settleFailure(ctx(RH, revertErr()));
+    assert.equal(r?.recovered, true);
+    assert.deepEqual(log, ["RH2"], "the first fallback settled; the second was never asked");
+    const log2 = [];
+    const s2 = fakeServer();
+    registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => { throw timeout(); }, log2) }, { name: "RH3", revertRetry: true, client: client("RH3", () => okResult, log2) }] });
+    assert.equal(await s2.hooks.settleFailure(ctx(RH, revertErr())), undefined);
+    assert.deepEqual(log2, ["RH2"], "a timeout at a fallback may have broadcast: nobody after it");
+    const log3 = [];
+    const s3 = fakeServer();
+    registerFacilitatorFailureHooks(s3, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => okResult, log3) }] });
+    assert.equal(await s3.hooks.settleFailure(ctx(RH, timeout())), undefined);
+    assert.deepEqual(log3, [], "a primary timeout never reaches a fallback");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+await check("robinhood: one URL (no listed fallback) + a reverted transfer asks nobody, as before the list", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const log = [];
+    const s = fakeServer();
+    const okResult = { success: true, transaction: "0x" + "78".repeat(32), network: RH };
+    registerFacilitatorFailureHooks(s, null, client("Solvador", () => okResult, log), {});
+    assert.equal(await s.hooks.settleFailure(ctx(RH, revertErr())), undefined);
+    assert.deepEqual(log, [], "the default chain is never reached by the revert rule");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+await check("robinhood: a revert reaches only the listed fallbacks; a pre-broadcast refusal there opens the default chain", async () => {
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  try {
+    const okResult = { success: true, transaction: "0x" + "79".repeat(32), network: RH };
+    const reverted = { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "" };
+    const log = [];
+    const s = fakeServer();
+    registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => reverted, log) }, { name: "Solvador", client: client("Solvador", () => okResult, log) }] });
+    assert.equal(await s.hooks.settleFailure(ctx(RH, revertErr())), undefined);
+    assert.deepEqual(log, ["RH2"], "after two reverts the default chain is not asked");
+    const log2 = [];
+    const s2 = fakeServer();
+    registerFacilitatorFailureHooks(s2, null, null, { [RH]: () => [{ name: "RH2", revertRetry: true, client: client("RH2", () => { throw new SettleError(402, { success: false, errorReason: "payment_required", transaction: "", network: RH }); }, log2) }, { name: "Solvador", client: client("Solvador", () => okResult, log2) }] });
+    const r2 = await s2.hooks.settleFailure(ctx(RH, revertErr()));
+    assert.equal(r2?.recovered, true);
+    assert.deepEqual(log2, ["RH2", "Solvador"], "a clean 402 at the listed fallback lets the chain continue as it always did");
+  } finally {
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+
+// Booted: three Robinhood facilitators in ROBINHOOD_FACILITATOR_URL. The first
+// verifies and answers the reverted transfer (its signer out of gas); the
+// second settles; the third does not list eip155:4663 and is dropped at boot.
+// The buyer pays exactly as before and gets a 200 settled by the second. The
+// control: an ambiguous failure at the first never reaches the second.
+await (async () => {
+  const [PORT, BASE_FAC, RH1, RH2, RH3] = await getFreePorts(5);
+  const B = `http://127.0.0.1:${PORT}`;
+  const RH2_TX = "0x" + "4b".repeat(32);
+  const st = { rh1: 0, rh2: 0, rh3: 0, rh1Mode: "revert", rh2Body: null };
+  const json = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const stub = (handler) => createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* ignore */ } handler(req, res, body); });
+  });
+  const payerOf = (body) => body?.paymentPayload?.payload?.authorization?.from;
+  const rhKinds = { kinds: [{ x402Version: 2, scheme: "exact", network: RH }], extensions: [], signers: {} };
+  const baseFac = stub((req, res) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (req.url === "/rpc") return json(res, 200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+    return json(res, 404, {});
+  });
+  const rh1 = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, rhKinds);
+    if (req.url === "/verify") return json(res, 200, { isValid: true, payer: payerOf(body) });
+    if (req.url === "/settle") {
+      st.rh1++;
+      if (st.rh1Mode === "revert") return json(res, 200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: REVERTED, transaction: "", network: RH, payer: payerOf(body) });
+      return json(res, 502, { success: false, errorReason: "unexpected_error", errorMessage: "upstream", transaction: "", network: RH });
+    }
+    return json(res, 404, {});
+  });
+  const rh2 = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, rhKinds);
+    if (req.url === "/settle") { st.rh2++; st.rh2Body = body; return json(res, 200, { success: true, transaction: RH2_TX, network: RH, payer: payerOf(body) }); }
+    return json(res, 404, {});
+  });
+  const rh3 = stub((req, res) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:5042" }], extensions: [], signers: {} });
+    if (req.url === "/settle") { st.rh3++; return json(res, 200, { success: true, transaction: "0x" + "3c".repeat(32), network: RH }); }
+    return json(res, 404, {});
+  });
+  await Promise.all([[baseFac, BASE_FAC], [rh1, RH1], [rh2, RH2], [rh3, RH3]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  const tmp = mkdtempSync(join(tmpdir(), "a402-rh-fallback-"));
+  const env = { ...process.env };
+  delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY;
+  const proc = spawn(process.execPath, ["src/server.js"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: {
+      ...env, PORT: String(PORT), FREE_MODE: "",
+      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
+      PAYMENT_NETWORKS: "base,robinhood",
+      ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}, http://127.0.0.1:${RH2},http://127.0.0.1:${RH3}`,
+      PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp,
+      FACILITATOR_GAS_CHECK: "off",
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const log = [];
+  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let nonce = 0;
+  const credential = (accepted) => Buffer.from(JSON.stringify({
+    x402Version: 2, resource: accepted.resource, accepted,
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: `0x${(0xe00 + ++nonce).toString(16).padStart(40, "0")}`, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (0x8800 + nonce).toString(16).padStart(64, "0") } },
+  })).toString("base64");
+  const PATH = "/api/demand-radar?limit=1";
+  const failuresBefore = failures;
+  try {
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
+    let accepted;
+    await check("robinhood e2e: the server boots, offers USDG on 4663 as before, and drops the facilitator that does not list it", async () => {
+      assert.ok(up, "server never came up");
+      const r = await fetch(`${B}${PATH}`);
+      assert.equal(r.status, 402);
+      const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf8"));
+      accepted = (req402.accepts || []).find((a) => a.network === RH);
+      assert.ok(accepted, `no Robinhood accept in ${JSON.stringify((req402.accepts || []).map((a) => a.network))}`);
+      assert.equal(accepted.extra?.name, "Global Dollar", "the buyer signs the same USDG domain");
+      for (let i = 0; i < 20 && !log.some((l) => /does not advertise exact on eip155:4663 - dropped/.test(l)); i++) await sleep(100);
+      assert.ok(log.some((l) => new RegExp(`127\\.0\\.0\\.1:${RH3}\\) does not advertise exact on eip155:4663 - dropped`).test(l)), "the third is dropped, by name");
+    });
+    await check("robinhood e2e: the first reverts -> the second settles once -> 200 with its tx; the dropped one is never asked", async () => {
+      const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } });
+      await r.text();
+      assert.equal(r.status, 200, `status ${r.status}`);
+      assert.equal(st.rh1, 1, "the primary was asked once");
+      assert.equal(st.rh2, 1, "exactly one fallback settle");
+      assert.equal(st.rh3, 0);
+      assert.equal(st.rh2Body?.paymentRequirements?.network, RH);
+      assert.equal(String(st.rh2Body?.paymentRequirements?.asset).toLowerCase(), String(accepted.asset).toLowerCase());
+      const receipt = JSON.parse(Buffer.from(r.headers.get("payment-response"), "base64").toString("utf8"));
+      assert.equal(receipt.success, true);
+      assert.equal(receipt.transaction, RH2_TX);
+    });
+    await check("robinhood e2e control: an ambiguous failure at the first never reaches the second; the buyer gets 402", async () => {
+      st.rh1Mode = "5xx";
+      const a = st.rh1, b2 = st.rh2;
+      const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": credential(accepted) } });
+      await r.text();
+      assert.equal(r.status, 402, `status ${r.status}`);
+      assert.equal(st.rh1, a + 1);
+      assert.equal(st.rh2, b2, "no fallback after a failure that may have broadcast");
+    });
+  } finally {
+    if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
+    proc.kill("SIGKILL");
+    for (const s of [baseFac, rh1, rh2, rh3]) s.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 })();

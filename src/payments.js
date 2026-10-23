@@ -33,7 +33,8 @@ import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
-import { registerSettlementClaimHooks, registerSettlementClaimRelease } from "./settlement-claims.js";
+import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
+import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
@@ -116,6 +117,19 @@ const AVM_NETWORKS = {
 // advertise every mainnet rail this file can settle — the test cross-checks.
 export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS, ...STELLAR_NETWORKS, ...AVM_NETWORKS };
 
+/** An ordered facilitator URL list from a comma-separated variable: trimmed,
+ *  http(s) only, duplicates dropped (the first occurrence keeps its place). */
+export function facilitatorUrlList(raw) {
+  const out = [];
+  for (const part of String(raw || "").split(",")) {
+    const u = part.trim().replace(/\/+$/, "");
+    if (!u) continue;
+    if (!/^https?:\/\/[^\s/]+/i.test(u)) { console.warn(`WARNING: ignoring facilitator URL that is not http(s): ${JSON.stringify(u).slice(0, 80)}`); continue; }
+    if (!out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
 // Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
 // has no default asset for chain 4663 — so we resolve the asset ourselves and
 // route settlement to an external facilitator that advertises
@@ -124,7 +138,24 @@ export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS, ...STELLAR_NETWORKS,
 // the USDG EIP-712 domain (name/version) is likewise env-overridable and can be
 // verified on-chain via scripts/rh-chain-probe.js before enabling.
 const ROBINHOOD_CAIP2 = "eip155:4663";
-const ROBINHOOD_FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim();
+// How often a listed Robinhood fallback that could not be reached is asked
+// for its /supported again before it is tried.
+const ROBINHOOD_FALLBACK_RECHECK_MS = Math.max(1000, Number(process.env.ROBINHOOD_FALLBACK_RECHECK_MS) || 120_000);
+// ROBINHOOD_FACILITATOR_URL is an ordered, comma-separated list. The first is
+// the facilitator every Robinhood payment settles through, exactly as a single
+// URL always has; the rest are its settle fallback (registerFacilitatorFailureHooks),
+// tried in order only after the one before refused without moving the money.
+// The offer, the scheme and what the buyer signs do not depend on the list.
+const ROBINHOOD_FACILITATOR_URLS = facilitatorUrlList(process.env.ROBINHOOD_FACILITATOR_URL);
+const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
+// ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
+// boot; a malformed key turns the feature off with a warning, never a crash.
+function robinhoodRelayerKeySafe() {
+  const k = String(process.env.ROBINHOOD_RELAYER_KEY || "").trim();
+  if (!k) return "";
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: ROBINHOOD_RELAYER_KEY is not a 32-byte hex key - own Robinhood relayer off"); return ""; }
+  return k.startsWith("0x") ? k : `0x${k}`;
+}
 // Monad (chain 143) settles native Circle USDC (in @x402/evm's registry, so the
 // standard ExactEvmScheme handles it — no custom parser). But PayAI and CDP do
 // NOT advertise eip155:143 at their /supported, so Monad must route to its own
@@ -308,6 +339,47 @@ export async function circlePendingStatus({ now = Date.now(), ttlMs = 10_000 } =
 }
 /** The pending book, for the operator route; null without an Arc client. */
 export function circlePendingBookForOperator() { return circlePendingBook; }
+// The late-settlement book (src/late-settlements.js), built on first use.
+let lateBook = null;
+async function lateSettleBook() {
+  if (lateBook) return lateBook;
+  const { createLateSettleBook } = await import("./late-settlements.js");
+  const { saleByTxFresh } = await import("./sales-ledger.js");
+  const { txServedElsewhere } = await import("./settlement-claims.js");
+  // Served after all: a sale recorded for the tx, or a request holding its
+  // settlement claim. Checking also takes the claim, so nothing can serve
+  // that tx after it is booked owed.
+  lateBook = lateBook || createLateSettleBook({
+    wasServed: async ({ tx, network, key }) =>
+      !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `late-settle:${key}`)),
+  });
+  return lateBook;
+}
+/** The late-settlement book for the operator route (built on first use). */
+export async function lateSettleBookForOperator() { return lateSettleBook(); }
+let lateReconcileStarted = false;
+function startLateSettleReconcile() {
+  if (lateReconcileStarted || process.env.X402_SYNC_ON_START === "false" || process.env.LATE_SETTLE_RECONCILE === "off") return;
+  lateReconcileStarted = true;
+  void (async () => {
+    const { leased } = await import("./state-db.js");
+    const { RECONCILE_LEASE_MS } = await import("./late-settlements.js");
+    const tick = leased("late-settle-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
+      const b = await lateSettleBook();
+      await b.ready;
+      await b.refresh();
+      // Run even with nothing open: a pass first lands what the journal holds
+      // (a booking whose store write failed).
+      const r = await b.reconcile();
+      if (r.journaled) console.warn(`[late-settle] reconcile: ${r.journaled} journaled booking(s) landed in the store`);
+      if (r.owed || r.reverted || r.notOurs || r.absent || r.served || r.unresolved || r.errors) console.warn(`[late-settle] reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.reverted} reverted, ${r.notOurs} without this transfer, ${r.absent} never mined, ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still open`);
+      return r;
+    });
+    const ms = Number(process.env.LATE_SETTLE_RECONCILE_MS) > 0 ? Number(process.env.LATE_SETTLE_RECONCILE_MS) : 2 * 60_000;
+    const t = setInterval(() => { tick().catch(() => {}); }, ms);
+    if (typeof t.unref === "function") t.unref();
+  })().catch((e) => console.warn(`[late-settle] reconcile did not start: ${String(e?.message || e).slice(0, 120)}`));
+}
 export function enabledNetworks(network) {
   const requested = (process.env.PAYMENT_NETWORKS || network)
     .split(",")
@@ -898,9 +970,75 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     );
     evmCaip2 = evmCaip2.filter((c) => c !== ROBINHOOD_CAIP2);
   }
+  // The rest of the list: Robinhood's settle fallback, in order. They are not
+  // registered as routing facilitators (addFacilitator), so none of them can
+  // take a payment on any network (several also list Base or Arc) except as
+  // a fallback the failure hook hands a refused Robinhood settle to.
+  const robinhoodFallbacks = [];
+  // Our own relayer (ROBINHOOD_RELAYER_KEY): the last of Robinhood's settle
+  // fallbacks, after every listed facilitator (src/robinhood-relayer.js).
+  let ownRelayer = null;
+  // With our relayer: an ambiguous facilitator failure on Robinhood is read on
+  // chain instead of stopping the chain (src/robinhood-outage.js).
+  let robinhoodOutage = null;
   if (robinhoodEnabled) {
     addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
+    for (const url of ROBINHOOD_FACILITATOR_URLS.slice(1)) {
+      const name = `Robinhood fallback (${url})`;
+      const client = new HTTPFacilitatorClient({ url });
+      labelFacilitatorErrors(name, client);
+      registerFacilitatorUpstream(url);
+      // revertRetry: a reverted transfer may go to this facilitator; the
+      // default chain (PayAI/Solvador) is reached only by a pre-broadcast refusal.
+      robinhoodFallbacks.push({ name, client, url, revertRetry: true, confirmed: false });
+    }
+    if (robinhoodFallbacks.length) {
+      console.log(`Robinhood Chain: settle fallback ${robinhoodFallbacks.map((f) => f.name).join(" -> ")} (PAYMENT_SETTLE_FALLBACK; after a refusal that moved no money)`);
+      // A fallback is tried only once its /supported has answered with exact
+      // on eip155:4663 (confirmed). One that answers without it could only
+      // fail: dropped, loudly. One that cannot be reached is not tried yet and
+      // is asked again in the background until it answers.
+      const confirmFallback = (f, attempt = 0) => {
+        Promise.resolve().then(() => f.client.getSupported()).then((sup) => {
+          const kinds = Array.isArray(sup?.kinds) ? sup.kinds : [];
+          if (kinds.some((k) => k?.scheme === "exact" && k?.network === ROBINHOOD_CAIP2)) {
+            f.confirmed = true;
+            if (attempt) console.log(`Robinhood Chain: ${f.name} confirmed for the settle fallback`);
+            return;
+          }
+          const i = robinhoodFallbacks.indexOf(f);
+          if (i >= 0) robinhoodFallbacks.splice(i, 1);
+          console.warn(`WARNING: ${f.name} does not advertise exact on ${ROBINHOOD_CAIP2} - dropped from Robinhood's settle fallback`);
+        }).catch((e) => {
+          if (attempt === 0) console.warn(`WARNING: ${f.name} unreachable (${String(e?.message || e).slice(0, 120)}); not tried until its /supported answers (re-checked in the background)`);
+          setTimeout(() => confirmFallback(f, attempt + 1), ROBINHOOD_FALLBACK_RECHECK_MS).unref?.();
+        });
+      };
+      for (const f of [...robinhoodFallbacks]) confirmFallback(f);
+    }
+    if (robinhoodRelayerKeySafe()) {
+      try {
+        const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
+        const { evmRpcFor } = await import("./evm-rpcs.js");
+        const client = createOwnRelayerClient({ key: robinhoodRelayerKeySafe(), network: ROBINHOOD_CAIP2, asset: USDG.asset, payTo: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2) });
+        ownRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
+        const { createRobinhoodOutage } = await import("./robinhood-outage.js");
+        robinhoodOutage = createRobinhoodOutage({ network: ROBINHOOD_CAIP2, token: USDG.asset, treasury: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2), relayer: client });
+        console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only; pays gas only when the listed facilitators fail)`);
+      } catch (e) {
+        console.warn(`WARNING: own Robinhood relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
+      }
+    }
+    // Gas runway of every listed facilitator's settlement signer, so an empty
+    // gas wallet reads on facilitatorFunds before settlements start failing.
+    if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
+      startFacilitatorGasCheck({
+        network: ROBINHOOD_CAIP2,
+        urls: () => gasCheckUrls(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks),
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
+      }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
+    }
   }
   // Monad (chain 143 / USDC) settles through its dedicated facilitator, added
   // only when `monad` is enabled — PayAI/CDP can't settle eip155:143, so without
@@ -1483,7 +1621,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
-  });
+    // Robinhood's listed fallbacks first (those whose /supported confirmed
+    // exact on 4663), then the chain it had before. Read at settle time: the
+    // boot check may still confirm or drop one.
+    // Our own relayer, when configured, comes after them.
+    ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
+  }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
   // feedback, my-usage, receipts) keys the caller on authorization.from; for a
@@ -1509,6 +1652,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only when nothing recovered the payment.
   registerSettlementClaimHooks(server);
   registerSettlementClaimRelease(server);
+  // A settle failure that names a transaction may still land: booked and
+  // read from the chain, and owed if it did (src/late-settlements.js).
+  // Registered after every hook that can recover the payment, so it sees
+  // only failures nothing settled.
+  registerLateSettleHook(server, lateSettleBook);
+  startLateSettleReconcile();
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -2022,7 +2171,12 @@ const SOLVADOR_SETTLE_NETWORKS = new Set([
 export function fallbackCandidatesFor(network, payAiClient, solvadorClient, overrides = null) {
   // A network whose primary is Solvador names its own fallbacks: retrying the
   // facilitator that just refused would only repeat the refusal.
-  if (overrides && Object.hasOwn(overrides, network)) return [...overrides[network]];
+  // An override may be a function, read at each settle (a list the boot check
+  // may still shorten).
+  if (overrides && Object.hasOwn(overrides, network)) {
+    const o = overrides[network];
+    return [...(typeof o === "function" ? o() : o)];
+  }
   const out = [];
   const solvadorAdvertises = !!solvadorClient && SOLVADOR_SETTLE_NETWORKS.has(network);
   if (solvadorAdvertises) out.push({ name: "Solvador", client: solvadorClient });
@@ -2171,12 +2325,56 @@ async function recordVerifyFailure(ctx, reason) {
 // Networks whose first-tried facilitator is wrapped by the settle demotion.
 const DEMOTION_NETWORKS = new Set();
 setDemotedReader(() => demotedList());
+/**
+ * The facilitators' settlement-signer gas check (src/facilitator-gas.js) on a
+ * schedule, one replica at a time (a lease); its readings reach every
+ * replica's facilitatorFunds word through the failure monitor's shared
+ * snapshots. `urls` is read at each tick. Returns the tick (tests run it).
+ */
+/**
+ * The facilitators whose settlement gas is watched: the primary and every
+ * listed fallback its /supported has confirmed. A fallback that never
+ * answered is never tried for a settlement, so its unknown gas is not a
+ * reason to page (its state is in the boot and recheck log lines).
+ */
+export function gasCheckUrls(primary, fallbacks = []) {
+  return [primary, ...fallbacks.filter((f) => f?.confirmed === true).map((f) => f.url)].filter(Boolean);
+}
+
+export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true } = {}) {
+  const { leased } = await import("./state-db.js");
+  const { createRelayerGasCheck, gasCheckSettings } = await import("./facilitator-gas.js");
+  const { evmRpcFor } = await import("./evm-rpcs.js");
+  const settings = gasCheckSettings();
+  const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
+  const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
+    const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);
+    if (!list.length && !ownSigners.length) return [];
+    const key = list.join(",");
+    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners }));
+    const readings = await checkers.get(key).check();
+    toolFailureMonitor().noteRelayerGas(readings);
+    for (const r of readings) {
+      if (r.status === "low" || r.status === "unread") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
+    }
+    return readings;
+  });
+  if (schedule) {
+    const run = () => { tick().catch(() => {}); };
+    const first = setTimeout(run, 30_000);
+    first.unref?.();
+    const t = setInterval(run, settings.intervalMs);
+    t.unref?.();
+  }
+  return tick;
+}
+
 /** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
 function registerFacilitatorUpstream(url) {
   try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
 }
 
-export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null) {
+export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {
   server.onVerifyFailure(async (ctx) => {
     const reason = summarizeFacilitatorError(ctx?.error);
     console.warn(
@@ -2255,7 +2453,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   if (fallbackEnabled) {
     console.log(
       `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks) -> " : ""}${payAiClient ? "PayAI" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
-        "; fires ONLY on pre-broadcast refusals (an HTTP 402 or a billing refusal on our facilitator account), never on buyer-side or ambiguous failures"
+        "; fires ONLY on pre-broadcast refusals (an HTTP 402, a billing refusal on our facilitator account, or on Robinhood a reverted transfer), never on buyer-side or ambiguous failures"
     );
   }
   server.onSettleFailure(async (ctx) => {
@@ -2309,12 +2507,20 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       return { recovered: true, result: r.result };
     }
     if (!fallbackEnabled) return;
-    if (!isPreBroadcastSettleRejection(ctx?.error)) return;
+    // An ambiguous failure (it may have broadcast) on a network with an outage
+    // handler is read on chain rather than stopping here (src/robinhood-outage.js).
+    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return settleAfterAmbiguous(ctx, ctx?.error, "primary", outageFor);
+    // A refusal that is retryable only because the transfer reverted reaches
+    // only the facilitators the operator listed for it (revertRetry), never
+    // the default chain: with no listed fallback the chain stops exactly as it
+    // always did. The mode follows the latest refusal along the chain.
+    let revertOnly = !isPreBroadcastSettleRejection(ctx?.error);
     // A facilitator the demotion wrapper already asked for this payment is
     // not asked again.
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
       .filter(({ name }) => !demotionAttempt?.asked.has(name));
-    for (const { name, client } of candidates) {
+    for (const { name, client, revertRetry, own } of candidates) {
+      if (revertOnly && revertRetry !== true) continue;
       try {
         const result = await client.settle(ctx.paymentPayload, ctx.requirements);
         // A graceful 200 {success:false} from a fallback is judged by the same
@@ -2330,15 +2536,28 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           const refusal = Object.assign(new Error(String(result?.errorMessage || result?.errorReason || "settle rejected")), {
             errorReason: result?.errorReason, errorMessage: result?.errorMessage, transaction: result?.transaction,
           });
-          if (isPreBroadcastSettleRejection(refusal)) continue;
+          if (isRetryableSettleRefusal(refusal, ctx?.requirements?.network)) { revertOnly = !isPreBroadcastSettleRejection(refusal); continue; }
+          // The chain stops here. A refusal that names a transaction may still
+          // land: the late-settlement book reads it (src/late-settlements.js).
+          // An ambiguous one from a listed facilitator is read on chain first.
+          if (!own) { const o = await settleAfterAmbiguous(ctx, refusal, name, outageFor); if (o) return o; }
+          noteLateTx(ctx, result?.transaction, name);
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
-        // it as-is), so the in-flight cover's release is called here.
+        // it as-is): its transaction is claimed here, and one another request
+        // served or the late-settlement book booked owed is never served
+        // again (a settler that answers a cached result for a resent
+        // authorization cannot turn one transfer into two answers).
+        if (await recoveredTxHeldElsewhere(ctx, result)) {
+          console.warn(`[payments] ${name} settle fallback on ${ctx?.requirements?.network} answered tx ${result?.transaction}, already held by another request or booked owed; not served`);
+          return;
+        }
+        // The in-flight cover's release is called here for the same reason.
         releaseCoverOnSettled(ctx, result);
         console.warn(
           `[payments] recovered ${ctx?.requirements?.network} settlement via ${name} fallback ` +
-            "(PAYMENT_SETTLE_FALLBACK=true; primary rejected pre-broadcast)"
+            `(PAYMENT_SETTLE_FALLBACK=true; ${isPreBroadcastSettleRejection(ctx?.error) ? "primary rejected pre-broadcast" : "primary's transfer reverted, nothing moved"})`
         );
         return { recovered: true, result };
       } catch (err) {
@@ -2354,10 +2573,61 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // candidate. A timeout/5xx here may
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
-        if (!isPreBroadcastSettleRejection(err)) return;
+        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) {
+          if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
+          noteLateTx(ctx, err?.transaction, name);
+          return;
+        }
+        revertOnly = !isPreBroadcastSettleRejection(err);
       }
     }
   });
+}
+
+/**
+ * After an AMBIGUOUS settle failure (it may have broadcast; see
+ * src/robinhood-outage.js), the network's outage handler reads the buyer's
+ * authorization on chain. A transfer it proves is ours is served like any
+ * recovered settlement (claimed first, so one transfer answers one request);
+ * otherwise the payment is refused and, when the authorization can still be
+ * used, booked for the late-settlement book on `ctx.__a402LateAuth`. Answers
+ * the hook result, or undefined when nothing applies (the chain stops as it
+ * always did).
+ */
+async function settleAfterAmbiguous(ctx, err, via, outageFor) {
+  const network = ctx?.requirements?.network;
+  const outage = outageFor(network);
+  if (!outage) return undefined;
+  const { isAmbiguousSettleFailure } = await import("./robinhood-outage.js");
+  if (!isAmbiguousSettleFailure(err, { isPreBroadcast: isPreBroadcastSettleRejection, isRevertRetry: (e) => isRetryableSettleRefusal(e, network) })) return undefined;
+  let r;
+  try { r = await outage.handle(ctx); } catch (e) {
+    console.warn(`[payments] ${network} outage check after ${via} errored: ${String(e?.message || e).slice(0, 120)}`);
+    r = { refused: true, lateAuth: lateAuthOf(ctx), reason: "outage check errored" };
+  }
+  if (!r) return undefined;
+  if (r.served) {
+    if (await recoveredTxHeldElsewhere(ctx, r.result)) {
+      console.warn(`[payments] ${network} after ${via}'s ambiguous failure: tx ${r.result.transaction} already held by another request or booked owed; not served`);
+      return undefined;
+    }
+    releaseCoverOnSettled(ctx, r.result);
+    console.warn(`[payments] recovered ${network} settlement after ${via}'s ambiguous failure: tx ${r.result.transaction} (read on chain)`);
+    return { recovered: true, result: r.result };
+  }
+  if (r.lateAuth) ctx.__a402LateAuth = r.lateAuth;
+  console.warn(`[payments] ${network} after ${via}'s ambiguous failure: refused (${r.reason})${r.lateAuth ? "; the authorization is booked until it is read on chain" : ""}`);
+  return undefined;
+}
+const lateAuthOf = (ctx) => {
+  const a = ctx?.paymentPayload?.payload?.authorization;
+  return a && a.from && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
+};
+
+/** The transaction a stopping fallback named, for the late-settlement hook
+ *  registered after this one (it reads the same failure context). */
+function noteLateTx(ctx, transaction, via) {
+  if (ctx && typeof transaction === "string" && /^0x[0-9a-fA-F]{64}$/.test(transaction)) ctx.__a402LateTx = { transaction, via };
 }
 
 /**
@@ -2403,6 +2673,38 @@ export function isPreBroadcastSettleRejection(err) {
     errorReason: err.errorReason,
     errorMessage: typeof err.errorMessage === "string" && err.errorMessage ? err.errorMessage : msg,
   });
+}
+
+/**
+ * A facilitator's answer that its transferWithAuthorization call REVERTED,
+ * with no transaction hash: `invalid_exact_evm_transaction_failed` and the
+ * contract's revert in the message. A reverted call moves no tokens and
+ * leaves the EIP-3009 nonce unused, so the same signed authorization may go
+ * to another facilitator, and the nonce lets at most one of them land it. A
+ * facilitator whose signer has no gas answers exactly this for every payment.
+ * Timeouts, transport errors and any answer naming a transaction stay
+ * ambiguous and are never this.
+ */
+export function isRevertedAuthorizationTransfer(err) {
+  if (!err || typeof err !== "object") return false;
+  if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
+  if (String(err.errorReason || "") !== "invalid_exact_evm_transaction_failed") return false;
+  const text = `${err.errorMessage || ""} ${err.message || ""}`;
+  return /\btransferWithAuthorization\b"?\s+reverted/i.test(text);
+}
+
+// Networks where the reverted-transfer answer passes to the next facilitator.
+// Robinhood's facilitators settle USDG by EIP-3009 only and each pays its own
+// gas, so a revert there is most often one facilitator's empty gas wallet,
+// which the next one does not share. Elsewhere a revert is left to stop the
+// chain as before.
+const REVERT_RETRY_NETWORKS = new Set([ROBINHOOD_CAIP2]);
+
+/** May this settle refusal go to the next facilitator on `network`? */
+export function isRetryableSettleRefusal(err, network) {
+  if (isPreBroadcastSettleRejection(err)) return true;
+  return REVERT_RETRY_NETWORKS.has(String(network || "")) && isRevertedAuthorizationTransfer(err);
 }
 
 /** Pull the human-meaningful bits out of a facilitator error (its message

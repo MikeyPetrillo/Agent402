@@ -59,7 +59,7 @@ const HOUR_MS = 3_600_000;
 export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone", "shed"];
 export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
 export const WORDS = ["ok", "degraded", "failing"];
-export const FUNDS_WORDS = ["ok", "refused", "demoted"];
+export const FUNDS_WORDS = ["ok", "low", "refused", "demoted"];
 export const ANSWER_WORDS = ["ok", "degraded"];
 export { ANSWER_CLASSES };
 const LAST_ANSWERS_PER_SLUG = 5;
@@ -83,6 +83,9 @@ export function thresholds(env = process.env) {
     upstreamMinCalls: num(env.UPSTREAM_FAIL_MIN_CALLS, 8),
     // facilitatorFunds reads refused while a refusal is this recent.
     fundsWindowMs: num(env.FACILITATOR_FUNDS_WINDOW_MS, HOUR_MS),
+    // A settlement signer's gas reading (src/facilitator-gas.js) counts while
+    // it is this recent; an older one (its checker stopped) counts for nothing.
+    gasFreshMs: num(env.FACILITATOR_GAS_FRESH_MS, 45 * 60_000),
     // toolAnswers degraded: one slug's outside empty + error-shaped share of
     // its checked 200s (ok + empty + error-shaped) at or above this rate,
     // over at least answerMinHour checked in 1 h or answerMinDay in 24 h.
@@ -177,6 +180,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const lastAnswer = new Map(); // slug -> [{ at, klass, reasons, synthetic }] (non-ok, newest last)
   const lastUpstream = new Map();  // name -> { at, kind, host, status }
   const refusals = [];          // { at, network, facilitator, reason }
+  let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
   let remote = { at: 0, snapshots: [], ok: false, merged: null };
   let cached = null;      // { at, e }: the last evaluation the words are read from
@@ -270,6 +274,20 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     );
   }
 
+  /** The latest settlement-signer gas readings, replacing the previous set. */
+  function noteRelayerGas(readings = []) {
+    relayerGas = (Array.isArray(readings) ? readings : []).slice(0, 50).map((r) => ({
+      network: String(r?.network || "").slice(0, 64),
+      facilitator: String(r?.facilitator || "unknown").slice(0, 120),
+      signer: r?.signer ? String(r.signer).slice(0, 64) : null,
+      balanceEth: Number.isFinite(r?.balanceEth) ? r.balanceEth : null,
+      runway: Number.isFinite(r?.runway) ? r.runway : null,
+      status: ["ok", "low", "unread", "unknown"].includes(r?.status) ? r.status : "unread",
+      ...(r?.error ? { error: String(r.error).slice(0, 120) } : {}),
+      at: Number(r?.at) || now(),
+    }));
+  }
+
   function noteFacilitatorRefusal({ network, facilitator, reason, at = now() } = {}) {
     refusals.push({ at, network: String(network || "").slice(0, 64), facilitator: String(facilitator || "unknown").slice(0, 120), reason: String(reason || "").slice(0, 160) });
     while (refusals.length > MAX_REFUSALS) refusals.shift();
@@ -296,6 +314,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       lastToolError: Object.fromEntries([...lastToolError].filter(([, v]) => v.at > t - DAY_MS)),
       lastUpstream: Object.fromEntries([...lastUpstream].filter(([, v]) => v.at > t - DAY_MS)),
       refusals: refusals.filter((r) => r.at > t - DAY_MS),
+      gas: relayerGas.filter((r) => r.at > t - DAY_MS),
     };
   }
 
@@ -325,6 +344,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function mergeSnapshots(all) {
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
+    const gasM = {}; // newest reading per (network, facilitator, signer)
     for (const s of all) {
       for (const [slug, rows] of Object.entries(s.tools || {})) {
         const dst = (toolsM[slug] ||= {});
@@ -351,9 +371,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       for (const [k, v] of Object.entries(s.lastToolError || {})) if (!lastT[k] || lastT[k].at < v.at) lastT[k] = v;
       for (const [k, v] of Object.entries(s.lastUpstream || {})) if (!lastU[k] || lastU[k].at < v.at) lastU[k] = v;
       for (const r of s.refusals || []) refs.push(r);
+      for (const r of s.gas || []) {
+        const k = `${r.network}|${r.facilitator}|${r.signer || ""}`;
+        if (!gasM[k] || gasM[k].at < r.at) gasM[k] = r;
+      }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at) };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM) };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -436,7 +460,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const recent = m.refusals.filter((r) => r.at > t - th.fundsWindowMs);
     let demoted = [];
     try { demoted = isDemoted() || []; } catch { demoted = []; }
-    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : "ok";
+    // Gas runway of the facilitators' settlement signers: low, or unreadable
+    // past the checker's retries, reads "low" (a warning before refusals). A
+    // facilitator that publishes no signer ("unknown") has nothing to watch
+    // and never pages.
+    const gas = (m.gas || []).filter((r) => r.at > t - th.gasFreshMs);
+    const gasLow = gas.filter((r) => r.status === "low" || r.status === "unread");
+    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : "ok";
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
@@ -448,6 +478,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
       facilitatorRefusals24h: m.refusals.filter((r) => r.at > t - DAY_MS).length,
       demoted,
+      relayerGas: gas.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
     };
   }
 
@@ -479,7 +510,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
-      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted },
+      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low").length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread").length },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
     };
   }
@@ -509,7 +540,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       issueSummary: {
         tools: e.tools.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         upstreams: e.upstreams.filter((r) => r.status !== "ok").map((r) => `${r.upstream.startsWith("facilitator:") ? "facilitator" : r.upstream} (${r.status})`),
-        facilitatorNetworks: [...new Set(e.facilitatorRefusals.map((r) => r.network))],
+        facilitatorNetworks: [...new Set([...e.facilitatorRefusals.map((r) => r.network), ...e.relayerGas.filter((r) => r.status === "low" || r.status === "unread").map((r) => r.network)])],
         answers: e.answers.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         identicalAnswers: identical.slugs.map((r) => r.slug),
       },
@@ -526,9 +557,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 

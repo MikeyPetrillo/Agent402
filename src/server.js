@@ -395,7 +395,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -3647,9 +3647,10 @@ app.get("/api/gateway-status", async (req, res) => {
     outboundDestinations: await outboundDestinationStore().status({ full }).catch(() => ({ status: "unknown" })),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
-    // last hour; facilitatorFunds reads ok / refused (an out-of-funds or
-    // billing settle refusal inside the hour) / demoted (a facilitator in its
-    // settle cool-down). One word each publicly; slugs, upstreams and counts
+    // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
+    // signer is short of gas, src/facilitator-gas.js) / refused (an
+    // out-of-funds or billing settle refusal inside the hour) / demoted (a
+    // facilitator in its settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
@@ -3911,7 +3912,7 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
   setInterval(() => { probeOxAlphaAvailability().catch(() => {}); }, 60 * 60_000).unref();
 }
 // Recent rows are re-read from the ledger per request (withFreshRecent); only
-// the balances ride the hourly background snapshot. Wallet balances and their
+// the balances ride the background snapshot (every 4 hours). Wallet balances and their
 // combined total are operator-only: /api/revenue serializes through
 // publicRevenueSnapshot, /__operator/revenue.json carries the full reading.
 const revenueApi = revenueApiHandlers({
@@ -4114,7 +4115,7 @@ app.get("/api/revenue/mpp", (req, res) => {
 app.get("/revenue", async (req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
-    // only the balances ride the hourly background snapshot.
+    // only the balances ride the background snapshot (every 4 hours).
     const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
@@ -5759,7 +5760,7 @@ app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) =
 // the ledger exists to prevent. The refund EXECUTOR (refund.yml -> scripts/
 // refund-run.js) is the only thing that sends money, from its own keys in
 // Actions secrets - this server never holds a spending key.
-app.get("/__operator/refunds.json", (req, res) => {
+app.get("/__operator/refunds.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // The real brute-force bound is operatorAuthed's own per-IP attempt limiter,
   // which charges budget only on a WRONG credential - CodeQL cannot see it
@@ -5779,6 +5780,10 @@ app.get("/__operator/refunds.json", (req, res) => {
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
+    // Settle failures that named a transaction, open until the chain says
+    // whether it landed (src/late-settlements.js); a landed one becomes an
+    // owed row above.
+    unconfirmedSettlements: await lateSettleBookForOperator().then((b) => b.operatorView()).catch(() => null),
   });
 });
 // Self-serve seller conversion/churn (2026-08-16). first_seen: when the
@@ -8087,7 +8092,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed hourly (see startLeaderboardRefresh below) — each request is a
+// refreshed every 4 hours (see startLeaderboardRefresh below): each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):
@@ -11267,7 +11272,7 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // takes even that hit off buyers' pageviews.
 bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
-// x402 Leaderboard cache: warms once at boot, refreshes hourly. Failures keep
+// x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.

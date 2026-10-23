@@ -542,6 +542,13 @@ Auto-closes when the word is ok.`;
     body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
   },
   {
+    // A facilitator's settlement signer short of gas before it starts
+    // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
+    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
+    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor, or its balance could not be read three times running; the operator detail says which (relayersLow, relayersUnread).`,
+  },
+  {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.
