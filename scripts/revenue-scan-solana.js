@@ -31,6 +31,7 @@
 //   SIG_LIMIT            signatures scanned per token account (default 100)
 //   SOLANA_RPCS          comma-separated JSON-RPC endpoints
 import { fileURLToPath } from "node:url";
+import { ZERO_EVM_ADDRESS } from "./revenue-scan.js";
 
 const WALLET = (process.env.SOLANA_REVENUE_WALLET || "").trim();
 // Default = the paid canary's Solana burner (public address only — the key
@@ -112,7 +113,7 @@ export function isExternalPayment(row, { ourWallets, maxUsd }) {
   // every rail through this copy) is nobody's payment: a Circle Gateway
   // withdrawal mints our own batched revenue, which the sales ledger already
   // counts, and a bridge mint is a move of our own funds.
-  if (row.payer === "0x0000000000000000000000000000000000000000") return false;
+  if (typeof row.payer === "string" && row.payer.toLowerCase() === ZERO_EVM_ADDRESS) return false;
   if (!(row.usd > 0) || row.usd > maxUsd) return false;
   return true;
 }

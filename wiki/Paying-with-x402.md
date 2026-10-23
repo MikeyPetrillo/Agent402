@@ -71,7 +71,8 @@ right now is machine-readable: `/api/pricing` (`payment.acceptKinds`,
   `Retry-After` and reason `settlement_pending`. Resend the same request with
   the same payment header (never a new signature) and it is served once Gateway
   confirms it, with no second charge. A batched payment Gateway settles and that
-  is never served is recorded as owed to the paying wallet and repaid.
+  is never served is recorded as owed to the paying wallet and refunded under
+  the [refund policy](https://agent402.tools/terms).
 - **Where it is not offered:** identity-bound routes (memory, attest, feedback,
   my-usage) and routes with a lasting effect (such as the route-execute tiers)
   carry the plain accept only.
