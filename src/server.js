@@ -3647,9 +3647,10 @@ app.get("/api/gateway-status", async (req, res) => {
     outboundDestinations: await outboundDestinationStore().status({ full }).catch(() => ({ status: "unknown" })),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
-    // last hour; facilitatorFunds reads ok / refused (an out-of-funds or
-    // billing settle refusal inside the hour) / demoted (a facilitator in its
-    // settle cool-down). One word each publicly; slugs, upstreams and counts
+    // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
+    // signer is short of gas, src/facilitator-gas.js) / refused (an
+    // out-of-funds or billing settle refusal inside the hour) / demoted (a
+    // facilitator in its settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.

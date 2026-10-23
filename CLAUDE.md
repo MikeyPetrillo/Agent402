@@ -238,6 +238,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
   facilitator only (`src/circle-facilitator.js`): `CIRCLE_FACILITATOR_API_KEY` is the switch,
   the client is Arc-only, reduces every upstream error to a status and a reason code, and Arc
   fails closed on Circle's own `/supported` (`scripts/test-arc-rail.js`).
+  `ROBINHOOD_FACILITATOR_URL` is an ordered list: the first settles, the rest are Robinhood's
+  settle fallback (never routing facilitators), reached after a pre-broadcast refusal or, on
+  `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
+  `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
+  `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
+  `scripts/test-tool-failure-monitor.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
@@ -248,7 +254,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
   query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
-- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer

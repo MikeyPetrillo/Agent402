@@ -116,6 +116,19 @@ const AVM_NETWORKS = {
 // advertise every mainnet rail this file can settle — the test cross-checks.
 export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS, ...STELLAR_NETWORKS, ...AVM_NETWORKS };
 
+/** An ordered facilitator URL list from a comma-separated variable: trimmed,
+ *  http(s) only, duplicates dropped (the first occurrence keeps its place). */
+export function facilitatorUrlList(raw) {
+  const out = [];
+  for (const part of String(raw || "").split(",")) {
+    const u = part.trim().replace(/\/+$/, "");
+    if (!u) continue;
+    if (!/^https?:\/\/[^\s/]+/i.test(u)) { console.warn(`WARNING: ignoring facilitator URL that is not http(s): ${JSON.stringify(u).slice(0, 80)}`); continue; }
+    if (!out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
 // Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
 // has no default asset for chain 4663 — so we resolve the asset ourselves and
 // route settlement to an external facilitator that advertises
@@ -124,7 +137,13 @@ export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS, ...STELLAR_NETWORKS,
 // the USDG EIP-712 domain (name/version) is likewise env-overridable and can be
 // verified on-chain via scripts/rh-chain-probe.js before enabling.
 const ROBINHOOD_CAIP2 = "eip155:4663";
-const ROBINHOOD_FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim();
+// ROBINHOOD_FACILITATOR_URL is an ordered, comma-separated list. The first is
+// the facilitator every Robinhood payment settles through, exactly as a single
+// URL always has; the rest are its settle fallback (registerFacilitatorFailureHooks),
+// tried in order only after the one before refused without moving the money.
+// The offer, the scheme and what the buyer signs do not depend on the list.
+const ROBINHOOD_FACILITATOR_URLS = facilitatorUrlList(process.env.ROBINHOOD_FACILITATOR_URL);
+const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
 // Monad (chain 143) settles native Circle USDC (in @x402/evm's registry, so the
 // standard ExactEvmScheme handles it — no custom parser). But PayAI and CDP do
 // NOT advertise eip155:143 at their /supported, so Monad must route to its own
@@ -898,9 +917,44 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     );
     evmCaip2 = evmCaip2.filter((c) => c !== ROBINHOOD_CAIP2);
   }
+  // The rest of the list: Robinhood's settle fallback, in order. They are not
+  // registered as routing facilitators (addFacilitator), so none of them can
+  // take a payment on any network (several also list Base or Arc) except as
+  // a fallback the failure hook hands a refused Robinhood settle to.
+  const robinhoodFallbacks = [];
   if (robinhoodEnabled) {
     addFacilitator(`Robinhood (${ROBINHOOD_FACILITATOR_URL})`, new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
+    for (const url of ROBINHOOD_FACILITATOR_URLS.slice(1)) {
+      const name = `Robinhood fallback (${url})`;
+      const client = new HTTPFacilitatorClient({ url });
+      labelFacilitatorErrors(name, client);
+      registerFacilitatorUpstream(url);
+      robinhoodFallbacks.push({ name, client, url });
+    }
+    if (robinhoodFallbacks.length) {
+      console.log(`Robinhood Chain: settle fallback ${robinhoodFallbacks.map((f) => f.name).join(" -> ")} (PAYMENT_SETTLE_FALLBACK; after a refusal that moved no money)`);
+      // A fallback that answers /supported without exact on eip155:4663
+      // could only fail: drop it, loudly. One that cannot be reached is kept
+      // (a later settle may reach it) and named.
+      for (const f of [...robinhoodFallbacks]) {
+        Promise.resolve().then(() => f.client.getSupported()).then((sup) => {
+          const kinds = Array.isArray(sup?.kinds) ? sup.kinds : [];
+          if (kinds.some((k) => k?.scheme === "exact" && k?.network === ROBINHOOD_CAIP2)) return;
+          const i = robinhoodFallbacks.indexOf(f);
+          if (i >= 0) robinhoodFallbacks.splice(i, 1);
+          console.warn(`WARNING: ${f.name} does not advertise exact on ${ROBINHOOD_CAIP2} - dropped from Robinhood's settle fallback`);
+        }).catch((e) => console.warn(`WARNING: ${f.name} unreachable at boot (${String(e?.message || e).slice(0, 120)}); kept in Robinhood's settle fallback`));
+      }
+    }
+    // Gas runway of every listed facilitator's settlement signer, so an empty
+    // gas wallet reads on facilitatorFunds before settlements start failing.
+    if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
+      void startFacilitatorGasCheck({
+        network: ROBINHOOD_CAIP2,
+        urls: () => [ROBINHOOD_FACILITATOR_URL, ...robinhoodFallbacks.map((f) => f.url)],
+      });
+    }
   }
   // Monad (chain 143 / USDC) settles through its dedicated facilitator, added
   // only when `monad` is enabled — PayAI/CDP can't settle eip155:143, so without
@@ -1483,6 +1537,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
+    // Robinhood's listed fallbacks first, then the chain it had before. Read
+    // at settle time: the boot check may still drop one.
+    ...(robinhoodFallbacks.length ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks, ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
   });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
@@ -2022,7 +2079,12 @@ const SOLVADOR_SETTLE_NETWORKS = new Set([
 export function fallbackCandidatesFor(network, payAiClient, solvadorClient, overrides = null) {
   // A network whose primary is Solvador names its own fallbacks: retrying the
   // facilitator that just refused would only repeat the refusal.
-  if (overrides && Object.hasOwn(overrides, network)) return [...overrides[network]];
+  // An override may be a function, read at each settle (a list the boot check
+  // may still shorten).
+  if (overrides && Object.hasOwn(overrides, network)) {
+    const o = overrides[network];
+    return [...(typeof o === "function" ? o() : o)];
+  }
   const out = [];
   const solvadorAdvertises = !!solvadorClient && SOLVADOR_SETTLE_NETWORKS.has(network);
   if (solvadorAdvertises) out.push({ name: "Solvador", client: solvadorClient });
@@ -2171,6 +2233,40 @@ async function recordVerifyFailure(ctx, reason) {
 // Networks whose first-tried facilitator is wrapped by the settle demotion.
 const DEMOTION_NETWORKS = new Set();
 setDemotedReader(() => demotedList());
+/**
+ * The facilitators' settlement-signer gas check (src/facilitator-gas.js) on a
+ * schedule, one replica at a time (a lease); its readings reach every
+ * replica's facilitatorFunds word through the failure monitor's shared
+ * snapshots. `urls` is read at each tick. Returns the tick (tests run it).
+ */
+export async function startFacilitatorGasCheck({ network, urls, schedule = true } = {}) {
+  const { leased } = await import("./state-db.js");
+  const { createRelayerGasCheck, gasCheckSettings } = await import("./facilitator-gas.js");
+  const { evmRpcFor } = await import("./evm-rpcs.js");
+  const settings = gasCheckSettings();
+  const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
+  const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
+    const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);
+    if (!list.length) return [];
+    const key = list.join(",");
+    if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings }));
+    const readings = await checkers.get(key).check();
+    toolFailureMonitor().noteRelayerGas(readings);
+    for (const r of readings) {
+      if (r.status !== "ok") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
+    }
+    return readings;
+  });
+  if (schedule) {
+    const run = () => { tick().catch(() => {}); };
+    const first = setTimeout(run, 30_000);
+    first.unref?.();
+    const t = setInterval(run, settings.intervalMs);
+    t.unref?.();
+  }
+  return tick;
+}
+
 /** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
 function registerFacilitatorUpstream(url) {
   try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
@@ -2255,7 +2351,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   if (fallbackEnabled) {
     console.log(
       `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks) -> " : ""}${payAiClient ? "PayAI" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
-        "; fires ONLY on pre-broadcast refusals (an HTTP 402 or a billing refusal on our facilitator account), never on buyer-side or ambiguous failures"
+        "; fires ONLY on pre-broadcast refusals (an HTTP 402, a billing refusal on our facilitator account, or on Robinhood a reverted transfer), never on buyer-side or ambiguous failures"
     );
   }
   server.onSettleFailure(async (ctx) => {
@@ -2309,7 +2405,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       return { recovered: true, result: r.result };
     }
     if (!fallbackEnabled) return;
-    if (!isPreBroadcastSettleRejection(ctx?.error)) return;
+    if (!isRetryableSettleRefusal(ctx?.error, ctx?.requirements?.network)) return;
     // A facilitator the demotion wrapper already asked for this payment is
     // not asked again.
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
@@ -2330,7 +2426,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           const refusal = Object.assign(new Error(String(result?.errorMessage || result?.errorReason || "settle rejected")), {
             errorReason: result?.errorReason, errorMessage: result?.errorMessage, transaction: result?.transaction,
           });
-          if (isPreBroadcastSettleRejection(refusal)) continue;
+          if (isRetryableSettleRefusal(refusal, ctx?.requirements?.network)) continue;
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
@@ -2354,7 +2450,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // candidate. A timeout/5xx here may
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
-        if (!isPreBroadcastSettleRejection(err)) return;
+        if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) return;
       }
     }
   });
@@ -2403,6 +2499,38 @@ export function isPreBroadcastSettleRejection(err) {
     errorReason: err.errorReason,
     errorMessage: typeof err.errorMessage === "string" && err.errorMessage ? err.errorMessage : msg,
   });
+}
+
+/**
+ * A facilitator's answer that its transferWithAuthorization call REVERTED,
+ * with no transaction hash: `invalid_exact_evm_transaction_failed` and the
+ * contract's revert in the message. A reverted call moves no tokens and
+ * leaves the EIP-3009 nonce unused, so the same signed authorization may go
+ * to another facilitator, and the nonce lets at most one of them land it. A
+ * facilitator whose signer has no gas answers exactly this for every payment.
+ * Timeouts, transport errors and any answer naming a transaction stay
+ * ambiguous and are never this.
+ */
+export function isRevertedAuthorizationTransfer(err) {
+  if (!err || typeof err !== "object") return false;
+  if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
+  if (String(err.errorReason || "") !== "invalid_exact_evm_transaction_failed") return false;
+  const text = `${err.errorMessage || ""} ${err.message || ""}`;
+  return /\btransferWithAuthorization\b"?\s+reverted/i.test(text);
+}
+
+// Networks where the reverted-transfer answer passes to the next facilitator.
+// Robinhood's facilitators settle USDG by EIP-3009 only and each pays its own
+// gas, so a revert there is most often one facilitator's empty gas wallet,
+// which the next one does not share. Elsewhere a revert is left to stop the
+// chain as before.
+const REVERT_RETRY_NETWORKS = new Set([ROBINHOOD_CAIP2]);
+
+/** May this settle refusal go to the next facilitator on `network`? */
+export function isRetryableSettleRefusal(err, network) {
+  if (isPreBroadcastSettleRejection(err)) return true;
+  return REVERT_RETRY_NETWORKS.has(String(network || "")) && isRevertedAuthorizationTransfer(err);
 }
 
 /** Pull the human-meaningful bits out of a facilitator error (its message

@@ -535,11 +535,12 @@ Auto-closes when the word is ok.`;
     body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
   },
   {
-    // Settle refusals (refused) and a facilitator in its settle cool-down
-    // (demoted, src/settle-demotion.js).
+    // Settle refusals (refused), a facilitator in its settle cool-down
+    // (demoted, src/settle-demotion.js), and a facilitator's settlement signer
+    // short of gas before it starts refusing (low, src/facilitator-gas.js).
     title: "facilitatorFunds: a facilitator refused settlement",
-    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["refused", "demoted"], ["ok"]),
-    body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
+    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low", "refused", "demoted"], ["ok"]),
+    body: ({ gateway: b }) => failureWordBody("facilitatorFunds", ["demoted", "low"].includes(b.facilitatorFunds?.status) ? b.facilitatorFunds.status : "refused"),
   },
   {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
