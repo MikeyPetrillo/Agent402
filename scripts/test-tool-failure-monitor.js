@@ -404,6 +404,45 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
         assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low");
       } finally { chain.noSigner = false; }
     });
+    await check("gas: a listed facilitator's empty signer is covered while our own relayer reads ok, never otherwise", async () => {
+      const c = clock();
+      const m = createToolFailureMonitor({ now: c.now, env: {} });
+      const theirs = (o = {}) => ({ network: NET, facilitator: "f.example", signer: SIGNER, balanceEth: 0, runway: 0, status: "low", at: c.t, ...o });
+      const ours = (o = {}) => ({ network: NET, facilitator: "own relayer", signer: "0x" + "22".repeat(20), own: true, balanceEth: 0.01, runway: 6000, status: "ok", at: c.t, ...o });
+      const word = async () => (await m.status({ fresh: true })).facilitatorFunds.status;
+      m.noteRelayerGas([theirs()]);
+      assert.equal(await word(), "low", "no relayer of ours: their empty wallet reads low");
+      m.noteRelayerGas([theirs(), ours()]);
+      assert.equal(await word(), "ok", "ours reads ok: covered");
+      const full = await m.status({ fresh: true, full: true });
+      assert.equal(full.facilitatorFunds.relayersCovered, 1);
+      assert.equal(full.facilitatorFunds.relayersLow, 0);
+      assert.equal(m.evaluate().relayerGas.find((r) => r.facilitator === "own relayer")?.own, true, "the own marker survives into the shared readings the settle order refreshes from");
+      {
+        // Caller path: the settle order refreshes from these readings, so our
+        // relayer reading low there puts the facilitator first.
+        const { createRobinhoodOrder } = await import("../src/robinhood-order.js");
+        const order = createRobinhoodOrder({ host: "f.example", network: NET, now: c.now, log: () => {} });
+        order.update(m.evaluate().relayerGas);
+        assert.equal(order.ownFirst(), true, "their wallet empty, ours funded: ours first");
+        m.noteRelayerGas([theirs(), ours({ status: "low", runway: 40 })]);
+        order.update(m.evaluate().relayerGas);
+        assert.equal(order.ownFirst(), false, "ours low in the shared readings: the facilitator first");
+        m.noteRelayerGas([theirs(), ours()]);
+      }
+      m.noteRelayerGas([theirs({ status: "unread", runway: null }), ours()]);
+      assert.equal(await word(), "ok", "their unreadable signer is covered too");
+      m.noteRelayerGas([theirs(), ours({ status: "low", runway: 40 })]);
+      assert.equal(await word(), "low", "ours low: not covered");
+      m.noteRelayerGas([theirs(), ours({ status: "unread", runway: null })]);
+      assert.equal(await word(), "low", "ours unread: not covered");
+      m.noteRelayerGas([theirs({ network: "eip155:8453" }), ours()]);
+      assert.equal(await word(), "low", "ours on another network covers nothing here");
+      m.noteRelayerGas([ours(), { network: NET, facilitator: "price floor", status: "low", reason: "gasNearFloor", at: c.t }]);
+      assert.equal(await word(), "low", "gas against the floor is never covered");
+      m.noteRelayerGas([theirs(), ours({ own: false })]);
+      assert.equal(await word(), "low", "a row not marked as ours covers nothing");
+    });
     await check("gas: readings merge across replicas (newest per signer) and age out", async () => {
       const store = (() => { const snaps = new Map(); return { async publish(id, json, t) { snaps.set(id, { id, at: t, ...JSON.parse(json) }); return { ok: true }; }, async readAll() { return { ok: true, snapshots: [...snaps.values()] }; } }; })();
       const c = clock();
