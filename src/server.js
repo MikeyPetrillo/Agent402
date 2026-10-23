@@ -5520,7 +5520,13 @@ app.get("/__operator/heap.json", async (req, res) => {
   res.set("Cache-Control", "no-store").json({
     heapUsedMb: mb(mem.heapUsed), heapTotalMb: mb(mem.heapTotal), rssMb: mb(mem.rss), externalMb: mb(mem.external), arrayBuffersMb: mb(mem.arrayBuffers),
     spaces: v8.getHeapSpaceStatistics().map((sp) => ({ space: sp.space_name, usedMb: mb(sp.space_used_size), sizeMb: mb(sp.space_size) })),
-    index: indexMemoryFigures(),
+    index: indexMemoryFigures({ sampleBytes: true }),
+    // Page and API bodies held between rebuilds: a string by its length, an
+    // array by its row count (never serialized here, some hold 200k rows).
+    surfaceMemo: [...surfaceMemo].map(([key, hit]) => {
+      const v = hit?.value;
+      return { key, ...(typeof v === "string" ? { mb: Math.round((v.length / 1048576) * 10) / 10 } : Array.isArray(v) ? { rows: v.length } : { type: typeof v }), ageS: Math.round((Date.now() - (hit?.at || 0)) / 1000) };
+    }),
   });
 });
 app.post("/__operator/stall-profile", async (req, res) => {

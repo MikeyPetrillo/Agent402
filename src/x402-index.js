@@ -9359,10 +9359,27 @@ export function economySectionHtml(snap, leaderboardSnap) {
 /** Internal helper for tests. */
 /** Counts only (no values): how much crawl data the index holds, for the
  *  operator heap read. Walks entries once; no stringify. */
-export function indexMemoryFigures() {
+// Entries whose fields are serialized for the byte estimate: a fixed stride
+// over the cache, so the read costs the same few milliseconds at any size.
+const MEMORY_SAMPLE_ENTRIES = 120;
+const jsonLength = (x) => { try { return x == null ? 0 : JSON.stringify(x).length; } catch { return 0; } };
+export function indexMemoryFigures({ sampleBytes = false } = {}) {
   let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0;
+  const stride = Math.max(1, Math.floor(cache.size / MEMORY_SAMPLE_ENTRIES));
+  const sampled = { entries: 0, tools: 0, openapiTools: 0, openapiRoutes: 0, manifest: 0, rest: 0 };
+  const sampledRows = { tools: 0, openapiTools: 0, openapiRoutes: 0 };
+  let i = 0;
   for (const v of cache.values()) {
     if (!v || typeof v !== "object") continue;
+    if (sampleBytes && i++ % stride === 0) {
+      sampled.entries++;
+      for (const [key, value] of Object.entries(v)) {
+        if (key === "manifestBody") continue; // counted exactly below
+        const n = jsonLength(value);
+        if (key in sampled && key !== "entries" && key !== "rest") sampled[key] += n; else sampled.rest += n;
+        if (key in sampledRows && Array.isArray(value)) sampledRows[key] += value.length;
+      }
+    }
     entries++;
     tools += Array.isArray(v.tools) ? v.tools.length : 0;
     openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
@@ -9375,7 +9392,20 @@ export function indexMemoryFigures() {
       if (Array.isArray(r)) manifestResources += r.length;
     }
   }
-  return { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  const out = { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  if (!sampleBytes) return out;
+  // Serialized size from the sample: a floor on what the heap holds (object
+  // headers and hidden classes come on top), comparable across fields. Row
+  // fields scale the sampled bytes per row by the exact row count, so a few
+  // very large sellers landing in (or missing) the sample do not skew them.
+  const scale = sampled.entries ? entries / sampled.entries : 0;
+  const mb = (n) => Math.round((n * scale) / 1048576);
+  const rowsMb = (key, total) => (sampledRows[key] ? Math.round(((sampled[key] / sampledRows[key]) * total) / 1048576) : mb(sampled[key]));
+  let postingRefs = 0;
+  for (const list of routeIdx.postings.values()) postingRefs += list.length;
+  out.jsonMbEstimate = { sampledEntries: sampled.entries, tools: rowsMb("tools", tools), openapiTools: rowsMb("openapiTools", openapiTools), openapiRoutes: rowsMb("openapiRoutes", openapiRoutes), manifest: mb(sampled.manifest), otherFields: mb(sampled.rest) };
+  out.routeIndex = { tokens: routeIdx.postings.size, postingRefs, pending: routeIdx.pending.size, termCache: routeIdx.termCache.size, staleTools: routeIdx.staleTools, shadowBuilding: !!routeIdx.shadow };
+  return out;
 }
 export function _cacheForTests() {
   return cache;
