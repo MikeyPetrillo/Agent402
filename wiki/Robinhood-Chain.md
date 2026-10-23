@@ -41,6 +41,13 @@ unmodified client that takes the first accept it can pay settles on Base. The pr
   `ROBINHOOD_FACILITATOR_URL=<an x402 facilitator that settles eip155:4663>`.
   If the facilitator URL is unset the rail is omitted gracefully - every other
   chain keeps serving. See [[Self-Hosting]].
+- **Settle fallback**: the variable also takes an ordered, comma-separated
+  list, `ROBINHOOD_FACILITATOR_URL=<primary-url>,<fallback-url>`. The first
+  settles every payment; the rest are tried, in order, only when the one
+  before refused without moving money (an HTTP 402, a billing refusal, or a
+  reverted transfer with no transaction), and only with
+  `PAYMENT_SETTLE_FALLBACK=true`. A fallback is used once its `/supported`
+  lists exact on `eip155:4663`. A single URL behaves exactly as before.
 - **Tollbooth (≥ 0.4.0)**: `TOLLBOOTH_NETWORK=eip155:4663 TOLLBOOTH_ASSET=USDG`
   quotes crawlers in USDG. To settle it, use the library API -
   `createTollbooth({ x402: paymentMiddleware(...) })` with a scheme your
@@ -72,3 +79,10 @@ example: [`0xae8e3e40…f826`](https://robinhoodchain.blockscout.com/tx/0xae8e3e
   secret says it should be there.
 - `SCAN_NETWORK=robinhood node scripts/revenue-scan.js` reports USDG received
   by the revenue wallet.
+- **Settlement gas**: every 10 minutes the server reads each listed
+  facilitator's settlement signer (from its `/supported`) and that signer's
+  balance on the chain. Fewer settlements left than
+  `FACILITATOR_GAS_MIN_SETTLEMENTS` (default 500), or a balance that cannot
+  be read three times running, reads `facilitatorFunds=low` on
+  `/api/gateway-status`; the detail is on the operator endpoint.
+  `FACILITATOR_GAS_CHECK=off` turns the check off.

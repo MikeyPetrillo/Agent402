@@ -282,7 +282,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       signer: r?.signer ? String(r.signer).slice(0, 64) : null,
       balanceEth: Number.isFinite(r?.balanceEth) ? r.balanceEth : null,
       runway: Number.isFinite(r?.runway) ? r.runway : null,
-      status: ["ok", "low", "unread"].includes(r?.status) ? r.status : "unread",
+      status: ["ok", "low", "unread", "unknown"].includes(r?.status) ? r.status : "unread",
       ...(r?.error ? { error: String(r.error).slice(0, 120) } : {}),
       at: Number(r?.at) || now(),
     }));
@@ -461,9 +461,11 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     let demoted = [];
     try { demoted = isDemoted() || []; } catch { demoted = []; }
     // Gas runway of the facilitators' settlement signers: low, or unreadable
-    // past the checker's retries, reads "low" (a warning before refusals).
+    // past the checker's retries, reads "low" (a warning before refusals). A
+    // facilitator that publishes no signer ("unknown") has nothing to watch
+    // and never pages.
     const gas = (m.gas || []).filter((r) => r.at > t - th.gasFreshMs);
-    const gasLow = gas.filter((r) => r.status !== "ok");
+    const gasLow = gas.filter((r) => r.status === "low" || r.status === "unread");
     const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : "ok";
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
@@ -508,7 +510,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
-      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status !== "ok").length },
+      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low" || r.status === "unread").length },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
     };
   }
@@ -538,7 +540,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       issueSummary: {
         tools: e.tools.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         upstreams: e.upstreams.filter((r) => r.status !== "ok").map((r) => `${r.upstream.startsWith("facilitator:") ? "facilitator" : r.upstream} (${r.status})`),
-        facilitatorNetworks: [...new Set([...e.facilitatorRefusals.map((r) => r.network), ...e.relayerGas.filter((r) => r.status !== "ok").map((r) => r.network)])],
+        facilitatorNetworks: [...new Set([...e.facilitatorRefusals.map((r) => r.network), ...e.relayerGas.filter((r) => r.status === "low" || r.status === "unread").map((r) => r.network)])],
         answers: e.answers.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         identicalAnswers: identical.slugs.map((r) => r.slug),
       },

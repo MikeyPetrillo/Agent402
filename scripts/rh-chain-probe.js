@@ -10,15 +10,16 @@
 // to the point of an actual transfer, so enabling Robinhood Chain payments is a
 // verified config flip, not a guess.
 //
-// Set ROBINHOOD_FACILITATOR_URL to also probe the facilitator's /supported
+// Set ROBINHOOD_FACILITATOR_URL to also probe each listed facilitator's /supported
+// (the variable may be an ordered, comma-separated list)
 // endpoint (confirms it advertises exact/eip155:4663/USDG); omit to skip that.
 //
 //   ROBINHOOD_FACILITATOR_URL=<facilitator-url> node scripts/rh-chain-probe.js
 const MAIN = { url: "https://rpc.mainnet.chain.robinhood.com", chainId: 4663 };
 const TEST = { url: "https://rpc.testnet.chain.robinhood.com", chainId: 46630 };
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
-const FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim().replace(/\/$/, "");
-const FACILITATOR_SUPPORTED = FACILITATOR_URL ? `${FACILITATOR_URL}/supported` : "";
+const FACILITATOR_SUPPORTED = String(process.env.ROBINHOOD_FACILITATOR_URL || "").split(",")
+  .map((u) => u.trim().replace(/\/+$/, "")).filter(Boolean).map((u) => `${u}/supported`);
 
 // ERC-20 / EIP-712 selectors
 const SEL = {
@@ -107,10 +108,10 @@ try {
   console.log(`  USDG read failed: ${e?.message || e}`);
 }
 
-if (FACILITATOR_SUPPORTED) {
-  console.log(`\n=== facilitator /supported (${FACILITATOR_SUPPORTED}) ===`);
+for (const supportedUrl of FACILITATOR_SUPPORTED) {
+  console.log(`\n=== facilitator /supported (${supportedUrl}) ===`);
   try {
-    const r = await fetch(FACILITATOR_SUPPORTED, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    const r = await fetch(supportedUrl, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
     const body = await r.text();
     console.log(`  HTTP ${r.status}`);
     if (r.ok) {
@@ -127,7 +128,8 @@ if (FACILITATOR_SUPPORTED) {
   } catch (e) {
     console.log(`  fetch failed: ${e?.message || e} (the facilitator may block automated fetches; this is informational only)`);
   }
-} else {
+}
+if (!FACILITATOR_SUPPORTED.length) {
   console.log(`\n=== facilitator /supported — skipped (set ROBINHOOD_FACILITATOR_URL to probe) ===`);
 }
 
