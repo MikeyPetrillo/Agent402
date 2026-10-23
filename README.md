@@ -521,6 +521,12 @@ on all routes) and carries a typed output schema twice: in the `bazaar` discover
 extension and as `accepts[0].outputSchema` on the first accept, so a client that
 reads the spec's field sees the response shape before paying.
 
+Optional: `GATEWAY_NANOPAYMENTS=on` adds a Circle Gateway batched accept on Arc
+and Base beside the plain one (same price, same payTo; buyers who deposited
+USDC into Gateway sign per call with no gas, and Gateway settles off chain into
+your Gateway balance, withdrawn with `scripts/gateway-withdraw.js`). Off by
+default; see the wiki's Self-Hosting page.
+
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -559,7 +565,7 @@ sha256 proof-of-work (a fraction of a second on a laptop; the MCP servers do it 
 Every claim links to the surface that proves it (the live version, a section of the home page: [agent402.tools/#why](https://agent402.tools/#why)).
 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
-2. **A failed x402 call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
+2. **A failed x402 call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again, and a request re-sent with the same signed EVM payment is answered from its first answer even without a key (`X-Replayed-Answer: 1`); the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
 3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
 4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on thirteen chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.

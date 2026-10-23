@@ -35,10 +35,13 @@ import {
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { evmLogsRead } from "./evm-logs-rpc.js";
-import { externalTempoPayments } from "./sales-ledger.js";
+import { externalTempoPayments, gatewayBatchedPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
+
+// The `from` of a mint; such a transfer settled no call (syncEvmChain).
+const ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
@@ -611,6 +614,11 @@ export async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
     for (const l of Array.isArray(logs) ? logs : []) {
       const usd = Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6;
       const payer = l.topics?.[1] ? ("0x" + l.topics[1].slice(-40)).toLowerCase() : null;
+      // A mint (Transfer from the zero address) settled no call: a Circle
+      // Gateway withdrawal mints batched revenue the sales ledger already
+      // counts (gatewayBatched below), so recording it here would count the
+      // same money twice, as revenue and as throughput.
+      if (payer === ZERO_EVM_ADDRESS) continue;
       stageTransfer({
         chain, wallet,
         txid: `${l.transactionHash}:${parseInt(l.logIndex ?? "0x0", 16)}`,
@@ -1160,12 +1168,29 @@ function* ledgerSummarySteps(wallets) {
   let tempoCount = 0, tempoUsd = 0;
   yield;
   for (const r of tempoExternalRows()) { tempoCount++; tempoUsd += r.usd; }
+  // Circle Gateway batched sales settle off chain at Gateway and are credited
+  // to our Gateway balance, so no treasury transfer carries them: they come
+  // from the sales ledger too. A withdrawal later mints that balance on chain,
+  // and syncEvmChain records no mint, so nothing is counted twice. Present
+  // only once such a sale exists.
+  yield;
+  const gw = gatewayBatchedPayments();
   return {
     allTimeExternalUsd: Number(allTimeExternalUsd.toFixed(6)),
     allTimeExternalCount,
     tempoExternal: { count: tempoCount, usd: Number(tempoUsd.toFixed(6)), source: "sales ledger, Tempo MPP settlements (tempo/charge and tempo/subscription), external rows only" },
     allTimeExternalWithTempoCount: allTimeExternalCount + tempoCount,
     allTimeExternalWithTempoUsd: Number((allTimeExternalUsd + tempoUsd).toFixed(6)),
+    ...(gw.count ? {
+      gatewayBatched: {
+        count: gw.count, externalCount: gw.externalCount, externalUsd: gw.externalUsd,
+        settledOffChain: true,
+        source: "sales ledger, Circle Gateway batched x402 settlements (wire gateway-batched): settled off chain at Circle Gateway and credited to our Gateway balance, withdrawn on chain separately; a withdrawal is not counted again",
+      },
+      // Every external figure: the on-chain transfers, Tempo and Gateway batched.
+      allTimeExternalAllCount: allTimeExternalCount + tempoCount + gw.externalCount,
+      allTimeExternalAllUsd: Number((allTimeExternalUsd + tempoUsd + gw.externalUsd).toFixed(6)),
+    } : {}),
     // ALL settled inbound transfers, our own canary/volume/test wallets
     // included — the /revenue throughput band's number. Never presented as
     // revenue: throughput proves the rails, external proves the demand.

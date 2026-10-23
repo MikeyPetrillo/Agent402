@@ -40,7 +40,7 @@
 // file written after that build ran alone is rolled forward into the tables
 // at the next boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
-import { isGatewayWire, settlementKindOf } from "./gateway-wire.js";
+import { GATEWAY_WIRE, isGatewayWire, settlementKindOf } from "./gateway-wire.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -1451,6 +1451,32 @@ export function externalTempoPayments() {
   try {
     return qTempoExternalPayments.all().map((r) => ({ ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 }));
   } catch { return []; }
+}
+
+// Circle Gateway batched sales (wire gateway-batched): settled off chain at
+// Gateway and credited to our Gateway balance, so no on-chain transfer to the
+// treasury carries them and the revenue ledger's chain scan never sees them.
+// Their tx is Gateway's transfer id. Aggregates only (no payer, no tx): the
+// revenue figures need a count and a sum, ours and external apart.
+const qGatewayBatched = db.prepare(`
+  SELECT internal, COUNT(*) AS n, SUM(price_usd) AS usd FROM sales
+  WHERE rail IN ${PAYING_RAILS_SQL} AND wire = '${GATEWAY_WIRE}'
+  GROUP BY internal`);
+
+/** { count, usd, externalCount, externalUsd } over every Circle Gateway
+ *  batched sale (count and usd include our own; external* are others' only). */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function gatewayBatchedPayments() {
+  const out = { count: 0, usd: 0, externalCount: 0, externalUsd: 0 };
+  try {
+    for (const r of qGatewayBatched.all()) {
+      const n = Number(r.n) || 0, usd = Number(r.usd) || 0;
+      out.count += n; out.usd += usd;
+      if (!r.internal) { out.externalCount += n; out.externalUsd += usd; }
+    }
+  } catch { /* an unreadable ledger reads as no batched sales */ }
+  out.usd = +out.usd.toFixed(6); out.externalUsd = +out.externalUsd.toFixed(6);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

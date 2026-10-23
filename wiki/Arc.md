@@ -45,6 +45,13 @@ Sign with an ordinary EOA key.
   through Circle's facilitator only, and is offered only while that
   facilitator's `/supported` lists it. Without the key Arc is not configured
   and every other chain keeps serving. See [[Self-Hosting]].
+- **Batched option (optional)**: with `GATEWAY_NANOPAYMENTS=on`, the Arc and
+  Base 402s also carry a Circle Gateway batched accept (`extra.name`
+  `GatewayWalletBatched`) beside the plain one: buyers who deposited USDC into
+  Gateway sign per call with no gas, and Gateway settles off chain in batches
+  into the seller's Gateway balance, withdrawn on chain separately. Off by
+  default. Buyer side: [[Paying with x402|Paying-with-x402]]; operator side:
+  [[Self-Hosting]].
 
 ## Find other sellers on the chain
 
@@ -69,4 +76,6 @@ decoded transfer showing buyer to seller for the quoted price. The
   Arc drops out of the offer while the Circle key secret says it should be
   there; `/api/rails` reports the rail like every other.
 - The revenue ledger reads the service wallet's USDC on Arc into
-  [/revenue](https://agent402.tools/revenue).
+  [/revenue](https://agent402.tools/revenue). Circle Gateway batched sales
+  settle off chain, so /revenue counts them from the sales ledger under their
+  own label; a withdrawal's mint to the wallet is not counted again.

@@ -3151,6 +3151,9 @@ jobs:
           t node scripts/test-reveal-no-hero-flash.js
           # Revenue buyers series (distinct-count semantics; seeded ledger — offline)
           t node scripts/test-revenue-buyers.js
+          # Circle Gateway batched sales on /revenue (off-chain label, no figure
+          # with none, a withdrawal mint never counted again; seeded, offline)
+          t node scripts/test-revenue-gateway.js
           # Marketplace activity scan bounds (a paged walk must report the whole window,
           # not its own page ceiling; stubbed sources — offline, spends nothing)
           t node scripts/test-scan-cap.js

@@ -120,6 +120,14 @@ const baseKind = kinds.get("eip155:8453");
 const baseAccept = { scheme: "exact", network: "eip155:8453", amount: "5000", asset: BASE_USDC, payTo: TREASURY, ...gatewayAcceptFields(baseKind) };
 const plainAccept = { scheme: "exact", network: "eip155:8453", amount: "5000", asset: BASE_USDC, payTo: TREASURY, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
 
+// The hosted connector's payment.info, as a client reads it (JSON or SSE).
+async function mcpPaymentInfo(base) {
+  const res = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "payment.info", arguments: {} } }) });
+  const text = await res.text();
+  const body = (res.headers.get("content-type") || "").startsWith("text/event-stream") ? JSON.parse(text.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("")) : JSON.parse(text);
+  return JSON.parse(body.result.content[0].text);
+}
+
 await check("/supported: every listed chain parses to a kind with the Gateway domain, the USDC asset and a 7-day window", () => {
   assert.deepEqual([...kinds.keys()].sort(), ["eip155:5042", "eip155:8453"], "by default only the chains the option can settle");
   assert.deepEqual([...gatewayKindsFromSupported(SUPPORTED, ["eip155:1", "eip155:137", "eip155:5042", "eip155:8453"]).keys()].sort(), ["eip155:1", "eip155:137", "eip155:5042", "eip155:8453"], "every listed chain parses when asked for");
@@ -1105,6 +1113,14 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     const hashInfo = openapi.paths["/api/hash"].post["x-payment-info"];
     assert.deepEqual(hashInfo.nanopayments.networks.sort(), ["eip155:5042", "eip155:8453"]);
     assert.equal(openapi.paths["/api/memory"].post["x-payment-info"].nanopayments, undefined, "no batched option on an identity-bound route in openapi either");
+    // /api/rails and the connector's payment.info name the option while it is live.
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    assert.equal(rails.gatewayBatched?.kind, GATEWAY_KIND_NAME, "/api/rails: the batched kind");
+    assert.deepEqual([...rails.gatewayBatched.networks].sort(), ["arc", "base"], "/api/rails: the batched networks");
+    const pinfo = await mcpPaymentInfo(base);
+    assert.match(pinfo.pay.batched || "", /Circle Gateway batched accept \(extra\.name GatewayWalletBatched\)/, "payment.info: the batched line");
+    assert.match(pinfo.pay.batched, /agent402-mcp and agent402-client pay the plain accept/, "payment.info: which accept the packages pay");
+    assert.match(pinfo.pay.retries, /X-Replayed-Answer: 1/, "payment.info: the implicit replay");
     for (const [page, want] of [["/base", true], ["/arc", true], ["/polygon", false]]) {
       const html = await (await fetch(`${base}${page}`)).text();
       assert.equal(/batched option/.test(html), want, `${page} ${want ? "names" : "does not name"} the batched option`);
@@ -1436,6 +1452,10 @@ await check("switch off: no batched accept anywhere, no option on the surfaces, 
     assert.match(pages["/how-to-pay"], /replays the settled 200 \(answers up to 1 MB\)/, "/how-to-pay: the replay size bound");
     assert.match(pages["/llms.txt"], /inside the replay window \(answers up to 1 MB\)/, "llms.txt: the replay size bound");
     assert.ok(!/batched option/.test(await (await fetch(`${base}/base`)).text()));
+    assert.equal((await (await fetch(`${base}/api/rails`)).json()).gatewayBatched, undefined, "/api/rails: no batched block with the switch off");
+    const pinfoOff = await mcpPaymentInfo(base);
+    assert.equal(pinfoOff.pay.batched, undefined, "payment.info: no batched line with the switch off");
+    assert.doesNotMatch(JSON.stringify(pinfoOff), /Circle Gateway|GatewayWalletBatched/, "payment.info: no batched text with the switch off");
     assert.deepEqual((await (await fetch(`${base}/api/gateway-status`)).json()).gatewayBalance, { status: "off" });
     assert.deepEqual((await (await fetch(`${base}/api/gateway-status`)).json()).gatewayPending, { status: "off" });
     assert.equal(st.gwHits.length, 0, "Gateway was never called");

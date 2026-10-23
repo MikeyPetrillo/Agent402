@@ -108,6 +108,11 @@ export function payerFromMeta(meta, owner, mint = USDC_MINT) {
 export function isExternalPayment(row, { ourWallets, maxUsd }) {
   if (!row) return false;
   if (row.payer && ourWallets.has(row.payer)) return false;
+  // A mint (an EVM Transfer from the zero address; src/revenue-live.js runs
+  // every rail through this copy) is nobody's payment: a Circle Gateway
+  // withdrawal mints our own batched revenue, which the sales ledger already
+  // counts, and a bridge mint is a move of our own funds.
+  if (row.payer === "0x0000000000000000000000000000000000000000") return false;
   if (!(row.usd > 0) || row.usd > maxUsd) return false;
   return true;
 }

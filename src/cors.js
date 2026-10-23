@@ -63,6 +63,7 @@ export const CORS_EXPOSE_HEADERS = [
   "X-Credits-Balance",
   "X-Metered-Usd",
   "X-Idempotent-Replay",
+  "X-Replayed-Answer",
   "Retry-After",
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",
