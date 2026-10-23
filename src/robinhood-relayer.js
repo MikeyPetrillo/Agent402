@@ -29,7 +29,8 @@
 // Success is only a mined receipt with status 1 and the USDG Transfer the
 // authorization names (the package checks the event).
 
-import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, verifyTypedData as verifyTypedDataLocal } from "viem";
+import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, parseAbi, verifyTypedData as verifyTypedDataLocal } from "viem";
+const AUTH_STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
 import { privateKeyToAccount } from "viem/accounts";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 
@@ -140,6 +141,12 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       let data = encodeFunctionData({ abi, functionName, args });
       if (dataSuffix && /^0x[0-9a-fA-F]*$/.test(dataSuffix)) data = `${data}${dataSuffix.slice(2)}`;
       return withRelayerLock(account.address, { lockWaitMs: settings.lockWaitMs, leaseImpl }, async (ctx) => {
+        // A used authorization is refused here, not broadcast: the token may
+        // treat a replayed nonce as a successful no-op (no revert in the
+        // simulation), which would spend our gas for nothing. Read under the
+        // lock, so a submission this relayer just mined is seen.
+        const used = await pub.readContract({ address: token, abi: AUTH_STATE_ABI, functionName: "authorizationState", args: [args[0], args[5]] });
+        if (used === true) throw Object.assign(new Error("authorization already used on chain; nothing sent"), { relayerRefusal: true, authorizationUsed: true });
         const [nonce, gasPrice, balance, estimate] = await Promise.all([
           pub.getTransactionCount({ address: account.address, blockTag: "pending" }),
           pub.getGasPrice(),

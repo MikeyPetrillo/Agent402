@@ -72,7 +72,9 @@ function stubChain() {
   async function transferCheck(args, at) {
     const [from, to, value, validAfter, validBefore, nonce, ...sig] = args;
     const now = BigInt(Math.floor(Date.now() / 1000));
-    if (st.used.has(`${lc(from)}|${nonce}`)) return "FiatTokenV2: authorization is used or canceled";
+    // usedNoop models a token that answers a replayed nonce as a successful
+    // no-op (no revert, no Transfer), as USDG did in a live replay.
+    if (st.used.has(`${lc(from)}|${nonce}`)) return st.usedNoop ? null : "FiatTokenV2: authorization is used or canceled";
     if (now <= validAfter) return "FiatTokenV2: authorization is not yet valid";
     if (now >= validBefore) return "FiatTokenV2: authorization is expired";
     const signature = sig.length === 3 ? serializeSignature({ v: BigInt(sig[0]), r: sig[1], s: sig[2] }) : sig[0];
@@ -144,6 +146,7 @@ function stubChain() {
         st.ethBalance.set(lc(from), (st.ethBalance.get(lc(from)) || 0n) - 90_000n * st.gasPrice);
         if (why) { st.receipts.set(hash, receiptOf(hash, from, false, [])); return hash; }
         const [aFrom, aTo, value, , , nonce] = args;
+        if (st.used.has(`${lc(aFrom)}|${nonce}`)) { st.receipts.set(hash, receiptOf(hash, from, true, [])); return hash; }
         st.used.add(`${lc(aFrom)}|${nonce}`);
         st.balances.set(lc(aFrom), bal(aFrom) - value);
         st.balances.set(lc(aTo), bal(aTo) + value);
@@ -265,6 +268,19 @@ await check("settle submits once and answers the mined transaction; the buyer pa
   const again = await A.settle(p.payload, p.requirements);
   assert.equal(again.success, false, "the same authorization never settles twice");
   assert.equal(st.sends.length, 1, "a replay is refused before sending");
+});
+
+await check("a replayed authorization is refused before sending even when the token treats it as a no-op", async () => {
+  st.usedNoop = true;
+  try {
+    const p = await signedPayment(buyer);
+    const first = await A.settle(p.payload, p.requirements);
+    assert.equal(first.success, true, JSON.stringify(first));
+    const sent = st.sends.length;
+    const again = await A.settle(p.payload, p.requirements);
+    assert.equal(again.success, false, "a replay never settles");
+    assert.equal(st.sends.length, sent, "and spends no gas: nothing is sent");
+  } finally { st.usedNoop = false; }
 });
 
 await check("two replicas settling at once never sign the same nonce (one lease per relayer key)", async () => {
