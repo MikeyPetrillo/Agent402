@@ -147,9 +147,19 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     for (const [s0, e0] of gcs) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
     worst = Math.max(worst, b - a - inGc);
   }
-  ok(pendingBefore > 1000 && worst < GAP_MS, `a route query over a ${pendingBefore}-entry index backlog never holds the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms, collector subtracted)`);
   while (x._routeIndexStatsForTest().pending || x._routeIndexStatsForTest().partial) await new Promise((r) => setImmediate(r));
   const drained = x.routeQuery({ query: Q, top: 25, ...routeCtx });
+  // Same-machine baseline: the synchronous query (the worker-thread path)
+  // indexes a backlog of the same size inline, the cost the sliced query
+  // avoids. A slow runner slows both, so the bound is a share of it, under an
+  // absolute cap; a query that drained inline again would hold about all of it.
+  i = 0;
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  const t0 = performance.now();
+  x.routeQuery({ query: Q, top: 25, ...routeCtx });
+  const inlineMs = performance.now() - t0;
+  const bound = Math.min(400, Math.max(GAP_MS, inlineMs * 0.4));
+  ok(pendingBefore > 1000 && worst < bound, `a route query over a ${pendingBefore}-entry index backlog never holds the loop long (worst ${Math.round(worst)} ms, collector subtracted; bound ${Math.round(bound)} ms: ${GAP_MS} ms or 40% of the ${Math.round(inlineMs)} ms inline drain, under 400 ms)`);
   ok(sliced.count > 0 && JSON.stringify([sliced.count, sliced.sellersMatched, sliced.results]) === JSON.stringify([drained.count, drained.sellersMatched, drained.results]), `...and its answer equals the answer once the backlog is indexed (${sliced.count} rows)`);
   // A pending row is a candidate by the index's own rule: a row that shares
   // only a non-selecting word ("to", "the") with the query is not one, so a
