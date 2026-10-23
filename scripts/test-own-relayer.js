@@ -682,6 +682,87 @@ await check("paid server WITH the key behind the CDN: a 20 s answer window is sh
   assert.ok(/authorization .* nonce .*: outcome unknown; booked until it is read on chain/.test(r.log), "the late book holds the authorization");
 });
 
+// Our relayer settles first because the listed facilitator reads dry, and
+// refuses before sending anything: the payment goes on to the listed
+// fallbacks and then the facilitator it skipped, never back to our relayer.
+await check("own-first: a nothing-sent refusal (balance, lock, gas cap, node refusal) goes on to the listed fallback, then the facilitator", async () => {
+  const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const { createRobinhoodOrder, withRobinhoodGasOrder, withOwnRefusalMemo } = await import("../src/robinhood-order.js");
+  const prev = process.env.PAYMENT_SETTLE_FALLBACK;
+  process.env.PAYMENT_SETTLE_FALLBACK = "true";
+  const HOST = "listed-primary.example";
+  const order = createRobinhoodOrder({ host: HOST, log: () => {} });
+  order.update([{ network: RH, facilitator: HOST, runway: 3, status: "low", at: Date.now() }]);
+  assert.equal(order.ownFirst(), true);
+  const savedBal = st.ethBalance.get(relayer.address.toLowerCase());
+  const savedGas = st.gasPrice;
+  const dbDown = async (_name, opts, fn) => (opts?.failOpen ? { ran: true, reason: "db-failopen", result: await fn({ stillHeld: () => true, signal: new AbortController().signal }) } : { ran: false, reason: "db" });
+  const cases = [
+    { label: "own balance", msg: /balance/i, set: () => st.ethBalance.set(relayer.address.toLowerCase(), 1n), reset: () => st.ethBalance.set(relayer.address.toLowerCase(), savedBal) },
+    { label: "lock (db)", msg: /relayer lock not available \(db\)/, extra: { leaseImpl: dbDown } },
+    { label: "gas cap", msg: /over the relayer cap/, set: () => { st.gasPrice = BigInt(settings.maxFeeGwei + 1) * 1_000_000_000n; }, reset: () => { st.gasPrice = savedGas; } },
+    { label: "node refusal", msg: /insufficient funds/, set: () => { st.refuseSendWith = "insufficient funds for gas * price + value"; }, reset: () => { st.refuseSendWith = null; } },
+  ];
+  let seq = 1;
+  try {
+    for (const withListed of [true, false]) {
+      for (const c of cases) {
+        const asked = [];
+        const tx = (b) => "0x" + (b + (seq++).toString(16).padStart(4, "0")).padEnd(64, "0");
+        const own = withOwnRefusalMemo(mk(relayerA, c.extra || {}));
+        const ownSpy = { settle: async (pp, rq) => { asked.push("own"); return own.settle(pp, rq); } };
+        const primary = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: tx("44"), network: RH }; } };
+        withRobinhoodGasOrder(primary, { order, relayer: ownSpy });
+        const hooks = {};
+        const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+        const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: tx("55"), network: RH }; } } };
+        const ownEntry = { name: "own relayer", revertRetry: true, own: true, client: ownSpy };
+        registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [...(withListed ? [listed] : []), ownEntry] });
+        const p = await signedPayment(buyer);
+        const attempts = st.sendAttempts, sends = st.sends.length;
+        c.set?.();
+        let first;
+        try { first = await primary.settle(p.payload, p.requirements); } finally { c.reset?.(); }
+        assert.equal(first.success, false, c.label);
+        assert.equal(first.transaction, "", `${c.label}: no hash`);
+        assert.equal(first.nothingSent, true, `${c.label}: marked nothing sent`);
+        assert.match(String(first.errorMessage), c.msg, c.label);
+        assert.equal(st.sends.length, sends, `${c.label}: the node took nothing`);
+        if (c.label !== "node refusal") assert.equal(st.sendAttempts, attempts, `${c.label}: nothing was sent`);
+        const r = await hooks.sf({ requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { ...first }) });
+        assert.equal(r?.recovered, true, `${c.label} (listed ${withListed}): recovered`);
+        assert.deepEqual(asked, withListed ? ["own", "listed"] : ["own", "facilitator"], `${c.label} (listed ${withListed}): order`);
+      }
+    }
+    // Control: an ambiguous answer from our relayer (a hash, pending) still
+    // stops; neither the listed fallback nor the facilitator is asked.
+    st.neverMine = true;
+    try {
+      const asked = [];
+      const own = withOwnRefusalMemo(mk(relayerA));
+      const ownSpy = { settle: async (pp, rq) => { asked.push("own"); return own.settle(pp, rq); } };
+      const primary = { settle: async () => { asked.push("facilitator"); return { success: true, transaction: "0x" + "44".repeat(32), network: RH }; } };
+      withRobinhoodGasOrder(primary, { order, relayer: ownSpy });
+      const hooks = {};
+      const s = { onVerifyFailure(fn) { hooks.vf = fn; return this; }, onAfterSettle(fn) { hooks.as = fn; return this; }, onSettleFailure(fn) { hooks.sf = fn; return this; } };
+      const listed = { name: "listed", revertRetry: true, client: { settle: async () => { asked.push("listed"); return { success: true, transaction: "0x" + "55".repeat(32), network: RH }; } } };
+      registerFacilitatorFailureHooks(s, null, null, { [RH]: () => [listed, { name: "own relayer", revertRetry: true, own: true, client: ownSpy }] });
+      const p = await signedPayment(buyer);
+      const first = await primary.settle(p.payload, p.requirements);
+      assert.match(String(first.transaction), /^0x[0-9a-f]{64}$/, "pending with its hash");
+      assert.notEqual(first.nothingSent, true);
+      const r = await hooks.sf({ requirements: p.requirements, paymentPayload: p.payload, error: new SettleError(500, { ...first }) });
+      assert.equal(r, undefined, "an ambiguous answer is not recovered elsewhere");
+      assert.deepEqual(asked, ["own"], "nobody after a send that may land");
+    } finally { st.neverMine = false; }
+  } finally {
+    st.ethBalance.set(relayer.address.toLowerCase(), savedBal);
+    st.gasPrice = savedGas;
+    st.refuseSendWith = null;
+    if (prev === undefined) delete process.env.PAYMENT_SETTLE_FALLBACK; else process.env.PAYMENT_SETTLE_FALLBACK = prev;
+  }
+});
+
 // The refund ledger books a debt at what the buyer signed on the floored
 // chain, not the route's list price: once for a hang-up during the settle,
 // once for a settled call that then failed.

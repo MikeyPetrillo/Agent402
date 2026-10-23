@@ -10067,15 +10067,23 @@ export function configureListingsStore({ excludeOrigin = "", ourTools = null } =
   }
   return true;
 }
-// Only against a loaded index: during a warm start, or with nothing loaded
-// yet, "the cache does not hold this origin" says nothing about the origin.
+// Only against a loaded index: during a warm start, before the warm load from
+// the state database has landed (pending, or failed partway and retrying), or
+// with nothing loaded yet, "the cache does not hold this origin" says nothing
+// about the origin. Another container's cache can be ahead of this one, so an
+// origin the persisted index still holds, or whose rows were written within
+// INDEX_LISTINGS_RECONCILE_GRACE_MS (default 15 min), is kept too.
 let listingsReconcileTimer = null;
 const LISTINGS_RECONCILE_FIRST_MS = 5 * 60_000;
 const LISTINGS_RECONCILE_MS = 60 * 60_000;
-const reconcileListingsLeased = leased("index-listings-reconcile", { ttlMs: 30 * 60_000, failOpen: false }, () => listings.reconcile((origin) => cache.has(origin)));
+const listingsReconcileGraceMs = () => { const n = Number(process.env.INDEX_LISTINGS_RECONCILE_GRACE_MS); return Number.isFinite(n) && n >= 0 && String(process.env.INDEX_LISTINGS_RECONCILE_GRACE_MS).trim() !== "" ? n : 15 * 60_000; };
+const reconcileListingsLeased = leased("index-listings-reconcile", { ttlMs: 30 * 60_000, failOpen: false }, () => listings.reconcile((origin) => cache.has(origin), {
+  persisted: (origins) => records.existing(INDEX_RECORDS, origins),
+  graceMs: listingsReconcileGraceMs(),
+}));
 /** Remove stored directory rows for origins the cache no longer holds (null when skipped). */
 export async function reconcileListings() {
-  if (!listingsOn() || warmStartInProgress || cache.size === 0) return null;
+  if (!listingsOn() || warmStartInProgress || cache.size === 0 || !warmLoader?.isLoaded()) return null;
   const r = await reconcileListingsLeased();
   return typeof r === "number" ? r : null;
 }
@@ -10083,6 +10091,7 @@ export async function reconcileListings() {
 export function listingsStoreStatus() { return listingsOn() ? listings.status() : null; }
 /** Test hooks. */
 export function _listingsStoreForTest() { return listings; }
+export function _setWarmLoaderForTest(loader) { warmLoader = loader; }
 export function _listingRowsForOriginForTest(origin) { return listingRowsForOrigin(origin); }
 export function _resetListingsStoreForTest() { listings = null; listingsSelf = ""; if (listingsFlushTimer) clearTimeout(listingsFlushTimer); listingsFlushTimer = null; if (listingsReconcileTimer) clearTimeout(listingsReconcileTimer); listingsReconcileTimer = null; }
 /** How many times the in-memory flattened directory was built (the store keeps it at zero). */

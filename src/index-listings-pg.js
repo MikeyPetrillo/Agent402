@@ -89,6 +89,7 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
         await c.query(`
           CREATE TABLE IF NOT EXISTS ${s}.index_listing_origins (origin TEXT PRIMARY KEY, seq BIGSERIAL, hash TEXT NOT NULL, seller_key TEXT,
             n_rows INTEGER NOT NULL DEFAULT 0, n_described INTEGER NOT NULL DEFAULT 0, n_ours INTEGER NOT NULL DEFAULT 0);
+          ALTER TABLE ${s}.index_listing_origins ADD COLUMN IF NOT EXISTS written_at TIMESTAMPTZ NOT NULL DEFAULT now();
           CREATE TABLE IF NOT EXISTS ${s}.index_listing_bodies (origin TEXT NOT NULL, pos INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (origin, pos));
           CREATE TABLE IF NOT EXISTS ${s}.index_listing_sellers (seller_key TEXT PRIMARY KEY, ord DOUBLE PRECISION NOT NULL);
           CREATE TABLE IF NOT EXISTS ${s}.index_listings (
@@ -241,7 +242,7 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
       const ord = rows.length ? await ordFor(listed.sellerKey, c) : 0;
       const nDescribed = rows.filter((x) => x.flat.described).length, nOurs = rows.filter((x) => x.ours).length;
       await c.query(`INSERT INTO ${s}.index_listing_origins (origin, hash, seller_key, n_rows, n_described, n_ours) VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (origin) DO UPDATE SET hash = EXCLUDED.hash, seller_key = EXCLUDED.seller_key, n_rows = EXCLUDED.n_rows, n_described = EXCLUDED.n_described, n_ours = EXCLUDED.n_ours`,
+        ON CONFLICT (origin) DO UPDATE SET hash = EXCLUDED.hash, seller_key = EXCLUDED.seller_key, n_rows = EXCLUDED.n_rows, n_described = EXCLUDED.n_described, n_ours = EXCLUDED.n_ours, written_at = now()`,
         [origin, hash, rows.length ? listed.sellerKey : null, rows.length, nDescribed, nOurs]);
       await c.query(`DELETE FROM ${s}.index_listings WHERE origin = $1`, [origin]);
       await c.query(`DELETE FROM ${s}.index_listing_bodies WHERE origin = $1`, [origin]);
@@ -273,14 +274,20 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
   /** Delete the stored rows of every origin the cache no longer holds (an
    *  origin removed while the store was off, or dropped by a path that never
    *  marked it). `present(origin)` answers whether the cache holds it now; our
-   *  own rows are never removed here. Sliced: one origin per write. */
-  async function reconcile(present) {
+   *  own rows are never removed here. Another container may hold an origin
+   *  this one has not loaded yet, so an origin is removed only when its rows
+   *  were written more than `graceMs` ago and `persisted(origins)` (the
+   *  persisted index's ids among them, a Set) does not name it. Sliced: one
+   *  origin per write. */
+  async function reconcile(present, { persisted = null, graceMs = 0 } = {}) {
     await ensure();
-    const r = await stateQuery(`SELECT origin FROM ${S()}.index_listing_origins`);
+    const r = await stateQuery(`SELECT origin, written_at < now() - make_interval(secs => $1) AS old FROM ${S()}.index_listing_origins`, [Math.max(0, Number(graceMs) || 0) / 1000]);
+    const absent = r.rows.filter(({ origin, old }) => old && origin !== OURS_ORIGIN && !present(origin)).map(({ origin }) => origin);
+    const held = absent.length && persisted ? await persisted(absent) : new Set();
     let removed = 0;
     let until = performance.now() + sliceMs;
-    for (const { origin } of r.rows) {
-      if (origin === OURS_ORIGIN || present(origin)) continue;
+    for (const origin of absent) {
+      if (held.has(origin) || present(origin)) continue;
       await writeOrigin(origin, null);
       removed++;
       if (performance.now() >= until) { await new Promise((res) => setImmediate(res)); until = performance.now() + sliceMs; }

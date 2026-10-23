@@ -161,8 +161,64 @@ try {
     const strayOrigin = "https://stray-not-cached.example";
     await store.writeOrigin(strayOrigin, { sellerKey: "Stray Co", sellerName: "Stray Co", rows: [{ method: "POST", route: "/api/stray", t: { route: "/api/stray", name: "stray" }, flat: { described: true, category: "web", networks: [] } }] });
     const kept = origins[20];
-    const before = await sdb.stateQuery(`SELECT origin FROM ${sdb.stateDbSchema()}.index_listing_origins WHERE origin = ANY($1)`, [[strayOrigin, kept]]);
+    const s = sdb.stateDbSchema();
+    const before = await sdb.stateQuery(`SELECT origin FROM ${s}.index_listing_origins WHERE origin = ANY($1)`, [[strayOrigin, kept]]);
     ok(before.rows.length === 2, "the stray origin is stored beside a cached one");
+    const strayStored = async () => (await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${s}.index_listing_origins WHERE origin = $1`, [strayOrigin])).rows[0].n === 1;
+    const backdate = (o) => sdb.stateQuery(`UPDATE ${s}.index_listing_origins SET written_at = now() - interval '1 hour' WHERE origin = $1`, [o]);
+    await backdate(strayOrigin);
+
+    // The warm load from the state database has not landed: never started,
+    // or failed partway (warmStartInProgress is already false again then).
+    x._setWarmLoaderForTest(null);
+    ok(await x.reconcileListings() === null && await strayStored(), "no warm load yet: reconcile is skipped and deletes nothing");
+    const { retryingLoad } = await import("../src/store-retry.js");
+    const failed = retryingLoad("test warm start", async () => { throw new Error("state database dropped the connection after page 1"); }, { log: () => {} });
+    await failed.ready().catch(() => {});
+    x._setWarmLoaderForTest(failed);
+    ok(!x.indexWarmStartInProgress() && !failed.isLoaded(), "the failed warm load has cleared the in-progress flag and is not loaded");
+    ok(await x.reconcileListings() === null && await strayStored(), "a warm load that failed partway does not let reconcile delete");
+    const loaded = retryingLoad("test warm start ok", async () => 0, { log: () => {} });
+    await loaded.ready();
+    x._setWarmLoaderForTest(loaded);
+
+    // Another container's cache can be ahead of this one: an origin the
+    // persisted index still holds is kept, and so is one written recently.
+    await sdb.records.put("x402-index", strayOrigin, { tools: [] });
+    ok(await x.reconcileListings() === 0 && await strayStored(), "an origin the persisted index holds is kept though this cache lacks it");
+    await sdb.records.del("x402-index", strayOrigin);
+    await sdb.stateQuery(`UPDATE ${s}.index_listing_origins SET written_at = now() WHERE origin = $1`, [strayOrigin]);
+    ok(await x.reconcileListings() === 0 && await strayStored(), "rows written within the grace period are kept");
+    process.env.INDEX_LISTINGS_RECONCILE_GRACE_MS = "0";
+    ok(await x.reconcileListings() >= 1 && !(await strayStored()), "the grace is env-tunable (0 removes it)");
+    delete process.env.INDEX_LISTINGS_RECONCILE_GRACE_MS;
+
+    // Two store instances (two containers): B writes an origin it just
+    // crawled; A's reconcile, whose cache has not seen it, keeps it.
+    {
+      const { createListingsStore } = await import("../src/index-listings-pg.js");
+      const peerOrigin = "https://peer-only.example";
+      const B = createListingsStore({
+        rowsForOrigin: (o) => (o === peerOrigin ? { sellerKey: "Peer Co", sellerName: "Peer Co", rows: [{ method: "POST", route: "/api/peer", t: { route: "/api/peer", name: "peer" }, flat: { described: true, category: "web", networks: [] } }] } : null),
+        keyForOrigin: (o) => (o === peerOrigin ? "Peer Co" : null),
+        projectRow: (o, t) => ({ o, t }), collate: (a, b) => (a < b ? -1 : a > b ? 1 : 0), terms: (q) => [q], hayOf: () => "h", log: () => {},
+      });
+      await B.ensure();
+      B.markDirty(peerOrigin);
+      await B.flush();
+      const peerStored = async () => (await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${s}.index_listing_origins WHERE origin = $1`, [peerOrigin])).rows[0].n === 1;
+      ok(!cache.has(peerOrigin) && await peerStored(), "container B stored an origin container A's cache does not hold");
+      await x.reconcileListings();
+      ok(await peerStored(), "A's reconcile keeps B's fresh origin (inside the grace)");
+      await backdate(peerOrigin);
+      await sdb.records.put("x402-index", peerOrigin, { tools: [] });
+      await x.reconcileListings();
+      ok(await peerStored(), "A's reconcile keeps B's origin while the persisted index holds it");
+      await sdb.records.del("x402-index", peerOrigin);
+      await B.writeOrigin(peerOrigin, null);
+    }
+    await store.writeOrigin(strayOrigin, { sellerKey: "Stray Co", sellerName: "Stray Co", rows: [{ method: "POST", route: "/api/stray", t: { route: "/api/stray", name: "stray" }, flat: { described: true, category: "web", networks: [] } }] });
+    await backdate(strayOrigin);
     const removedN = await x.reconcileListings();
     const after = await sdb.stateQuery(`SELECT origin FROM ${sdb.stateDbSchema()}.index_listing_origins WHERE origin = ANY($1)`, [[strayOrigin, kept]]);
     const strayRows = await sdb.stateQuery(`SELECT count(*)::int AS n FROM ${sdb.stateDbSchema()}.index_listings WHERE origin = $1`, [strayOrigin]);

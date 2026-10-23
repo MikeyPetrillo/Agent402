@@ -275,6 +275,26 @@ await check("a facilitator timeout or 5xx that names a transaction is booked; on
   assert.equal(lateSettleCandidate(ctxFor(17, pendingErr("0x1234"))), null, "a malformed hash is not a candidate");
 });
 
+await check("our relayer settled first (the facilitator read dry) and answered pending: the entry says own relayer, not primary", async () => {
+  const { createRobinhoodOrder, withRobinhoodGasOrder } = await import("../src/robinhood-order.js");
+  const book = makeBook();
+  const { server, fail } = hookHost();
+  registerFacilitatorFailureHooks(server, null, null, {});
+  registerLateSettleHook(server, async () => book);
+  const order = createRobinhoodOrder({ host: "facilitator.example", log: () => {} });
+  order.update([{ network: RH, facilitator: "facilitator.example", runway: 2, status: "low", at: Date.now() }]);
+  const primary = { settle: async () => ({ success: true, transaction: txh(99), network: RH }) };
+  withRobinhoodGasOrder(primary, { order, relayer: { settle: async () => ({ success: false, errorReason: "settlement_pending", errorMessage: "no receipt within 30 s", transaction: txh(19), network: RH }) } });
+  const ctx = ctxFor(19, null);
+  const res = await primary.settle(ctx.paymentPayload, ctx.requirements);
+  ctx.error = pendingErr(res.transaction);
+  assert.equal(await fail(ctx), null, "nothing recovered");
+  assert.deepEqual(book.list().map((e) => [e.tx, e.via]), [[txh(19), "own relayer"]]);
+  // Control: the facilitator's own pending answer still reads primary.
+  await fail(ctxFor(20, pendingErr(txh(20))));
+  assert.deepEqual(book.list().filter((e) => e.tx === txh(20)).map((e) => e.via), ["primary"]);
+});
+
 await check("a recovered settlement (a fallback settled it) books nothing", async () => {
   const book = makeBook();
   const { server, fail } = hookHost();
