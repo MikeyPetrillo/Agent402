@@ -606,6 +606,22 @@ await check("the pending resolver: confirmed and unserved -> exactly one owed ro
     const stubborn = createGatewayPendingResolver({ book, client: rc, recordOwed: async () => false, owedExists: async () => false, log: () => {} });
     await stubborn.tick(); await stubborn.tick();
     assert.ok(await book.get(refused.key), "kept while the debt is not in the ledger");
+    // The caller path: the refund ledger itself (file mode, a scratch dir),
+    // wired as src/payments.js wires it. One row, keyed on the transfer id,
+    // that refund-run proves at Gateway.
+    process.env.REFUND_DB_DIR = mkdtempSync(join(tmpdir(), "a402-gw-refunds-"));
+    const ledger = await import("../src/refund-ledger.js");
+    const real = createGatewayPendingResolver({ book, client: rc, log: () => {},
+      recordOwed: async (row) => ledger.recordRefundOwed(row),
+      owedExists: async (tx) => !!(await ledger.refundByEvidenceFresh(tx)) });
+    await real.tick(); await real.tick();
+    const rows = ledger.listRefunds({ status: "all" }).filter((r) => r.evidence === refused.rec.id);
+    assert.equal(rows.length, 1, "one ledger row for the transfer");
+    assert.equal(rows[0].wire, GATEWAY_WIRE); assert.equal(rows[0].status, "owed"); assert.equal(rows[0].price_usd ?? rows[0].priceUsd, 0.005);
+    assert.equal(await book.get(refused.key), null, "dropped once the row is in the ledger");
+    const proof = await verifyInboundPayment({ network: "eip155:8453", payer: acct.address, amountUsd: 0.005, tx: rows[0].evidence, createdAt: Date.now(), wire: GATEWAY_WIRE,
+      acceptsFor: () => ({ payTo: TREASURY.toLowerCase(), asset: BASE_USDC }), payToSetFor: () => [TREASURY.toLowerCase()], rpcFor: () => null, fetchImpl: fetchStub });
+    assert.equal(proof.verified, true, `refund-run's proof accepts the row: ${proof.reason || ""}`);
   } finally { gw.mode = "ok"; rmSync(dir, { recursive: true, force: true }); }
 });
 
