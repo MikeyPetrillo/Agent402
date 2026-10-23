@@ -314,6 +314,17 @@ try {
   ok(row && row.hour.implicit === 1 && row.hour.keyed === 1 && tf.replayTotals?.hour?.implicit === 1,
     `the operator detail counts the replays by slug (${JSON.stringify(row)})`);
   ok(!JSON.stringify(tf.replays).toLowerCase().includes(PAYER.slice(2, 12)), "and names no payer");
+  // i. An identity-bound route (one payer's own data) never replays implicitly:
+  // a settled payment header can be rebuilt from public chain data, so the
+  // copy must take the normal path, where its used nonce is refused.
+  const usageBody = JSON.stringify({ days: 30 });
+  const usageAccept = await acceptFor("/api/my-usage", "POST", usageBody);
+  const cred4 = credential(usageAccept, freshNonce());
+  const s0 = settles;
+  const usage = await pay("/api/my-usage", cred4, { method: "POST", body: usageBody });
+  ok(usage.status === 200 && settles === s0 + 1, `my-usage (identity-bound) settles (status ${usage.status})`);
+  const usageCopy = await pay("/api/my-usage", cred4, { method: "POST", body: usageBody });
+  ok(usageCopy.status !== 200 && !replayed(usageCopy), `its re-sent copy is never served from the store (got ${usageCopy.status}, replay ${usageCopy.headers.get("x-replayed-answer")})`);
 
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");

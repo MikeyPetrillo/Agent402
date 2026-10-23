@@ -750,14 +750,15 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
       if (!ADDR.test(String(payer || "")) || !B32.test(String(nonce || "")) || !/^eip155:[0-9]{1,12}$/.test(String(network || ""))) return false;
       const key = pendingKey(network, payer, nonce);
       let made = false;
-      await change((pending) => {
+      const wrote = await change((pending) => {
         made = false;
         if (pending[key]) return;
         if (Object.keys(pending).length >= maxEntries) { log(`[gateway] pending book full (${maxEntries}); a pending settlement on ${network} was not booked`); return; }
         pending[key] = { key, network, payer: lc(payer), nonce: lc(nonce), amount: UINT.test(String(amount ?? "")) ? String(amount) : null, resource: typeof resource === "string" ? resource.slice(0, 300) : null, at: now(), state: "pending" };
         made = true;
       });
-      return made;
+      // A database update that did not land made nothing, whatever the mutator saw.
+      return made && wrote === true;
     },
     /** Drop an entry an operator reconciled (repaid, failed at Gateway, or served). */
     async resolve(key, { outcome, note } = {}) {
@@ -777,7 +778,7 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
      *  replica that died mid-request cannot strand the entry. */
     async claimResume(key, owner, { leaseMs = RESUME_LEASE_MS } = {}) {
       let took = false;
-      await change((pending) => {
+      const wrote = await change((pending) => {
         took = false;
         const e = pending[key];
         if (!e) return;
@@ -785,7 +786,7 @@ export function createGatewayPendingBook({ file = process.env.GATEWAY_PENDING_FI
         pending[key] = { ...e, state: "resuming", owner, resumeAt: now() };
         took = true;
       });
-      return took;
+      return took && wrote === true;
     },
     /** Hand an entry back after a resend that was not served. */
     async releaseResume(key, owner) {

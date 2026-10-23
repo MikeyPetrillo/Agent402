@@ -9567,15 +9567,17 @@ if (!FREE_MODE) {
 // credits gate and before the paywall, so a replay hit skips settlement.
 // A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
 // replays its first answer the same way, except on a route whose effect
-// outlives the answer (hasLastingEffect) and on a streamed call, which the
-// store never holds. Replays are counted per slug on the operator detail
+// outlives the answer (hasLastingEffect), on an identity-bound route (its
+// answer is one payer's own data, and a settled payment header can be rebuilt
+// from public chain data, so only a key the buyer chose may replay it), and on
+// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
 // (/__operator/tool-failures.json), never per payer.
 app.use(createIdempotency({
   isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
   freeMode: FREE_MODE,
   implicitReplay: (req) => {
     const def = CATALOG[`${req.method} ${req.path}`];
-    return Boolean(def) && !hasLastingEffect(def.slug) && req.body?.stream !== true;
+    return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBoundRoute(def) && req.body?.stream !== true;
   },
   onReplay: (req, { implicit }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
