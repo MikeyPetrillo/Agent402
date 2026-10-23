@@ -243,7 +243,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
   `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
-  `scripts/test-tool-failure-monitor.js`).
+  `scripts/test-tool-failure-monitor.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
+  settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
+  treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
+  relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
+  balance check before signing, and a hash for any send that may have reached the node so a
+  missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
