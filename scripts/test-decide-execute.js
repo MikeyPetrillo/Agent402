@@ -796,6 +796,51 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const plain = await exr({ decisionId: "rp1" }, mkReq("0xr8"));
   ok(!("replanned" in plain) && replanCalls.length === 0 && plain.paidUsd === 0.02 && calls.some((c) => c[0] === "a"), "without replan nothing is re-planned and the answer has no replanned field");
   ok(planChanges([], newPlan)[0]?.before === null && planChanges(savedPlan, [])[0]?.after === null, "a step the new plan adds or drops shows null on the missing side");
+
+  // The quote never passes the published per-call maximum (quoteRange.maxUsd),
+  // even for a full-depth plan whose steps would use all of it.
+  const { decideConfig } = await import("../src/decide/config.js");
+  const { buildDecideTools } = await import("../src/tools/decide-kit.js");
+  const maxUsd = decideConfig().execute.perCallMaxUsd;
+  const execDef = buildDecideTools({ getCatalog: () => catalog, ledger, now }).find((x) => x.slug === "decide-execute");
+  const publishedMax = execDef.quoteMaxUsd;
+  ledger.saveDecision({ decisionId: "rp_big", depth: "full", priceUsd: priceForDepth("full"), payer: "0xr", plan: savedPlan, costViaUsd: 5, now: clock });
+  ledger.markDecisionSettled("rp_big");
+  const bigQuote = executeQuoteUsd({ decisionId: "rp_big", replan: true }, { ledger, now: clock });
+  const bigPlain = executeQuoteUsd({ decisionId: "rp_big" }, { ledger, now: clock });
+  ok(bigQuote <= publishedMax + 1e-9 && bigPlain === maxUsd && publishedMax === maxUsd, `a full-depth re-plan quote stays at the published maximum (${bigQuote} <= ${publishedMax}; without replan ${bigPlain})`);
+  ok(Math.abs(executeBudgetUsd({ decisionId: "rp_big", replan: true }, ledger.getDecision("rp_big")) - (maxUsd - priceForDepth("full"))) < 1e-9, "...its steps get the maximum less the plan price, so the plan price never funds a step");
+
+  // Refusals that do not depend on the new plan come before the planner: a
+  // wallet at its hourly ceiling is refused with no planner call and no decision saved.
+  let savedDecisions = 0;
+  const capped = new Proxy(ledger, { get: (tg, k) => (k === "payerExposureUsd" ? async () => 1e6 : k === "saveDecision" ? (...a) => { savedDecisions++; return tg.saveDecision(...a); } : typeof tg[k] === "function" ? tg[k].bind(tg) : tg[k]) });
+  const exCapped = makeExecuteHandler({ ledger: capped, getCatalog: () => catalog, now, replan });
+  calls.length = 0; replanCalls.length = 0; replanMode = "new";
+  await throwsWith(() => exCapped({ decisionId: "rp1", replan: true, runKey: "k-capped" }, mkReq("0xr9")), 429, "hourly execution ceiling", "a capped wallet's re-plan is refused before the planner runs");
+  ok(replanCalls.length === 0 && calls.length === 0 && savedDecisions === 0, `...with zero planner calls and no saved decision (${replanCalls.length} calls, ${savedDecisions} saved)`);
+  // A credit the price assumed that is gone is refused before the planner too.
+  const noCredit = new Proxy(ledger, { get: (tg, k) => (k === "creditAvailableUsd" ? async () => 0 : typeof tg[k] === "function" ? tg[k].bind(tg) : tg[k]) });
+  const exNoCredit = makeExecuteHandler({ ledger: noCredit, getCatalog: () => catalog, now, replan });
+  replanCalls.length = 0;
+  const lateReq = Object.assign(mkReq("0xr10"), { __meteredQuoteUsd: planFee + 0.001 });
+  await throwsWith(() => exNoCredit({ decisionId: "rp1", replan: true, creditToken: "dc_gone", maxBudgetUsd: 0.02, runKey: "k-credit" }, lateReq), 409, "no longer available", "a vanished credit is refused before the planner runs");
+  ok(replanCalls.length === 0, "...with zero planner calls");
+
+  // The credit window must outlast the whole run: a failed re-plan whose
+  // decision window closes before the run's deadline is refused uncharged;
+  // one with room returns the plan price as credit.
+  replanMode = "down";
+  const ttlMs = decideConfig().credit.ttlHours * 3_600_000;
+  ledger.saveDecision({ decisionId: "rp_edge", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 5 * 60_000 });
+  ledger.markDecisionSettled("rp_edge");
+  calls.length = 0;
+  await throwsWith(() => exr({ decisionId: "rp_edge", replan: true }, mkReq("0xr11")), 503, "nothing was charged", "a failed re-plan whose credit window closes inside the run is refused (5 min left, run up to 4 min plus slack)");
+  ok(calls.length === 0, "...before any step runs");
+  ledger.saveDecision({ decisionId: "rp_room", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 10 * 60_000 });
+  ledger.markDecisionSettled("rp_room");
+  const room = await exr({ decisionId: "rp_room", replan: true }, mkReq("0xr12"));
+  ok(room.replanned?.returnedAsCredit === true && room.leftoverCredit?.amountUsd > planFee - 1e-9, `with 10 min left the saved plan runs and the plan price comes back (${room.leftoverCredit?.amountUsd})`);
 }
 
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);

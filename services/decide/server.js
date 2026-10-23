@@ -53,7 +53,9 @@ const newDecisionId = () => `dec_${randomUUID().replace(/-/g, "").slice(0, 24)}`
  *  decision would be an empty plan sold as an answer. */
 export const isReady = () => state.loadedRows > 0 || state.lastSync?.complete === true;
 
-export async function decide(body, { now = Date.now() } = {}) {
+/** `fresh` plans without reading the cache (a re-plan is bought to see current
+ *  prices and reliability); its result still refreshes the cache. */
+export async function decide(body, { now = Date.now(), fresh = false } = {}) {
   if (!isReady()) throw Object.assign(new Error("the decision index is still loading - retry shortly"), { statusCode: 503, retryAfter: 30 });
   const input = parseDecideInput(body);
   // The caller's own deadline: past it the main app has already answered (503,
@@ -63,7 +65,7 @@ export async function decide(body, { now = Date.now() } = {}) {
   if (Date.now() >= callerDeadline) throw late();
   const cfg = decideConfig();
   const key = cacheKeyFor(input.task, input.constraints, input.depth);
-  let result = state.cache.get(key, now);
+  let result = fresh ? null : state.cache.get(key, now);
   let cached = false;
   const meter = [];
   const t0 = Date.now();
@@ -223,7 +225,7 @@ export const routes = {
     const b = await readJson(req);
     const saved = await state.decisions.get(String(b.decisionId || ""));
     if (!saved?.result?.task) throw Object.assign(new Error("unknown decision"), { statusCode: 404 });
-    return decide({ task: saved.result.task, constraints: saved.constraints || {}, depth: saved.result.depth, payer: b.payer, rail: b.rail, priceUsd: b.priceUsd, synthetic: b.synthetic === true, deadlineAt: b.deadlineAt });
+    return decide({ task: saved.result.task, constraints: saved.constraints || {}, depth: saved.result.depth, payer: b.payer, rail: b.rail, priceUsd: b.priceUsd, synthetic: b.synthetic === true, deadlineAt: b.deadlineAt }, { fresh: true });
   },
   "POST /internal/decision": async (req) => {
     const b = await readJson(req);
