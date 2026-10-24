@@ -54,6 +54,20 @@ for (const f of runtimeFiles) {
   }
 }
 ok(needed.size > 0, "detector found no scripts/ references at all - it has gone blind");
+// A runtime script's own relative imports ship too (a copied file that imports
+// a sibling the image lacks crashes on boot). Followed transitively.
+const SIBLING = [
+  /from\s+["']\.\/([\w.-]+\.js)["']/g,
+  /import\s*\(\s*["']\.\/([\w.-]+\.js)["']\s*\)/g,
+];
+for (const queue = [...needed.keys()]; queue.length;) {
+  const file = queue.shift();
+  let src = "";
+  try { src = readFileSync(new URL(`scripts/${file}`, root), "utf8"); } catch { continue; }
+  for (const re of SIBLING) {
+    for (const m of src.matchAll(re)) if (!needed.has(m[1])) { needed.set(m[1], `scripts/${file}`); queue.push(m[1]); }
+  }
+}
 
 for (const [file, where] of needed) {
   // Escape EVERY regex metacharacter, not only '.'. The capture pattern admits
