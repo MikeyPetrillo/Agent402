@@ -80,5 +80,16 @@ ok(others.length >= 2, `the two fallback-less frankfurter calls are present (${o
 ok(others.every((a) => !/FX_PRIMARY/.test(a)),
   "fx-rate and fx-history do NOT get the short leash - with no fallback, a slow success beats a fast failure");
 
+// 6. A third keyless publisher sits behind open.er-api.com in both chains, and
+//    only behind it: it must never be tried before the second publisher.
+const dataSrc = readFileSync(new URL("../src/tools/data-kit.js", import.meta.url), "utf8");
+for (const [name, text] of [["fx-dashboard", src], ["fx-rate", dataSrc]]) {
+  const er = text.indexOf("https://open.er-api.com/v6/latest/");
+  const art = text.indexOf("https://allratestoday.com/api/open/latest/");
+  ok(er >= 0 && art > er, `${name}: allratestoday.com is the third publisher, after open.er-api.com`);
+}
+ok(/source = "ECB via AllRatesToday/.test(src),
+  "a response served by the third publisher names it");
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
