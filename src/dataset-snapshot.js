@@ -47,7 +47,7 @@
 import { gzipSync, gzip } from "node:zlib";
 import { promisify } from "node:util";
 const gzipAsync = promisify(gzip);
-import { putObject, objectExists, getObject, backupConfigured } from "./backup.js";
+import { putObject, objectExists, getObject, backupConfigured, credentialHint } from "./backup.js";
 import { priceToMicroUsd } from "./x402-index.js";
 
 export const DATASET_VERSION = "v1";
@@ -432,6 +432,7 @@ export async function runDatasetSnapshot({
       .filter(([, cols]) => cols.length));
     status.lastSuccess = new Date().toISOString();
     status.lastError = null;
+    recordedCache = { at: 0, value: null }; // the day just written must show at once, not after the 60 s read cache
     status.lastDay = day;
     status.lastRows = rows;
     status.lastEmptyColumns = emptyCols;
@@ -444,7 +445,7 @@ export async function runDatasetSnapshot({
     // that mattered.
     const cause = e?.cause?.code || e?.cause?.message || "";
     const detail = `${e.message}${cause ? ` (${String(cause).slice(0, 120)})` : ""}`;
-    status.lastError = `${new Date().toISOString()} ${detail.slice(0, 300)}`;
+    status.lastError = `${new Date().toISOString()} ${detail.slice(0, 260)}${credentialHint(detail)}`;
     log(`[dataset] FAILED dt=${day}: ${detail}`);
     return { ok: false, error: detail };
   } finally {

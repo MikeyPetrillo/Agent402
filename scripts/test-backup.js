@@ -89,7 +89,10 @@ process.env.BACKUP_DATA_DIR = dataDir;
 process.env.BACKUP_KEEP_DAYS = "14";
 
 process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(32); // 32-byte test key built at runtime (no key-shaped literal in the tree for the secret scanner)
-const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, adoptNewerStatus, decryptBackupBuffer, parseEncKey, retryDelayMs, isBucketPushback } = await import("../src/backup.js");
+const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus, adoptNewerStatus, decryptBackupBuffer, parseEncKey, retryDelayMs, isBucketPushback, credentialHint } = await import("../src/backup.js");
+// A rejected signature names the stored credentials as the usual cause; any other failure gets no hint.
+ok(/BACKUP_S3_SECRET/.test(credentialHint("list failed: HTTP 403 <Code>SignatureDoesNotMatch</Code>")), "a SignatureDoesNotMatch names the stored credentials");
+ok(credentialHint("PUT x: HTTP 500 internal") === "", "a non-credential failure gets no credential hint");
 ok(backupAlarmStatus() === "stale", `configured with no successful run yet: the alarm word is stale (${backupAlarmStatus()})`);
 
 // --- plan ------------------------------------------------------------------
