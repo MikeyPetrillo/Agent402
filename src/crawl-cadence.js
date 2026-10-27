@@ -29,3 +29,12 @@ function everyLabel(ms) {
 export const crawlIntervalLabel = () => everyLabel(CRAWL_INTERVAL_MS);
 /** "every hour": how often the discovery registries are re-read. */
 export const discoveryIntervalLabel = () => everyLabel(DISCOVERY_INTERVAL_MS);
+
+// Origins whose operator asked us to probe them less often. The request is
+// theirs, so the set is explicit and small, and the cadence is a multiple of the
+// normal cycle: a due check on the cycle number, never a second timer.
+export const SLOW_ORIGINS = Object.freeze(new Set(["https://api.agentpaywire.com"]));
+export const SLOW_ORIGIN_EVERY_CYCLES = 12; // 12 x 30 minutes = every 6 hours
+export function isSlowOrigin(origin) {
+  return SLOW_ORIGINS.has(String(origin || "").replace(/\/+$/, ""));
+}
