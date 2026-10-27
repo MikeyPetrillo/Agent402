@@ -516,9 +516,10 @@ export async function runCatalogBuy({
   async function buyOne(row, sale = null) {
     const t0 = Date.now();
     const timeout = tierOf(row) === "weekly" ? slowTimeoutMs : timeoutMs;
-    let r, attempts = 0;
+    let r, attempts = 0, sentBody = null;
     try {
       const { url, init } = await requestFor(row, sale ? withOwnSale(row.example, sale.tx) : row.example);
+      sentBody = String(init?.body ?? "").slice(0, 300); // what production received, for a failing run to show
       r = await attempt(row, url, init, timeout); attempts = 1;
       if (!r.grade && r.status >= 500 && r.status <= 599) {
         log.warn(`  retry ${row.slug} after HTTP ${r.status}`);
@@ -529,7 +530,8 @@ export async function runCatalogBuy({
       r = { threw: String(e?.name === "TimeoutError" ? "timeout" : e?.message || e) }; attempts = attempts || 1;
     }
     const { pass, grade } = gradeAnswer(row, r);
-    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, ...(sale ? { ownSaleOf: sale.slug } : {}) };
+    const errorBody = r.status >= 400 ? String(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
+    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, sentBody, errorBody, ...(sale ? { ownSaleOf: sale.slug } : {}) };
     noteSale(row, r, out);
     // The paid answer itself goes to the separate outputs file (redacted,
     // bounded, guarded: scripts/catalog-buy-capture.js), never into the
