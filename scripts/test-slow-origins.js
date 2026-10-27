@@ -2,20 +2,22 @@
 // SLOW_ORIGIN_EVERY_CYCLES cycles; every other origin keeps the normal cadence.
 //   node scripts/test-slow-origins.js
 import { readFileSync } from "node:fs";
-import { originsDueThisCycle } from "../src/x402-index.js";
-import { isSlowOrigin, SLOW_ORIGINS, SLOW_ORIGIN_EVERY_CYCLES } from "../src/crawl-cadence.js";
+process.env.CRAWL_SLOW_ORIGINS = "https://slow-seller.test/";
+const { originsDueThisCycle } = await import("../src/x402-index.js");
+const { isSlowOrigin, SLOW_ORIGINS, SLOW_ORIGIN_EVERY_CYCLES } = await import("../src/crawl-cadence.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error(`FAIL - ${m}`); } };
 
-const slow = [...SLOW_ORIGINS][0];
+const slow = "https://slow-seller.test";
 const normal = "https://example-normal-seller.test";
 const all = [slow, normal];
 
 ok(SLOW_ORIGIN_EVERY_CYCLES === 12, "the slow cadence is 12 cycles (6 hours at 30-minute cycles)");
 ok(isSlowOrigin(slow), "the configured slow origin matches itself");
+ok([...SLOW_ORIGINS].length === 1, "the slow list is read from the environment");
 ok(isSlowOrigin(slow + "/"), "a trailing slash still matches");
-ok(!isSlowOrigin("https://api.agentpaywire.com.evil.test"), "a look-alike host does not match");
+ok(!isSlowOrigin("https://slow-seller.test.evil.test"), "a look-alike host does not match");
 ok(!isSlowOrigin(normal), "an ordinary origin is not slow");
 
 let slowDue = 0, normalDue = 0;
