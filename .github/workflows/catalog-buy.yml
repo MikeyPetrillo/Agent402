@@ -55,6 +55,10 @@ on:
         description: "daily (cheap set + today's weekly slice), weekly (today's slice only), cheap, all"
         required: false
         default: "daily"
+      cap:
+        description: "Spend cap for this run in USD (blank: the script default)"
+        required: false
+        default: ""
       only:
         description: "Slug substring, or comma-separated exact slugs: buy only the matching tools (a narrowed run never closes the issue)"
         required: false
@@ -103,7 +107,7 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           # The weekly scheduled run buys every tool, so it carries a cap sized
           # to the whole catalog at list price; a dispatch keeps the script's.
-          CATALOG_BUY_MAX_USD: ${{ github.event_name == 'schedule' && '32' || '' }}
+          CATALOG_BUY_MAX_USD: ${{ github.event_name == 'schedule' && '32' || inputs.cap || '' }}
           TIER: ${{ inputs.tier || 'all' }}
           ONLY: ${{ inputs.only || '' }}
           # The route-execute products pay an outside seller from the spending
