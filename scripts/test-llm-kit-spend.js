@@ -81,7 +81,9 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   await assert.rejects(pro.handler({ model: "gpt-6.1-sol", messages: m, reasoning_effort: "ultra" }), /must be one of/);
   n += 2;
   const before = Date.parse("2027-01-13T23:59:59Z"), on = Date.parse("2027-01-14T00:00:00Z");
-  ok(Object.keys(RETIRING).every((k) => RETIRING[k].until === "2027-01-14" && retiredSuccessor(k, before) === null && retiredSuccessor(k, on) === RETIRING[k].use), "each retiring id is served as itself until 2027-01-14, then by its successor");
+  const sunset = Object.keys(RETIRING).filter((k) => RETIRING[k].until === "2027-01-14");
+  ok(sunset.length > 0 && sunset.every((k) => retiredSuccessor(k, before) === null && retiredSuccessor(k, on) === RETIRING[k].use), "each 2027 retiring id is served as itself until 2027-01-14, then by its successor");
+  ok(retiredSuccessor("o3-mini", Date.now()) === "o4-mini", "o3-mini, already retired, is served by o4-mini");
   ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("o3", on) === null, "dated snapshots follow their family; other ids are untouched");
 }
 
