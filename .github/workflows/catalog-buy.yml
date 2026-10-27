@@ -156,6 +156,7 @@ jobs:
           path: |
             catalog-buy-outputs.json
             catalog-buy-enhancements.md
+            captures/
           if-no-files-found: ignore
           # Long enough to apply a week's examples after review, short enough
           # that old answers do not linger.

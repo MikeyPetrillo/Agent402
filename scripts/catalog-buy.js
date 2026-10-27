@@ -82,7 +82,8 @@
 // exported and unit-tested offline by scripts/test-catalog-buy.js against a stub
 // server and a fake payer; importing this module never spends anything.
 import { createHmac } from "node:crypto";
-import { appendFileSync, writeFileSync, realpathSync } from "node:fs";
+import { appendFileSync, writeFileSync, realpathSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
@@ -627,6 +628,21 @@ async function main() {
     // receipts, no tx: each record is the grade, the latency, the documented
     // example's shape and the redacted, bounded body (or why it was dropped).
     const kept = summary.captures.filter((c) => c.captured).length;
+    // Whole answers that the docs preview cut: one JSON file each, plus the MP4 when the answer embeds one.
+    const capDir = join(dirname(outputsOut), "captures");
+    for (const cap of summary.captures) {
+      if (!cap.fullBody) continue;
+      mkdirSync(capDir, { recursive: true });
+      const full = cap.fullBody;
+      writeFileSync(join(capDir, `${cap.slug}.json`), JSON.stringify(full, null, 1));
+      const b64 = full?.data?.[0]?.b64_json;
+      if (typeof b64 === "string" && b64.length > 100) {
+        const bytes = Buffer.from(b64, "base64");
+        if (bytes.subarray(4, 8).toString("latin1") === "ftyp") writeFileSync(join(capDir, `${cap.slug}.mp4`), bytes);
+      }
+      cap.fullFile = `captures/${cap.slug}.json`;
+      delete cap.fullBody;
+    }
     writeFileSync(outputsOut, JSON.stringify({ version: 1, target, tier: summary.plan.tier, capturedAt: new Date().toISOString(), maxBytesPerTool: CAPTURE_MAX_BYTES, captures: summary.captures }, null, 2));
     console.log(`wrote ${outputsOut} (${summary.captures.length} graded, ${kept} answers kept)`);
   }

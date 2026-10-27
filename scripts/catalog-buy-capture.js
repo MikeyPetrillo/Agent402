@@ -168,5 +168,8 @@ export function captureRecord(row, graded, answer, { payer = null, maxBytes = CA
   const b = boundBody(redacted, maxBytes);
   if (b.body === null) { rec.dropped = "too-large"; rec.bytes = b.bytes; return rec; }
   rec.captured = { bytes: b.bytes, truncated: b.truncated, body: b.body };
+  // The docs keep the bounded preview. The whole redacted answer goes to its own file
+  // in the run artifacts (catalog-buy-outputs.js writes it), never into the docs.
+  if (b.truncated) rec.fullBody = redacted;
   return rec;
 }
