@@ -3406,6 +3406,8 @@ jobs:
           t node scripts/test-chain-activity.js
           # Compression-kit tests (gzip, gunzip, brotli, compress-compare — pure CPU, zip-bomb guard)
           t node scripts/test-compression-kit.js
+          t node scripts/test-model-retirements.js
+          t node scripts/test-slow-origins.js
           # Stats-kit tests (summary, correlation, regression, moving-average, outliers — pure CPU)
           t node scripts/test-stats-kit.js
           # Tollbooth atomic replay + origin binding (F05/F18 — Durable Object single-use claim + PoW origin/method binding — offline)
