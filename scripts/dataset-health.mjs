@@ -36,7 +36,7 @@ const TOKEN = process.env.AGENT402_OPERATOR_TOKEN || "";
 // and gets ignored, which is worse than no guard.
 const MUST_BE_POPULATED = {
   sellers: ["origin", "routable", "router_dispatch_reason"],
-  routes: ["origin", "route", "price_usd"],
+  routes: ["origin", "route", "price_usd", "price_outlier"],
   settlement_base: ["pay_to", "calls_settled"],
 };
 
@@ -53,7 +53,6 @@ const MUST_BE_POPULATED = {
 const WATCHED = [
   { table: "sellers", column: "primary_network", at: 0.9, saw: 0.37 },
   { table: "sellers", column: "discovery_path", at: 0.9, saw: 0.51 },
-  { table: "routes", column: "price_outlier", at: 0.7, saw: null },
   { table: "routes", column: "price_source", at: 0.6, saw: 0.16 },
   { table: "routes", column: "networks", at: 0.8, saw: 0.48 },
 ];

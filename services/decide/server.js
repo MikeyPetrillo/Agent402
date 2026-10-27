@@ -188,11 +188,13 @@ async function readJson(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { throw Object.assign(new Error("invalid JSON"), { statusCode: 400 }); }
 }
 
+// Process memory in MB, so the health output shows where the footprint goes.
+const memoryMb = () => { const u = process.memoryUsage(); return { rssMb: Math.round(u.rss / 1048576), heapUsedMb: Math.round(u.heapUsed / 1048576), externalMb: Math.round(u.external / 1048576), arrayBuffersMb: Math.round(u.arrayBuffers / 1048576) }; };
 export const routes = {
   // Public health says only that the service is up; details need the token.
   // Liveness by default; `?ready=1` answers 503 until the index can serve.
   "GET /health": async (req) => (/[?&]ready=1\b/.test(req.url) && !isReady() ? Promise.reject(Object.assign(new Error("not ready"), { statusCode: 503 })) : tokenOk(req)
-    ? { ok: true, ready: isReady(), rows: state.index.size, vectors: state.index.vectors.count, lastSync: state.lastSync, embed: embedBudgetStatus(), db: !!state.pool, gate: state.gate.stats(), llm: state.llm?.stats() || null, cached: state.cache.size() }
+    ? { ok: true, ready: isReady(), rows: state.index.size, vectors: state.index.vectors.count, lastSync: state.lastSync, memory: memoryMb(), embed: embedBudgetStatus(), db: !!state.pool, gate: state.gate.stats(), llm: state.llm?.stats() || null, cached: state.cache.size() }
     : { ok: true }),
   "POST /internal/search": async (req) => {
     const b = await readJson(req);

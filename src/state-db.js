@@ -184,6 +184,28 @@ function withReadTimeout(run, ms, onTimeout = () => {}) {
  * the connection, as the pool's query() does; a timeout discards it at once,
  * so the statement still running on it never holds a pooled slot.
  */
+// Time spent in pooled queries, by statement shape. In memory and per process: it
+// says which statements cost the most on this replica, read from /__operator/perf.json.
+const QUERY_STATS = new Map();
+const QUERY_STATS_MAX = 200;
+function noteQuery(text, ms) {
+  const key = String(text || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  let e = QUERY_STATS.get(key);
+  if (!e) {
+    if (QUERY_STATS.size >= QUERY_STATS_MAX) return;
+    e = { count: 0, totalMs: 0, maxMs: 0 };
+    QUERY_STATS.set(key, e);
+  }
+  e.count++; e.totalMs += ms; if (ms > e.maxMs) e.maxMs = ms;
+}
+/** The statements that cost the most time on this replica, highest total first. */
+export function stateQueryStats(limit = 15) {
+  return [...QUERY_STATS.entries()]
+    .sort((x, y) => y[1].totalMs - x[1].totalMs)
+    .slice(0, limit)
+    .map(([statement, e]) => ({ statement, count: e.count, totalMs: Math.round(e.totalMs), maxMs: Math.round(e.maxMs), meanMs: Math.round(e.totalMs / e.count) }));
+}
+
 async function pooledQuery(p, text, values, ms = stateDbTimeouts().queryMs) {
   const client = await p.connect();
   let released = false;
@@ -197,7 +219,9 @@ async function pooledQuery(p, text, values, ms = stateDbTimeouts().queryMs) {
   const onError = (err) => { failWith = failWith || err; release(err); };
   client.on("error", onError);
   try {
+    const t0 = Date.now();
     const r = await withReadTimeout(() => client.query(text, values), ms, (e) => release(e));
+    noteQuery(text, Date.now() - t0);
     if (failWith) throw failWith;
     release();
     return r;

@@ -47,6 +47,14 @@ const SECTIONS = [
     links: [[REPO_URL, "Source"], [repoUrl("wiki/Security-Model"), "Security model"]],
   },
   {
+    h: "Redact before you send",
+    p: [
+      "Agents often hold text you would rather not share. The Redact PII tool masks email addresses, phone numbers, card-like numbers, IP addresses and US social security numbers before the text goes anywhere else, and returns the masked text with a count of each type it masked.",
+      "It is a priced tool like the rest of the catalog, with the price shown on its page. Run it on your side before a prompt, a log line or a support ticket leaves your system.",
+    ],
+    links: [["/tools/redact", "Redact tool"]],
+  },
+  {
     h: "Availability",
     p: [
       `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every on-chain payment rail daily. Nightly backups of the state database and the data volume go to separate object storage and are deleted after ${backupKeepDays()} days.`,

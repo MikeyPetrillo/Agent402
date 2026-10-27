@@ -207,6 +207,10 @@ export function retryDelayMs(attempt, { baseMs = 1000, capMs = 30_000 } = {}, ra
 }
 /** True for a status the bucket uses to ask for a slower request rate. */
 export const isBucketPushback = (status) => RETRY_STATUSES.has(Number(status));
+/** Names the usual cause when the bucket rejects our signature: the stored secret no longer matches the bucket's. */
+export const credentialHint = (text) => (/SignatureDoesNotMatch|InvalidAccessKeyId/.test(String(text))
+  ? " - the bucket rejected our signature: BACKUP_S3_KEY_ID and BACKUP_S3_SECRET must match the bucket's current credentials"
+  : "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let runRetries = 0;            // retries the current run needed (reported on the result and the status)
 let retryLog = () => {};       // the run's logger while a run is in progress
@@ -560,7 +564,7 @@ export async function runBackup({ log = console.log } = {}) {
     return { ok: true, day, uploaded, held, heldState, pruned, retries: runRetries };
   } catch (e) {
     status.lastRetries = runRetries;
-    status.lastError = `${new Date().toISOString()} ${String(e.message).slice(0, 300)}`;
+    status.lastError = `${new Date().toISOString()} ${String(e.message).slice(0, 260)}${credentialHint(e.message)}`;
     status.lastResult = "failed";
     log(`[backup] FAILED: ${e.message}`);
     return { ok: false, error: String(e.message), retries: runRetries };

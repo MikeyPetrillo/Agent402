@@ -276,7 +276,7 @@ const INDEX_ROW_CAP = 100;
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { decodeTagCharacters, hasHiddenCharacters, stripHiddenCharacters } from "./hidden-chars.js";
@@ -4912,6 +4912,9 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       && typeof t.route === "string" && t.route.startsWith("/")
       // A manifest row's "$0.005" is a price; a sentence is not (price-usd.js).
       && isPricedAboveZero(t.price)
+      // A slow origin is probed with GET only: a POST would send a body to its
+      // write routes (feedback, reviews) just to read a price.
+      && !(isSlowOrigin(t.seller) && String(t.method || "GET").toUpperCase() !== "GET")
   );
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
   // that says nothing about the paywall.
@@ -6308,7 +6311,9 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
     const offset = (cycle * cap) % list.length;
     for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
   }
-  return origins.filter((o) => due.has(o));
+  // A slow origin (its operator asked) is due only on every SLOW_ORIGIN_EVERY_CYCLES-th cycle.
+  const slowWait = (o) => isSlowOrigin(o) && cycle % SLOW_ORIGIN_EVERY_CYCLES !== 0;
+  return origins.filter((o) => due.has(o) && !slowWait(o));
 }
 
 /** True while a crawl cycle is running (every entry is being replaced). */

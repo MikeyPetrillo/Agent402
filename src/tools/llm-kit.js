@@ -30,7 +30,7 @@ function bad(message, statusCode = 400) {
 const TIERS = {
   llm:           { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6-luna", "gpt-4o-mini"], maxInputChars: 16_000, maxTokens: 4096 },
   "llm-pro":     { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6.1-sol", "gpt-6-luna", "gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
-  "llm-premium": { prefixes: ["o3", "o3-mini"],     maxInputChars: 32_000, maxTokens: 2048 },
+  "llm-premium": { prefixes: ["o3", "o3-mini", "o4-mini"], maxInputChars: 32_000, maxTokens: 2048 },
 };
 
 // OpenAI rates per 1M tokens, from the private table (src/upstream-costs.js,
@@ -76,6 +76,7 @@ export const RETIRING = Object.freeze({
   "gpt-4o": { until: "2027-01-14", use: "gpt-6.1-sol" },
   "gpt-4.1-mini": { until: "2027-01-14", use: "gpt-6-luna" },
   "gpt-4.1": { until: "2027-01-14", use: "gpt-6.1-sol" },
+  "o3-mini": { until: "2026-10-27", use: "o4-mini" },
 });
 /** The successor serving `model` at `now`, or null while it is still served as itself. */
 export function retiredSuccessor(model, now = Date.now()) {
@@ -400,7 +401,7 @@ export const LLM_TOOLS = [
     tags: [...SHARED_TAGS, "o3", "o3-mini", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "o3-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "o4-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
           model: { type: "string", description: "Model ID - o3 or o3-mini" },
@@ -415,7 +416,7 @@ export const LLM_TOOLS = [
       },
       output: {
         example: {
-          model: "o3-mini",
+          model: "o4-mini",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],

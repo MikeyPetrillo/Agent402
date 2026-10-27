@@ -11,6 +11,6 @@
   "dependencies": {
     "agent402-tollbooth": "^0.3.1",
     "express": "^4.21.0",
-    "zod": "^3.23.0"
+    "zod": "4.6.6"
   }
 }

@@ -449,7 +449,10 @@ bun add @x402/fetch @x402/evm viem
     }
   }
 }`,
-    walletExample: `# Claude Code, hosted connector (no install; proof-of-work tools)
+    walletExample: `# Paste this prompt into Claude Code to install and check the connector:
+# "Add the agent402 MCP server with claude mcp add --transport http agent402 https://agent402.tools/mcp, then call server.describe and tell me what it returns."
+
+# Claude Code, hosted connector (no install; proof-of-work tools)
 claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
