@@ -412,7 +412,7 @@ async function readBody(res) {
  */
 export async function runCatalogBuy({
   target, payer, fetchImpl = fetch, readBalanceUsd = null, powSecret = "", tier = "daily", only = "", skip = [],
-  capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = DEFAULT_CONCURRENCY, paceMs = DEFAULT_PACE_MS, timeoutMs = 200_000,
+  capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = DEFAULT_CONCURRENCY, paceMs = DEFAULT_PACE_MS, timeoutMs = 260_000,
   slowTimeoutMs = 330_000, retryBackoffMs = 5_000, now = new Date(), dry = false, log = console,
   capture = true, captureMaxBytes = CAPTURE_MAX_BYTES,
 } = {}) {
@@ -463,8 +463,8 @@ export async function runCatalogBuy({
 
   async function requestFor(row, ex = row.example) {
     let url = `${base}${row.path}`;
-    // Slow routes answer 400 respond_async_required unless the caller waits: ask for the answer synchronously, up to 180 s.
-    const init = { method: row.method.toUpperCase(), headers: { Accept: "application/json", Prefer: "wait=180" } };
+    // Slow routes answer 400 respond_async_required unless the caller waits: ask for the answer synchronously, up to 240 s (the longest published maxSeconds).
+    const init = { method: row.method.toUpperCase(), headers: { Accept: "application/json", Prefer: "wait=240" } };
     if (ex.kind === "query") {
       const qs = new URLSearchParams(ex.query).toString();
       if (qs) url += `?${qs}`;
