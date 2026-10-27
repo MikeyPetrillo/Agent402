@@ -20,9 +20,9 @@ ok(!isSlowOrigin(normal), "an ordinary origin is not slow");
 
 let slowDue = 0, normalDue = 0;
 for (let c = 0; c < 36; c++) {
-  const due = originsDueThisCycle(all, c);
-  if (due.includes(slow)) { slowDue++; ok(c % SLOW_ORIGIN_EVERY_CYCLES === 0, `slow origin due only on a 12-cycle boundary (cycle ${c})`); }
-  if (due.includes(normal)) normalDue++;
+  const due = new Set(originsDueThisCycle(all, c));
+  if (due.has(slow)) { slowDue++; ok(c % SLOW_ORIGIN_EVERY_CYCLES === 0, `slow origin due only on a 12-cycle boundary (cycle ${c})`); }
+  if (due.has(normal)) normalDue++;
 }
 ok(slowDue === 3, `slow origin due 3 times in 36 cycles, got ${slowDue}`);
 ok(normalDue === 36, `ordinary origin due every cycle, got ${normalDue}`);
