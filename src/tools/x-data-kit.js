@@ -560,7 +560,9 @@ export const X_DATA_TOOLS = [
       const usernames = [...new Set(raw.map((u, idx) => takeUsername(u, `usernames[${idx}]`)))];
 
       const data = await xGet("/users/by", { usernames: usernames.join(","), "user.fields": USER_FIELDS });
-      const users = (Array.isArray(data.data) ? data.data : []).map(shapeUser).filter(Boolean);
+      // No `data` array is an upstream answer we cannot read, not an empty result: say so, never report the handles as missing.
+      if (!Array.isArray(data.data)) throw Object.assign(new Error("X answered without the account list; retry later. Not charged on x402."), { statusCode: 502 });
+      const users = data.data.map(shapeUser).filter(Boolean);
       const found = new Set(users.map((u) => String(u.username || "").toLowerCase()));
       // X lists unresolved handles under `errors`; fall back to a set difference.
       const notFound = usernames.filter((u) => !found.has(u.toLowerCase()));
