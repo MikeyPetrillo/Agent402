@@ -17,6 +17,8 @@
 // hardcoded, which is why it sweeps the whole catalog instead of sampling.
 // Common proxy limits sit at 8 KB per header and 16 KB total.
 
+import { createHmac } from "node:crypto";
+
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 // This sweep walks every priced route on PRODUCTION on every CI run.
 // Unmarked, PostHog filed each of those 402s as an outside buyer's first look
