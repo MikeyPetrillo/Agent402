@@ -30,13 +30,15 @@ const rows = [
   { ts: nov, slug: "tts", priceUsd: 0.05, payer: "0xabc", tx: "0xdeadbeef" },    // wallet payment: no address
   { ts: nov, slug: "dub", priceUsd: 0.2, payer: "k_unknown", tx: null },         // a key with no address on file
   { ts: dec, slug: "tts", priceUsd: 0.05, payer: "k_nc2", tx: null },            // NC, no ZIP
+  { ts: nov, slug: "tts", priceUsd: 0.05, payer: "0xfeed", tx: null, rail: "usdc" }, // a wallet row with no tx: the rail says wallet, not credits
+  { ts: nov, slug: "tts", priceUsd: 0.05, payer: "k_nc1", tx: null, rail: "credits" }, // credits by rail: counts
 ];
 const lookups = [];
 const r = await ncTaxReport(rows, { billingForKey: (id) => keys.get(id) || null, billingForPayment: async (pi) => { lookups.push(pi); return payments[pi] || null; } });
 ok(Object.keys(r.months).sort().join() === "2026-11,2026-12", "receipts are grouped by calendar month (UTC)");
-ok(r.months["2026-11"].calls === 2 && Math.abs(r.months["2026-11"].grossReceiptsUsd - 0.55) < 1e-9, "only card-funded taxable sales billed to NC count");
-ok(r.months["2026-11"].bySource.credits === 1 && r.months["2026-11"].bySource.card === 1, "credits and per-call card sales are both included and told apart");
-ok(r.months["2026-11"].byZip["27601"]?.calls === 1 && r.months["2026-11"].byZip["28202"]?.calls === 1, "receipts are broken down by 5-digit billing ZIP");
+ok(r.months["2026-11"].calls === 3 && Math.abs(r.months["2026-11"].grossReceiptsUsd - 0.6) < 1e-9, "only card-funded taxable sales billed to NC count");
+ok(r.months["2026-11"].bySource.credits === 2 && r.months["2026-11"].bySource.card === 1, "credits and per-call card sales are both included and told apart");
+ok(r.months["2026-11"].byZip["27601"]?.calls === 2 && r.months["2026-11"].byZip["28202"]?.calls === 1, "receipts are broken down by 5-digit billing ZIP");
 ok(r.months["2026-12"].byZip.unknown?.calls === 1, "an NC sale without a ZIP is kept as unknown, not dropped");
 ok(r.cardFundedSalesWithoutAddress === 1, "a card-funded sale with no address on file is counted, not silently dropped");
 ok(!lookups.includes("0xdeadbeef") && lookups.includes("pi_nc"), "wallet payments are not looked up; card payments are");

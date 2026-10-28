@@ -212,8 +212,8 @@ expire with their window (one hour, or 24 hours for the free trial's daily allow
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
 A prepaid credits key's record (the purchase details listed above and the calls it paid for) is kept for
-the life of the key and three years after its last use, the period sales tax records must be kept; a
-deletion request removes what that period does not require us to keep.
+the life of the key and three years after its last use, the period sales tax records must be kept, and is
+deleted on request after that; within that period a deletion request removes what tax records do not need.
 Free-alert records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records delete the address
 as soon as the last follow-up is sent, when you stop them or buy again, or after ${MAX_SEND_FAILURES} failed deliveries

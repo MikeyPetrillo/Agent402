@@ -68,8 +68,12 @@ export async function ncTaxReport(rows, { billingForKey, billingForPayment }) {
     if (!ncTaxableKind(r?.slug) || !(Number(r.priceUsd) > 0)) continue;
     const tx = typeof r.tx === "string" ? r.tx : "";
     let billing = null, source = null;
-    if (!tx && typeof r.payer === "string" && r.payer) { source = "credits"; billing = billingForKey(r.payer); }
-    else if (/^pi_/.test(tx)) { source = "card"; billing = await billingForPayment(tx); }
+    // Classified by the ledger's rail when the row carries it; older rows by shape.
+    const rail = typeof r.rail === "string" ? r.rail : null;
+    const isCredits = rail ? rail === "credits" : !tx && typeof r.payer === "string" && !!r.payer;
+    const isCard = rail ? rail === "card" && /^pi_/.test(tx) : /^pi_/.test(tx);
+    if (isCredits && typeof r.payer === "string" && r.payer) { source = "credits"; billing = billingForKey(r.payer); }
+    else if (isCard) { source = "card"; billing = await billingForPayment(tx); }
     else continue; // a wallet payment: no billing address
     if (!billing) { unknownAddress++; continue; }
     if (!isNcBilling(billing)) continue;
