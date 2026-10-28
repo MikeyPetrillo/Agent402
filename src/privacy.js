@@ -136,9 +136,10 @@ so every claim below is verifiable in code.</p>
   and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
   repeated failures for one buyer stop further charges. Prepaid credits ${creditsSalesEnabled() ? "are sold by card at /credits" : "are not currently sold"}; for each key
   we keep a hash of the key (never the key), its balance and the calls it paid for, and from its purchase the email, the
-  billing country, state and postal code, any business tax ID you enter, the Stripe customer id and Stripe's fingerprint
-  of the card (a token, never the card number). We use the billing address to apply sales tax, and the email, customer id
-  and card fingerprint to enforce the daily purchase limit. For a monitor
+  billing country, state and postal code, any business tax ID you enter, your answers to the checkout's business-use and
+  terms questions, and Stripe's fingerprint of the card (a token, never the card number). We use the billing address to
+  apply sales tax, the tax ID to sell to a business in the EU or the UK, and the email and card fingerprint to enforce the
+  daily purchase limit. For a monitor
   we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
   and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
@@ -210,6 +211,9 @@ exactly like the HTTP API.</p>
 expire with their window (one hour, or 24 hours for the free trial's daily allowance). Memory-tool data
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
+A prepaid credits key's record (the purchase details listed above and the calls it paid for) is kept for
+the life of the key and three years after its last use, the period sales tax records must be kept; a
+deletion request removes what that period does not require us to keep.
 Free-alert records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records delete the address
 as soon as the last follow-up is sent, when you stop them or buy again, or after ${MAX_SEND_FAILURES} failed deliveries
