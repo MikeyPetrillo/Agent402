@@ -9,6 +9,7 @@
 // photon.komoot.io (Komoot's keyless OSM geocoder — same ODbL data, GeoJSON
 // wire) as an automatic fallback when Nominatim itself fails (see below).
 import { safeFetch } from "./fetch-guard.js";
+import { nominatimSlot } from "./nominatim-pace.js";
 
 const NOMINATIM_SOURCE = "nominatim.openstreetmap.org (ODbL)";
 const PHOTON_SOURCE = "photon.komoot.io (ODbL)";
@@ -18,6 +19,12 @@ function bad(message, statusCode = 400) {
 }
 
 async function getJson(url, provider = "nominatim") {
+  // One request a second across the service (src/tools/nominatim-pace.js); a
+  // call that gets no slot in time is a 503 here, which sends it to Photon.
+  if (provider === "nominatim" && !(await nominatimSlot())) {
+    console.warn("[geo] nominatim pace: no slot within the wait budget");
+    throw bad("Geocoder busy upstream - retry shortly", 503);
+  }
   let html;
   try {
     ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 }));
