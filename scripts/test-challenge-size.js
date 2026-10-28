@@ -65,6 +65,11 @@ if (LOCAL_BOOT) {
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    // Routes production serves behind a key (X, Farcaster, Exa, judge, RugCheck,
+    // speech): placeholder keys mount them so their 402 is this tree's, not
+    // production's old one. Only the unpaid 402 is read; no upstream is called.
+    X_BEARER_TOKEN: "challenge-size-placeholder", NEYNAR_API_KEY: "challenge-size-placeholder", EXA_API_KEY: "challenge-size-placeholder",
+    TYPESAFE_API_KEY: "challenge-size-placeholder", RUGCHECK_TOOLS: "on", OPENROUTER_TTS_ENABLED: "true",
     // Mount the Decide routes too (their challenge is among the largest), with
     // a placeholder service that is never called: only the 402 is read.
     DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "challenge-size-")), "decide.db"),
