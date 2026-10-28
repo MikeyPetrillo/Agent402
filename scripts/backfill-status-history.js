@@ -52,7 +52,7 @@ if (!DRY && !OP_TOKEN) die("OP_TOKEN not set (the operator token that authorizes
 
 async function ghJson(path) {
   const res = await fetch(`https://api.github.com${path}`, {
-    headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json", "User-Agent": "agent402-status-backfill" },
+    headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10", "User-Agent": "agent402-status-backfill" },
     signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error(`GitHub ${path} -> HTTP ${res.status}`);

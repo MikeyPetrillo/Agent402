@@ -325,7 +325,7 @@ async function gh(path, token, init = {}) {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
       "User-Agent": "agent402-status-probe",
-      "X-GitHub-Api-Version": "2022-11-28",
+      "X-GitHub-Api-Version": "2026-03-10",
       ...(init.headers || {}),
     },
   }, 15000);
