@@ -1,4 +1,5 @@
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 
 export function quickstartPage(baseUrl) {
   const canonical = `${baseUrl}/quickstart`;
@@ -72,17 +73,24 @@ export function quickstartPage(baseUrl) {
 <!-- Panel: Claude / MCP -->
 <div class="qs-panel active" id="panel-mcp" role="tabpanel">
 <h2>Add to Claude Code</h2>
-<p class="qs-oneliner">One command adds 500+ tools. The pure-CPU ones run free with proof-of-work; the rest pay per call from a wallet key.</p>
+<p class="qs-oneliner">Start with the hosted connector: no install, no wallet. Free tools run with proof-of-work; paid tools answer with their price and a pointer to payment.info.</p>
 
-<span class="qs-label">Install (free tools, no wallet)</span>
+<span class="qs-label">1. Hosted connector (no install)</span>
 <div class="qs-code-wrap">
-<pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</code></pre>
+<pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<span class="qs-label"><span>Or with a funded EVM key</span><span>(every paid tool)</span></span>
+<span class="qs-label">2. Free npm install (pinned, no wallet)</span>
 <div class="qs-code-wrap">
-<pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest</code></pre>
+<pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>
+<button class="qs-copy" aria-label="Copy">Copy</button>
+</div>
+
+<span class="qs-label">3. Wallet for paid tools (optional, pinned)</span>
+<p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
+<div class="qs-code-wrap">
+<pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_NEW_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
@@ -93,11 +101,6 @@ export function quickstartPage(baseUrl) {
 # with a key:  "fetch Apple's latest 10-K"</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
-
-<p class="qs-alt">Or paste the hosted connector URL (zero install):</p>
-<div class="qs-code-wrap">
-<pre><code>https://agent402.tools/mcp</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
 <div class="qs-next">
@@ -160,6 +163,7 @@ curl -X POST https://agent402.tools/api/hash \\
 </div>
 
 <span class="qs-label">Web search, then a cited answer</span>
+<p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
 <div class="qs-code-wrap">
 <pre><code>import { Agent402 } from "agent402-client";
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -281,6 +285,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
 </div>
 
 <span class="qs-label">Make a paid call</span>
+<p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
 <div class="qs-code-wrap">
 <pre><code>import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";

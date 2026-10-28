@@ -305,10 +305,10 @@ ${section("mcp", `
 claude mcp add --transport http agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.20
 
 # a credits key already issued works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@latest`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.13.20`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 

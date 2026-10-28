@@ -443,14 +443,20 @@ function gatewayNanopaymentsLine() {
   return ` **Batched option, no gas per call (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\`${windowWords}): after a USDC deposit into Circle Gateway (an on-chain transfer the buyer makes and pays gas for), the buyer for each call signs the same EIP-3009 authorization under that domain against that balance and pays no gas for the call; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`. Identity-bound routes and routes with a lasting effect (such as memory writes, attest and the route-execute tiers) offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
 }
 
-export function llmsTxt(baseUrl, catalog) {
-  // Identity-bound routes, read from the same flag the gates and tool pages read
-  // (isIdentityBoundRoute, stamped on each def at catalog build), never typed.
+/** The full llms text: every section, the skill packs and every tool category.
+ *  /llms-full.txt is this plus the learn summaries and the catalog lines. */
+/** Identity-bound routes, read from the same flag the gates and tool pages read
+ *  (isIdentityBoundRoute, stamped on each def at catalog build), never typed. */
+function identityBoundListOf(catalog) {
   const identityBoundDefs = Object.values(catalog || {}).filter((d) => d && d.identityBound);
-  const identityBoundList = [
+  return [
     ...(identityBoundDefs.some((d) => d.category === "memory") ? ["memory"] : []),
     ...[...new Set(identityBoundDefs.filter((d) => d.category !== "memory").map((d) => d.slug))].sort(),
   ].join(", ");
+}
+
+function llmsFullBody(baseUrl, catalog) {
+  const identityBoundList = identityBoundListOf(catalog);
   // Route prices in this text are READ FROM THE CATALOG at render time. They
   // used to be typed by hand and eleven of thirty-eight were stale after two
   // repricings (found 2026-09-10); a price beside a route in llms.txt is a
@@ -530,7 +536,7 @@ export function llmsTxt(baseUrl, catalog) {
 
 Base URL: ${baseUrl}
 
-**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
+**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings. Read every line and run it yourself: ${REPO_URL}
 
 **Why pay here (seven first-party differences, each proven on a live surface - full section: /#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
@@ -595,7 +601,7 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - Smithery: listed at https://smithery.ai/servers/mike-kq9d/agent402 (paste \`${baseUrl}/mcp\` at https://smithery.ai/new)
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key already issued). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@latest\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key already issued). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20\`
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
@@ -621,9 +627,8 @@ ${toolSections}
 - [Skill packs JSON](${baseUrl}/api/skill-packs.json): machine-readable pack index
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
-- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
+- [Company](${baseUrl}/company): Havok Holdings, what it sells, where the proof is, role mailboxes
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
-- [Prepaid credits](${baseUrl}/credits): not on sale; a key already issued pays any paid tool except the wallet-scoped ones with the header "Authorization: Bearer a402_..." (debited per call on success; balance at GET /api/credits/balance)
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
 - [Test your x402 client](${baseUrl}/x402-test): point any client at a real paid route and read why it was refused - which field differs from what was advertised, which schemes and networks are offered, whether the amount or the validity window is wrong. Refusals are free (an error status cancels settlement); every reason this server emits is listed there
 - [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - plain language, speaker notes, and a live demo (402 quote decoded, pay with a puzzle, real receipts)
@@ -634,7 +639,40 @@ ${toolSections}
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
-- [Maintainer](${REPO_URL}): Havok Holdings LLC, mike@agent402.tools
+- [Maintainer](${REPO_URL}): Havok Holdings, mike@agent402.tools
+`;
+}
+
+/** /llms.txt: the short index an agent reads first (under 15 KB). Its title,
+ *  summary line and sections are taken from the full text, so they never drift;
+ *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
+export function llmsTxt(baseUrl, catalog) {
+  const full = llmsFullBody(baseUrl, catalog).split("\n");
+  const title = full[0];
+  const summary = full.find((l) => l.startsWith("> "));
+  const keep = ["Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains", "Optional"];
+  const sections = keep.map((name) => {
+    const start = full.indexOf(`## ${name}`);
+    if (start < 0) return "";
+    let end = start + 1;
+    while (end < full.length && !full[end].startsWith("## ")) end += 1;
+    return full.slice(start, end).join("\n").trimEnd();
+  }).filter(Boolean);
+  const identity = `## Identity and receiving wallet
+- Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
+- Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.`;
+
+  return `${title}
+
+${summary}
+
+Base URL: ${baseUrl}
+
+The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+
+${sections.join("\n\n")}
+
+${identity}
 `;
 }
 
@@ -651,7 +689,7 @@ export function llmsFullTxt(baseUrl, catalog) {
   };
   const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price || "see /api/pricing"} | ${firstSentence(t.description)}`).join("\n");
   const learnLines = LEARN.map((l) => `- [${l.term}](${baseUrl}/learn/${l.slug}): ${l.summary}`).join("\n");
-  return `${llmsTxt(baseUrl, catalog)}
+  return `${llmsFullBody(baseUrl, catalog)}
 ## Learn (summaries)
 
 ${learnLines}

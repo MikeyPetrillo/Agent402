@@ -754,7 +754,6 @@ function chainRowHtml(c, live) {
 // its own top-level nav item, so a row here would just duplicate it one hover
 // away from itself.
 function marketPanelNav(chainInfo) {
-  const rows = chainInfo.chains.map((c) => chainRowHtml(c, chainInfo.live)).join("\n                ");
   // Marketplaces ONLY (2026-09-09): the x402 index, the MPP index, the
   // leaderboard and the transactions ledger are four views of one seller
   // set. Explainers (what is x402, agentic finance) live under Docs.
@@ -766,8 +765,7 @@ function marketPanelNav(chainInfo) {
                 <a href="/leaderboard" class="mlnav-row"><span style="font-weight:700;">leaderboard</span><span class="mlnav-faint">settled on-chain</span></a>
                 <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">every settlement on our rails</span></a>
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
-                <span class="mlnav-label">BY CHAIN</span>
-                ${rows}
+                <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">Marketplace by chain</span><span class="mlnav-faint">every chain, one directory</span></a>
                 <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">route a task to a proven seller</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
@@ -874,7 +872,6 @@ function mobileMenuHtml(chainInfo, activePath) {
   // Chains as a compact 2-column chip grid (12 full-width rows pushed every
   // other destination below the fold on a phone); each still a real <a href>
   // (test-nav-chains asserts every rail's href is present here).
-  const chains = chainInfo.chains.map((c) => `<a href="${esc(c.href)}" class="ml-mm-chip${c.href === activePath ? " ml-mm-active" : ""}">${esc(c.label)}</a>`).join("");
   return `<div id="ml-mobile-menu" class="ml-mobile-menu">
     <div class="ml-mm-group">${mmLink("/reports", "reports · finished reports and monitors", activePath === "/reports")}</div>
     ${DECIDE_LIVE ? `<div class="ml-mm-h">Decide</div>
@@ -893,12 +890,11 @@ function mobileMenuHtml(chainInfo, activePath) {
     </div>
     <div class="ml-mm-h">Marketplaces</div>
     <div class="ml-mm-group">
-      ${mmLink("/marketplace", "x402 marketplace · every chain", activePath === "/marketplace")}
+      ${mmLink("/marketplace", "Marketplace by chain", activePath === "/marketplace")}
       ${mmLink("/mpp-marketplace", "mpp marketplace · verified sellers", activePath === "/mpp-marketplace")}
       ${mmLink("/leaderboard", "leaderboard", activePath === "/leaderboard")}
       ${mmLink("/guides/smart-order-router", "smart order router", activePath === "/guides/smart-order-router")}
       ${mmLink("/marketplace/tools", "every tool indexed", activePath === "/marketplace/tools")}
-      <div class="ml-mm-chains">${chains}</div>
     </div>
     <div class="ml-mm-h">Sell</div>
     <div class="ml-mm-group">
@@ -1015,7 +1011,7 @@ export function ledgerFooterCompact() {
       <span class="ml-foot-links"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">tools</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
-      <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a></span><span><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span></span>
+      <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings</a></span><span><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span></span>
       <span class="ml-foot-links"><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">

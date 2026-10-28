@@ -9,7 +9,7 @@
 // Offline - calls llmsTxt() directly with a minimal fixture catalog.
 //
 //   node scripts/test-llms-mpp-header-note.js
-import { llmsTxt } from "../src/seo.js";
+import { llmsFullTxt } from "../src/seo.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -22,7 +22,7 @@ const FIXTURE_CATALOG = {
   },
 };
 
-const text = llmsTxt("https://agent402.tools", FIXTURE_CATALOG);
+const text = llmsFullTxt("https://agent402.tools", FIXTURE_CATALOG);
 
 ok(text.includes("How to read our 402 if you only speak one dialect"), "the new section heading is present");
 ok(text.includes("PAYMENT-REQUIRED"), "names the real x402 header explicitly");

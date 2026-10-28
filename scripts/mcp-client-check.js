@@ -145,7 +145,7 @@ await check("tools/list: every expected dotted tool is listed with a description
 // 3. server.describe
 await check("server.describe: JSON answer naming the maintainer and the first job", async () => {
   const j = jsonAnswer(await callTool("server.describe"), "server.describe");
-  assert(typeof j.maintainer === "string" && j.maintainer.includes("Havok Holdings LLC"), "maintainer missing");
+  assert(typeof j.maintainer === "string" && j.maintainer.includes("Havok Holdings"), "maintainer missing");
   assert(typeof j.startHere?.firstJob === "string" && j.startHere.firstJob.length > 0, "startHere.firstJob missing");
 });
 

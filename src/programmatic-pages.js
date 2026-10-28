@@ -495,7 +495,7 @@ function productLd(baseUrl, family, name, description, canonical) {
     name: `${p.label}: ${name}`, description,
     image: `${baseUrl}/tools/${p.slug}/card.png`,
     brand: { "@type": "Brand", name: "Agent402" },
-    offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: canonical, seller: { "@type": "Organization", name: "Havok Holdings LLC" } },
+    offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: canonical, seller: { "@type": "Organization", name: "Havok Holdings" } },
   };
 }
 function datasetLd(baseUrl, { name, description, canonical, modified }) {
@@ -504,7 +504,7 @@ function datasetLd(baseUrl, { name, description, canonical, modified }) {
     name, description, url: canonical,
     isAccessibleForFree: true,
     license: "https://www.sec.gov/about/website-policy",
-    creator: { "@type": "Organization", name: "Havok Holdings LLC", url: baseUrl },
+    creator: { "@type": "Organization", name: "Havok Holdings", url: baseUrl },
     ...(modified ? { dateModified: modified } : {}),
     isBasedOn: "https://www.sec.gov/edgar",
     keywords: ["SEC EDGAR", "filings", "public company data"],

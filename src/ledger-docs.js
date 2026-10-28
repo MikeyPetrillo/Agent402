@@ -133,7 +133,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
 </span>claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
-</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest
+</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.20
 
 <span style="color:var(--on-panel-faint);"># Cursor - ~/.cursor/mcp.json
 </span>{

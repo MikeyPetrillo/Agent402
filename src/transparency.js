@@ -156,7 +156,7 @@ and these are the receipts:</p>
 <h3>Where we stand</h3>
 
 <ul>
-  <li>Not an official token. $AGENT402 is not a product of Agent402.Tools or Havok Holdings LLC.
+  <li>Not an official token. $AGENT402 is not a product of Agent402.Tools or Havok Holdings.
   We have no roadmap, no expectations, and no commitments regarding the token or any use of it.</li>
   <li>No involvement. We do not own, operate, control, or participate in the token, its
   liquidity, or its market, and we claim no authority over what the community does with it. We do not plan

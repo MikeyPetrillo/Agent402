@@ -114,7 +114,7 @@ const catalog = {
 {
   const stats = { toolCallsServed: { viaUSDC: 100, viaProofOfWork: 200, viaMPPWire: 1, viaRouter: 1, viaUSDCByNetwork: {} } };
   const html = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, []);
-  ok(html.includes('"@type":"Organization"') && html.includes('"Havok Holdings LLC"'), "Organization JSON-LD present, credits Havok Holdings LLC");
+  ok(html.includes('"@type":"Organization"') && html.includes('"Havok Holdings"'), "Organization JSON-LD present, credits Havok Holdings");
   ok(html.includes('"@type":"WebSite"') && html.includes('"@type":"SearchAction"'), "WebSite + SearchAction JSON-LD present");
   ok(html.includes('"@type":"SoftwareApplication"') && html.includes('"@type":"AggregateOffer"'), "SoftwareApplication + AggregateOffer JSON-LD present");
   ok(html.includes('"@type":"Dataset"') && html.includes('"@type":"DataDownload"'), "Dataset + DataDownload JSON-LD present for the leaderboard");
@@ -142,7 +142,10 @@ const catalog = {
   // stronger invariant now is its absence.
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
-  ok(html.includes("No account. No API key. No card on file.") && html.includes("Pay for any API call"), "hero leads with the one sentence: pay for any API call without an account, key or card on file");
+  ok(/Web search, browser rendering, SEC filings and market data, plus [\d,]+ utilities\./.test(html) && html.includes("An agent sends a request, gets a price back"), "hero headline names what the tools do (N utilities derived from the catalog); the payment line is the subheading");
+  const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 } });
+  ok(/external payments/.test(withExt) && withExt.includes("40,000") && /of our own test purchases are not counted/.test(withExt) && !/>46,007</.test(withExt),
+    "with the external split the counter leads with external payments and footnotes our own test purchases");
 }
 
 

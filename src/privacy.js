@@ -14,7 +14,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
-  const description = "Agent402's privacy policy: no accounts, no ad trackers, an analytics cookie choice you can change. What we process, why, how long we keep it, and how to have it erased.";
+  const description = "Agent402's privacy policy: no accounts, Google Analytics (advertising features off), an analytics cookie choice you can change. What we process, why, how long we keep it, and how to have it erased.";
   const canonical = `${baseUrl}/privacy`;
   // The Circle Gateway batched option, read from the live offer every other
   // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
@@ -44,12 +44,12 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-23.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-27.</p>
 </section>
 
 <section>
 <div class="pv-body">
-<p>Agent402 has no accounts and no ad trackers on its pages. Pages run a first-party page counter
+<p>Agent402 has no accounts. Pages run Google Analytics (advertising features off) and a first-party page counter
 (PostHog, served from our own domain). It records page views, page leaves (time on the page and how far
 you scrolled) and page load timings (web vitals), with your browser, user agent string, operating system,
 device type, screen and window size, browser language and time zone, the page address with any query

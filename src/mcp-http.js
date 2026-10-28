@@ -366,11 +366,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
   function walletRequiredText(def) {
     return [
-      `"${def.slug}" (${def.price}/call) needs per-call payment and is not part of this hosted free tier.`,
+      `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`,
       ...(mppLoopback ? [`Pay it RIGHT HERE over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `${mppLoopback ? "Or, from" : "To pay it from"} Claude or any MCP client, run the npm server with a funded wallet:`,
       `npx agent402-mcp with env ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
-      `Already hold a prepaid credits key? Run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP); new credits are not on sale. Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
+      `Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
 
@@ -1012,7 +1012,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           return mcpJsonResult({
             service: baseUrl,
             connector: "hosted free tier (authless)",
-            maintainer: "Havok Holdings LLC",
+            maintainer: "Havok Holdings",
             positioning: `Agent402 is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
             // Flagship-first positioning: search/answer as the default job,
             // evergreen 500+ catalog, models and reports named beside the tools.

@@ -51,6 +51,8 @@ try {
   ok(res.status === 200, `/llms.txt → 200 (got ${res.status})`);
   ok((res.headers.get("content-type") || "").includes("text/plain"), `content-type is text/plain (got ${res.headers.get("content-type")})`);
   const txt = await res.text();
+  // The trust and settlement copy lives in the full text; llms.txt links to it.
+  const fullTxt = await fetch(`${BASE}/llms-full.txt`).then((r) => r.text());
   ok(txt.startsWith("# Agent402"), `body opens with '# Agent402' (got '${txt.slice(0, 30)}…')`);
 
   // Tool count claim must match the live catalog. We get the live count from
@@ -92,9 +94,9 @@ try {
   // overclaim, so the guarantee is now stated with the residual case disclosed
   // and made checkable from the response. Assert the mechanism and the
   // verifiability; test-retry-contract.js pins the four branches.
-  ok(/settlement runs AFTER the tool handler/i.test(txt) && /cancels settlement/i.test(txt),
+  ok(/settlement runs AFTER the tool handler/i.test(fullTxt) && /cancels settlement/i.test(fullTxt),
     "llms.txt carries the structural no-charge-on-failure guarantee (settlement ordering, not a refund programme)");
-  ok(/PAYMENT-RESPONSE/.test(txt),
+  ok(/PAYMENT-RESPONSE/.test(fullTxt),
     "...and tells the buyer how to VERIFY it from the response rather than trust the claim");
   ok(!/never charged - structurally/.test(txt),
     "...without re-publishing the absolute our own charged-failure alarm refutes");
