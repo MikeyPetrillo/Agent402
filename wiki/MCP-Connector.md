@@ -48,7 +48,7 @@ The connector is also read every 6 hours by an independent client (the reference
 
 ```json
 { "mcpServers": { "agent402": {
-  "command": "npx", "args": ["-y", "agent402-mcp"],
+  "command": "npx", "args": ["-y", "agent402-mcp@0.13.20"],
   "env": {
     "AGENT_KEY": "0x<funded wallet key - optional>",
     "AGENT402_BUDGET": "1.00",
@@ -56,6 +56,8 @@ The connector is also read every 6 hours by an independent client (the reference
   }
 } } }
 ```
+
+**Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
 
 - **With `AGENT_KEY`** (an EVM wallet: it pays on any EVM chain the 402 offers, Base first; pin one with `AGENT402_NETWORKS`, e.g. `robinhood` for USDG on Robinhood Chain, or `eip155:5042` for USDC on Arc) **and/or `SOLANA_AGENT_KEY`** (a Solana wallet holding USDC on Solana): every tool works; each call settles via x402 invisibly under the MCP call. The service also accepts USDC on Stellar and Algorand, which this npm server does not sign. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
 - **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key already issued (`a402_…`) pays every wallet-only tool except the wallet-identity-bound ones, debited only on a successful call, inside the same spend controls. New credits are not on sale at the moment (see [`/credits`](https://agent402.tools/credits)); keys already issued keep working. See [[Reports and Monitors|Reports-and-Monitors]].

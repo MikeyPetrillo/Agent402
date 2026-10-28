@@ -499,6 +499,7 @@ export function mcpInstallHints(baseUrl) {
   return {
     hostedUrl: hosted,
     claudeCodeHosted: `claude mcp add --transport http agent402 ${hosted}`,
+    walletWarning: "Use a new wallet holding only a few dollars of USDC. Never your main wallet.",
     claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
     cursorMcpJson: {
       mcpServers: {
@@ -509,7 +510,7 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp"],
+          args: ["-y", "agent402-mcp@0.13.20"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },

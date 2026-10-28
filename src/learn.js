@@ -292,11 +292,12 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"],
+      "args": ["-y", "agent402-mcp@0.13.20"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
 }` },
+        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong>`),
       ]],
       ["The hosted connector", [
         P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result with the MPP challenges in ${C('_meta["org.paymentauth/payment-required"]')}, so a host that does not speak MPP still shows the user something useful. An MCP client wrapped with mppx's ${C("McpClient.wrap()")} reads the challenges, pays, and retries with the credential in ${C('_meta["org.paymentauth/credential"]')}; the result comes back with ${C('_meta["org.paymentauth/receipt"]')}. A credential that is refused is JSON-RPC error ${C("-32043")}.`),

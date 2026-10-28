@@ -444,7 +444,7 @@ bun add @x402/fetch @x402/evm viem
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"],
+      "args": ["-y", "agent402-mcp@0.13.20"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -456,6 +456,7 @@ bun add @x402/fetch @x402/evm viem
 claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
+# Use a new wallet holding only a few dollars of USDC. Never your main wallet.
 claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.20
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,

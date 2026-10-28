@@ -319,6 +319,7 @@ export const BLOG_POSTS = [
     }
   }
 }</code></pre>
+<p><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
 
 <p>The npm package reads the live catalog from agent402.tools at startup and sends each call to the hosted API, signing the payment from your wallet underneath. It works with any MCP client that supports stdio transport - Claude Code, Cline, Continue, and others.</p>
 
