@@ -328,6 +328,14 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const rBefore = refunds.length;
   const lost = await own.refuseAndRefund("cs_r2", "pi_cs_r2", "refused", "daily_purchase_limit");
   ok(lost.status === "claimed" && refunds.length === rBefore, "a claim that finds the session already issued answers claimed and refunds nothing");
+  // A refusal whose refund never finished (a crash between refusing and
+  // refunding) is listed as owed once it has been pending past five minutes.
+  ok(await own.refuseSession("cs_stuck", "refused"), "setup: a refusal recorded and left pending");
+  ok(!(await lc.refusalsToRefund()).includes("cs_stuck"), "a fresh pending refusal is not yet owed");
+  t += 6 * 60_000;
+  ok((await lc.refusalsToRefund()).includes("cs_stuck"), "a refusal pending past five minutes is listed as owed");
+  await lc.markRefusalRefunded("cs_stuck");
+  ok(!(await lc.refusalsToRefund()).includes("cs_stuck") && (await lc.claim("cs_stuck")).refunded === true, "marking it refunded clears it");
   // An EU or UK billing address needs a business tax ID.
   const euBuy = (id, { country, taxIds = [] }) => {
     ls[id] = { id, mode: "payment", payment_status: "paid", payment_intent: "pi_" + id, customer_details: { email: `${id}@x.com`, address: { country }, tax_ids: taxIds }, metadata: { credits_pack: "credits-20" } };
@@ -340,6 +348,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   ok((await lc.claim("cs_de")).status === "tax_id_required", "re-claiming it answers the same");
   ok((await euBuy("cs_gb", { country: "GB" })).status === "tax_id_required", "the UK is included");
   ok((await euBuy("cs_de2", { country: "DE", taxIds: [{ type: "eu_vat", value: "DE123456789" }] })).status === "minted", "an EU business with a VAT ID is issued a key");
+  ok((await euBuy("cs_de3", { country: "DE", taxIds: [{ type: "us_ein", value: "12-3456789" }] })).status === "tax_id_required", "a tax ID that is not an EU or UK VAT number does not count");
   ok((await euBuy("cs_us", { country: "US" })).status === "minted" && (await euBuy("cs_ch", { country: "CH" })).status === "minted", "other countries are unaffected");
   process.env.CREDITS_EU_UK_REQUIRE_TAX_ID = "off";
   ok((await euBuy("cs_fr", { country: "FR" })).status === "minted", "CREDITS_EU_UK_REQUIRE_TAX_ID=off lifts the rule");

@@ -158,6 +158,48 @@ try {
   // Held money with no entry (a build without entries placed it) comes back once the row is quiet.
   await sdb.stateQuery(`UPDATE ${RT} SET body = jsonb_set(body, '{heldMicro}', to_jsonb(30000)), updated_at = now() - interval '1 hour' WHERE collection = 'credits' AND id = $1`, [`k_${HASH}`]);
   ok((await E.sweepAbandonedHolds()).released === 1 && JSON.stringify(await bal()) === JSON.stringify([0.38, 0]), "held money no entry accounts for is returned once the row has been quiet for the window");
+  // ---- refusals on the database: the claim-once marker, its refund outcome
+  // (regexp_replace keeps the kind), stuck pending, and the daily limit
+  // across two instances sharing the rows.
+  {
+    process.env.CREDITS_DAILY_MAX_USD = "50";
+    const refunds = [];
+    const fps = {};
+    const ls = {};
+    const lstripe = {
+      checkout: { sessions: { retrieve: async (id) => { await wait(5); if (!ls[id]) throw new Error("no"); return ls[id]; } } },
+      paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { payment_method_details: { card: { fingerprint: fps[id] || null } } } }) },
+      refunds: { create: async (x) => { refunds.push(x); return { id: "re_" + refunds.length }; } },
+    };
+    let t = Date.parse("2026-11-02T12:00:00Z");
+    const A = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: DIR, now: () => t, log: quiet });
+    const B = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: DIR, now: () => t, log: quiet });
+    await A.ready(); await B.ready();
+    const paid = (id, email, fp, extra = {}) => { ls[id] = { id, mode: "payment", payment_status: "paid", payment_intent: "pi_" + id, customer_details: { email, ...extra }, metadata: { credits_pack: "credits-20" } }; fps["pi_" + id] = fp; };
+    for (let i = 0; i < 6; i++) paid(`cs_pgl${i}`, "pg@x.com", "fp_pg");
+    const out = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => (i % 2 ? A : B).claim(`cs_pgl${i}`)));
+    const minted = out.filter((x) => x.status === "minted").length;
+    ok(minted <= 2 && out.every((x) => x.status === "minted" || x.status === "over_limit") && refunds.length === out.length - minted, `pg: six purchases across two instances never pass $50 (${minted} issued, ${refunds.length} refunded)`);
+    // A re-claim of a refused session answers the same and refunds nothing more.
+    const refused = out.findIndex((x) => x.status === "over_limit");
+    const r0 = refunds.length;
+    ok((await A.claim(`cs_pgl${refused}`)).status === "over_limit" && refunds.length === r0, "pg: a refused session re-claimed answers over_limit and refunds nothing");
+    // A failed refund keeps its kind through regexp_replace and is listed as owed.
+    lstripe.refunds.create = async () => { throw new Error("card closed"); };
+    paid("cs_pgtax", "eu@x.com", "fp_eu", { address: { country: "FR" } });
+    const tx = await A.claim("cs_pgtax");
+    ok(tx.status === "tax_id_required" && tx.refunded === false, "pg: an EU purchase without a VAT number is refused; its failed refund is reported");
+    ok((await B.refusalsToRefund()).includes("cs_pgtax") && (await B.claim("cs_pgtax")).status === "tax_id_required", "pg: the other instance lists it as owed and keeps its kind");
+    await B.markRefusalRefunded("cs_pgtax");
+    const after = await A.claim("cs_pgtax");
+    ok(after.status === "tax_id_required" && after.refunded === true && !(await A.refusalsToRefund()).includes("cs_pgtax"), "pg: marking it refunded is seen by both instances");
+    // A refusal left pending (a crash before the refund outcome) becomes owed after five minutes.
+    ok(await A._internals.refuseSession("cs_pgstuck", "refused"), "pg: setup, a refusal left pending");
+    ok(!(await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: a fresh pending refusal is not owed");
+    t += 6 * 60_000;
+    ok((await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: pending past five minutes is owed");
+    delete process.env.CREDITS_DAILY_MAX_USD;
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();
