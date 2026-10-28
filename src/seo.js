@@ -536,7 +536,7 @@ function llmsFullBody(baseUrl, catalog) {
 
 Base URL: ${baseUrl}
 
-**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings. Read every line and run it yourself: ${REPO_URL}
+**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
 
 **Why pay here (seven first-party differences, each proven on a live surface - full section: /#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
@@ -627,7 +627,7 @@ ${toolSections}
 - [Skill packs JSON](${baseUrl}/api/skill-packs.json): machine-readable pack index
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
-- [Company](${baseUrl}/company): Havok Holdings, what it sells, where the proof is, role mailboxes
+- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
 - [Test your x402 client](${baseUrl}/x402-test): point any client at a real paid route and read why it was refused - which field differs from what was advertised, which schemes and networks are offered, whether the amount or the validity window is wrong. Refusals are free (an error status cancels settlement); every reason this server emits is listed there
@@ -639,7 +639,7 @@ ${toolSections}
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
-- [Maintainer](${REPO_URL}): Havok Holdings, mike@agent402.tools
+- [Maintainer](${REPO_URL}): Havok Holdings LLC, mike@agent402.tools
 `;
 }
 

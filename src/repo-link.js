@@ -9,7 +9,7 @@
 // addresses on purpose - being checkable against the chain is the product - and
 // a wallet is only a number until something ties it to a person. The repo link
 // is that something: wallet -> agent402.tools -> a named individual -> public
-// records. The business identity (Havok Holdings) is already correct
+// records. The business identity (Havok Holdings LLC) is already correct
 // everywhere it appears; the source link was the one public surface still
 // carrying a person.
 //

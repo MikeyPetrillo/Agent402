@@ -72,7 +72,7 @@ export function securityPage(baseUrl) {
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">security</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Security at Agent402.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings</a>. This page states how the hosted service is built, what it holds, and how to report a problem. Every control named here is in the open-source server and can be read.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>. This page states how the hosted service is built, what it holds, and how to report a problem. Every control named here is in the open-source server and can be read.</p>
   </div>
 </header>
 ${SECTIONS.map((s) => `

@@ -55,7 +55,7 @@ ${baseUrl}. Every priced endpoint answers an unpaid call with HTTP 402: a
 machine-readable price and the ways this instance takes payment (x402, and MPP
 where it is enabled); a prepaid credits key already issued also works
 as a Bearer key (new credits are not on sale). There is no signup and no human in the loop: the
-payment is the identity. Maintainer: Havok Holdings. Source:
+payment is the identity. Maintainer: Havok Holdings LLC. Source:
 ${REPO_URL}
 
 ## What I can accomplish
