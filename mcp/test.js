@@ -208,6 +208,8 @@ try {
   // snake/digit aliases and raw kebab slugs.
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
+  // Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
+  for (const t of tools) if ((t.description || "").length > 400) fail(`${t.name} description is ${t.description.length} characters (limit 400)`);
   for (const required of [
     "catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe",
     "web.search", "web.answer", "web.news", "browser.render", "market.quote",

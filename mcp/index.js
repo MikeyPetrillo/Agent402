@@ -54,6 +54,7 @@ import {
   mcpInitializeInstructions,
   toolInputBoundRefusal,
   AGENT402_MCP_VERSION,
+  clipToolDescription,
 } from "./output-schemas.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
@@ -692,7 +693,7 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
       name,
       title: t.slug,
       annotations: { title: t.slug, ...ann },
-      description: `${t.computePayable ? `Paid (${t.price}/call), or free via proof-of-work:` : `Paid (${t.price}/call):`} ${t.description}`,
+      description: clipToolDescription(`${t.computePayable ? `Paid (${t.price}/call), or free via proof-of-work:` : `Paid (${t.price}/call):`} ${t.description}`),
       inputSchema: t.inputSchema,
       outputSchema: FLAGSHIP_OUTPUT_SCHEMAS[t.slug] || outputSchemaFromExample(null),
     };
@@ -773,7 +774,7 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
       title: "List top x402 sellers",
       annotations: { title: "List top x402 sellers", ...NET },
       description:
-        "List ranked sellers from the on-chain leaderboards. wire=x402 (default): x402 sellers earning the most USDC (or serving the most calls) on Base in the last ~24h, derived from on-chain USDC transfers. wire=mpp: MPP (Machine Payments Protocol) sellers ranked by inbound USDC.e transfers on Tempo to the recipient their live 402 names (window, rolling 7d/30d, distinct payers, volume; routable = the host's router will pay them). Useful for agents discovering the live x402 / MPP economy: who's getting paid, which networks, and where to point demand. Free to call (no payment, no proof-of-work). Defaults: top 10, sort by USDC, exclude this service's own wallet.",
+        "List ranked sellers from the on-chain leaderboards. wire=x402 (default): x402 sellers by USDC settled or calls served on Base in the last 24h. wire=mpp: MPP sellers ranked by inbound USDC.e transfers on Tempo. Free to call (no payment, no proof-of-work). Defaults: top 10, sorted by USDC, this service's own wallet excluded.",
       inputSchema: {
         type: "object",
         properties: {

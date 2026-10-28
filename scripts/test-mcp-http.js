@@ -57,6 +57,8 @@ const pricingDoc = await (await fetch(`${BASE}/api/pricing`)).json().catch(() =>
 const served = JSON.stringify(pricingDoc);
 const inCatalog = (slug) => slug !== "decide" && slug !== "decide-execute" ? true : served.includes(slug === "decide" ? '"/api/decide"' : '"/api/decide/execute"');
 // decide.feedback (free, no catalog route) is listed alongside the decide tools.
+// Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
+for (const t of (list.result?.tools ?? [])) assert((t.description || "").length <= 400, `${t.name} description is ${(t.description || "").length} characters (limit 400)`);
 // sellers.list is listed only when the connector opts in (AGENT402_SHOW_ROUTER=1).
 const EXPECTED_META = process.env.AGENT402_SHOW_ROUTER === "1" ? META : META.filter((n) => n !== "sellers.list");
 const EXPECTED_LIST = [...EXPECTED_META, ...FLAGSHIP_SLUGS.filter(inCatalog).map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_")), ...(inCatalog("decide") && served.includes('"/api/decide"') ? ["decide.feedback"] : [])].sort();

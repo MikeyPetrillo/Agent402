@@ -7,6 +7,7 @@ const ENTRIES = [
     items: [
       "agent402-mcp 0.13.20: tools that reach the network are labelled not read-only and open-world, so hosts ask before running them; only the local describe and payment lookups are read-only.",
       "agent402-mcp 0.13.20: router.execute and sellers.list are listed only when a wallet or credits key is set, or with AGENT402_SHOW_ROUTER=1. Calls to them still work.",
+      "agent402-mcp 0.13.20 and the hosted /mcp: every listed tool description is at most 400 characters, cut at a sentence; a paid tool opens with its price. The full description stays on catalog.find.",
       "agent402-mcp 0.13.20: install commands are pinned to a published version. The startup instructions list tools and prices, without install commands.",
     ],
   },

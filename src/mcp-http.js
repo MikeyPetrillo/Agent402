@@ -68,6 +68,7 @@ import {
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
+  clipToolDescription,
   mcpJsonResult,
   outputSchemaFromExample,
   toolInputBoundRefusal,
@@ -487,7 +488,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // the outside world. Hosts read readOnlyHint to skip confirmation.
           annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
           description:
-            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) ${mppLoopback ? "answer with a payment ask that is payable right here over MPP (the challenges ride in _meta[\"org.paymentauth/payment-required\"], and the text names every other way to pay)" : "return a paid-access setup guide instead"} - this connector holds no wallet of its own. An unknown slug returns an error pointing back to catalog.search.`,
+            `Run an Agent402 tool by slug, with params matching that tool's inputSchema; find slugs with catalog.find or catalog.search. The ${freeCount} pure-CPU tools run free here, rate-limited, through proof-of-work. ${mppLoopback ? "Paid tools are payable here over MPP (the challenges ride in _meta)." : "A paid tool answers with payment setup; see payment.info."} An unknown slug returns an error.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -503,7 +504,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Payment and wallet setup",
           annotations: { title: "Payment and wallet setup", ...SAFE },
           description:
-            `How paying for Agent402 tools works and how to manage a wallet. This hosted connector holds NO wallet: ${freeCount} pure-CPU tools run free here (or solve a proof-of-work puzzle), the rest - including search/answer and the /v1 OpenAI-compatible LLM gateway - settle in USDC via x402${mppLoopback ? " or over MPP (payable right here)" : ""}. Covers: the free vs paid split, how to configure a funded wallet + per-call and budget spend caps, the rails (${RAILS_OR}), and checking a wallet's balance/transaction history via catalog.call on wallet-balances / wallet-transactions. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
+            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${mppLoopback ? " or MPP (payable here)" : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
@@ -526,7 +527,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             name: mcpNameOf(slug),
             title: def.name,
             annotations: { title: def.name, ...ann },
-            description: `${access} ${def.description}${returnsHint(def)}${walletNote}`,
+            description: clipToolDescription(`${access} ${def.description}${returnsHint(def)}${walletNote}`),
             inputSchema: schemaOf(def),
             outputSchema: outSchema,
           };
@@ -542,7 +543,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             idempotentHint: false,
             openWorldHint: true,
           },
-          description: `[free] Tell Agent402 about a capability its 500+ tools do not cover (catalog size ${tools.size}). Use it after catalog.search or catalog.find came back with nothing that fits, instead of giving up: requests are clustered by need, and the ones that keep coming up get built. Records demand only - it never returns a tool or runs anything. Same intake as POST ${baseUrl}/api/wish; aggregate demand is public at ${baseUrl}/api/wishes.`,
+          description: `[free] Report a capability the 500+ tools do not cover, after catalog.search or catalog.find found nothing that fits. Requests are clustered by need, and frequent ones get built. Records demand only: it runs nothing. Same intake as POST ${baseUrl}/api/wish; aggregate demand is public at ${baseUrl}/api/wishes.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -597,7 +598,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: META_MCP_NAMES.list_top_sellers,
           title: "List top x402 sellers",
           annotations: { title: "List top x402 sellers", ...NET },
-          description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled call counts, USDC totals and distinct buyers. wire=mpp: MPP (Machine Payments Protocol) sellers ranked by inbound USDC.e transfers on Tempo to the recipient their live 402 names (window count, rolling 7d/30d, distinct payers, volume; routable = this host's router will pay them). Use it to find other services in the open x402 / MPP ecosystem. This host's own wallet is excluded unless include is set to all.",
+          description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled calls, USDC totals and distinct buyers. wire=mpp: MPP sellers ranked by inbound USDC.e transfers on Tempo. This host's own wallet is excluded unless include is all.",
           inputSchema: {
             type: "object",
             properties: {

@@ -494,6 +494,20 @@ export function mcpJsonResult(obj) {
  */
 export const AGENT402_MCP_VERSION = "0.13.20";
 
+/** A listed MCP tool description, at most `max` characters. Hosts truncate or
+ *  skip long descriptions, so the listing keeps the first whole sentences; the
+ *  full catalog text stays on catalog.find and the tool's page. */
+export const TOOL_DESCRIPTION_MAX = 400;
+export function clipToolDescription(text, max = TOOL_DESCRIPTION_MAX) {
+  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  const head = s.slice(0, max);
+  const cut = head.lastIndexOf(". ");
+  if (cut > max * 0.5) return head.slice(0, cut + 1);
+  const sp = head.lastIndexOf(" ", max - 1);
+  return head.slice(0, sp > 0 ? sp : max - 1).replace(/[,;:\-\s]+$/, "") + ".";
+}
+
 export function mcpInstallHints(baseUrl) {
   const hosted = `${baseUrl}/mcp`;
   return {
