@@ -1139,9 +1139,11 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       category: "agent",
       price: "$0.001",
       spendsOwnWallet: true,
+      // Buys from an outside seller with our wallet: sold for a wallet payment only,
+      // never for prepaid credits or a card (src/third-party-routes.js).
+      paysThirdPartySeller: true,
       // Outside steps are bought from the Base spending wallet, which only a
-      // Base payment funds: other EVM chains are not offered (credits and card
-      // still work).
+      // Base payment funds: other EVM chains are not offered.
       onlyNetworks: ["eip155:8453"],
       quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.

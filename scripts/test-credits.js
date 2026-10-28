@@ -177,6 +177,11 @@ ok(nexted && !res.headers["X-Credits-Balance"], "gate: a credits key on a non-pr
 nexted = false; res = fakeRes();
 cr.gate((m, p) => (p === "/api/memory" ? { priceUsd: 0.001, slug: "memory", identityBound: true } : null))({ method: "POST", path: "/api/memory", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
 ok(!nexted && res.statusCode === 402 && res.body.reason === "identity-bound" && cr.balance(KEY).heldUsd === 0, "SECURITY: an identity-bound route refuses credits (402, no hold, handler never runs)");
+// Credits are spent only on our own services: a route that buys from an
+// outside seller with our wallet is refused before any hold.
+nexted = false; res = fakeRes();
+cr.gate((m, p) => (p === "/api/route/execute" ? { priceUsd: 0.01, slug: "route-execute", identityBound: false, paysThirdParty: true } : null))({ method: "POST", path: "/api/route/execute", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
+ok(!nexted && res.statusCode === 402 && res.body.reason === "third-party-purchase" && res.headers["X-Credits-Error"] === "third-party-purchase" && cr.balance(KEY).heldUsd === 0, "a route that buys from an outside seller refuses credits (402, no hold, handler never runs)");
 nexted = false; res = fakeRes();
 const forged = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}`, "x-payment": "ZmFrZQ==", "payment-signature": "ZmFrZQ==", "payment-identifier": "x" } };
 gate(forged, res, () => { nexted = true; });

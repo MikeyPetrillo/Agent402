@@ -529,6 +529,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         res.status(402).json({ error: "This route is wallet-identity bound (the payment IS the identity); prepaid credits carry no verified wallet. Pay it over an x402 rail.", reason: "identity-bound" });
         return { done: true };
       }
+      // Credits are spent only on Agent402's own services: a route that buys
+      // from an outside seller with our wallet is sold for a wallet payment
+      // only (src/third-party-routes.js).
+      if (item.paysThirdParty) {
+        res.setHeader("X-Credits-Error", "third-party-purchase");
+        res.status(402).json({ error: "Prepaid credits are spent only on Agent402's own services. This route buys from an outside seller with our wallet and is sold for a wallet payment only (x402, or MPP on a chain).", reason: "third-party-purchase" });
+        return { done: true };
+      }
       return { key, item };
     };
     // After the hold: the refusal, or the settle-on-finish wiring.

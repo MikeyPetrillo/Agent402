@@ -1619,6 +1619,7 @@ jobs:
           t node scripts/test-seller-succession.js
           # Operator removal of one seller origin: exact match, persisted, every discovery write refuses it, register answers 410
           t node scripts/test-seller-remove.js
+          t node scripts/test-third-party-routes.js
           t node scripts/test-evidence-watch.js
           # Two surfaces that told a consumer something false (paging base, find-miss wish)
           t node scripts/test-index-paging-and-find-bridge.js
