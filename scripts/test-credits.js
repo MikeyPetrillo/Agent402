@@ -243,5 +243,40 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   r3.setHeader("X-Metered-Usd", "9.5"); r3.statusCode = 200; r3.emit("finish");
   ok(Math.abs(cr.balance(KEY).balanceUsd - (b3 - 0.001)) < 1e-9, "gate (metered): a reported amount above the hold can never take more than the hold");
 }
+// ---- daily purchase limit: one buyer, at most CREDITS_DAILY_MAX_USD in 24 hours ----
+{
+  const LDIR = join("/tmp", `test-credits-limit-${process.pid}`);
+  try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* first run */ }
+  process.env.CREDITS_DAILY_MAX_USD = "250";
+  const ls = {};
+  const refunds = [];
+  const fp = {}; // payment intent -> card fingerprint
+  const lstripe = {
+    checkout: { sessions: { retrieve: async (id) => { if (!ls[id]) throw new Error("no"); return ls[id]; } } },
+    paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { payment_method_details: { card: { fingerprint: fp[id] || null } } } }) },
+    refunds: { create: async (a) => { refunds.push(a); return { id: "re_" + refunds.length }; } },
+  };
+  let t = Date.parse("2026-10-28T12:00:00Z");
+  const lc = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: LDIR, now: () => t, log: () => {} });
+  const buy = (id, { email = "a@x.com", card = "fp_a", pack = "credits-100" } = {}) => {
+    ls[id] = { id, mode: "payment", payment_status: "paid", payment_intent: "pi_" + id, customer_details: { email }, metadata: { credits_pack: pack } };
+    fp["pi_" + id] = card;
+    return lc.claim(id);
+  };
+  ok((await buy("cs_l1")).status === "minted" && (await buy("cs_l2")).status === "minted", "limit: purchases up to the limit are issued ($200 of $250)");
+  const over = await buy("cs_l3");
+  ok(over.status === "over_limit" && over.refunded === true && over.limitUsd === 250 && !over.key, "limit: the purchase that would pass $250 in 24 hours issues no key");
+  ok(refunds.length === 1 && refunds[0].payment_intent === "pi_cs_l3", "limit: and is refunded in full to the card");
+  const again = await lc.claim("cs_l3");
+  ok(again.status === "over_limit" && refunds.length === 1, "limit: claiming the refused session again answers the same and refunds nothing twice");
+  ok((await buy("cs_l4", { email: "other@x.com", card: "fp_a" })).status === "over_limit", "limit: the same card under another email is the same buyer");
+  ok((await buy("cs_l5", { email: "A@X.com", card: "fp_z" })).status === "over_limit", "limit: the same email in another case, with another card, is the same buyer");
+  ok((await buy("cs_l6", { email: "b@x.com", card: "fp_b" })).status === "minted", "limit: a different buyer is unaffected");
+  ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
+  t += 86_400_001;
+  ok((await buy("cs_l8")).status === "minted", "limit: after 24 hours the same buyer can buy again");
+  delete process.env.CREDITS_DAILY_MAX_USD;
+  try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* cleanup */ }
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

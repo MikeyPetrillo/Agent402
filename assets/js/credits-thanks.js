@@ -23,6 +23,16 @@
       app.innerHTML = '<div class="status"><h2>Key already claimed</h2><p>The key for this purchase was shown once and emailed to you (key id <span style="font-family:var(--font-mono)">' + esc(s.keyId || "") + '</span>, balance $' + esc(s.balanceUsd) + '). For safety it cannot be shown again.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Buy another pack</a></p></div>';
       return;
     }
+    if (s.status === "over_limit") { app.innerHTML = '<div class="status"><h2>Daily purchase limit reached</h2><p>Credits are limited to  app.innerHTML = '<div class="status"><h2>Payment not completed</h2><p><a href="/credits">Start over</a></p></div>'; return; }
+    app.innerHTML = '<div class="status"><h2>Purchase not found</h2><p><a href="/credits">Back to credits</a></p></div>';
+  }
+  if (!id) { render({ status: "not_found" }); return; }
+  fetch("/api/credits/claim?session=" + encodeURIComponent(id))
+    .then(function (r) { return r.json(); })
+    .then(render)
+    .catch(function () { render({ status: "not_found" }); });
+})();
+ + esc(s.limitUsd) + ' per buyer in any 24 hours. ' + (s.refunded ? 'This purchase was refunded in full to your card and no key was issued.' : 'This purchase was not issued a key and will be refunded to your card.') + '</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
     if (s.status === "unpaid") { app.innerHTML = '<div class="status"><h2>Payment not completed</h2><p><a href="/credits">Start over</a></p></div>'; return; }
     app.innerHTML = '<div class="status"><h2>Purchase not found</h2><p><a href="/credits">Back to credits</a></p></div>';
   }

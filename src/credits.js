@@ -55,6 +55,17 @@ export const CREDIT_PACKS = {
   "credits-100": { label: "Pro", cents: 10000 },
 };
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
+// PURCHASE LIMIT. One buyer (matched by email, card fingerprint or Stripe
+// customer) may buy at most CREDITS_DAILY_MAX_USD (default $1,000) of credits
+// in any 24 hours. A purchase that would pass it is refunded in full and no
+// key is issued; its session is recorded as refused so a later claim answers
+// the same. Read at call time.
+export const creditsDailyMaxCents = () => {
+  const n = Number(process.env.CREDITS_DAILY_MAX_USD);
+  return Math.round((Number.isFinite(n) && n > 0 ? n : 1000) * 100);
+};
+const REFUSED = "refused";
+const DAY_MS = 86_400_000;
 const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
 const MICRO = 1_000_000;
 // A file written this much later than the newest row was written by a build
@@ -290,6 +301,40 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
 
   // The answer for a session somebody already claimed: the key is never re-shown.
   const claimedAnswer = (rec) => ({ status: "claimed", keyId: rec?.keyId || null, balanceUsd: rec ? microToUsd(rec.balanceMicro) : null });
+  const overLimitAnswer = (refunded = true) => ({ status: "over_limit", refunded, limitUsd: creditsDailyMaxCents() / 100 });
+  // Who bought: lowercased email, the card's fingerprint and the Stripe
+  // customer, whichever the session carries. A read that fails leaves a field
+  // null; the others still match.
+  async function buyerOf(session, paymentIntent) {
+    const email = String(session.customer_details?.email || session.customer_email || "").trim().toLowerCase() || null;
+    const customer = typeof session.customer === "string" ? session.customer : session.customer?.id || null;
+    let cardFingerprint = null;
+    if (paymentIntent && stripe.paymentIntents?.retrieve) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(paymentIntent, { expand: ["latest_charge"] });
+        cardFingerprint = pi?.latest_charge?.payment_method_details?.card?.fingerprint || null;
+      } catch { /* the email and customer still match */ }
+    }
+    return { email, customer, cardFingerprint };
+  }
+  // Credits this buyer was issued in the 24 hours before `at`, in cents.
+  async function boughtInDayCents(buyer, at) {
+    let micro = 0;
+    for (const { rec } of await allKeys()) {
+      if (!rec || !(Date.parse(rec.createdAt) > at - DAY_MS)) continue;
+      const same = (buyer.email && rec.email && String(rec.email).toLowerCase() === buyer.email)
+        || (buyer.cardFingerprint && rec.cardFingerprint === buyer.cardFingerprint)
+        || (buyer.customer && rec.customer === buyer.customer);
+      if (same) micro += Number(rec.loadedMicro) || 0;
+    }
+    return Math.round(micro / 10_000);
+  }
+  // Record a session as refused (claim-once, like a minted one).
+  async function refuseSession(sessionId) {
+    if (usePg) { await claimSessionPg(sessionId, REFUSED); return; }
+    const idx = sessionsIdx();
+    if (!idx[sessionId]) { idx[sessionId] = REFUSED; writeJsonAtomic(SESSIONS, idx); }
+  }
   // Claim-once on the database: the index row gains this session only when it
   // does not carry it yet (one conditional statement). Resolves the index
   // body when this call claimed it, null when another one did.
@@ -309,6 +354,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return { status: "invalid" };
     if (usePg) await readyP();
     const idx = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+    if (idx[sessionId] === REFUSED) return overLimitAnswer();
     if (idx[sessionId]) return claimedAnswer(await readRec(idx[sessionId]));
     let session;
     try { session = await stripe.checkout.sessions.retrieve(sessionId); } catch { return { status: "not_found" }; }
@@ -318,14 +364,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (!p) return { status: "invalid" };
     // Re-check the index right before minting (two tabs claiming at once).
     const again = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+    if (again[sessionId] === REFUSED) return overLimitAnswer();
     if (again[sessionId]) return claimedAnswer(await readRec(again[sessionId]));
-    const key = `a402_${randomBytes(24).toString("base64url")}`;
-    const hash = hashKey(key);
-    const keyId = hash.slice(0, 12);
     const email = session.customer_details?.email || session.customer_email || null;
     const loadedMicro = p.cents * 10_000;
     const paymentIntent = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null;
-    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    // The daily purchase limit, checked before anything is issued.
+    const buyer = await buyerOf(session, paymentIntent);
+    if ((await boughtInDayCents(buyer, now())) + p.cents > creditsDailyMaxCents()) {
+      await refuseSession(sessionId);
+      let refunded = false;
+      try { if (paymentIntent) { await stripe.refunds.create({ payment_intent: paymentIntent, reason: "requested_by_customer", metadata: { credits_refused: "daily_limit" } }); refunded = true; } } catch (e) { log(`[credits] daily-limit refund FAILED for session ${sessionId}: ${String(e?.message || e).slice(0, 160)} - refund it by hand`); }
+      log(`[credits] session ${sessionId} over the daily purchase limit; ${refunded ? "refunded" : "NOT refunded"}, no key issued`);
+      return overLimitAnswer(refunded);
+    }
+    const key = `a402_${randomBytes(24).toString("base64url")}`;
+    const hash = hashKey(key);
+    const keyId = hash.slice(0, 12);
+    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, customer: buyer.customer, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
       // another container won in between leaves an orphan row, removed here.
