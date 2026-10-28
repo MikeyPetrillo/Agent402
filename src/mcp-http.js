@@ -436,14 +436,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     const CALL_PAID = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+    // Anything that reaches the network is not read-only and is open-world; only
+    // the local describe and payment-info lookups are read-only.
+    const NET = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: listable([
         {
           name: META_MCP_NAMES.search_tools,
           title: "Search the Agent402 tool catalog",
-          annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
+          annotations: { title: "Search the Agent402 tool catalog", ...NET },
           description:
-            `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ pay-per-call tools (exact count ${tools.size}). Start with the listed flagships for search/answer/news/render/data/transcribe/memory; use this when you need a long-tail slug. Counterpart catalog.find resolves a task to ONE ready-to-run pick - search explores, find decides. ${freeCount} pure-CPU tools run free here (proof-of-work); the rest are payable ${mppLoopback ? "right here over MPP (credential in _meta - mppx McpClient pays automatically) or " : ""}via npx agent402-mcp with a wallet. Also an OpenAI-compatible LLM gateway at ${baseUrl}/v1 (flat per-call; wallet = account). Returns { results, workflows }; run one with catalog.call.`,
+            `Keyword search over the Agent402 catalog of 500+ tools (${tools.size} loaded by this connector). Returns { results, workflows }; run one with catalog.call. ${freeCount} pure-CPU tools run free here (proof-of-work). The others are paid per call${mppLoopback ? ", payable here over MPP (credential in _meta; mppx McpClient pays automatically), or" : ", through"} npx agent402-mcp with a wallet.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -457,9 +460,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         {
           name: META_MCP_NAMES.find_tool,
           title: "Resolve a task to the one best Agent402 tool",
-          annotations: { title: "Resolve a task to the one best Agent402 tool", ...SAFE },
+          annotations: { title: "Resolve a task to the one best Agent402 tool", ...NET },
           description:
-            "DECIDE, don't browse: resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready - slug, price, input schema, and a worked example (its counterpart catalog.search returns a list of candidates to compare - search explores, find decides). Prefer this for anything outside the flagship list. Returns { task, results } with the top pick first; then run catalog.call with the chosen slug + params.",
+            "Resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
           inputSchema: {
             type: "object",
             properties: {
@@ -480,7 +483,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // memory, attest on-chain or buy from another seller, so it is
           // neither read-only nor idempotent, can be destructive, and reaches
           // the outside world. Hosts read readOnlyHint to skip confirmation.
-          annotations: { title: "Run an Agent402 tool", ...(mppLoopback ? CALL_PAID : SAFE) },
+          annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
           description:
             `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) ${mppLoopback ? "answer with a payment ask that is payable right here over MPP (the challenges ride in _meta[\"org.paymentauth/payment-required\"], and the text names every other way to pay)" : "return a paid-access setup guide instead"} - this connector holds no wallet of its own. An unknown slug returns an error pointing back to catalog.search.`,
           inputSchema: {
@@ -507,9 +510,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // authless connector: calling returns paid-access setup.
         ...[...flagshipSet].map((slug) => {
           const { def, free } = tools.get(slug);
-          const ann = FLAGSHIP_WRITERS.has(slug) ? WRITE
-            : FLAGSHIP_OPEN_WORLD.has(slug) ? OPEN
-            : SAFE;
+          // Every flagship reaches the network (the free ones included), so none is read-only.
+          const ann = NET;
           const access = free
             ? "[free, no wallet]"
             : `[wallet-required, ${def.price}/call]`;
@@ -536,7 +538,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             readOnlyHint: false,
             destructiveHint: false,
             idempotentHint: false,
-            openWorldHint: false,
+            openWorldHint: true,
           },
           description: `[free] Tell Agent402 about a capability its 500+ tools do not cover (catalog size ${tools.size}). Use it after catalog.search or catalog.find came back with nothing that fits, instead of giving up: requests are clustered by need, and the ones that keep coming up get built. Records demand only - it never returns a tool or runs anything. Same intake as POST ${baseUrl}/api/wish; aggregate demand is public at ${baseUrl}/api/wishes.`,
           inputSchema: {
@@ -556,14 +558,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: META_MCP_NAMES.describe_server,
           title: "About this Agent402 connector",
           annotations: { title: "About this Agent402 connector", ...SAFE },
-          description: "[free] Describe this connector: flagship-first tools layer (search/answer as the front door), how to install (Claude Code / Cursor / npm), free vs paid tiers, and discovery URLs. Call this first.",
+          description: "[free] Describe this connector: the tools it lists, how to install (Claude Code / Cursor / npm), free vs paid tiers, and discovery URLs.",
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
           outputSchema: META_OUTPUT_SCHEMAS["server.describe"],
         },
         ...(decideFeedback ? [{
           name: "decide.feedback",
           title: "Report how a decide plan step went",
-          annotations: { title: "Report how a decide plan step went", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          annotations: { title: "Report how a decide plan step went", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
           description: "[free] Report whether one step of a decide.plan decision worked (success or failure, optional 1-5 quality and latency). Needs the decisionId and feedbackToken that decide.plan returned; one verdict per step, a later report replaces it. Reports feed tool reliability in future rankings.",
           inputSchema: {
             type: "object",
@@ -587,12 +589,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
           },
         }] : []),
-        ...(getLeaderboard ? [{
+        ...(getLeaderboard && process.env.AGENT402_SHOW_ROUTER === "1" ? [{
           // Dotted Smithery Naming (sellers.list). Prior snake/digit names
           // remain CallTool aliases via resolveListedName.
           name: META_MCP_NAMES.list_top_sellers,
           title: "List top x402 sellers",
-          annotations: { title: "List top x402 sellers", ...SAFE },
+          annotations: { title: "List top x402 sellers", ...NET },
           description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled call counts, USDC totals and distinct buyers. wire=mpp: MPP (Machine Payments Protocol) sellers ranked by inbound USDC.e transfers on Tempo to the recipient their live 402 names (window count, rolling 7d/30d, distinct payers, volume; routable = this host's router will pay them). Use it to find other services in the open x402 / MPP ecosystem. This host's own wallet is excluded unless include is set to all.",
           inputSchema: {
             type: "object",

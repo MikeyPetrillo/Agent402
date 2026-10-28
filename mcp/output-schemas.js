@@ -492,12 +492,14 @@ export function mcpJsonResult(obj) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor / Smithery notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
+export const AGENT402_MCP_VERSION = "0.13.20";
+
 export function mcpInstallHints(baseUrl) {
   const hosted = `${baseUrl}/mcp`;
   return {
     hostedUrl: hosted,
     claudeCodeHosted: `claude mcp add --transport http agent402 ${hosted}`,
-    claudeCodeNpm: "claude mcp add agent402 -s user -- npx -y agent402-mcp@latest",
+    claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
     cursorMcpJson: {
       mcpServers: {
         agent402: { url: hosted },
@@ -527,22 +529,17 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
-    "Agent402 is a tools and models layer for AI agents (Havok Holdings LLC) - the applied layer of Agentic Finance: deterministic utilities, a metered model gateway and finished reports, paid per request over x402 or MPP, or free via proof-of-work on the pure-CPU tools.",
-    "One fact: call web.search or web.answer for live web search and cited answers.",
-    "Also listed: web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
-    "Long catalog (500+ tools): call catalog.find with your task, or catalog.search then catalog.call.",
+    "Agent402 is a catalog of 500+ tools for AI agents: per-call tools and metered models, paid in USDC over x402 or MPP, or free through proof-of-work for the pure-CPU tools.",
+    "Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
+    "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
     // Only where the decide tools are listed: an instruction must never name a
     // tool the connector does not advertise.
-    ...(decide ? ["A job that needs several tools: call decide.plan with the task for a call-ready plan (tools, order, fallbacks, inputs), then decide.execute to run it; the plan fee comes back as credit toward the run."] : []),
-    "Orientation: call server.describe. Payment rails / wallet setup: call payment.info.",
-    "Missing a tool: call demand.request. Ecosystem sellers: call sellers.list.",
-    `Install (npm + wallet, pays for web.search, web.answer and the rest): ${install.claudeCodeNpm}`,
-    // The hosted line says what that connector takes: with MPP on it, a wallet
-    // can pay the other tools there too.
-    `${mpp ? "Hosted (proof-of-work tools free; the rest payable there over MPP from a wallet)" : "No wallet yet (hosted, proof-of-work tools only)"}: ${install.claudeCodeHosted}`,
+    ...(decide ? ["Multi-step jobs: decide.plan returns a call-ready plan (tools, order, fallbacks, inputs); decide.execute runs it. The plan fee is credited toward the run."] : []),
+    "Also: server.describe (connector details), payment.info (wallet and payment setup), demand.request (report a missing tool).",
+    `Install (npm package, pinned): ${install.claudeCodeNpm}`,
+    `${mpp ? "Hosted connector (proof-of-work tools free; other tools payable over MPP from a wallet)" : "Hosted connector (proof-of-work tools free; others need a wallet on the npm package)"}: ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
-    `Why pay here (usage priced under a quoted ceiling, a failed x402 call is not charged and the receipt shows it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/#why`,
-    `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
+    `Docs: ${baseUrl}/llms.txt · status ${baseUrl}/status`,
   ].join("\n");
 }
 

@@ -2,6 +2,16 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-27",
+    title: "agent402-mcp 0.13.20: clearer tool safety labels and a $5 session budget",
+    items: [
+      "agent402-mcp 0.13.20: tools that reach the network are labelled not read-only and open-world, so hosts ask before running them; only the local describe and payment lookups are read-only.",
+      "agent402-mcp 0.13.20: the session spend budget defaults to $5 (AGENT402_BUDGET; off removes it). Before, no session cap applied by default.",
+      "agent402-mcp 0.13.20: router.execute and sellers.list are listed only when a wallet or credits key is set, or with AGENT402_SHOW_ROUTER=1. Calls to them still work.",
+      "agent402-mcp 0.13.20: install commands are pinned to a published version. The startup instructions list tools and prices, without install commands.",
+    ],
+  },
+  {
     date: "2026-10-23",
     title: "Spending caps count the price you pay",
     items: [
