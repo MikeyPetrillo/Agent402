@@ -506,6 +506,21 @@ Auto-closes when the word is ok.`;
     },
   },
   {
+    // A prepaid credits purchase refused by the daily limit or the EU/UK tax
+    // ID rule issues no key and is refunded by card; a refund that failed is
+    // owed by hand (creditsRefunds on /api/gateway-status). owed pages; ok
+    // clears; unknown or absent does neither.
+    title: "A refused credits purchase was not refunded",
+    verdict: ({ gateway: b }) => {
+      const w = b.creditsRefunds?.status;
+      if (w === "owed") return "bad";
+      return w === "ok" ? "good" : "quiet";
+    },
+    body: () => `/api/gateway-status reports creditsRefunds.status=owed: a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {"session":"cs_..."}.
+
+Auto-closes when nothing is owed.`,
+  },
+  {
     // Money writes (sales, refund debts, checkout finals, subscription and
     // decide records) kept on the container's local disk because the
     // state database has not taken them (ledgerDeadLetter on
