@@ -68,6 +68,7 @@ import {
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
+  clipToolDescription,
   mcpJsonResult,
   outputSchemaFromExample,
   toolInputBoundRefusal,
@@ -192,6 +193,8 @@ export function mcpPaymentMethods() {
 }
 
 export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
+  // sellers.list is listed and answered only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+  const sellersListed = Boolean(getLeaderboard) && process.env.AGENT402_SHOW_ROUTER === "1";
   const scoped = profile?.metaTools === false;
   const HIDDEN_WHEN_SCOPED = new Set([META_MCP_NAMES.search_tools, META_MCP_NAMES.find_tool, META_MCP_NAMES.call_tool, META_MCP_NAMES.request_tool, META_MCP_NAMES.list_top_sellers]);
   const listable = (arr) => (scoped ? arr.filter((t) => !HIDDEN_WHEN_SCOPED.has(t.name)) : arr);
@@ -216,7 +219,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // id, which every published version of the package passes through.
   const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", robinhood: "Robinhood Chain", arc: "Arc" };
   const otherEvm = RAILS.filter((r) => r.chainId && !Object.values(NPM_EVM_PRESETS).includes(r.name)).map((r) => `${r.name} ${r.caip2}`);
-  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by its CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  const npmEvmSetup = `Use a new wallet holding only a few dollars of USDC. Never your main wallet. AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by its CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
   // MPP start-here set (src/mpp-flagship.js) as served by this connector's
   // catalog, prices read from it. Surfaced in payment.info.
   const mppStartHere = mppFlagshipRows(catalog).map((r) => ({ slug: r.slug, method: r.method, path: r.path, url: `${baseUrl}${r.path}`, price: r.price, why: r.why }));
@@ -366,11 +369,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
   function walletRequiredText(def) {
     return [
-      `"${def.slug}" (${def.price}/call) needs per-call payment and is not part of this hosted free tier.`,
+      `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`,
       ...(mppLoopback ? [`Pay it RIGHT HERE over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `${mppLoopback ? "Or, from" : "To pay it from"} Claude or any MCP client, run the npm server with a funded wallet:`,
       `npx agent402-mcp with env ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
-      `Already hold a prepaid credits key? Run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP); new credits are not on sale. Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
+      `Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
 
@@ -436,14 +439,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     const CALL_PAID = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+    // Anything that reaches the network is not read-only and is open-world; only
+    // the local describe and payment-info lookups are read-only.
+    const NET = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: listable([
         {
           name: META_MCP_NAMES.search_tools,
           title: "Search the Agent402 tool catalog",
-          annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
+          annotations: { title: "Search the Agent402 tool catalog", ...NET },
           description:
-            `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ pay-per-call tools (exact count ${tools.size}). Start with the listed flagships for search/answer/news/render/data/transcribe/memory; use this when you need a long-tail slug. Counterpart catalog.find resolves a task to ONE ready-to-run pick - search explores, find decides. ${freeCount} pure-CPU tools run free here (proof-of-work); the rest are payable ${mppLoopback ? "right here over MPP (credential in _meta - mppx McpClient pays automatically) or " : ""}via npx agent402-mcp with a wallet. Also an OpenAI-compatible LLM gateway at ${baseUrl}/v1 (flat per-call; wallet = account). Returns { results, workflows }; run one with catalog.call.`,
+            `Keyword search over the Agent402 catalog of 500+ tools (${tools.size} loaded by this connector). Returns { results, workflows }; run one with catalog.call. ${freeCount} pure-CPU tools run free here (proof-of-work). The others are paid per call${mppLoopback ? ", payable here over MPP (credential in _meta; mppx McpClient pays automatically), or" : ", through"} npx agent402-mcp with a wallet.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -457,9 +463,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         {
           name: META_MCP_NAMES.find_tool,
           title: "Resolve a task to the one best Agent402 tool",
-          annotations: { title: "Resolve a task to the one best Agent402 tool", ...SAFE },
+          annotations: { title: "Resolve a task to the one best Agent402 tool", ...NET },
           description:
-            "DECIDE, don't browse: resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready - slug, price, input schema, and a worked example (its counterpart catalog.search returns a list of candidates to compare - search explores, find decides). Prefer this for anything outside the flagship list. Returns { task, results } with the top pick first; then run catalog.call with the chosen slug + params.",
+            "Resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
           inputSchema: {
             type: "object",
             properties: {
@@ -480,9 +486,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // memory, attest on-chain or buy from another seller, so it is
           // neither read-only nor idempotent, can be destructive, and reaches
           // the outside world. Hosts read readOnlyHint to skip confirmation.
-          annotations: { title: "Run an Agent402 tool", ...(mppLoopback ? CALL_PAID : SAFE) },
+          annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
           description:
-            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) ${mppLoopback ? "answer with a payment ask that is payable right here over MPP (the challenges ride in _meta[\"org.paymentauth/payment-required\"], and the text names every other way to pay)" : "return a paid-access setup guide instead"} - this connector holds no wallet of its own. An unknown slug returns an error pointing back to catalog.search.`,
+            `Run an Agent402 tool by slug, with params matching that tool's inputSchema; find slugs with catalog.find or catalog.search. The ${freeCount} pure-CPU tools run free here, rate-limited, through proof-of-work. ${mppLoopback ? "Paid tools are payable here over MPP (the challenges ride in _meta)." : "A paid tool answers with payment setup; see payment.info."} An unknown slug returns an error.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -498,7 +504,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Payment and wallet setup",
           annotations: { title: "Payment and wallet setup", ...SAFE },
           description:
-            `How paying for Agent402 tools works and how to manage a wallet. This hosted connector holds NO wallet: ${freeCount} pure-CPU tools run free here (or solve a proof-of-work puzzle), the rest - including search/answer and the /v1 OpenAI-compatible LLM gateway - settle in USDC via x402${mppLoopback ? " or over MPP (payable right here)" : ""}. Covers: the free vs paid split, how to configure a funded wallet + per-call and budget spend caps, the rails (${RAILS_OR}), and checking a wallet's balance/transaction history via catalog.call on wallet-balances / wallet-transactions. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
+            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${mppLoopback ? " or MPP (payable here)" : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
@@ -507,12 +513,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // authless connector: calling returns paid-access setup.
         ...[...flagshipSet].map((slug) => {
           const { def, free } = tools.get(slug);
-          const ann = FLAGSHIP_WRITERS.has(slug) ? WRITE
-            : FLAGSHIP_OPEN_WORLD.has(slug) ? OPEN
-            : SAFE;
+          // Every flagship reaches the network (the free ones included), so none is read-only.
+          const ann = NET;
           const access = free
             ? "[free, no wallet]"
-            : `[wallet-required, ${def.price}/call]`;
+            : `Paid (${def.price}/call):`;
           const walletNote = free
             ? ""
             : ` This hosted connector holds no wallet: ${mppLoopback ? "pay it here over MPP, or " : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.`;
@@ -522,7 +527,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             name: mcpNameOf(slug),
             title: def.name,
             annotations: { title: def.name, ...ann },
-            description: `${access} ${def.description}${returnsHint(def)}${walletNote}`,
+            description: clipToolDescription(`${access} ${def.description}${returnsHint(def)}${walletNote}`),
             inputSchema: schemaOf(def),
             outputSchema: outSchema,
           };
@@ -536,9 +541,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             readOnlyHint: false,
             destructiveHint: false,
             idempotentHint: false,
-            openWorldHint: false,
+            openWorldHint: true,
           },
-          description: `[free] Tell Agent402 about a capability its 500+ tools do not cover (catalog size ${tools.size}). Use it after catalog.search or catalog.find came back with nothing that fits, instead of giving up: requests are clustered by need, and the ones that keep coming up get built. Records demand only - it never returns a tool or runs anything. Same intake as POST ${baseUrl}/api/wish; aggregate demand is public at ${baseUrl}/api/wishes.`,
+          description: `[free] Report a capability the 500+ tools do not cover, after catalog.search or catalog.find found nothing that fits. Requests are clustered by need, and frequent ones get built. Records demand only: it runs nothing. Same intake as POST ${baseUrl}/api/wish; aggregate demand is public at ${baseUrl}/api/wishes.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -556,14 +561,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: META_MCP_NAMES.describe_server,
           title: "About this Agent402 connector",
           annotations: { title: "About this Agent402 connector", ...SAFE },
-          description: "[free] Describe this connector: flagship-first tools layer (search/answer as the front door), how to install (Claude Code / Cursor / npm), free vs paid tiers, and discovery URLs. Call this first.",
+          description: "[free] Describe this connector: the tools it lists, how to install (Claude Code / Cursor / npm), free vs paid tiers, and discovery URLs.",
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
           outputSchema: META_OUTPUT_SCHEMAS["server.describe"],
         },
         ...(decideFeedback ? [{
           name: "decide.feedback",
           title: "Report how a decide plan step went",
-          annotations: { title: "Report how a decide plan step went", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          annotations: { title: "Report how a decide plan step went", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
           description: "[free] Report whether one step of a decide.plan decision worked (success or failure, optional 1-5 quality and latency). Needs the decisionId and feedbackToken that decide.plan returned; one verdict per step, a later report replaces it. Reports feed tool reliability in future rankings.",
           inputSchema: {
             type: "object",
@@ -587,13 +592,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
           },
         }] : []),
-        ...(getLeaderboard ? [{
+        ...(sellersListed ? [{
           // Dotted Smithery Naming (sellers.list). Prior snake/digit names
           // remain CallTool aliases via resolveListedName.
           name: META_MCP_NAMES.list_top_sellers,
           title: "List top x402 sellers",
-          annotations: { title: "List top x402 sellers", ...SAFE },
-          description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled call counts, USDC totals and distinct buyers. wire=mpp: MPP (Machine Payments Protocol) sellers ranked by inbound USDC.e transfers on Tempo to the recipient their live 402 names (window count, rolling 7d/30d, distinct payers, volume; routable = this host's router will pay them). Use it to find other services in the open x402 / MPP ecosystem. This host's own wallet is excluded unless include is set to all.",
+          annotations: { title: "List top x402 sellers", ...NET },
+          description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled calls, USDC totals and distinct buyers. wire=mpp: MPP sellers ranked by inbound USDC.e transfers on Tempo. This host's own wallet is excluded unless include is all.",
           inputSchema: {
             type: "object",
             properties: {
@@ -1043,7 +1048,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
             clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
             paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
-            ...(getLeaderboard ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
+            ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
           });
@@ -1052,7 +1057,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           try { return mcpJsonResult(decideFeedback(args, { ip })); }
           catch (err) { return { content: [{ type: "text", text: err.statusCode && err.statusCode < 500 ? err.message : "feedback failed" }], isError: true }; }
         }
-        if (name === "sellers.list" && getLeaderboard && args.wire === "mpp") {
+        if (name === "sellers.list" && sellersListed && args.wire === "mpp") {
           // The MPP leaderboard (src/mpp-leaderboard.js) - same row discipline
           // as the x402 branch below: token-cheap rows, self hidden by default,
           // seller names are self-reported external content and marked so.
@@ -1098,7 +1103,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             source: `${baseUrl}/api/mpp-leaderboard`,
           });
         }
-        if (name === "sellers.list" && getLeaderboard) {
+        if (name === "sellers.list" && sellersListed) {
           const snap = getLeaderboard() || {};
           const limit = Math.min(Math.max(parseInt(args.limit, 10) || 10, 1), 50);
           const sort = args.sort === "calls" ? "calls" : "usd";

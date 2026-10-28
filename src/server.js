@@ -3376,7 +3376,7 @@ const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) => {
   htmlCache(res, 60, 300).send(
-    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: settledOnChainCount() })
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: settledOnChainCount(), external: settledExternalCount() })
   );
 });
 // /marketplaces — legacy surface, merged into /marketplace (301 keeps SEO equity).
@@ -8946,12 +8946,24 @@ if (!POW_SLUGS.has(PROBE_POW_SLUG)) {
 // in-process viaUSDC tally stays for ops - it can only count what this
 // process witnessed, and the chain is the ground truth. 60s memo because
 // homepage traffic must never pay a sqlite aggregate per render.
-let __settledMemo = { at: 0, n: 0 };
+let __settledMemo = { at: 0, n: 0, external: null };
 // railThroughput is the /revenue hero's own arithmetic: on-chain inbound
 // plus Tempo MPP once, never Base/Celo MPP (already on-chain).
 // Stored even at 0: an empty ledger used to recompute on every homepage hit.
-const storeSettledCount = ({ allTime, mpp }) => { const n = railThroughput({ allTime, mpp }).total; if (n >= 0) __settledMemo = { at: Date.now(), n }; };
+// External = paid by a buyer that is not one of our wallets (the /revenue
+// headline). Null when the ledger has not measured it yet.
+const externalSettled = (allTime) => {
+  const count = allTime?.allTimeExternalAllCount ?? allTime?.allTimeExternalWithTempoCount;
+  const usd = allTime?.allTimeExternalAllUsd ?? allTime?.allTimeExternalWithTempoUsd;
+  return Number.isFinite(Number(count)) && count !== undefined ? { count: Number(count), usd: Number(usd || 0) } : null;
+};
+const storeSettledCount = ({ allTime, mpp }) => { const n = railThroughput({ allTime, mpp }).total; if (n >= 0) __settledMemo = { at: Date.now(), n, external: externalSettled(allTime) }; };
 let __settledRefresh = null;
+// The homepage's external split, from the same memo (refreshed with the count).
+function settledExternalCount() {
+  settledOnChainCount();
+  return __settledMemo.external;
+}
 function settledOnChainCount() {
   if (Date.now() - __settledMemo.at < 60_000) return __settledMemo.n;
   // The first reading is taken in line so the page never shows a zero it has

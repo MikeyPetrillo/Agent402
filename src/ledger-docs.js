@@ -108,7 +108,8 @@ node demo.js
 
 <span style="color:var(--on-panel-faint);"># or settle USDC on Base with a funded EVM key (four packages, same file)
 </span>npm i @x402/core @x402/evm @x402/fetch viem
-AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
+<span style="color:var(--on-panel-faint);"># Use a new wallet holding only a few dollars of USDC. Never your main wallet.
+</span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       </div>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 14px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
@@ -133,7 +134,8 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
 </span>claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
-</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest
+# Use a new wallet holding only a few dollars of USDC. Never your main wallet.
+</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.20
 
 <span style="color:var(--on-panel-faint);"># Cursor - ~/.cursor/mcp.json
 </span>{

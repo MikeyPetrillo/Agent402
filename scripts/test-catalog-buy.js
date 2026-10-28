@@ -212,6 +212,7 @@ eq(gradeAnswer(row, { status: 402 }).grade, "unsettled", "a 402 after paying is 
 eq(gradeAnswer(row, { status: 500, body: { error: "x" } }).grade, "http-500", "a 5xx is graded by status");
 eq(gradeAnswer(row, { threw: "timeout" }).grade, "timeout", "a client timeout is graded timeout");
 eq(gradeAnswer(row, { threw: "fetch failed" }).grade, "unreachable", "a transport failure is graded unreachable");
+eq(gradeAnswer(row, { threw: "headers-overflow: the response headers exceed the 16 KB a Node client reads" }).grade, "headers-overflow", "a 402 too large for a Node client is graded headers-overflow, not unreachable");
 eq(gradeAnswer(row, { status: 200, bytes: 12 }).grade, "non-json", "bytes where JSON is documented fail");
 eq(gradeAnswer(catalog.find((r) => r.slug === "binary"), { status: 200, bytes: 12 }).grade, "ok", "bytes where bytes are documented pass");
 eq(gradeAnswer(catalog.find((r) => r.slug === "binary"), { status: 200, bytes: 0 }).grade, "empty-body", "an empty binary body fails");

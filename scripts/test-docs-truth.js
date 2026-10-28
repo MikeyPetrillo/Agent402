@@ -47,7 +47,7 @@ const packs = await (await fetch(`${TARGET}/api/skill-packs.json`)).json();
 // catalog now, and this pins that every "`METHOD /api/slug` ($x)" in the served
 // text equals the live price for that slug (an unknown slug prints no number).
 {
-  const llms = await (await fetch(`${TARGET}/llms.txt`)).text();
+  const llms = await (await fetch(`${TARGET}/llms-full.txt`)).text();
   const bySlug = Object.fromEntries((pricing.endpoints || []).map((e) => [e.slug, String(e.price || "")]));
   const re = /`(?:GET|POST) \/api\/([a-z0-9-]+)` \((\$[0-9.]+)\)/g;
   let m, seen = 0, stale = 0;

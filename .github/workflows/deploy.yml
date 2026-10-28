@@ -1174,7 +1174,7 @@ jobs:
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
-          t node scripts/test-listing-text-serve.js
+          t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -3528,7 +3528,7 @@ jobs:
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
+            AGENT402_SHOW_ROUTER=1 X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -3670,7 +3670,7 @@ jobs:
       # while dead; issue #730). Filter never calls metered routes; own-boot
       # strips keys too. Uses the shared FREE_MODE server when TARGET_URL is set.
       - name: Remote MCP connector (/mcp — initialize, search, free call, paid refusal)
-        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-http.js
+        run: AGENT402_SHOW_ROUTER=1 TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-http.js
 
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-all.js

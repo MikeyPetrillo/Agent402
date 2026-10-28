@@ -61,7 +61,7 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   re-runs weekly.
 - **MCP:** hosted connector `https://agent402.tools/mcp` (dotted tools:
   `catalog.search`, `catalog.find`, `catalog.call`, `payment.info`,
-  `server.describe`, `sellers.list`, `demand.request`, plus flagships `web.search`,
+  `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagships `web.search`,
   `web.answer`, `web.news`, `browser.render`, `market.quote`, `audio.transcribe`,
   `memory.read`, `memory.write`); wallet-only tools are payable on the connector
   over MPP (the challenge arrives as a JSON-RPC payment error, the credential

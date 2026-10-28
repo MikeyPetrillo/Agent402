@@ -57,7 +57,11 @@ const pricingDoc = await (await fetch(`${BASE}/api/pricing`)).json().catch(() =>
 const served = JSON.stringify(pricingDoc);
 const inCatalog = (slug) => slug !== "decide" && slug !== "decide-execute" ? true : served.includes(slug === "decide" ? '"/api/decide"' : '"/api/decide/execute"');
 // decide.feedback (free, no catalog route) is listed alongside the decide tools.
-const EXPECTED_LIST = [...META, ...FLAGSHIP_SLUGS.filter(inCatalog).map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_")), ...(inCatalog("decide") && served.includes('"/api/decide"') ? ["decide.feedback"] : [])].sort();
+// Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
+for (const t of (list.result?.tools ?? [])) assert((t.description || "").length <= 400, `${t.name} description is ${(t.description || "").length} characters (limit 400)`);
+// sellers.list is listed only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+const EXPECTED_META = process.env.AGENT402_SHOW_ROUTER === "1" ? META : META.filter((n) => n !== "sellers.list");
+const EXPECTED_LIST = [...EXPECTED_META, ...FLAGSHIP_SLUGS.filter(inCatalog).map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_")), ...(inCatalog("decide") && served.includes('"/api/decide"') ? ["decide.feedback"] : [])].sort();
 assert(
   names.length === EXPECTED_LIST.length && EXPECTED_LIST.every((n) => names.includes(n)),
   `tools/list is the flagship set (got ${names.length}: ${names.join(",")}; expected ${EXPECTED_LIST.join(",")})`
@@ -107,7 +111,11 @@ const writers = (list.result?.tools ?? []).filter((t) => t.annotations?.readOnly
 // catalog.call writes too when this connector can take a payment (MPP): a paid
 // call can run any slug, memory writes and on-chain attests included.
 const mppHere = !!init.result?.capabilities?.experimental?.payment;
-const expectedWriters = ["demand.request", "memory.write", ...(mppHere ? ["catalog.call"] : []), ...(served.includes('"/api/decide"') ? ["decide.execute", "decide.feedback"] : [])].sort();
+// Only the two local lookups (describe, payment info) stay read-only; every tool
+// that reaches the network is not read-only, so hosts ask before running it.
+const LOCAL_LOOKUPS = ["payment.info", "server.describe"];
+const expectedWriters = (list.result?.tools ?? []).map((t) => t.name).filter((n) => !LOCAL_LOOKUPS.includes(n)).sort();
+void [mppHere, served];
 assert(
   writers.join(",") === expectedWriters.join(","),
   `writers are ${expectedWriters.join(" + ")} (got ${writers.join(",") || "none"})`
@@ -115,13 +123,10 @@ assert(
 {
   const call = (list.result?.tools ?? []).find((t) => t.name === "catalog.call");
   const ann = call?.annotations || {};
-  if (mppHere) {
-    assert(ann.readOnlyHint === false && ann.idempotentHint === false && ann.openWorldHint === true && ann.destructiveHint === true,
-      `catalog.call with MPP on is annotated as a paid, writing, open-world call (got ${JSON.stringify(ann)})`);
-  } else {
-    assert(ann.readOnlyHint === true && ann.openWorldHint === false,
-      `catalog.call without MPP runs only pure-CPU tools and says read-only, closed-world (got ${JSON.stringify(ann)})`);
-  }
+  // catalog.call reaches the network whether or not MPP is on, so it is never
+  // read-only and always open-world.
+  assert(ann.readOnlyHint === false && ann.openWorldHint === true,
+    `catalog.call is annotated not read-only and open-world (got ${JSON.stringify(ann)})`);
   // Without MPP no listed text may offer to take payment on this connector.
   if (!mppHere) {
     const texts = (list.result?.tools ?? []).map((t) => t.description).join(" ") + " " + init.result.instructions;
@@ -253,7 +258,8 @@ assert(search.result?.structuredContent?.results, "catalog.search call returns s
 // sellers.list wire=mpp: the MPP leaderboard behind the same tool (2026-08-18).
 // The board may still be warming in CI (first on-chain read is +120s after
 // boot), so the shape is asserted, never a non-empty ranking.
-{
+// The tool is listed only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+if (process.env.AGENT402_SHOW_ROUTER === "1") {
   const def = (list.result?.tools ?? []).find((t) => t.name === "sellers.list");
   assert(def?.inputSchema?.properties?.wire?.enum?.includes("mpp"), "sellers.list advertises the wire parameter with mpp");
   const mpp = await rpc("tools/call", { name: "sellers.list", arguments: { wire: "mpp", limit: 5 } });

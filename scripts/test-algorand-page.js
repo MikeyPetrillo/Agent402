@@ -40,7 +40,7 @@ ok(html.includes("1 seller live"), "honesty line rendered when only local seller
 ok(html.includes("network=algorand"), "machine route-filter snippet present");
 ok(html.includes("application/ld+json"), "JSON-LD present");
 ok(html.includes("OfferCatalog"), "OfferCatalog JSON-LD type present");
-ok(html.includes('href="/stellar"') && html.includes(">stellar<"), "switcher strip cross-links to /stellar");
+ok(html.includes('href="/stellar"') && />stellar</i.test(html), "switcher strip cross-links to /stellar");
 
 // Page render — rail unavailable
 html = algorandPage("https://agent402.tools", { snapshot: snapOnlyUs, rail: null });

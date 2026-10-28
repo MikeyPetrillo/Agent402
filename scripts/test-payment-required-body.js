@@ -367,8 +367,12 @@ try {
     ok(body.resource?.url === decoded.resource?.url, `B3 body.resource.url is the header's (${body.resource?.url})`);
   }
 
-  // B4 a per-request metered quote is mirrored, never re-quoted
-  {
+  // B4 a per-request metered quote is mirrored, never re-quoted. The quote is
+  // priced from the private cost table; without it every quote is the floor, so
+  // the check says what is missing (and still fails under CI, where it must run).
+  const costTable = !!(process.env.UPSTREAM_COSTS_JSON || process.env.UPSTREAM_COSTS_FILE);
+  if (!costTable && !process.env.CI) console.log("skip - B4 needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a metered quote");
+  else {
     const METERED = "/v1/metered/chat/completions";
     const floor = await fetch(`${B}${METERED}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     ok(floor.status === 402, `B4 control: an empty metered body -> 402 (got ${floor.status})`);

@@ -1115,6 +1115,9 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       description: decideDescription(),
       tags: ["agents", "routing", "planning", "discovery", "x402"],
       discovery: {
+        // The 402 names each depth's price and carries the whole sample plan:
+        // those are the product, so the 402 budget never trims them.
+        keepListing: true,
         bodyType: "json",
         input: { task: DECIDE_EXAMPLE_TASK, depth: "plan" },
         inputSchema: {

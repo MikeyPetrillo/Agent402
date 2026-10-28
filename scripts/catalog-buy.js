@@ -297,7 +297,7 @@ export function planRun(catalog, { tier = "daily", only = "", skip = [], now = n
 /** The strict sweep's grade over one paid answer. Pure. */
 export function gradeAnswer(row, r) {
   if (r.grade) return { pass: false, grade: r.grade };
-  if (r.threw) return { pass: false, grade: /timeout|abort/i.test(r.threw) ? "timeout" : "unreachable" };
+  if (r.threw) return { pass: false, grade: /^headers-overflow/.test(r.threw) ? "headers-overflow" : /timeout|abort/i.test(r.threw) ? "timeout" : "unreachable" };
   if (r.status === 402) return { pass: false, grade: "unsettled" };
   if (r.status !== 200) return { pass: false, grade: `http-${r.status}` };
   if (r.bytes !== undefined) {
@@ -529,10 +529,13 @@ export async function runCatalogBuy({
         r = await attempt(row, url, init, timeout); attempts = 2;
       }
     } catch (e) {
-      r = { threw: String(e?.name === "TimeoutError" ? "timeout" : e?.message || e) }; attempts = attempts || 1;
+      // A 402 whose headers pass Node's 16 KB limit throws before a buyer can read
+      // the price: name it, because every stock Node x402 client fails the same way.
+      const overflow = e?.cause?.code === "UND_ERR_HEADERS_OVERFLOW";
+      r = { threw: overflow ? "headers-overflow: the response headers exceed the 16 KB a Node client reads" : String(e?.name === "TimeoutError" ? "timeout" : [e?.message, e?.cause?.code || e?.cause?.message].filter(Boolean).join(": ") || e) }; attempts = attempts || 1;
     }
     const { pass, grade } = gradeAnswer(row, r);
-    const errorBody = r.status >= 400 ? String(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
+    const errorBody = r.threw ? String(r.threw).slice(0, 300) : r.status >= 400 ? String(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
     const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, sentBody, errorBody, ...(sale ? { ownSaleOf: sale.slug } : {}) };
     noteSale(row, r, out);
     // The paid answer itself goes to the separate outputs file (redacted,

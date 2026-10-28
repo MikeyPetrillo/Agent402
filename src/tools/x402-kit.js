@@ -16,8 +16,6 @@
 // stay OFF the free hosted connector - the payments surface is the paid
 // HTTP/npm path.
 import { randomBytes } from "node:crypto";
-import sha3 from "js-sha3"; // CommonJS — default import, then destructure
-const { keccak256 } = sha3;
 
 // FR4-08: read a response body with a hard byte cap. `AbortSignal.timeout`
 // bounds elapsed time, not memory — a fast large response from a user-controlled
@@ -44,21 +42,18 @@ async function boundedText(res, maxBytes = X402_MAX_BODY_BYTES) {
 import { assertPublicUrl, ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
 import { leaderboardCadence } from "../refresh-cadence.js";
+import { createPublicClient, custom } from "viem";
+import { mainnet } from "viem/chains";
+import { normalize as normalizeEns } from "viem/ens";
 
-// ENS (Ethereum mainnet) — namehash + registry/resolver selectors for forward
-// resolution (name -> address). keccak256 over UTF-8 labels per EIP-137.
-const ENS_REGISTRY = "0x00000000000c2e074ec69a0dfb2997ba6c7d2e1e";
-const SEL_RESOLVER = "0x0178b8bf"; // resolver(bytes32)
-const SEL_ADDR = "0x3b3b57de"; // addr(bytes32)
-function namehash(name) {
-  let node = Buffer.alloc(32);
-  if (name) {
-    for (const label of name.toLowerCase().split(".").reverse()) {
-      const labelHash = Buffer.from(keccak256(label), "hex");
-      node = Buffer.from(keccak256(Buffer.concat([node, labelHash])), "hex");
-    }
-  }
-  return "0x" + node.toString("hex");
+// ENS (Ethereum mainnet) forward resolution goes through ENS's universal
+// resolver, the path current clients use: a name whose records moved off the
+// legacy registry answers there and nowhere else (nick.eth, measured
+// 2026-10-28). The calls ride this kit's own RPC list. Offchain (CCIP-read)
+// lookups are off: they fetch a URL the name's owner chooses, so a name that
+// only resolves through such a gateway reads as not found.
+function ensClient(eth) {
+  return createPublicClient({ chain: mainnet, ccipRead: false, transport: custom({ request: ({ method, params }) => rpc(eth, method, params, { revertsAreAnswers: method === "eth_call" }) }) });
 }
 const isZeroAddr = (a) => /^0x0*$/.test(a);
 
@@ -194,9 +189,12 @@ function formatUnits(raw, decimals) {
   return frac ? `${whole}.${frac}` : whole;
 }
 
-async function rpc(net, method, params, { passes = 2 } = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt < passes; attempt++) {
+// revertsAreAnswers: an eth_call that reverts is the contract's answer, not an
+// unavailable node, so it is thrown as a JSON-RPC error (code, message, data)
+// for the caller to read, and no other node is asked.
+async function rpc(net, method, params, { passes = 2, revertsAreAnswers = false } = {}) {
+  let lastErr, revert = null;
+  for (let attempt = 0; attempt < passes && !revert; attempt++) {
     for (const url of net.rpcs) {
       try {
         const r = await fetch(url, {
@@ -209,11 +207,16 @@ async function rpc(net, method, params, { passes = 2 } = {}) {
         const text = await boundedText(r);
         let j; try { j = JSON.parse(text); } catch { lastErr = new Error(`${url}: non-JSON`); continue; }
         if (j.result !== undefined) return j.result;
+        if (revertsAreAnswers && j.error && (j.error.code === 3 || /revert/i.test(String(j.error.message || "")))) {
+          revert = Object.assign(new Error(String(j.error.message || "execution reverted")), { code: j.error.code ?? 3, data: j.error.data });
+          break;
+        }
         lastErr = new Error(`${url}: ${JSON.stringify(j.error ?? j).slice(0, 120)}`);
       } catch (e) { lastErr = e; }
     }
-    if (attempt < passes - 1) await sleep(1000 * (attempt + 1));
+    if (!revert && attempt < passes - 1) await sleep(1000 * (attempt + 1));
   }
+  if (revert) throw revert;
   // lastErr.message can embed the RPC URL, which for the Alchemy robinhood
   // endpoint carries ALCHEMY_API_KEY — redact before it reaches the buyer/log.
   throw bad(`${net.key} RPC unavailable: ${redactSecrets(String(lastErr?.message ?? "")).slice(0, 200)}`, 502);
@@ -520,14 +523,20 @@ export const X402_TOOLS = [
     handler: async (i) => {
       const name = String(i.name ?? "").trim().toLowerCase();
       if (!name || !name.includes(".") || /\s/.test(name)) throw bad("name must be an ENS name like vitalik.eth");
-      const eth = resolveNetwork("ethereum");
-      const node = namehash(name).slice(2);
-      const resolverHex = await rpc(eth, "eth_call", [{ to: ENS_REGISTRY, data: SEL_RESOLVER + node }, "latest"]);
-      const resolver = "0x" + (resolverHex || "0x").slice(-40);
-      if (isZeroAddr(resolver)) return { name, address: null, found: false };
-      const addrHex = await rpc(eth, "eth_call", [{ to: resolver, data: SEL_ADDR + node }, "latest"]);
-      const address = "0x" + (addrHex || "0x").slice(-40);
-      if (isZeroAddr(address)) return { name, address: null, found: false };
+      let normalized;
+      try { normalized = normalizeEns(name); } catch { throw bad("name must be a valid ENS name like vitalik.eth"); }
+      // An RPC failure is our 502 (rpc throws it); a name with no resolver or
+      // no address record is an answer: found false.
+      let address = null;
+      try {
+        address = await ensClient(resolveNetwork("ethereum")).getEnsAddress({ name: normalized });
+      } catch (e) {
+        if (e?.statusCode) throw e;
+        const rpcCause = (function find(x) { return x ? (x.statusCode ? x : find(x.cause)) : null; })(e);
+        if (rpcCause) throw rpcCause;
+        address = null;
+      }
+      if (!address || isZeroAddr(address)) return { name, address: null, found: false };
       return { name, address, found: true };
     },
   },

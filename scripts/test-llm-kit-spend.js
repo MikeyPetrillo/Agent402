@@ -83,7 +83,9 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   const before = Date.parse("2027-01-13T23:59:59Z"), on = Date.parse("2027-01-14T00:00:00Z");
   const sunset = Object.keys(RETIRING).filter((k) => RETIRING[k].until === "2027-01-14");
   ok(sunset.length > 0 && sunset.every((k) => retiredSuccessor(k, before) === null && retiredSuccessor(k, on) === RETIRING[k].use), "each 2027 retiring id is served as itself until 2027-01-14, then by its successor");
-  ok(retiredSuccessor("o3-mini", Date.now()) === "o4-mini", "o3-mini, already retired, is served by o4-mini");
+  // OpenAI retired o3-mini and then o4-mini; both are served by gpt-5.6-terra.
+  ok(retiredSuccessor("o3-mini", Date.now()) === "gpt-5.6-terra" && retiredSuccessor("o4-mini", Date.now()) === "gpt-5.6-terra", "o3-mini and o4-mini, both retired, are served by gpt-5.6-terra");
+  ok(retiredSuccessor("o4-mini-2025-04-16", Date.now()) === "gpt-5.6-terra", "a dated o4-mini snapshot follows its family");
   ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("o3", on) === null, "dated snapshots follow their family; other ids are untouched");
 }
 

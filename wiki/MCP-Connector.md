@@ -36,7 +36,7 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `payment.info` | Free vs paid rails, wallet setup, spend caps, prepaid credits |
 | `server.describe` | Service description, install one-liners, free-vs-paid breakdown |
 | `demand.request` | Tell us a tool you needed that is missing (same intake as `POST /api/wish`) |
-| `sellers.list` | On-chain seller leaderboards: x402 sellers by Base USDC (default) or `wire: "mpp"` for MPP sellers by USDC.e transfers on Tempo |
+| `sellers.list` | On-chain seller leaderboards: x402 sellers by Base USDC (default) or `wire: "mpp"` for MPP sellers by USDC.e transfers on Tempo. Listed when a wallet or credits key is set, or with `AGENT402_SHOW_ROUTER=1` |
 
 `initialize` also returns **instructions** with the same front-door story and Claude/Cursor install one-liners, so clients that never call `server.describe` still get oriented.
 
@@ -48,7 +48,7 @@ The connector is also read every 6 hours by an independent client (the reference
 
 ```json
 { "mcpServers": { "agent402": {
-  "command": "npx", "args": ["-y", "agent402-mcp"],
+  "command": "npx", "args": ["-y", "agent402-mcp@0.13.20"],
   "env": {
     "AGENT_KEY": "0x<funded wallet key - optional>",
     "AGENT402_BUDGET": "1.00",
@@ -56,6 +56,8 @@ The connector is also read every 6 hours by an independent client (the reference
   }
 } } }
 ```
+
+**Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
 
 - **With `AGENT_KEY`** (an EVM wallet: it pays on any EVM chain the 402 offers, Base first; pin one with `AGENT402_NETWORKS`, e.g. `robinhood` for USDG on Robinhood Chain, or `eip155:5042` for USDC on Arc) **and/or `SOLANA_AGENT_KEY`** (a Solana wallet holding USDC on Solana): every tool works; each call settles via x402 invisibly under the MCP call. The service also accepts USDC on Stellar and Algorand, which this npm server does not sign. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
 - **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key already issued (`a402_…`) pays every wallet-only tool except the wallet-identity-bound ones, debited only on a successful call, inside the same spend controls. New credits are not on sale at the moment (see [`/credits`](https://agent402.tools/credits)); keys already issued keep working. See [[Reports and Monitors|Reports-and-Monitors]].
@@ -86,7 +88,7 @@ Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the
 | **Connector won't connect** in claude.ai/Claude Code | Confirm the URL is exactly `https://agent402.tools/mcp` (HTTPS, no trailing path). In Claude Code, `claude mcp list` should show `agent402 ✓ Connected`. If it's mid-deploy it can briefly drop - retry in ~60s. |
 | **"Error occurred during tool execution"** (transient) | Usually a redeploy window on the host; the same call succeeds on retry. The endpoint is health-gated in CI on every deploy. |
 | **`catalog.call` says a field is missing / "must be a number"** | Pass `params` as a JSON object, e.g. `{"slug":"unit-convert","params":{"value":42,"from":"kilometers","to":"miles"}}`. A stringified object (`"{\"value\":42}"`) is also accepted. |
-| **A tool returns "wallet required" / paid-path guidance** | That flagship (live search, browser render, STT, durable memory, …) isn't free on the authless hosted connector. Pay it in the call with an mppx MCP client, run the npm server `npx -y agent402-mcp` with `AGENT_KEY` (funded wallet) or `AGENT402_CREDITS_KEY` (prepaid card credits), or call it over HTTP with any x402 client. |
+| **A tool returns "wallet required" / paid-path guidance** | That flagship (live search, browser render, STT, durable memory, …) isn't free on the authless hosted connector. Pay it in the call with an mppx MCP client, run the npm server `npx -y agent402-mcp@0.13.20` with `AGENT_KEY` (funded wallet) or `AGENT402_CREDITS_KEY` (prepaid card credits), or call it over HTTP with any x402 client. |
 | **"Free-tier rate limit reached"** | The hosted connector is capped at 20 calls/min, 120/hour per client. Wait, or use the npm server with a wallet (or a prepaid credits key) for the paid, uncapped path. |
 | **Finding the right tool** | Call `catalog.find` with a plain-language task - it returns the best match ready to call (slug + example + the exact `catalog.call` invocation). `catalog.search` is the broader, lower-level browse. |
 | **My client still sends `find_tool` / `call_tool`** | Those names remain CallTool aliases and keep working; only the listing moved to the dotted names. |

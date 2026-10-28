@@ -208,13 +208,18 @@ try {
   // snake/digit aliases and raw kebab slugs.
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
+  // Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
+  for (const t of tools) if ((t.description || "").length > 400) fail(`${t.name} description is ${t.description.length} characters (limit 400)`);
   for (const required of [
     "catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe",
-    "sellers.list", "router.execute",
     "web.search", "web.answer", "web.news", "browser.render", "market.quote",
     "audio.transcribe", "memory.read", "memory.write",
   ]) {
     if (!names.includes(required)) fail(`tools/list missing "${required}" (got: ${names.join(", ")})`);
+  }
+  // With no wallet and no credits key, router.execute and sellers.list are not listed.
+  for (const hidden of ["sellers.list", "router.execute"]) {
+    if (names.includes(hidden)) fail(`tools/list lists "${hidden}" without a wallet (got: ${names.join(", ")})`);
   }
   if (names.some((n) => n.includes("-"))) fail(`tools/list names must not use kebab, found: ${names.filter((n) => n.includes("-")).join(", ")}`);
   if (
@@ -639,7 +644,7 @@ try {
 
     // Defaults: with neither variable set, a $5 quote is refused (the default
     // per-call cap), the default covers the dearest tool in the catalog, and
-    // there is no session budget (opt-in), so a long session is never refused.
+    // there is no session budget by default, so a heavy session is never refused.
     {
       const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
       try {

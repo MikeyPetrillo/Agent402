@@ -14,7 +14,7 @@
 // 2027-01-14. Each stays served as itself until then; from that day a
 // request naming one is served by its scheduled successor (RETIRING below)
 // and the answer names the swap in agent402_model_substituted.
-//   llm-premium  $0.50  — o3, o3-mini         (32k input, 2048 output)
+//   llm-premium  $0.50  - o3, gpt-5.6-terra   (32k input, 2048 output)
 
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
@@ -30,7 +30,9 @@ function bad(message, statusCode = 400) {
 const TIERS = {
   llm:           { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6-luna", "gpt-4o-mini"], maxInputChars: 16_000, maxTokens: 4096 },
   "llm-pro":     { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6.1-sol", "gpt-6-luna", "gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
-  "llm-premium": { prefixes: ["o3", "o3-mini", "o4-mini"], maxInputChars: 32_000, maxTokens: 2048 },
+  // o3-mini and o4-mini are still accepted by name: OpenAI retired both, and
+  // RETIRING serves them as gpt-5.6-terra, so an agent with an older id is answered.
+  "llm-premium": { defaultModel: "gpt-5.6-terra", prefixes: ["o3", "gpt-5.6-terra", "o3-mini", "o4-mini"], maxInputChars: 32_000, maxTokens: 2048 },
 };
 
 // OpenAI rates per 1M tokens, from the private table (src/upstream-costs.js,
@@ -76,7 +78,8 @@ export const RETIRING = Object.freeze({
   "gpt-4o": { until: "2027-01-14", use: "gpt-6.1-sol" },
   "gpt-4.1-mini": { until: "2027-01-14", use: "gpt-6-luna" },
   "gpt-4.1": { until: "2027-01-14", use: "gpt-6.1-sol" },
-  "o3-mini": { until: "2026-10-27", use: "o4-mini" },
+  "o3-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
+  "o4-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
 });
 /** The successor serving `model` at `now`, or null while it is still served as itself. */
 export function retiredSuccessor(model, now = Date.now()) {
@@ -397,14 +400,14 @@ export const LLM_TOOLS = [
     category: "ai",
     price: "$0.500",
     description:
-      "LLM inference proxy (Premium tier) - o3 or o3-mini reasoning models. Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 32k chars, output at 2048 tokens.",
-    tags: [...SHARED_TAGS, "o3", "o3-mini", "vision", "json-mode"],
+      "LLM inference proxy (Premium tier) - o3 or gpt-5.6-terra reasoning models (default gpt-5.6-terra; the retired o3-mini and o4-mini ids are served by gpt-5.6-terra). Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 32k chars, output at 2048 tokens.",
+    tags: [...SHARED_TAGS, "o3", "gpt-5.6-terra", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "o4-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "gpt-5.6-terra", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
-          model: { type: "string", description: "Model ID - o3 or o3-mini" },
+          model: { type: "string", description: "Model ID: o3 or gpt-5.6-terra (default gpt-5.6-terra). The retired o3-mini and o4-mini ids are served by gpt-5.6-terra." },
           messages: { type: "array", description: "Array of {role, content} objects. content can be a string or array of {type:'text',text} and {type:'image_url',image_url:{url,detail}} blocks" },
           max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 2048)" },
           response_format: { type: "object", description: 'Optional: {type:"json_object"} or {type:"json_schema",json_schema:{name,schema}}' },
@@ -412,11 +415,11 @@ export const LLM_TOOLS = [
           top_p: { type: "number", description: "Nucleus sampling (0-1)" },
           stop: { type: "string", description: "Stop sequence(s)" },
         },
-        required: ["model", "messages"],
+        required: ["messages"],
       },
       output: {
         example: {
-          model: "o4-mini",
+          model: "gpt-5.6-terra",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],

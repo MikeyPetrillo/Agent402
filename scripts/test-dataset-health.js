@@ -127,11 +127,13 @@ async function run({ sellers = HEALTHY_SELLERS, recorded = HEALTHY_RECORDED } = 
 {
   const src = readFileSync(new URL("./dataset-health.mjs", import.meta.url), "utf8");
   ok(/const WATCHED = \[/.test(src), "the daily check carries a watch list, so a partially-filled column is reported every day rather than remembered");
-  for (const c of ["primary_network", "discovery_path", "price_source", "networks"])
+  for (const c of ["primary_network", "discovery_path", "price_source"])
     ok(new RegExp(`column: "${c}"`).test(src), `${c} is watched (it was measurably short on the first recorded day)`);
   // price_outlier cleared its bar (84% filled against 70%), so a human promoted it: it is asserted now, not watched.
   ok(/routes: \[[^\]]*"price_outlier"[^\]]*\]/.test(src), "price_outlier is asserted in MUST_BE_POPULATED once it passed its watch bar");
   ok(!/column: "price_outlier"/.test(src), "and it is no longer on the watch list (a column is asserted or watched, not both)");
+  // routes.networks reached its 80% bar (80% on 2026-10-27), so it is asserted too.
+  ok(/routes: \[[^\]]*"networks"[^\]]*\]/.test(src) && !/column: "networks"/.test(src), "routes.networks is asserted in MUST_BE_POPULATED and no longer watched");
   ok(/READY TO ASSERT/.test(src), "and it says plainly when one has earned a place in MUST_BE_POPULATED");
   ok(!/MUST_BE_POPULATED\[w\.table\]\.push|MUST_BE_POPULATED\[.*\] =/.test(src),
      "promotion is a HUMAN edit: the check names the candidate and never widens its own contract, because a guard that grants itself new assertions can also grant itself none");

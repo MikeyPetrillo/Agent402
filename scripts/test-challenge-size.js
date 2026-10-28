@@ -17,6 +17,8 @@
 // hardcoded, which is why it sweeps the whole catalog instead of sampling.
 // Common proxy limits sit at 8 KB per header and 16 KB total.
 
+import { createHmac } from "node:crypto";
+
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 // This sweep walks every priced route on PRODUCTION on every CI run.
 // Unmarked, PostHog filed each of those 402s as an outside buyer's first look
@@ -63,6 +65,11 @@ if (LOCAL_BOOT) {
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    // Routes production serves behind a key (X, Farcaster, Exa, judge, RugCheck,
+    // speech): placeholder keys mount them so their 402 is this tree's, not
+    // production's old one. Only the unpaid 402 is read; no upstream is called.
+    X_BEARER_TOKEN: "challenge-size-placeholder", NEYNAR_API_KEY: "challenge-size-placeholder", EXA_API_KEY: "challenge-size-placeholder",
+    TYPESAFE_API_KEY: "challenge-size-placeholder", RUGCHECK_TOOLS: "on", OPENROUTER_TTS_ENABLED: "true",
     // Mount the Decide routes too (their challenge is among the largest), with
     // a placeholder service that is never called: only the 402 is read.
     DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "challenge-size-")), "decide.db"),
@@ -132,9 +139,13 @@ const WARN_HEADER_BYTES = Number(process.env.WARN_CHALLENGE_HEADER_BYTES) || 9_0
 // The whole 402, every header: a Node fetch client reads at most 16 KB of
 // response headers, and past that the buyer sees a header overflow, not a
 // paywall. The challenge shares that budget with the MPP challenge, CORS and
-// the security headers, so the bound is on the total, with room for more rails.
-const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 13_800;
-const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 12_500;
+// the security headers, so the bound is on the total. 16 offers and the MPP
+// challenge are fixed per route; the per-route part has its own budget
+// (CHALLENGE_VARIABLE_MAX_BYTES in src/payments.js). 15,900 leaves about 480
+// bytes under Node's 16,384, about one more rail; the watch line flags the
+// routes to look at before a rail is added.
+const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 15_900;
+const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 15_500;
 // The body that provokes the largest challenge on the gateway: a priced
 // model widens the MPP challenge (its quote rides in every method's request).
 const GATEWAY_BODY = JSON.stringify({ model: "openai/gpt-5", max_tokens: 300, messages: [{ role: "user", content: "Reply with the single word: settled" }] });
@@ -224,6 +235,7 @@ if (override.length) {
 
 const rows = [];
 const skipped = [];
+const statuses = {};
 const queue = [...probes];
 async function worker() {
   while (queue.length) {
@@ -236,7 +248,7 @@ async function worker() {
         body: bodyFor(t),
       });
     } catch (e) { skipped.push(`${t.slug}: ${String(e.message).slice(0, 40)}`); continue; }
-    if (res.status !== 402) continue; // free tier, or FREE_MODE: nothing to bound
+    if (res.status !== 402) { statuses[res.status] = (statuses[res.status] || 0) + 1; continue; } // free tier, or FREE_MODE: nothing to bound
     const h = res.headers.get("payment-required") || "";
     if (!h) { rows.push({ slug: t.slug, bytes: -1 }); continue; }
     const total = headerBytes(res);
@@ -267,7 +279,15 @@ const sized = rows.filter((r) => r.bytes >= 0).sort((a, b) => b.bytes - a.bytes)
 if (!sized.length) {
   // FREE_MODE boots answer 200 everywhere - there is no challenge to bound,
   // and reporting that as a pass would be a green run that proved nothing.
-  console.log(`no paywalled route answered a 402 on ${TARGET} - this guard needs a PAID-mode server`);
+  // A local FREE_MODE boot has nothing to measure. Production always has paid
+  // routes, so no 402 from it means the sweep could not read what a buyer gets:
+  // that is a failure, never a pass that proved nothing.
+  const seen = `statuses ${JSON.stringify(statuses)}; ${skipped.length} unreadable${skipped.length ? ` (${skipped.slice(0, 3).join("; ")})` : ""}`;
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(TARGET)) {
+    console.log(`FAIL - no paywalled route on ${TARGET} answered a readable 402 (${seen})`);
+    process.exit(1);
+  }
+  console.log(`no paywalled route answered a 402 on ${TARGET} - this guard needs a PAID-mode server (${seen})`);
   console.log("SKIPPED: nothing to measure");
   process.exit(0);
 }

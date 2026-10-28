@@ -1,6 +1,6 @@
 {
   "name": "agent402",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "500+ pay-per-call tools for AI agents over x402 or MPP, or free via proof-of-work for pure-compute tools. Find a tool with catalog.find and call it.",
   "author": {
     "name": "Havok Holdings LLC",
@@ -9,6 +9,15 @@
   "homepage": "https://agent402.tools",
   "repository": "https://github.com/MikeyPetrillo/Agent402",
   "license": "AGPL-3.0-or-later",
-  "keywords": ["mcp", "x402", "mpp", "tools", "agents", "payments"],
+  "keywords": [
+    "mcp",
+    "x402",
+    "mpp",
+    "tools",
+    "agents",
+    "payments"
+  ],
+  "icon": "./.claude-plugin/icon.png",
+  "privacyPolicyUrl": "https://agent402.tools/privacy",
   "mcpServers": "./.mcp.json"
 }

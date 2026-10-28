@@ -157,7 +157,7 @@ export const PAGE_CHANGE_TOOLS = [
     route: "POST /api/page-change",
     name: "Page change detection",
     slug: "page-change",
-    aliases: ["website-change", "page-monitor", "page-diff"],
+    aliases: ["website-change", "page-monitor", "page-diff", "urlwatch", "url-watch", "watch-page"],
     category: "web",
     price: "$0.004",
     description:

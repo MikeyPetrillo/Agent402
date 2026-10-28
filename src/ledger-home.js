@@ -169,9 +169,14 @@ function decideDoorHtml() {
   </div>`;
 }
 
-export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, skillPacks, { settledOnChain = 0 } = {}) {
+export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
+  // The headline's "N utilities": catalog tools in the pure utility categories
+  // (conversion, text, math, encoding, generators, time, validation, network),
+  // counted from the live catalog, never typed.
+  const UTILITY_CATEGORIES = new Set(["conversion", "text", "math", "encoding", "identifiers", "time", "validation", "network"]);
+  const utilityCount = tools.filter((t) => UTILITY_CATEGORIES.has(t.category)).length;
   const freeCount = tools.filter(isComputePayable).length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
   const served = stats?.toolCallsServed || {};
@@ -186,13 +191,20 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   // boot, but a number that changes meaning silently is worse than a number
   // that is briefly missing.
   const heroFromChain = Number(settledOnChain) > 0;
-  const heroCount = heroFromChain ? Number(settledOnChain) : viaUsdc;
+  // The headline leads with EXTERNAL payments (buyers outside our wallets) and
+  // external revenue; our own test purchases sit in a footnote beneath it.
+  const hasExternal = external && Number.isFinite(Number(external.count)) && heroFromChain;
+  const ownTestPurchases = hasExternal ? Math.max(0, Number(settledOnChain) - Number(external.count)) : 0;
+  const heroCount = hasExternal ? Number(external.count) : heroFromChain ? Number(settledOnChain) : viaUsdc;
   // The live view's /embed may be framed only by agent402.tools, so a server
   // on any other origin (a self-hosted copy, CI on 127.0.0.1) links to it
   // instead of rendering a frame the browser would refuse.
   const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
   // Tags, each kept on one line, wrapping between tags at phone width.
-  const heroLabel = (heroFromChain ? ["on-chain settlements received", "all rails", "including our own test purchases"] : ["calls served", "paid in stablecoin"]).map((t) => `<span>${t}</span>`).join("");
+  const heroLabel = (hasExternal
+    ? ["external payments", `$${Number(external.usd || 0).toFixed(2)} external revenue`]
+    : heroFromChain ? ["on-chain settlements received", "all rails", "including our own test purchases"] : ["calls served", "paid in stablecoin"]).map((t) => `<span>${t}</span>`).join("");
+  const heroFootnote = hasExternal ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--on-panel-faint);margin-top:6px;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
@@ -291,8 +303,8 @@ ${WHY_SECTION_CSS}
   <div style="max-width:1180px;margin:0 auto;padding:84px 30px 56px;position:relative;">
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
-        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">No account. No API key. No card on file.</div>
-        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">Pay for any API call <span style="color:var(--faint);">without an account.</span></h1>
+        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For AI agents</div>
+        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">Web search, browser rendering, SEC filings and market data, plus ${fmtNum(utilityCount)} utilities.</h1>
         <p class="hm-lede" style="margin:0;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and the call is served. 500+ tools priced in cents, models metered under a quoted ceiling, and a receipt on every settled call.</p>
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
@@ -333,6 +345,7 @@ ${WHY_SECTION_CSS}
               <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel-soft);">Settlement count loading</span>
             </div>
             <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
+            ${heroFootnote}
           </div>
           <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify settlements on Basescan ↗</a><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> free calls via proof-of-work</span></div>
         </div>

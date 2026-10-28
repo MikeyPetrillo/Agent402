@@ -191,7 +191,7 @@ async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetch
   let txn = null, lastErr = "";
   for (const url of rpcs) {
     try {
-      txn = await rpc(url, "getTransaction", [tx, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], fetchImpl, timeoutMs);
+      txn = await rpc(url, "getTransaction", [tx, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }], fetchImpl, timeoutMs);
       if (txn) break;
     } catch (e) { lastErr = e.message; }
   }

@@ -284,7 +284,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.20")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -292,11 +292,12 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"],
+      "args": ["-y", "agent402-mcp@0.13.20"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
 }` },
+        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong>`),
       ]],
       ["The hosted connector", [
         P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result with the MPP challenges in ${C('_meta["org.paymentauth/payment-required"]')}, so a host that does not speak MPP still shows the user something useful. An MCP client wrapped with mppx's ${C("McpClient.wrap()")} reads the challenges, pays, and retries with the credential in ${C('_meta["org.paymentauth/credential"]')}; the result comes back with ${C('_meta["org.paymentauth/receipt"]')}. A credential that is refused is JSON-RPC error ${C("-32043")}.`),

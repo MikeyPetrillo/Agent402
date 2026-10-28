@@ -1,59 +1,39 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools), the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance) - a catalog of **500+ pay-per-call web tools and curated multi-tool skill packs** for AI agents, paid per call in USDC via the [x402 protocol](https://www.x402.org), **with compute (proof-of-work)** when no wallet is configured, or through a prepaid credits key already issued. (The hosted API is dual-stack: it also accepts [MPP](https://agent402.tools/what-is-mpp) clients on the same 402, settling on Base/Celo or natively on Tempo; this package pays via x402 or credits.) Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
-
-Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live web search **+ web answers with citations**, live **financial/crypto/macro data** (US equity quotes and daily bars from a licensed feed, CoinGecko, FRED, ECB FX, World Bank, yield curve), **SEC EDGAR filings** (10-K/10-Q text, XBRL, insider, 13F, IPO calendar), **deterministic stats & forecasting** (Pearson correlation, OLS, Holt-Winters), **compression** (gzip/brotli), DNS/TLS/WHOIS + email-deliverability checks, wallet-keyed shared memory, and the pure-CPU utilities - plus **skill packs** like `security-audit`, `trend-analysis`, `structured-scrape`, `decode-blob`, and `forecasting-bake-off` callable as MCP prompts, and the **report products** (deep research, company dossier, 13F fund report, domain audit, token risk, FDA recall, insider flow, market brief) as ordinary catalog slugs. Payment handled invisibly underneath the MCP calls. No signup, no API key.
+MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance: a catalog of **500+ web tools** that AI agents call one request at a time, paid per call in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
 
 ## Quick start
 
-**Zero install (hosted connector):** add `https://agent402.tools/mcp` as a remote
-MCP server - e.g. claude.ai → Settings → Connectors → Add custom connector. The
-pure-CPU tools run free there (rate-limited), and the paid tools are payable
-right on the connector over [MPP](https://agent402.tools/what-is-mpp): a paid
-call answers JSON-RPC error `-32042` carrying the challenges (`-32043` if a presented credential was refused), and an MCP client
-wrapped with `mppx`'s `McpClient.wrap()` (USDC on Base/Celo, or native Tempo)
-pays and retries on its own, receipt in `_meta`. For no rate limit, or to pay
-over x402 or with a credits key already issued, run this package locally:
+Pick one setup. Both run locally through `npx`.
 
-With a funded wallet (USDC on any EVM rail the server offers - Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc - or USDG on Robinhood Chain, or USDC on Solana via `SOLANA_AGENT_KEY`; the service also settles on Stellar and Algorand, which this package does not sign) - every tool available:
+**1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
+
+```
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
+```
+
+**2. Paid, with a wallet.** Paid tools are settled in USDC on each call.
 
 ```json
 {
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"],
+      "args": ["-y", "agent402-mcp@0.13.20"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
 }
 ```
 
-With a prepaid credits key already issued (new credits are not on sale) - every tool except the wallet-scoped ones (memory, usage) is available:
+> Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-```json
-{
-  "mcpServers": {
-    "agent402": {
-      "command": "npx",
-      "args": ["-y", "agent402-mcp"],
-      "env": { "AGENT402_CREDITS_KEY": "a402_YOUR_KEY" }
-    }
-  }
-}
-```
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $4 by default; there is no session budget unless you set `AGENT402_BUDGET`.
 
-Without a wallet or credits key - the pure-CPU tools work free via proof-of-work (the network/browser/memory tools will ask for a wallet or a credits key):
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.20`
+(use a new wallet holding only a few dollars of USDC; never your main wallet).
 
-```json
-{
-  "mcpServers": {
-    "agent402": { "command": "npx", "args": ["-y", "agent402-mcp"] }
-  }
-}
-```
-
-Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
+Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
 
 ## Configuration
 
@@ -67,22 +47,22 @@ Every variable the server reads (all optional):
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `4` | Refuse any single call priced above this many USD (e.g. `0.05`); `off` disables it. Applies to the wallet and the credits path. |
-| `AGENT402_BUDGET` | no session cap | Opt-in hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. Applies to the wallet and the credits path. |
+| `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. Applies to the wallet and the credits path. |
+| `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet or credits key is set. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
 | `AGENT402_ASYNC_TIMEOUT_MS` | `900000` | How long to poll a job before answering with its link (`structuredContent.jobUrl`) to collect later. |
 
 The per-call cap is on by default and the session budget is opt-in; both are
 enforced on the payment that is signed (or before a credits call is sent) - a
-runaway model is refused, not billed. The
+call over the cap is refused before anything is signed. The
 wallet's x402 client carries a policy that drops every payment option over the
 per-call cap or what is left of the budget, so the 402 the wallet signs is held
 to the caps, and a wallet call sends no unpaid preflight first. Each option is priced from the
 known decimals of its asset (USDC on each rail, USDG on Robinhood Chain), never
 from a decimals value in the challenge, and an option in any other asset is not
 signed. A value that is not a USD amount or `off` reads as the default (the
-$4 per-call cap; no session cap). Set `AGENT402_BUDGET` to bound what one
-session may spend in total.
+$4 per-call cap and no session budget). Set `AGENT402_BUDGET` to cap the session total.
 `payment.info` reports the caps, what's been spent, and what remains. With no wallet key and no credits key,
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
@@ -91,6 +71,16 @@ at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so the default per-call cap of $4 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling.
+
+## Advanced
+
+**Hosted connector (no install).** Add `https://agent402.tools/mcp` as a remote MCP server (for example claude.ai → Settings → Connectors → Add custom connector). Pure-CPU tools run free there, rate-limited. Paid tools are payable on the connector over [MPP](https://agent402.tools/what-is-mpp): a paid call answers JSON-RPC error `-32042` with the payment challenges, and `-32043` if a credential you presented was refused. An MCP client wrapped with `mppx`'s `McpClient.wrap()` pays and retries on its own, with the receipt in `_meta`. This package runs locally for no rate limit, or to pay over x402.
+
+**Chains.** With a funded wallet, `AGENT_KEY` pays USDC on any EVM chain the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc) or USDG on Robinhood Chain. `SOLANA_AGENT_KEY` pays USDC on Solana. The service also settles on Stellar and Algorand, which this package does not sign. Restrict or order chains with `AGENT402_NETWORKS`.
+
+**Credits key.** A prepaid credits key already issued (`AGENT402_CREDITS_KEY`) pays from its balance. New credits are not on sale.
+
+**Error codes.** `-32042` payment required (the challenges are in the error data). `-32043` a presented credential was refused.
 
 ## How it works
 

@@ -37,7 +37,6 @@ const TOC = [
   ["#rule", "One rule on every rail"],
   ["#x402", "x402: a stablecoin from a wallet"],
   ["#mpp", "MPP: Tempo, EVM and card"],
-  ["#credits", "Prepaid credits"],
   ["#free", "Free with proof-of-work"],
   ["#mcp", "From an MCP host"],
   ["#failed", "When a call fails"],
@@ -77,9 +76,9 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
   const enabledSet = Array.isArray(networks) ? new Set(networks.map((n) => String(n).toLowerCase())) : null;
   const rails = enabledSet ? liveRails().filter((r) => enabledSet.has(railKey(r))) : RAILS;
   const canonical = `${baseUrl}/how-to-pay`;
-  const title = "How to pay for a call: x402, MPP, credits or proof-of-work";
+  const title = "How to pay for a call: x402, MPP or proof-of-work";
   const description =
-    "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, prepaid credits, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
+    "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
 
   // ---- derived facts -------------------------------------------------------
   const usdcRails = rails.filter((r) => r.asset === "USDC");
@@ -305,10 +304,11 @@ ${section("mcp", `
 claude mcp add --transport http agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@latest
+# Use a new wallet holding only a few dollars of USDC. Never your main wallet.
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.20
 
 # a credits key already issued works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@latest`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.13.20`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 

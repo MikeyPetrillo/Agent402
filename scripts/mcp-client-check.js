@@ -42,7 +42,9 @@ const TOTAL_MS = Number(process.env.MCP_CHECK_TOTAL_TIMEOUT_MS) || 180_000;
 // The listed surface as a client sees it (src/mcp-http.js lists these; the
 // decide tools appear only on an instance with the decide service, so they are
 // not required here).
-const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "sellers.list", "demand.request"];
+const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "demand.request"];
+// sellers.list is listed only on a connector that opts in (AGENT402_SHOW_ROUTER=1);
+// it is checked when listed and never required.
 const FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "market.quote", "audio.transcribe", "memory.read", "memory.write"];
 const EXPECTED_TOOLS = [...META_TOOLS, ...FLAGSHIP_TOOLS];
 
@@ -145,7 +147,7 @@ await check("tools/list: every expected dotted tool is listed with a description
 // 3. server.describe
 await check("server.describe: JSON answer naming the maintainer and the first job", async () => {
   const j = jsonAnswer(await callTool("server.describe"), "server.describe");
-  assert(typeof j.maintainer === "string" && j.maintainer.includes("Havok Holdings LLC"), "maintainer missing");
+  assert(typeof j.maintainer === "string" && j.maintainer.includes("Havok Holdings LLC"), "maintainer missing or not the legal name");
   assert(typeof j.startHere?.firstJob === "string" && j.startHere.firstJob.length > 0, "startHere.firstJob missing");
 });
 
@@ -173,7 +175,8 @@ await check("catalog.find: a task phrase resolves to a ready catalog.call invoca
 });
 
 // 7. sellers.list (the board may still be warming on a fresh boot: shape only)
-await check("sellers.list: JSON answer with a results array", async () => {
+await check("sellers.list: JSON answer with a results array, when the connector lists it", async () => {
+  if (!listed.some((t) => t.name === "sellers.list")) return "not listed on this connector (opt-in off)";
   const j = jsonAnswer(await callTool("sellers.list", { limit: 3 }), "sellers.list");
   assert(Array.isArray(j.results), "results is not an array");
   return `${j.results.length} rows`;

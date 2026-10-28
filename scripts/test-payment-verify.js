@@ -222,6 +222,16 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
     "a short Solana transfer -> unverified");
   ok((await solRun(null)).verified === false, "a missing Solana transaction -> unverified");
   ok((await solRun(good, { tx: "short" })).verified === false, "a junk signature -> unverified");
+  // A version 1 transaction: a node refuses a request that allows only version 0
+  // (-32015), so the reader must ask for version 1 or the paid call is refused.
+  const v1Rpc = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.params?.[1]?.maxSupportedTransactionVersion === 0) {
+      return { ok: true, json: async () => ({ error: { code: -32015, message: "Transaction version (1) is not supported by the requesting client" } }) };
+    }
+    return { ok: true, json: async () => ({ result: { meta: good } }) };
+  };
+  ok((await solRun(good, { fetchImpl: v1Rpc })).verified === true, "a version 1 Solana transaction verifies (the reader asks for version 1)");
 }
 
 // 14. ALGORAND. The indexer stores only confirmed transactions, but sender,

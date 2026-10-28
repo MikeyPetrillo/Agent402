@@ -66,7 +66,9 @@ ok(manifest.discovery.sortOptions.includes("usd") && manifest.discovery.sortOpti
 // or custom router can dispatch on the typed shape (not just prose).
 ok(manifest.discovery.leaderboardSurfaces && typeof manifest.discovery.leaderboardSurfaces === "object", "manifest.discovery.leaderboardSurfaces present");
 ok(manifest.discovery.leaderboardSurfaces.http === `${BASE}/api/leaderboard`, "leaderboardSurfaces.http = /api/leaderboard");
-ok(manifest.discovery.leaderboardSurfaces.mcpTool === "sellers.list", "leaderboardSurfaces.mcpTool = sellers.list");
+// sellers.list is named only when the connector lists it (AGENT402_SHOW_ROUTER=1).
+if (process.env.AGENT402_SHOW_ROUTER === "1") ok(manifest.discovery.leaderboardSurfaces.mcpTool === "sellers.list", "leaderboardSurfaces.mcpTool = sellers.list");
+else ok(manifest.discovery.leaderboardSurfaces.mcpTool === undefined, "leaderboardSurfaces names no MCP tool while sellers.list is not listed");
 ok(manifest.discovery.leaderboardSurfaces.sdkMethod === "topSellers", "leaderboardSurfaces.sdkMethod = topSellers");
 ok(manifest.machineReadable.findTool && manifest.discovery.neutralRouter, "manifest still exposes find + router");
 // Must serialize (it is served as JSON).

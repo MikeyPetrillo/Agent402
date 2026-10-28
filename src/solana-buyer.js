@@ -124,7 +124,7 @@ export async function solanaInboundCount(payTo, { windowMs = SVM_WINDOW_MS(), li
   const funders = new Set();
   const CHUNK = Number(process.env.SOR_SVM_TX_CONCURRENCY || "12");
   const readOne = (signature) =>
-    rpcCall("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { fetchImpl })
+    rpcCall("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }], { fetchImpl })
       .catch(() => null);                            // one unreadable tx is not fatal
   let credits = 0;
   for (let off = 0; off < toRead.length && credits < stopAt; off += CHUNK) {
@@ -393,7 +393,7 @@ export async function confirmSvmNotDebited({ wallet, sinceUnix, graceMs = 8000, 
       const recent = (sigs || []).filter((s) => !s.err && Number(s.blockTime || 0) >= cutoff);
       observed = recent.length;
       for (const s of recent) {
-        const tx = await rpcCall("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], { fetchImpl });
+        const tx = await rpcCall("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }], { fetchImpl });
         const meta = tx?.meta;
         if (!meta || meta.err) continue;
         const bal = (list) => Number((list || []).find((b) => b?.mint === USDC_MINT && b?.owner === wallet)?.uiTokenAmount?.amount || 0);

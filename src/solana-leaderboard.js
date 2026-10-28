@@ -196,7 +196,7 @@ export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windo
     for (let off = 0; off < live.length; off += txConcurrency) {
       const chunk = live.slice(off, off + txConcurrency);
       const got = await Promise.all(chunk.map(async (s) => {
-        const args = [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }];
+        const args = [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }];
         let tx;
         try { tx = await call("getTransaction", args); }
         catch {
