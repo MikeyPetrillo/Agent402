@@ -30,7 +30,7 @@ Character config:
 `AGENT402_CREDITS_KEY` is a prepaid card-credits key issued at
 https://agent402.tools/credits (shown once, emailed; that page says whether new
 keys are on sale). It pays Agent402's own services; the routes that buy from an
-outside seller (the route-execute tiers, `seller-payability`, `decide-execute`) and
+outside seller (the route-execute tiers, `seller-payability`, `decide-execute` and the flight routes) and
 the wallet-identity tools need the wallet below. To pay from a wallet
 instead, set `AGENT402_WALLET_KEY` (an EVM key holding USDC on Base) and
 install the optional peers `@x402/fetch @x402/evm viem`. With neither, the

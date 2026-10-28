@@ -8,7 +8,7 @@ request** from the body, paid in **USDC over x402** from a wallet or with a
 prepaid credits key (agent402.tools/credits says whether packs are on sale). The
 same key and gateway reach Agent402's 500+ pay-per-call tools; credits pay
 Agent402's own services, so the routes that buy from an outside seller
-(the route-execute tiers, `seller-payability`, `decide-execute`) need a wallet.
+(the route-execute tiers, `seller-payability`, `decide-execute` and the flight routes) need a wallet.
 
 Guide: https://agent402.tools/guides/openclaw-model-provider
 

@@ -90,7 +90,7 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 - **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar.
 - **Balance:** `GET /api/credits/balance` (same header) returns what is left. An insufficient or unknown key answers `402` with `{ reason, balanceUsd }`.
 - **Identity-bound tools refuse credits.** The memory tools, `my-usage`, `receipts`, `attest` and `feedback` use the payer's signed wallet as identity; a credits key carries no verified wallet, so those routes answer `402` with `reason: "identity-bound"` and must be paid over an x402 rail.
-- **Outside-seller routes refuse credits.** The route-execute tiers, `seller-payability` and `/api/decide/execute` buy from an outside seller with our wallet, so they answer `402` with `reason: "third-party-purchase"` and take a wallet payment only (x402, or MPP on a chain).
+- **Outside-seller routes refuse credits.** The route-execute tiers, `seller-payability`, `/api/decide/execute` and the flight routes buy from an outside seller with our wallet, so they answer `402` with `reason: "third-party-purchase"` and take a wallet payment only (x402, or MPP on a chain).
 - **In the SDKs:** `agent402-mcp` (0.13.0+) reads `AGENT402_CREDITS_KEY`; `agent402-client` (0.7.0+) accepts `{ creditsKey }`. Both keep their per-call and budget caps in front of the key.
 
 ## How this fits the rest

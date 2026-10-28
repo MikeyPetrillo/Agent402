@@ -78,7 +78,7 @@ sale) pays for Agent402's own services: pass it
 as `creditsKey` and the SDK sends `Authorization: Bearer a402_...` on wallet-only
 calls (the wallet-scoped routes, memory and usage, refuse it and need a wallet, as do
 the routes that buy from an outside seller: the route-execute tiers,
-`seller-payability` and `decide-execute`); the server authorizes
+`seller-payability`, `decide-execute` and the flight routes); the server authorizes
 against the key's balance before the handler runs and debits the list price only
 on a successful (200) response (the `X-Credits-Balance` header carries what is
 left; credits never expire). A refused call throws with the balance; nothing is

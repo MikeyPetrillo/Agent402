@@ -43,7 +43,7 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   (agent402.tools/credits says whether packs are on sale) pays Agent402's own
   services with `Authorization: Bearer a402_…`, debited only on a successful call,
   and never expires; the wallet-identity-bound routes and the routes that buy from
-  an outside seller (the route-execute tiers, `seller-payability`, `decide-execute`)
+  an outside seller (the route-execute tiers, `seller-payability`, `decide-execute` and the flight routes)
   need a wallet payment.
 - **Report products** ($0.60 to $2.00 over x402/MPP, or $2 to $5 by card at
   https://agent402.tools/reports - the card price includes payment processing,

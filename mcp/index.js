@@ -906,7 +906,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         note: HAS_WALLET
           ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet(s) - EVM chains via AGENT_KEY, Solana via SOLANA_AGENT_KEY - within the spend controls above."
           : HAS_CREDITS
-            ? "Every tool on Agent402's own services is available; each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute) and the wallet-identity tools (memory, usage) need a wallet key."
+            ? "Every tool on Agent402's own services is available; each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute, the flight tools) and the wallet-identity tools (memory, usage) need a wallet key."
             : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY).`,
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,

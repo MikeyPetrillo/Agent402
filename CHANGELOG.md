@@ -12,9 +12,9 @@ carries its own version on npm.
   The terms and privacy policy (both dated 2026-10-28) say so, and the
   checkout shows the rules.
 - Routes that buy from an outside seller with our wallet (the router's execute
-  tiers, seller-payability and decide-execute) take a wallet payment over x402
-  or MPP on a chain; prepaid credits and per-call card payments are refused on
-  them with reason third-party-purchase.
+  tiers, seller-payability, decide-execute and the flight routes) take a
+  wallet payment over x402 or MPP on a chain; prepaid credits and per-call
+  card payments are refused on them with reason third-party-purchase.
 - One buyer may buy at most $1,000 of credits in any 24 hours, matched by
   email or card; a purchase past that is refunded in full and issues no key,
   decided one buyer at a time across servers.

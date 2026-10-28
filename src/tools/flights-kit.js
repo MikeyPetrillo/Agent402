@@ -315,7 +315,10 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     aliases: ["flights", "search-flights", "flight-prices", "airfare", "cheap-flights"],
     category: "travel",
     spendsOwnWallet: true,
-    price: `$${FLIGHT_SEARCH_PRICE_USD}`,
+    // Buys from an outside seller with our wallet: sold for a wallet payment only,
+    // never for prepaid credits or a card (src/third-party-routes.js).
+    paysThirdPartySeller: true,
+    price: `${FLIGHT_SEARCH_PRICE_USD}`,
     description: "Flight offers between two airports on a date: price, total duration, stops and each leg (airline, flight number, times, aircraft, cabin), plus the lowest and typical price for the route. Bought live per request from an outside flight data seller and returned in one stable shape; the answer names which seller served it. Searches only: it does not book or hold seats.",
     tags: ["travel", "flights", "flight search", "airfare", "fares", "airline", "itinerary", "book a flight", "cheap flights", "plane tickets"],
     discovery: {
@@ -345,7 +348,10 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     aliases: ["flight-tracker", "track-flight", "is-my-flight-delayed", "flight-delay"],
     category: "travel",
     spendsOwnWallet: true,
-    price: `$${FLIGHT_STATUS_PRICE_USD}`,
+    // Buys from an outside seller with our wallet: sold for a wallet payment only,
+    // never for prepaid credits or a card (src/third-party-routes.js).
+    paysThirdPartySeller: true,
+    price: `${FLIGHT_STATUS_PRICE_USD}`,
     description: "Live status of one flight by its number: scheduled, estimated and actual departure and arrival, delay in minutes, gates and terminals, progress, cancelled or diverted. Give a date to pick that day's flight; otherwise the flight in the air now or the next to depart. A day the flight does not fly answers found:false with the days it does. Bought live per request from an outside flight data seller; the answer names which seller served it.",
     tags: ["travel", "flights", "flight status", "flight tracker", "delay", "departure", "arrival", "gate", "is my flight on time"],
     discovery: {

@@ -20,8 +20,13 @@ for (const [file, slug] of [["tools/seller-payability-kit.js", "seller-payabilit
   const at = s.indexOf(`slug: "${slug}"`);
   ok(at > 0 && /paysThirdPartySeller: true,/.test(s.slice(at, at + 1200)), `${slug} is flagged`);
 }
-// A fixed upstream vendor or network gas is an ordinary cost, not a third-party purchase.
-for (const file of ["tools/flights-kit.js", "tools/attest-kit.js"]) ok(!/paysThirdPartySeller/.test(src(file)), `${file.split("/").pop()} is not flagged`);
+// The flight routes buy each answer from an outside seller with our wallet: flagged too.
+{
+  const fl = src("tools/flights-kit.js");
+  for (const slug of ["flight-search", "flight-status"]) { const at = fl.indexOf(`slug: "${slug}"`); ok(at > 0 && /paysThirdPartySeller: true,/.test(fl.slice(at, at + 600)), `${slug} is flagged`); }
+}
+// Network gas is an ordinary cost of our own service, not a third-party purchase.
+ok(!/paysThirdPartySeller/.test(src("tools/attest-kit.js")), "attest-kit.js is not flagged");
 
 ok(paysThirdParty({ paysThirdPartySeller: true }) === true && paysThirdParty({ spendsOwnWallet: true }) === false && paysThirdParty(null) === false, "only the explicit flag counts");
 
