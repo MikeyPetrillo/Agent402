@@ -4,6 +4,32 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## Unreleased
+
+### 2026-10-28 (credits)
+- Prepaid credits are a prepayment for Agent402's own services, for business
+  and developer use: not cash, not transferable, never expiring, with no fees.
+  The terms and privacy policy (both dated 2026-10-28) say so, and the
+  checkout shows the rules.
+- Routes that buy from an outside seller with our wallet (the router's execute
+  tiers, seller-payability and decide-execute) take a wallet payment over x402
+  or MPP on a chain; prepaid credits and per-call card payments are refused on
+  them with reason third-party-purchase.
+- One buyer may buy at most $1,000 of credits in any 24 hours, matched by
+  email, card or Stripe customer; a purchase past that is refunded in full and
+  issues no key.
+- An unspent credits balance under $10 is refunded on request, and a refunded
+  or disputed purchase disables only the key it issued.
+- A client that sends 20 unknown or malformed credits keys within 10 minutes
+  is answered 429 until the window ends.
+- Credits checkout asks for a billing address, offers a business tax ID field
+  and confirms business or developer use. Prices are the same everywhere and
+  include North Carolina sales tax on generated speech, audio and video for a
+  key billed in North Carolina.
+- agent402-mcp 0.13.21 lists router.execute only with a wallet key;
+  agent402-client 0.8.18, agent402-openclaw 0.5.6, elizaos-plugin-agent402
+  0.2.8 and agent402-agentkit 0.1.8 carry the updated credits wording.
+
 ## v2.8.1 - 2026-10-28
 
 ### 2026-10-28
