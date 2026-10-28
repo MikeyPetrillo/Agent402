@@ -11,7 +11,7 @@ The Agent402 plugin connects Claude Code to Agent402.Tools, a catalog of 500+ we
 ## How you pay
 
 - **Free, with proof-of-work.** Pure-compute tools (no outbound calls, keys or models) run free through a proof-of-work challenge, with no account and no wallet.
-- **Per call, in USDC.** Paid tools settle over x402 or MPP on supported chains. A call that returns an error is not charged.
+- **Per call, in USDC.** Paid tools settle over x402 or MPP on supported chains. On x402, a call the server answers with an error is not charged; settlement runs only after a successful answer.
 - **Prepaid credits key.** If you already hold an `a402_...` credits key, set it as `AGENT402_CREDITS_KEY` to pay from that balance. New credits are not on sale.
 
 ## Install

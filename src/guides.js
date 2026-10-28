@@ -157,7 +157,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.13.20\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -1221,7 +1221,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.20
 \`\`\`
 
 Or in \`.mcp.json\` at the project root:

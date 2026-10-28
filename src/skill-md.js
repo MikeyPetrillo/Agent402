@@ -109,9 +109,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp
+claude mcp add agent402 -- npx -y agent402-mcp@0.13.20
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.20
 \`\`\`
 
 Generic MCP host config:

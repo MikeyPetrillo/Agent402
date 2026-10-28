@@ -55,7 +55,7 @@ Every variable the server reads (all optional):
 
 The per-call cap is on by default and the session budget is opt-in; both are
 enforced on the payment that is signed (or before a credits call is sent) - a
-runaway model is refused, not billed. The
+call over the cap is refused before anything is signed. The
 wallet's x402 client carries a policy that drops every payment option over the
 per-call cap or what is left of the budget, so the 402 the wallet signs is held
 to the caps, and a wallet call sends no unpaid preflight first. Each option is priced from the

@@ -532,7 +532,7 @@ export function mcpInstallHints(baseUrl) {
         },
       },
     },
-    npm: "npx -y agent402-mcp",
+    npm: "npx -y agent402-mcp@0.13.20",
     smithery: `Paste ${hosted} into the add-server form at https://smithery.ai/new. Submission is external; Agent402 does not auto-publish.`,
     maintainer: "Havok Holdings LLC",
   };
