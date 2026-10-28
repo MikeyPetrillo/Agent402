@@ -10,17 +10,22 @@
 //      at HANDOFF_PATH (same host, and under a path seller's own prefix).
 //   2. Control of the old wallet: the document carries the old wallet's
 //      EIP-191 signature over handoffMessage(), which names the origin, the
-//      network and both wallets. An ordinary wallet, an ERC-1271 contract
-//      wallet and an ERC-6492 counterfactual one all verify.
-// Plus the origin's own Base 402 must already ask to be paid at the new
-// wallet. Nothing in the document is used except the fields parseHandoff
+//      network and both wallets. An ordinary wallet and a deployed ERC-1271
+//      contract wallet verify.
+// Plus the index's recorded Base payTo for the origin (its last crawl or
+// registration) must already be the new wallet, and the old wallet must be one
+// this origin itself advertised. The router still reads the live 402 before it
+// pays. Nothing in the document is used except the fields parseHandoff
 // validates; the signed text is rebuilt from those fields, never copied.
 //
 // Narrow by construction: one hop (old -> new) on one origin. A wallet can be
-// handed off from by one origin at a time, a listed shared wallet or a
-// mostly self-funded one is never part of a handoff, and the old wallet's
-// history must itself clear the floor on this origin (evidencePayToVerdict
-// only adds the new wallet beside a wallet that already clears).
+// handed off from by one origin at a time; no other listed origin may still be
+// paid at the old wallet (one history never backs two payees); a listed
+// shared wallet or a mostly self-funded one is never part of a handoff; the
+// old wallet's history must itself clear the floor on this origin
+// (evidencePayToVerdict only adds the new wallet beside a wallet that already
+// clears); and the old wallet must sign as an ordinary wallet or a deployed
+// contract wallet (ERC-6492 and ERC-8010 wrapped signatures are refused).
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
 
@@ -48,7 +53,7 @@ export function handoffMessage({ origin, network = HANDOFF_NETWORK, from, to, is
   ].join("\n");
 }
 
-export const HANDOFF_FORMAT = `serve JSON at ${HANDOFF_PATH} on the origin: {"version":1,"network":"${HANDOFF_NETWORK}","from":"<old 0x payTo>","to":"<new 0x payTo>","issuedAt":"<ISO 8601 UTC, e.g. 2026-10-28T12:00:00Z>","signature":"<old wallet's EIP-191 signature of the message>"}; the message is these six lines joined by \\n: "Agent402 payTo handoff", "origin: <origin as listed>", "network: ${HANDOFF_NETWORK}", "from: <old, lowercase>", "to: <new, lowercase>", "issued: <issuedAt>"`;
+export const HANDOFF_FORMAT = `serve JSON at ${HANDOFF_PATH} on the origin: {"version":1,"network":"${HANDOFF_NETWORK}","from":"<old 0x payTo>","to":"<new 0x payTo>","issuedAt":"<ISO 8601 UTC, e.g. 2026-10-28T12:00:00Z>","signature":"<old wallet's EIP-191 signature of the message>"}; the message is these six lines joined by \\n: "Agent402 payTo handoff", "origin: <the origin exactly as GET /api/index?seller= lists it>", "network: ${HANDOFF_NETWORK}", "from: <old, lowercase>", "to: <new, lowercase>", "issued: <issuedAt>"`;
 
 const bad = (reason) => ({ ok: false, reason });
 
@@ -67,6 +72,9 @@ export function parseHandoff(doc, { now = Date.now() } = {}) {
   if (t > now + FUTURE_SKEW_MS) return bad('"issuedAt" is in the future');
   if (t < now - MAX_AGE_MS) return bad('"issuedAt" is more than 30 days old; sign a fresh handoff');
   if (typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature) || signature.length > SIG_MAX_HEX + 2 || signature.length < 132) return bad('"signature" must be a 0x hex signature');
+  // Wrapped signatures run a factory or authorization the signer chooses;
+  // only an ordinary wallet or an already-deployed contract wallet signs here.
+  if (/(?:6492){16}$/i.test(signature) || /(?:8010){16}$/i.test(signature)) return bad('"signature" must come from an ordinary wallet or a deployed contract wallet (ERC-6492 and ERC-8010 wrapped signatures are not accepted)');
   return { ok: true, network, from: lc(from), to: lc(to), issuedAt, signature };
 }
 
@@ -76,14 +84,18 @@ export function parseHandoff(doc, { now = Date.now() } = {}) {
  *   livePayTo(origin)     -> the Base payTo the origin's 402 asks for, or null
  *   verifySignature({address, message, signature}) -> true | false (throws = unverifiable)
  *   isExcludedWallet(w)   -> true for a listed shared or self-funded wallet
+ *   oldWalletProblem({origin, from, to}) -> a reason string when the old wallet is not
+ *                            this origin's own or another origin is still paid there
  */
-export async function verifyHandoff({ origin, readDocument, livePayTo, verifySignature, isExcludedWallet = () => false, now = Date.now() }) {
+export async function verifyHandoff({ origin, readDocument, livePayTo, verifySignature, isExcludedWallet = () => false, oldWalletProblem = () => null, now = Date.now() }) {
   const doc = await readDocument(origin);
   if (!doc) return bad(`no handoff document could be read from the origin itself; ${HANDOFF_FORMAT}`);
   const p = parseHandoff(doc, { now });
   if (!p.ok) return p;
   const live = livePayTo(origin);
   if (!live || lc(live) !== p.to) return bad(`the origin's Base 402 must already ask to be paid at "to" (${p.to}); the index last read ${live ? lc(live) : "no Base payTo"}. Update the 402, re-register the origin, then submit the handoff`);
+  const oldProblem = oldWalletProblem({ origin, from: p.from, to: p.to });
+  if (oldProblem) return bad(oldProblem);
   if (isExcludedWallet(p.from) || isExcludedWallet(p.to)) return bad("a wallet listed as a shared settlement contract, or one whose history is mostly self-funded, cannot be part of a handoff");
   let valid;
   try {
@@ -165,12 +177,45 @@ export function createHandoffStore({ file = null, log = null } = {}) {
  * evidencePayToVerdict reads). Applied only when neither wallet is excluded;
  * the verdict then adds `to` only if `from` clears the floor on this origin.
  */
-export function attachHandoffs(binding, records, { isExcludedWallet = () => false } = {}) {
+export function attachHandoffs(binding, records, { isExcludedWallet = () => false, oldWalletProblem = () => null, keyOf = (o) => o } = {}) {
   if (!(binding instanceof Map)) return binding;
   for (const r of records || []) {
-    const e = binding.get(r.origin);
-    if (!e || isExcludedWallet(r.from) || isExcludedWallet(r.to)) continue;
+    const e = binding.get(keyOf(r.origin));
+    if (!e || isExcludedWallet(r.from) || isExcludedWallet(r.to) || oldWalletProblem(r)) continue;
     e.handoff = { from: r.from, to: r.to, issuedAt: r.issuedAt, verifiedAt: r.verifiedAt };
   }
   return binding;
+}
+
+/**
+ * The listed seller a submission names: the index's own key, matched exactly
+ * (a path differing only in case is another seller on the same host).
+ * Returns { listed } or { near } (the same seller under another spelling).
+ */
+export function findListedSeller(summaries, origin, norm) {
+  const all = [...(summaries || [])];
+  const listed = all.find((s) => s?.origin === origin);
+  if (listed) return { listed };
+  return { near: all.find((s) => typeof s?.origin === "string" && norm(s.origin) === norm(origin)) || null };
+}
+
+/**
+ * Why the old wallet cannot be handed off from this origin, or null. The old
+ * wallet must be a Base payTo this origin itself advertised, and every OTHER
+ * origin known to advertise it must now be paid at the new wallet, so one
+ * wallet's history never backs two payees.
+ *   ctx.summaries: Map(norm(origin) -> seller summary with payToByNetwork / payTosByNetwork)
+ *   ctx.byPayTo:   Map(lowercased wallet -> Set(origins that advertised it))
+ */
+export function oldWalletProblem({ origin, from, to }, { summaries, byPayTo, norm }) {
+  const f = lc(from), t = lc(to);
+  const own = summaries.get(norm(origin));
+  const advertised = (own?.payTosByNetwork?.[HANDOFF_NETWORK] || []).map(lc);
+  if (!advertised.includes(f)) return `the old wallet (${f}) is not a Base payTo this origin advertised; a handoff moves only this origin's own wallet`;
+  for (const o of byPayTo.get(f) || []) {
+    if (norm(o) === norm(origin)) continue;
+    const primary = summaries.get(norm(o))?.payToByNetwork?.[HANDOFF_NETWORK];
+    if (!primary || lc(primary) !== t) return `another listed origin (${o}) is still paid at the old wallet; a wallet's history can back one payee`;
+  }
+  return null;
 }

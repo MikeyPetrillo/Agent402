@@ -624,7 +624,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
-import { HANDOFF_PATH, HANDOFF_DOC_MAX_BYTES, HANDOFF_FORMAT, createHandoffStore, verifyHandoff, attachHandoffs, handoffMessage, parseHandoff } from "./payto-handoff.js";
+import { HANDOFF_PATH, HANDOFF_DOC_MAX_BYTES, HANDOFF_FORMAT, createHandoffStore, verifyHandoff, attachHandoffs, handoffMessage, parseHandoff, findListedSeller, oldWalletProblem } from "./payto-handoff.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
@@ -1371,6 +1371,16 @@ function handoffExcludedWallet(w) {
   try { const c = getLeaderboardCircularWallets().wallets; if (c && typeof c.has === "function" && c.has(String(w).toLowerCase())) return true; } catch { return true; }
   return false;
 }
+// The old wallet in a handoff must be this origin's own, and no other listed
+// origin may still be paid at it (src/payto-handoff.js oldWalletProblem).
+function handoffOldWalletProblem(r, ctx = handoffContext()) {
+  return oldWalletProblem(r, { ...ctx, norm });
+}
+function handoffContext() {
+  const summaries = new Map();
+  for (const s of routableSellerSummaries()) if (typeof s?.origin === "string") summaries.set(norm(s.origin), s);
+  return { summaries, byPayTo: allPayToOrigins("eip155:8453") };
+}
 // Wallets whose self-funded verdict the OPERATOR has cleared (the rule's own
 // lever, src/leaderboard.js configureSellerFunding): a cleared wallet's
 // evidence reads gross and it is never treated as circular while listed. For a
@@ -1424,7 +1434,10 @@ function buildEvidenceBindingByOrigin({ chainProven }) {
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
   });
-  try { attachHandoffs(binding, handoffStore().list(), { isExcludedWallet: handoffExcludedWallet }); } catch { /* no handoff credits nothing */ }
+  try {
+    const ctx = handoffContext();
+    attachHandoffs(binding, handoffStore().list(), { isExcludedWallet: handoffExcludedWallet, oldWalletProblem: (r) => handoffOldWalletProblem(r, ctx), keyOf: norm });
+  } catch { /* no handoff credits nothing */ }
   return binding;
 }
 // origin -> the Base payTo the CRAWL saw the origin advertise (registry items
@@ -8107,9 +8120,11 @@ app.post("/api/index/payto-handoff", async (req, res) => {
   if (!(await regLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
   if (v.error) return res.status(400).json({ error: v.error });
-  const origin = norm(v.origin);
-  const listed = routableSellerSummaries().find((s) => norm(s?.origin) === origin);
-  if (!listed) return res.status(404).json({ error: "this origin is not listed in the index; register it first (POST /api/index/register)" });
+  // The origin must be the listed seller exactly: a path differing only in
+  // case is another seller on the same host.
+  const { listed, near } = findListedSeller(routableSellerSummaries(), v.origin, norm);
+  if (!listed) return res.status(404).json({ error: near ? `submit the origin exactly as the index lists it: ${near.origin}` : "this origin is not listed in the index; register it first (POST /api/index/register)" });
+  const origin = listed.origin;
   const last = handoffCooldown.get(origin) || 0;
   if (now - last < HANDOFF_COOLDOWN_MS) return res.status(429).set("Retry-After", String(Math.ceil((HANDOFF_COOLDOWN_MS - (now - last)) / 1000))).json({ error: "this origin's handoff was checked under a minute ago; try again shortly" });
   const taken = await regLimiter.take(ip, now);
@@ -8120,10 +8135,11 @@ app.post("/api/index/payto-handoff", async (req, res) => {
   let fetched = null;
   const r = await verifyHandoff({
     origin,
-    readDocument: async () => (fetched = await readOwnWellKnown(v.origin, HANDOFF_PATH, { maxBytes: HANDOFF_DOC_MAX_BYTES })),
+    readDocument: async () => (fetched = await readOwnWellKnown(origin, HANDOFF_PATH, { maxBytes: HANDOFF_DOC_MAX_BYTES })),
     livePayTo: () => listedPayTo,
     verifySignature: verifyHandoffSignature,
     isExcludedWallet: handoffExcludedWallet,
+    oldWalletProblem: (r) => handoffOldWalletProblem(r),
     now,
   });
   if (!r.ok) {

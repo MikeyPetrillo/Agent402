@@ -63,6 +63,16 @@ ok(handoffMessage({ origin: ORIGIN, from: A.toUpperCase().replace("0X", "0x"), t
   const flaky = await run(await docFor(), { verifySignature: async () => { throw new Error("rpc down"); } });
   ok(!flaky.ok && flaky.retry === true, "a failed chain read is a retryable refusal, never a pass");
   ok(!(await run(await docFor(), { verifySignature: async () => "true" })).ok, "only a boolean true from the verifier passes");
+  // The old wallet must be this origin's own, and no other payee may still use it.
+  let asked = null;
+  const own = await run(await docFor(), { oldWalletProblem: (r) => { asked = r; return "another listed origin is still paid at the old wallet"; } });
+  ok(!own.ok && /still paid at the old wallet/.test(own.reason) && asked?.origin === ORIGIN && asked?.from === A && asked?.to === B, "refused when the old wallet is not this origin's own or still pays another origin (the check sees origin, from and to)");
+  // Wrapped signatures (ERC-6492 counterfactual, ERC-8010) are refused before any chain read.
+  let reads = 0;
+  const wrapped = await docFor(); wrapped.signature = wrapped.signature + "6492".repeat(16);
+  ok(!(await run(wrapped, { verifySignature: async () => { reads++; return true; } })).ok && reads === 0, "an ERC-6492 wrapped signature is refused without a chain read");
+  const wrapped8010 = await docFor(); wrapped8010.signature = wrapped8010.signature + "8010".repeat(16);
+  ok(!(await run(wrapped8010, { verifySignature: async () => { reads++; return true; } })).ok && reads === 0, "an ERC-8010 wrapped signature is refused without a chain read");
 }
 
 // ---- store: one origin per old wallet ----
@@ -102,6 +112,38 @@ const bindingFor = ({ handoff = { from: A, to: B }, a = clears, b = thin } = {})
   const b2 = new Map([[ORIGIN, { byWallet: new Map([[A, clears]]) }]]);
   attachHandoffs(b2, [{ origin: ORIGIN, from: A, to: B }], { isExcludedWallet: (w) => w === B });
   ok(!b2.get(ORIGIN).handoff, "a record naming an excluded wallet is not attached");
+  const b3 = new Map([[ORIGIN, { byWallet: new Map([[A, clears]]) }]]);
+  attachHandoffs(b3, [{ origin: ORIGIN, from: A, to: B }], { oldWalletProblem: () => "another listed origin is still paid at the old wallet" });
+  ok(!b3.get(ORIGIN).handoff, "a stored record stops applying once another origin is paid at the old wallet");
+  const b4 = new Map([[ORIGIN.toLowerCase(), { byWallet: new Map([[A, clears]]) }]]);
+  attachHandoffs(b4, [{ origin: "https://Pay.Example.com", from: A, to: B }], { keyOf: (o) => o.toLowerCase() });
+  ok(b4.get(ORIGIN.toLowerCase()).handoff?.to === B, "records attach through the binding's own key normalization");
+}
+
+// ---- the reviewer's attacks, against the functions the route and the evidence build call ----
+{
+  const { oldWalletProblem, findListedSeller } = await import("../src/payto-handoff.js");
+  const n = (u) => String(u || "").replace(/\/+$/, "").toLowerCase();
+  const V = "https://busy-seller.example", X = "https://stranger.example";
+  // A busy seller V is paid at W=A; a stranger X once named A (so A is in X's list) and now asks for B.
+  const ctxFor = (vPrimary) => ({
+    summaries: new Map([
+      [n(V), { origin: V, payToByNetwork: { [HANDOFF_NETWORK]: vPrimary }, payTosByNetwork: { [HANDOFF_NETWORK]: [vPrimary] } }],
+      [n(X), { origin: X, payToByNetwork: { [HANDOFF_NETWORK]: B }, payTosByNetwork: { [HANDOFF_NETWORK]: [B, A] } }],
+    ]),
+    byPayTo: new Map([[A, new Set([V, X])], [B, new Set([X])]]),
+    norm: n,
+  });
+  ok(/still paid at the old wallet/.test(oldWalletProblem({ origin: X, from: A, to: B }, ctxFor(A)) || ""), "attack 1: a wallet still paying another seller cannot be handed to a stranger's origin");
+  ok(oldWalletProblem({ origin: X, from: A, to: B }, ctxFor(B)) === null, "the same operator moving two origins to one new wallet is allowed");
+  ok(/not a Base payTo this origin advertised/.test(oldWalletProblem({ origin: X, from: C, to: B }, ctxFor(B)) || ""), "an old wallet the origin never advertised is refused");
+  const brian = { summaries: new Map([[n(ORIGIN), { origin: ORIGIN, payToByNetwork: { [HANDOFF_NETWORK]: B }, payTosByNetwork: { [HANDOFF_NETWORK]: [B, A.toUpperCase().replace("0X", "0x")] } }]]), byPayTo: new Map([[A, new Set([ORIGIN])]]), norm: n };
+  ok(oldWalletProblem({ origin: ORIGIN, from: A, to: B }, brian) === null, "an origin that rotated its own wallet (checksummed in the listing) qualifies");
+  // Attack 2: a different-case path on the same host must not stand for the listed seller.
+  const sellers = [{ origin: "https://host.example/foo" }];
+  const r = findListedSeller(sellers, "https://host.example/FOO", n);
+  ok(!r.listed && r.near?.origin === "https://host.example/foo", "attack 2: a case-variant path does not match the listed seller (the answer names the exact spelling)");
+  ok(findListedSeller(sellers, "https://host.example/foo", n).listed?.origin === "https://host.example/foo", "the exact listed spelling matches");
 }
 
 // ---- booted: the route takes only an origin and refuses before any fetch ----
