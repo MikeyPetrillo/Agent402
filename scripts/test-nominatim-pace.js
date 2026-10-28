@@ -66,8 +66,9 @@ if (process.argv[2] === "geo") {
   process.env.SHARED_LIMITS = "off";
   const seen = [];
   globalThis.fetch = async (url) => {
-    seen.push(new URL(String(url)).host);
-    const body = String(url).includes("photon") ? { features: [{ geometry: { coordinates: [2.29, 48.85] }, properties: { name: "P", countrycode: "FR" } }] } : [];
+    const host = new URL(String(url)).hostname;
+    seen.push(host);
+    const body = host === "photon.komoot.io" ? { features: [{ geometry: { coordinates: [2.29, 48.85] }, properties: { name: "P", countrycode: "FR" } }] } : [];
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   };
   const pace = await import("../src/tools/nominatim-pace.js");
@@ -79,7 +80,7 @@ if (process.argv[2] === "geo") {
   for (const [route, input] of [["GET /api/geocode", { q: "Eiffel Tower" }], ["GET /api/reverse-geocode", { lat: 48.85, lon: 2.29 }], ["GET /api/place-search", { q: "cafe" }]]) {
     seen.length = 0;
     const out = await h(route)(input).catch((e) => ({ error: e.message }));
-    ok(String(out.source || "").startsWith("photon") && !seen.includes("nominatim.openstreetmap.org"), `${route}: no slot -> answered by the fallback geocoder, Nominatim not called`);
+    ok(String(out.source || "").startsWith("photon") && seen.every((h) => h !== "nominatim.openstreetmap.org"), `${route}: no slot -> answered by the fallback geocoder, Nominatim not called`);
   }
   console.log(failed ? `${failed} failed` : "geo part passed");
   process.exit(failed ? 1 : 0);
