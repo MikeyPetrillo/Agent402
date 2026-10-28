@@ -516,7 +516,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const ann = NET;
           const access = free
             ? "[free, no wallet]"
-            : `[wallet-required, ${def.price}/call]`;
+            : `Paid (${def.price}/call):`;
           const walletNote = free
             ? ""
             : ` This hosted connector holds no wallet: ${mppLoopback ? "pay it here over MPP, or " : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.`;

@@ -692,7 +692,7 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
       name,
       title: t.slug,
       annotations: { title: t.slug, ...ann },
-      description: `[${t.price}/call${t.computePayable ? ", or free via proof-of-work" : ", wallet required"}] ${t.description}`,
+      description: `${t.computePayable ? `Paid (${t.price}/call), or free via proof-of-work:` : `Paid (${t.price}/call):`} ${t.description}`,
       inputSchema: t.inputSchema,
       outputSchema: FLAGSHIP_OUTPUT_SCHEMAS[t.slug] || outputSchemaFromExample(null),
     };
