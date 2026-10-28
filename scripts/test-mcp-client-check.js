@@ -156,7 +156,7 @@ function stubConnector(brk = null) {
     });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [...META_TOOLS, ...FLAGSHIP_TOOLS]
-        .filter((name) => !(brk === "missing-tool" && name === "sellers.list"))
+        .filter((name) => !(brk === "missing-tool" && name === "demand.request"))
         .map((name) => ({
           name,
           description: brk === "empty-description" && name === "catalog.find" ? "" : `${name} on the stub connector.`,
@@ -189,7 +189,7 @@ function stubConnector(brk = null) {
 }
 
 const EXPECTED_FAILS = {
-  "missing-tool": /^FAIL - tools\/list: .*missing: sellers\.list/m,
+  "missing-tool": /^FAIL - tools\/list: .*missing: demand\.request/m,
   "empty-description": /^FAIL - tools\/list: .*catalog\.find: empty description/m,
   "wrong-answer": /^FAIL - catalog\.call: /m,
 };

@@ -463,7 +463,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.20
     exposes: [
       "Flagship tools under dotted names: `web.search`, `web.answer`, `web.news`, `browser.render`, `market.quote`, `audio.transcribe`, `memory.read`, `memory.write`.",
       "`catalog.search` / `catalog.find` + `catalog.call` for the rest of the catalog, keeping the context window small.",
-      "`payment.info`, `server.describe` and `sellers.list` for orientation, spend caps and the live seller leaderboards.",
+      "`payment.info` and `server.describe` for orientation and spend caps; `sellers.list` for the live seller leaderboards, listed when a wallet or credits key is set.",
       "Skill packs as MCP prompts (`prompts/list`, `prompts/get`).",
     ],
     payment: [

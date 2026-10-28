@@ -76,7 +76,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
   const enabledSet = Array.isArray(networks) ? new Set(networks.map((n) => String(n).toLowerCase())) : null;
   const rails = enabledSet ? liveRails().filter((r) => enabledSet.has(railKey(r))) : RAILS;
   const canonical = `${baseUrl}/how-to-pay`;
-  const title = "How to pay for a call: x402, MPP, credits or proof-of-work";
+  const title = "How to pay for a call: x402, MPP or proof-of-work";
   const description =
     "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
 

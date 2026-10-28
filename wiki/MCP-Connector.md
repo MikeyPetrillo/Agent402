@@ -36,7 +36,7 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `payment.info` | Free vs paid rails, wallet setup, spend caps, prepaid credits |
 | `server.describe` | Service description, install one-liners, free-vs-paid breakdown |
 | `demand.request` | Tell us a tool you needed that is missing (same intake as `POST /api/wish`) |
-| `sellers.list` | On-chain seller leaderboards: x402 sellers by Base USDC (default) or `wire: "mpp"` for MPP sellers by USDC.e transfers on Tempo |
+| `sellers.list` | On-chain seller leaderboards: x402 sellers by Base USDC (default) or `wire: "mpp"` for MPP sellers by USDC.e transfers on Tempo. Listed when a wallet or credits key is set, or with `AGENT402_SHOW_ROUTER=1` |
 
 `initialize` also returns **instructions** with the same front-door story and Claude/Cursor install one-liners, so clients that never call `server.describe` still get oriented.
 
