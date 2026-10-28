@@ -381,7 +381,7 @@ import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SC
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
-import { submissionSlotStatus } from "./x402-index.js";
+import { submissionSlotStatus, readOwnWellKnown } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
@@ -624,6 +624,8 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { HANDOFF_PATH, HANDOFF_DOC_MAX_BYTES, HANDOFF_FORMAT, createHandoffStore, verifyHandoff, attachHandoffs, handoffMessage, parseHandoff } from "./payto-handoff.js";
+import { evmRpcFor } from "./evm-rpcs.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
@@ -1353,6 +1355,22 @@ function sharedPayToStore() {
   }
   return sharedPayToStoreInstance;
 }
+// Verified Base payTo handoffs (src/payto-handoff.js), origin -> record.
+let handoffStoreInstance = null;
+function handoffStore() {
+  if (!handoffStoreInstance) {
+    handoffStoreInstance = createHandoffStore({ file: process.env.SOR_PAYTO_HANDOFFS_FILE || "/data/sor-payto-handoffs.json", log: (m) => console.warn(m) });
+    handoffStoreInstance.load();
+  }
+  return handoffStoreInstance;
+}
+// A listed shared wallet, or one whose settled history is mostly self-funded,
+// is never part of a handoff.
+function handoffExcludedWallet(w) {
+  try { if (sharedPayToStore().has(w)) return true; } catch { return true; }
+  try { const c = getLeaderboardCircularWallets().wallets; if (c && typeof c.has === "function" && c.has(String(w).toLowerCase())) return true; } catch { return true; }
+  return false;
+}
 // Wallets whose self-funded verdict the OPERATOR has cleared (the rule's own
 // lever, src/leaderboard.js configureSellerFunding): a cleared wallet's
 // evidence reads gross and it is never treated as circular while listed. For a
@@ -1393,7 +1411,7 @@ function buildProvenPayToByOrigin(chainProven) {
 }
 // origin -> { byWallet, clearing, settled, payers, payTos, ownSettled, ownPayers, withheld }.
 function buildEvidenceBindingByOrigin({ chainProven }) {
-  return buildEvidenceBinding({
+  const binding = buildEvidenceBinding({
     leaderboardRows: getLeaderboardSnapshot()?.leaderboard || [],
     walletEvidence: getLeaderboardWalletEvidence(),
     bazaarQuality: bazaarQualityEntries(),
@@ -1406,6 +1424,8 @@ function buildEvidenceBindingByOrigin({ chainProven }) {
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
   });
+  try { attachHandoffs(binding, handoffStore().list(), { isExcludedWallet: handoffExcludedWallet }); } catch { /* no handoff credits nothing */ }
+  return binding;
 }
 // origin -> the Base payTo the CRAWL saw the origin advertise (registry items
 // only, like payToByNetwork itself). The label-time stand-in for the live
@@ -1511,6 +1531,8 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // candidate, src/base-unproven.js and resolveExternalSeller), so it is
   // callable now too, marked as the unproven lane.
   const { executeVia, ...rest } = row;
+  // A verified payTo handoff on this origin is public, so anyone can check it.
+  const handoff = local ? null : ev.binding.get(origin)?.handoff || null;
   const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
@@ -1524,6 +1546,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     routerDispatchEligible: verdict.eligible,
     routerDispatchReason: verdict.reason,
     ...(Object.keys(verdict.chains || {}).length ? { routerDispatchByChain: verdict.chains } : {}),
+    ...(handoff ? { payToHandoff: { network: "eip155:8453", from: handoff.from, to: handoff.to, issuedAt: handoff.issuedAt, verifiedAt: handoff.verifiedAt } } : {}),
     ...affordance,
   };
 }
@@ -8062,6 +8085,58 @@ app.post("/api/index/register", async (req, res) => {
   // per-IP count stands - that is the caller's own limit.)
   if (!replaces && result?.reverify && !result.reverify.documentsReread && !result.reverify.routesRechecked) regLimiter.giveBackGlobal(slot);
   res.json(result);
+});
+// Base payTo handoff (src/payto-handoff.js): a listed seller that moved its
+// Base payTo asks us to read HANDOFF_PATH on its own origin. The only input is
+// the origin; everything else is read from the origin itself and checked.
+// Same per-IP and global budget as registration.
+const handoffCooldown = new Map(); // origin -> last attempt (ms), bounded
+const HANDOFF_COOLDOWN_MS = 60_000;
+let handoffClient = null;
+async function verifyHandoffSignature({ address, message, signature }) {
+  if (!handoffClient) {
+    const { createPublicClient, http } = await import("viem");
+    const { base } = await import("viem/chains");
+    handoffClient = createPublicClient({ chain: base, transport: http(evmRpcFor("eip155:8453"), { timeout: 8_000, retryCount: 0 }) });
+  }
+  return handoffClient.verifyMessage({ address, message, signature });
+}
+app.post("/api/index/payto-handoff", async (req, res) => {
+  const now = Date.now();
+  const ip = limiterKey(req.ip || "?");
+  if (!(await regLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
+  if (v.error) return res.status(400).json({ error: v.error });
+  const origin = norm(v.origin);
+  const listed = routableSellerSummaries().find((s) => norm(s?.origin) === origin);
+  if (!listed) return res.status(404).json({ error: "this origin is not listed in the index; register it first (POST /api/index/register)" });
+  const last = handoffCooldown.get(origin) || 0;
+  if (now - last < HANDOFF_COOLDOWN_MS) return res.status(429).set("Retry-After", String(Math.ceil((HANDOFF_COOLDOWN_MS - (now - last)) / 1000))).json({ error: "this origin's handoff was checked under a minute ago; try again shortly" });
+  const taken = await regLimiter.take(ip, now);
+  if (!taken.ok) return res.status(429).json({ error: taken.reason === "ip" ? "rate limit: 5 submissions per hour per IP" : "rate limit: submissions are busy, try again later", retryAfterSeconds: 600 });
+  if (handoffCooldown.size >= RL_MAP_MAX_KEYS) handoffCooldown.delete(handoffCooldown.keys().next().value);
+  handoffCooldown.set(origin, now);
+  const listedPayTo = typeof listed.payToByNetwork?.["eip155:8453"] === "string" ? listed.payToByNetwork["eip155:8453"] : null;
+  let fetched = null;
+  const r = await verifyHandoff({
+    origin,
+    readDocument: async () => (fetched = await readOwnWellKnown(v.origin, HANDOFF_PATH, { maxBytes: HANDOFF_DOC_MAX_BYTES })),
+    livePayTo: () => listedPayTo,
+    verifySignature: verifyHandoffSignature,
+    isExcludedWallet: handoffExcludedWallet,
+    now,
+  });
+  if (!r.ok) {
+    // When the document parsed, name the exact text the old wallet must sign.
+    const p = fetched ? parseHandoff(fetched, { now }) : null;
+    const expected = p?.ok ? { message: handoffMessage({ origin, network: p.network, from: p.from, to: p.to, issuedAt: p.issuedAt }) } : {};
+    return res.status(r.retry ? 503 : 422).json({ ok: false, origin, error: r.reason, format: HANDOFF_FORMAT, ...expected });
+  }
+  const stored = await handoffStore().put(r.record);
+  if (!stored.ok && stored.conflict) return res.status(409).json({ ok: false, origin, error: "another origin already holds a handoff from this wallet; a wallet's history can be handed to one origin" });
+  if (!stored.ok) return res.status(503).json({ ok: false, origin, error: stored.reason || "the handoff could not be stored" });
+  dispatchEvidenceCache = null;
+  res.json({ ok: true, origin, network: r.record.network, from: r.record.from, to: r.record.to, issuedAt: r.record.issuedAt, verifiedAt: r.record.verifiedAt, effect: `settlement history credited to ${r.record.from} on this origin now counts for ${r.record.to}; it shows as payToHandoff on GET /api/index?seller=<origin>` });
 });
 // MPP self-serve listing: same shape/limits as /api/index/register above -
 // validate + rate-limit here, all probing happens inside the crawler behind

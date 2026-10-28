@@ -67,7 +67,7 @@ const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
-  evidence_payto_mismatch: "the settlement history that clears the floor for this origin was measured at a wallet its own 402 does not ask to be paid at; each wallet's history counts only where that wallet is paid, so it does not count for this origin",
+  evidence_payto_mismatch: "the settlement history that clears the floor for this origin was measured at a wallet its own 402 does not ask to be paid at; each wallet's history counts only where that wallet is paid, so it does not count for this origin. A seller that moved its own Base payTo can carry the old wallet's history to the new one with a signed handoff (POST /api/index/payto-handoff)",
   evidence_payto_unverified: "the settlement history that clears the floor for this origin was measured at a specific wallet and the origin's own Base payTo could not be read, so it does not count until the live 402 names that wallet",
   evidence_payto_shared: "the wallet this origin's 402 asks to be paid at is listed by this host as a settlement contract shared by many sellers, so that wallet's own settlement history is credited to none of them; only settlement measured on this origin's own URLs counts toward the floor",
 });
@@ -114,10 +114,23 @@ export function evidencePayToVerdict({ evidence, livePayTo, minSettled = 50, min
     const w = evmKey(w0);
     if (w && meetsRouterGate({ settled: Number(v?.settled || 0), payers: v?.payers, minSettled, minPayers }).ok) payTos.push(w);
   }
+  // A verified handoff (src/payto-handoff.js) lets the new wallet stand where
+  // the old one did, on this origin only and only when the old wallet's own
+  // evidence clears here.
+  const h = evidence.handoff;
+  const handedTo = h && evmKey(h.from) && payTos.includes(evmKey(h.from)) ? evmKey(h.to) : null;
+  if (handedTo && !payTos.includes(handedTo)) payTos.push(handedTo);
   const live = evmKey(livePayTo);
   if (!live) return { bound: true, ok: false, verdict: "evidence_payto_unverified", payTos };
   if (!payTos.includes(live)) return { bound: true, ok: false, verdict: "evidence_payto_mismatch", payTos, livePayTo: live };
-  return { bound: true, ok: true, verdict: "evidence_payto_match", payTos, livePayTo: live };
+  return { bound: true, ok: true, verdict: live === handedTo && !byWalletClears(byWallet, live, minSettled, minPayers) ? "evidence_payto_handoff" : "evidence_payto_match", payTos, livePayTo: live };
+}
+
+function byWalletClears(byWallet, w, minSettled, minPayers) {
+  for (const [w0, v] of byWallet) {
+    if (evmKey(w0) === w) return meetsRouterGate({ settled: Number(v?.settled || 0), payers: v?.payers, minSettled, minPayers }).ok;
+  }
+  return false;
 }
 
 /** Would the history WITHHELD at a listed shared wallet (plus what is credited

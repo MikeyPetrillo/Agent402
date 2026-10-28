@@ -1368,9 +1368,16 @@ export function sharesPayTo(claimant, predecessor) {
 
 /** Fetch one origin's succession marker. Never throws; an unreadable marker is
  *  simply not a proof. */
-async function readMarker(origin, fetchImpl) {
+function readMarker(origin, fetchImpl) {
+  return readOwnWellKnown(origin, SUCCESSION_PATH, { fetchImpl });
+}
+
+/** Fetch a JSON document the origin ITSELF serves at `path` (succession
+ *  markers, the payTo handoff in src/payto-handoff.js). Never throws; an
+ *  unreadable or off-host document is null. */
+export async function readOwnWellKnown(origin, path, { fetchImpl = null, maxBytes = 4096 } = {}) {
   try {
-    const url = `${String(origin).replace(/\/+$/, "")}${SUCCESSION_PATH}`;
+    const url = `${String(origin).replace(/\/+$/, "")}${path}`;
     // SSRF: `origin` is caller-supplied, so this goes through safeFetch - the
     // guarded fetcher this file already imports and the rest of the codebase
     // uses for exactly this. It asserts the URL is public, pins the connection
@@ -1388,7 +1395,7 @@ async function readMarker(origin, fetchImpl) {
     // `fetchImpl` remains only for tests and is never the network path.
     const res = fetchImpl
       ? await fetchImpl(url).then(async (r) => (r.ok ? { html: await r.text(), finalUrl: r.url || url } : null))
-      : await safeFetch(url, { headers: { accept: "application/json" }, maxBytes: 4096 }).catch(() => null);
+      : await safeFetch(url, { headers: { accept: "application/json" }, maxBytes }).catch(() => null);
     if (!res) return null;
     // THE MARKER MUST BE SERVED BY THE ORIGIN ITSELF.
     //
@@ -1405,7 +1412,7 @@ async function readMarker(origin, fetchImpl) {
     // A path seller's marker must also come from under its own prefix: another
     // app on the same host is not the seller.
     if (res.finalUrl && !(sellerPrefixOf(origin) ? isUnderSeller(res.finalUrl, origin) : sameOrigin(res.finalUrl, origin))) return null;
-    return JSON.parse(String(res.html).slice(0, 4000));
+    return JSON.parse(String(res.html).slice(0, maxBytes));
   } catch { return null; }
 }
 
