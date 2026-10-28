@@ -194,6 +194,18 @@ globalThis.fetch = async (url) => { lastUrl = new URL(String(url)); return jsonR
   ok(lastUrl.pathname === "/v2/email-verifier" && lastUrl.searchParams.get("email") === "support@stripe.com", "email-verify: /v2/email-verifier?email= (lowercased)");
   ok(out.result === "deliverable" && out.status === "valid" && out.score === 94 && out.checks.mxRecords === true && out.checks.smtpCheck === true && out.checks.acceptAll === false && out.checks.block === false && out.sourceCount === 3, "email-verify: shaped with checks");
 }
+// Hunter deprecated `result`: an answer carrying only `status` still fills it.
+for (const [status, result] of [["valid", "deliverable"], ["webmail", "deliverable"], ["invalid", "undeliverable"], ["accept_all", "risky"], ["disposable", "risky"], ["unknown", "unknown"]]) {
+  const { result: _drop, ...noResult } = VERIFY_FIXTURE.data;
+  globalThis.fetch = async () => jsonRes(200, { data: { ...noResult, status }, meta: {} });
+  const out = await h("hunter-email-verify")({ email: "support@stripe.com" });
+  ok(out.status === status && out.result === result, `email-verify: status ${status} with no result field -> result ${result}`);
+}
+{
+  globalThis.fetch = async () => jsonRes(200, { data: { ...VERIFY_FIXTURE.data, status: "accept_all", result: "deliverable" }, meta: {} });
+  const out = await h("hunter-email-verify")({ email: "support@stripe.com" });
+  ok(out.result === "deliverable", "email-verify: a result the source sends is kept as sent");
+}
 globalThis.fetch = async () => jsonRes(202, {});
 await throws(h("hunter-email-verify")({ email: "slow@stripe.com" }), 503, "email-verify: 202 still verifying -> 503 retry hint", /retry/);
 

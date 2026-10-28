@@ -43,6 +43,11 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
+// Hunter deprecated the email-verifier `result` field in favor of `status`;
+// while `result` is still in the answer, it is derived from `status` when absent.
+const RESULT_OF_STATUS = { valid: "deliverable", webmail: "deliverable", invalid: "undeliverable", accept_all: "risky", disposable: "risky", unknown: "unknown" };
+const resultOfStatus = (status) => (status && RESULT_OF_STATUS[status]) || null;
+
 const hunterKey = () => (process.env.HUNTER_API_KEY || "").trim();
 const apolloKey = () => (process.env.APOLLO_API_KEY || "").trim();
 
@@ -457,7 +462,7 @@ export const B2B_ENRICH_TOOLS = [
     category: "research",
     price: "$0.020",
     description:
-      "Verify whether an email address is deliverable: result (deliverable/undeliverable/risky/unknown), status (valid/invalid/accept_all/webmail/disposable/unknown), a 0-100 score, and the individual checks (format, gibberish, disposable, webmail, MX records, SMTP server, SMTP check, accept-all, blocked).",
+      "Verify whether an email address is deliverable: status (valid/invalid/accept_all/webmail/disposable/unknown), result (deliverable/undeliverable/risky/unknown, derived from status when the source omits it), a 0-100 score, and the individual checks (format, gibberish, disposable, webmail, MX records, SMTP server, SMTP check, accept-all, blocked).",
     tags: ["b2b", "enrichment", "email", "verify", "deliverability"],
     discovery: {
       bodyType: "json",
@@ -490,7 +495,7 @@ export const B2B_ENRICH_TOOLS = [
         source: "hunter",
         fetchedAt: nowIso(),
         email: str(d.email) || email,
-        result: str(d.result),
+        result: str(d.result) || resultOfStatus(str(d.status)),
         status: str(d.status),
         score: num(d.score),
         checks: {
@@ -743,7 +748,7 @@ export function b2bEnrichEnabled() {
   });
 }
 
-export const __test = { takeDomain, takeEmail, takeName, takeInt, takeStringList, shapeHunterEmail, shapeHunterCompany, shapeApolloPerson, shapeApolloOrgFull, HUNTER_API, APOLLO_API };
+export const __test = { resultOfStatus, takeDomain, takeEmail, takeName, takeInt, takeStringList, shapeHunterEmail, shapeHunterCompany, shapeApolloPerson, shapeApolloOrgFull, HUNTER_API, APOLLO_API };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(B2B_ENRICH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
