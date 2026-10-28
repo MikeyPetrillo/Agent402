@@ -25,8 +25,8 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET
 // when measured (2026-10-14).
 const KALSHI_READ_MS = 12_000;
 
-// Kalshi's trade API, keyless (https://trading-api.readme.io/reference/getmarkets).
-const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
+// Kalshi's trade API on its dedicated external host, keyless (docs.kalshi.com).
+const KALSHI = "https://external-api.kalshi.com/trade-api/v2";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
