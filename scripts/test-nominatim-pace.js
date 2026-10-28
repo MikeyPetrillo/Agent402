@@ -38,16 +38,57 @@ if (process.argv[2] === "shared") {
   __setTestClient({ isReady: true, async set() { throw new Error("down"); }, async pTTL() { throw new Error("down"); } });
   process.env.NOMINATIM_PACE_WAIT_MS = "2500";
   ok((await pace.nominatimSlot()) === true && pace.nominatimPaceCounts().local === 1, "shared: a store error falls back to this process's spacing");
+  // The store answers "held" once, then fails while this call waits: the local
+  // fallback must not start inside the second another call still holds.
+  pace._resetNominatimPace();
+  let calls = 0;
+  __setTestClient({
+    isReady: true,
+    async set() { if (calls++ === 0) return null; throw new Error("down"); },
+    async pTTL() { return 400; },
+  });
+  const t1 = Date.now();
+  ok((await pace.nominatimSlot()) === true && Date.now() - t1 >= 1350, `shared: a store failure mid-wait starts locally one slot after the held second (${Date.now() - t1} ms)`);
   console.log(failed ? `${failed} failed` : "shared part passed");
   process.exit(failed ? 1 : 0);
 }
-{
+if (process.argv[2] !== "geo") {
   const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "shared"], {
     env: { ...process.env, REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "" }, encoding: "utf8",
   });
   process.stdout.write(r.stdout || "");
   if (r.stderr) process.stderr.write(r.stderr);
   ok(r.status === 0, "shared-store part passed in its own process");
+}
+
+// ---- caller path: the geo kit's three Nominatim sites (child process) ----
+if (process.argv[2] === "geo") {
+  process.env.SHARED_LIMITS = "off";
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    seen.push(new URL(String(url)).host);
+    const body = String(url).includes("photon") ? { features: [{ geometry: { coordinates: [2.29, 48.85] }, properties: { name: "P", countrycode: "FR" } }] } : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const pace = await import("../src/tools/nominatim-pace.js");
+  const geo = await import("../src/tools/geo-kit.js");
+  const tools = Object.values(geo).find(Array.isArray);
+  const h = (r) => tools.find((t) => t.route === r).handler;
+  await pace.nominatimSlot(); // this process's second is taken
+  process.env.NOMINATIM_PACE_WAIT_MS = "0";
+  for (const [route, input] of [["GET /api/geocode", { q: "Eiffel Tower" }], ["GET /api/reverse-geocode", { lat: 48.85, lon: 2.29 }], ["GET /api/place-search", { q: "cafe" }]]) {
+    seen.length = 0;
+    const out = await h(route)(input).catch((e) => ({ error: e.message }));
+    ok(String(out.source || "").startsWith("photon") && !seen.includes("nominatim.openstreetmap.org"), `${route}: no slot -> answered by the fallback geocoder, Nominatim not called`);
+  }
+  console.log(failed ? `${failed} failed` : "geo part passed");
+  process.exit(failed ? 1 : 0);
+}
+{
+  const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "geo"], { env: { ...process.env, REDIS_URL: "" }, encoding: "utf8" });
+  process.stdout.write(r.stdout || "");
+  if (r.stderr) process.stderr.write(r.stderr.split("\n").filter((l) => !l.startsWith("[geo]")).join("\n"));
+  ok(r.status === 0, "geo caller-path part passed in its own process");
 }
 
 // ---- local spacing (no shared store) ----

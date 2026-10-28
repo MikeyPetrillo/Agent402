@@ -50,6 +50,7 @@ async function localSlot(deadline, now = Date.now()) {
 /** Resolves true once this call holds the service's Nominatim second, false when none frees within the wait budget. */
 export async function nominatimSlot() {
   const deadline = Date.now() + waitBudgetMs();
+  let heldSeen = false;
   if (sharedLimitsEnabled()) {
     try {
       const c = await getSharedRedisClient();
@@ -61,10 +62,14 @@ export async function nominatimSlot() {
         const ttl = Number(await within(c.pTTL(key), sharedDeadlineMs()));
         const waitMs = ttl > 0 ? ttl : 50;
         if (Date.now() + waitMs > deadline) { counts.refused++; return false; }
+        heldSeen = true;
         await sleep(waitMs);
       }
     } catch (e) {
       noteSharedLimitsDegraded("nominatim-pace", { error: e?.message });
+      // The shared second was held by another call when the store failed:
+      // this process starts no sooner than one slot later.
+      if (heldSeen) localNextAt = Math.max(localNextAt, Date.now() + SLOT_MS);
     }
   }
   const ok = await localSlot(deadline);
