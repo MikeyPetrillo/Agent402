@@ -637,6 +637,19 @@ await check("paid canary: the Arc leg is a peer leg (absent from the 402 = a rai
     assert.equal(f.calls.filter((x) => x.url.endsWith("/verify")).length, 1);
   });
 
+  await check("switch on: a cached verdict covers only the message it checked (same payer, nonce and signature, different value or recipient is checked again)", async () => {
+    const pc = stubClient("valid");
+    const verify = createContractVerifier({ publicClient: pc });
+    const p = await contractSigned(SIG_1271);
+    const a = p.payload.authorization;
+    assert.equal(await verify(a, SIG_1271), true);
+    assert.equal(await verify({ ...a }, SIG_1271), true);
+    assert.equal(pc.calls.length, 1, "the identical message is served from cache");
+    await verify({ ...a, value: String(BigInt(a.value) * 500n) }, SIG_1271);
+    await verify({ ...a, to: "0x00000000000000000000000000000000000000ff" }, SIG_1271);
+    assert.equal(pc.calls.length, 3, "a changed value or recipient is verified on chain again");
+  });
+
   await check("switch on + ERC-1271 invalid: refused before Circle", async () => {
     const pc = stubClient("invalid");
     const f = okFetch();
