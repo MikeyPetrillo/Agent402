@@ -753,14 +753,20 @@ export const BAZAAR_DISCOVERY_MAX_BYTES = Number(process.env.BAZAAR_DISCOVERY_MA
  *  first (it is derived from the example, which stays readable), then the
  *  example gives way to the truncation note; a schema never outlives the
  *  example it was read from. A block inside the budget is returned as is. */
+// The pointer that stands in for a sample output too large for the 402. It is
+// recognised by its note, never by a "truncated" field alone: a tool's own
+// sample output often carries one (a paged list), and that is not the pointer.
+const EXAMPLE_POINTER_NOTE = "full example in /openapi.json";
+export const examplePointer = () => ({ truncated: true, note: EXAMPLE_POINTER_NOTE });
+export const isExamplePointer = (ex) => !!ex && typeof ex === "object" && ex.truncated === true && ex.note === EXAMPLE_POINTER_NOTE;
 export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES) {
   if (!block || typeof block !== "object") return block;
   const bytes = (b) => JSON.stringify(b).length;
   if (bytes(block) <= maxBytes) return block;
   let out = { ...block };
   if (out.output?.schema) { const { schema: _dropped, ...rest } = out.output; out = { ...out, output: rest }; }
-  if (bytes(out) > maxBytes && out.output?.example !== undefined && !out.output.example?.truncated) {
-    out = { ...out, output: { ...out.output, example: { truncated: true, note: "full example in /openapi.json" } } };
+  if (bytes(out) > maxBytes && out.output?.example !== undefined && !isExamplePointer(out.output.example)) {
+    out = { ...out, output: { ...out.output, example: examplePointer() } };
   }
   return out;
 }
@@ -770,11 +776,25 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // the price. Every route carries the same payment offers and MPP challenge, so
 // the part that varies by route (the discovery extension plus the listing
 // description) has a byte budget. A route over it gives up, in order: the input
-// property descriptions (names and types stay), description length, then its
-// sample output and the schema read from it. A route under the budget keeps
+// property descriptions (names and types stay), description length, its sample
+// output and the schema read from it, any input detail past each property's
+// name and type (required stays), then long strings in the input example (an
+// inline image, say), which /openapi.json keeps runnable. A route under the budget keeps
 // everything, and /openapi.json always carries the full versions.
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_800;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
+const LONG_EXAMPLE_STRING = 200;
+function shortExampleStrings(v) {
+  if (typeof v === "string") return v.length > LONG_EXAMPLE_STRING ? `<${v.length} characters; the full example is in /openapi.json>` : v;
+  if (Array.isArray(v)) return v.map(shortExampleStrings);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shortExampleStrings(x)]));
+  return v;
+}
+function typesOnly(schema) {
+  if (!schema || typeof schema !== "object" || !schema.properties) return schema;
+  const props = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => [name, p && typeof p === "object" && p.type ? { type: p.type } : {}]));
+  return { type: schema.type || "object", properties: props, ...(Array.isArray(schema.required) && schema.required.length ? { required: schema.required } : {}) };
+}
 function withoutPropertyDescriptions(schema) {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(withoutPropertyDescriptions);
@@ -798,10 +818,15 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   const trimmed = [];
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
   if (d && d.length > CHALLENGE_SHORT_DESCRIPTION_MAX && size(b, d) > max) { d = bazaarCapDescription(d, CHALLENGE_SHORT_DESCRIPTION_MAX); trimmed.push("description"); }
-  if (b?.output && b.output.example !== undefined && !b.output.example?.truncated && size(b, d) > max) {
+  if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
     const { schema: _schema, ...rest } = b.output;
-    b = { ...b, output: { ...rest, example: { truncated: true, note: "full example in /openapi.json" } } };
+    b = { ...b, output: { ...rest, example: examplePointer() } };
     trimmed.push("output-example");
+  }
+  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
+  if (b?.input !== undefined && size(b, d) > max) {
+    const input = shortExampleStrings(b.input);
+    if (JSON.stringify(input) !== JSON.stringify(b.input)) { b = { ...b, input }; trimmed.push("input-example-strings"); }
   }
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
@@ -1985,7 +2010,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       slim.output = {
         type: slim.output.type || "json",
         ...(example !== undefined
-          ? { example: oversized ? { truncated: true, note: "full example in /openapi.json" } : example }
+          ? { example: oversized ? examplePointer() : example }
           : {}),
         ...(schema ? { schema } : {}),
       };

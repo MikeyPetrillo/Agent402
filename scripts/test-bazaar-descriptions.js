@@ -2,7 +2,7 @@
 // slug, fits the Bazaar's 500-char cap, reads as what+when (no internal
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
@@ -51,8 +51,16 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
   ok(one.trimmed.join() === "input-descriptions" && !JSON.stringify(one.slim.inputSchema).includes("xxxx") && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example,
     "budget: input property descriptions go first; names, types and the sample output stay");
   const all = fitChallenge(block, long, declare, 200);
-  ok(all.trimmed.join() === "input-descriptions,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && all.slim.output.example.truncated === true && all.slim.output.schema === undefined,
-    "budget: then the description shortens at a sentence, then the sample output becomes a pointer and its schema goes with it");
+  ok(all.trimmed.slice(0, 4).join() === "input-descriptions,description,output-example,input-types-only" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
+    "budget: then the description shortens at a sentence, the sample output becomes a pointer (its schema goes with it), then input properties keep only name and type");
+  // A tool's own sample output can carry a "truncated" field (a paged list): it is still trimmed.
+  const paged = { ...block, output: { type: "json", example: { truncated: true, results: Array.from({ length: 60 }, (_, i) => ({ id: i })) } } };
+  ok(isExamplePointer(fitChallenge(paged, "short", declare, 200).slim.output.example), "budget: a sample output with its own truncated field is still replaced by the pointer");
+  // A long string in the input example (an inline image) gives way last; short fields stay.
+  const inline = { input: { prompt: "an apple", image: "data:image/png;base64," + "A".repeat(1200) }, output: { type: "json", example: { ok: true } } };
+  const fitInline = fitChallenge(inline, "short", declare, 300);
+  ok(fitInline.trimmed.includes("input-example-strings") && fitInline.slim.input.prompt === "an apple" && fitInline.slim.input.image.length < 100 && /openapi/.test(fitInline.slim.input.image),
+    "budget: a long input example string becomes a pointer to /openapi.json, and short fields stay");
   ok(fitChallenge(null, "short", declare, 10).slim === null, "budget: a route with no discovery block only shortens its description");
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
