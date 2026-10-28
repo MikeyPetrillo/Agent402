@@ -1608,6 +1608,7 @@ jobs:
           t node scripts/test-market-pulse-slices.js
           # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
           t node scripts/test-cache-hygiene.js
+          t node scripts/test-cache-keys.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
           t node scripts/test-tempo-router.js
           t node scripts/test-sor-resolver-scope.js
