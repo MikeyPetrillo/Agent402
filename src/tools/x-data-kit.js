@@ -535,9 +535,10 @@ export const X_DATA_TOOLS = [
     tags: [...SHARED_TAGS, "users", "bulk", "lookup"],
     discovery: {
       bodyType: "json",
-      // One real account and one that does not exist, so the answer shows both
-      // lists the output example shows: the found profile and notFound.
-      input: { usernames: ["coinbase", "nosuchuser_xyz"] },
+      // One real account and one that cannot exist (X does not allow a handle
+      // containing "twitter" or "admin"), so the answer shows both lists the
+      // output example shows: the found profile and notFound.
+      input: { usernames: ["coinbase", "twitteradmin_x"] },
       inputSchema: {
         properties: {
           usernames: { type: "array", items: { type: "string" }, description: "1-10 usernames (array, or a comma-separated string)." },
@@ -550,7 +551,7 @@ export const X_DATA_TOOLS = [
           fetchedAt: "2026-08-20T14:10:00.000Z",
           count: 1,
           users: [USER_EXAMPLE],
-          notFound: ["nosuchuser_xyz"],
+          notFound: ["twitteradmin_x"],
         },
       },
     },

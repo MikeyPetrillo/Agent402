@@ -15,7 +15,7 @@ Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `
 |---|---|---|---|---|
 | `POST /api/llm` | $0.01 | `gpt-4o-mini` | 16k chars | 4,096 tokens |
 | `POST /api/llm-pro` | $0.10 | `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
-| `POST /api/llm-premium` | $0.50 | `o3-mini`, `o3` (reasoning) | 32k chars | 2,048 tokens |
+| `POST /api/llm-premium` | $0.50 | `gpt-5.6-terra` (default), `o3` (reasoning) | 32k chars | 2,048 tokens |
 
 GPT-4o, GPT-4o mini and GPT-4.1 are scheduled to be retired upstream on 2027-01-14; these routes will move to their successors before then.
 
@@ -41,7 +41,7 @@ Every tier accepts the same OpenAI-shaped JSON body:
 
 | Field | Required | Notes |
 |---|---|---|
-| `model` | no | Defaults to `gpt-4o-mini` when omitted. Must match the tier's allowlist by prefix (`gpt-4o-mini` for `/api/llm`; `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `o3` / `o3-mini` for `/api/llm-premium`, which refuses the default, so name a model there) |
+| `model` | no | Defaults to `gpt-4o-mini` on `/api/llm` and `/api/llm-pro`, and to `gpt-5.6-terra` on `/api/llm-premium`. Must match the tier's allowlist by prefix (`gpt-4o-mini` for `/api/llm`; `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `o3` / `gpt-5.6-terra` for `/api/llm-premium`, where the retired `o3-mini` and `o4-mini` ids are served by `gpt-5.6-terra`) |
 | `messages` | yes | Array of `{role, content}` objects; max 50 messages |
 | `max_tokens` | no | Default 1,024; silently clamped to the tier's output cap |
 | `temperature` | no | 0--2; controls randomness |
@@ -99,13 +99,13 @@ curl -X POST https://agent402.tools/api/llm-pro \
   }'
 ```
 
-### Premium tier ($0.50: o3 / o3-mini reasoning)
+### Premium tier ($0.50: gpt-5.6-terra / o3 reasoning)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm-premium \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "o3-mini",
+    "model": "gpt-5.6-terra",
     "messages": [{"role": "user", "content": "What are the trade-offs of on-chain vs off-chain settlement?"}],
     "max_tokens": 512
   }'

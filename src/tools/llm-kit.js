@@ -14,7 +14,7 @@
 // 2027-01-14. Each stays served as itself until then; from that day a
 // request naming one is served by its scheduled successor (RETIRING below)
 // and the answer names the swap in agent402_model_substituted.
-//   llm-premium  $0.50  — o3, gpt-5.6-terra   (32k input, 2048 output)
+//   llm-premium  $0.50  - o3, gpt-5.6-terra   (32k input, 2048 output)
 
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";

@@ -754,7 +754,7 @@ export const BAZAAR_DISCOVERY_MAX_BYTES = Number(process.env.BAZAAR_DISCOVERY_MA
  *  example gives way to the truncation note; a schema never outlives the
  *  example it was read from. A block inside the budget is returned as is. */
 // The pointer that stands in for a sample output too large for the 402. It is
-// recognised by its note, never by a "truncated" field alone: a tool's own
+// recognized by its note, never by a "truncated" field alone: a tool's own
 // sample output often carries one (a paged list), and that is not the pointer.
 const EXAMPLE_POINTER_NOTE = "full example in /openapi.json";
 export const examplePointer = () => ({ truncated: true, note: EXAMPLE_POINTER_NOTE });
@@ -782,7 +782,9 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // sample output becomes a pointer: those are what a buyer reads to decide, so
 // they go last. /openapi.json keeps every full version. A route under the budget keeps
 // everything, and /openapi.json always carries the full versions.
-export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_800;
+// 1,900 keeps the heaviest measured routes near 15.7 KB in all while about 470
+// of 596 keep their full sample output.
+export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_900;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
 const LONG_EXAMPLE_STRING = 200;
 function shortExampleStrings(v) {
