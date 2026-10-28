@@ -72,7 +72,9 @@ const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
 // Sent as Authorization: Bearer on every catalog call; the server debits the
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
-const SHOW_ROUTER = HAS_WALLET || CREDITS_KEY !== "" || process.env.AGENT402_SHOW_ROUTER === "1";
+// Listed with a wallet: a credits key does not pay routes that buy from an
+// outside seller (prepaid credits are spent only on Agent402's own services).
+const SHOW_ROUTER = HAS_WALLET || process.env.AGENT402_SHOW_ROUTER === "1";
 const HIDDEN_WITHOUT_WALLET = new Set(["router.execute", META_MCP_NAMES.list_top_sellers]);
 const HAS_CREDITS = /^a402_[A-Za-z0-9_-]{32,64}$/.test(CREDITS_KEY);
 // Slow paid routes (async.recommended on their /api/pricing row) are sent with
@@ -910,7 +912,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.20",
+          npm: "npx -y agent402-mcp@0.13.21",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -930,7 +932,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.20",
+          npm: "npx -y agent402-mcp@0.13.21",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,

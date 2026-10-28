@@ -2839,7 +2839,7 @@ export function skillsIndex(baseUrl) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
+      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.21
 
 <span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span></pre>
       <a href="/docs#add" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
@@ -3025,7 +3025,7 @@ ${packTool ? `
 <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
 
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20</pre>
+<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.21</pre>
 <p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
 <div class="sk-prompt"><pre>${e(pack.claudePrompt)}</pre></div>
 
