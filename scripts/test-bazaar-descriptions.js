@@ -2,7 +2,7 @@
 // slug, fits the Bazaar's 500-char cap, reads as what+when (no internal
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
@@ -35,6 +35,26 @@ const words = "word ".repeat(200).trim();
 const capped = bazaarCapDescription(words);
 ok(capped.length <= BAZAAR_DESCRIPTION_MAX && capped.endsWith("word.") && !capped.includes("..."), `cap: word boundary + period, never mid-word '...' (${capped.length} chars)`);
 ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "", "cap: short/empty untouched");
+// The per-route 402 budget: under it nothing changes; over it the route gives
+// up input descriptions first, then description length, then its sample output.
+{
+  const declare = (b) => ({ bazaar: { info: { input: b.input, output: b.output }, schema: { input: b.inputSchema } } });
+  const long = "A long description sentence about the tool. ".repeat(20).trim();
+  const block = {
+    input: { values: [1, 2, 3] },
+    inputSchema: { properties: { values: { type: "array", description: "x".repeat(400) }, horizon: { type: "number", description: "y".repeat(400) } } },
+    output: { type: "json", example: { forecast: Array.from({ length: 40 }, (_, i) => ({ step: i, point: i * 1.5 })) }, schema: { type: "object" } },
+  };
+  const roomy = fitChallenge(block, long, declare, 1_000_000);
+  ok(roomy.trimmed.length === 0 && roomy.slim === block && roomy.description === long, "budget: a route under it keeps its block and description untouched");
+  const one = fitChallenge(block, long, declare, JSON.stringify(declare(block)).length + long.length - 100);
+  ok(one.trimmed.join() === "input-descriptions" && !JSON.stringify(one.slim.inputSchema).includes("xxxx") && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example,
+    "budget: input property descriptions go first; names, types and the sample output stay");
+  const all = fitChallenge(block, long, declare, 200);
+  ok(all.trimmed.join() === "input-descriptions,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && all.slim.output.example.truncated === true && all.slim.output.schema === undefined,
+    "budget: then the description shortens at a sentence, then the sample output becomes a pointer and its schema goes with it");
+  ok(fitChallenge(null, "short", declare, 10).slim === null, "budget: a route with no discovery block only shortens its description");
+}
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");
 console.log(`\n${pass} passed, ${fail} failed`);
