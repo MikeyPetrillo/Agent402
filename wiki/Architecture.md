@@ -84,7 +84,7 @@ Checkout, generate-once per paid session, auto-refund on failure, report at
 `/r/:session`), `/monitors` sells $5/month subscriptions whose fulfilment is a
 10-minute scheduler tick (free daily probes, a paid re-run only on change or cadence,
 reports at `/m/:id`, emails via `src/email.js`), and `/credits` sells prepaid credit
-packs while `CREDITS_SALES=on` (off by default; keys already issued keep spending). The Stripe webhook endpoint is signature-verified with
+packs while `CREDITS_SALES=on` (off by default; existing keys spend either way). The Stripe webhook endpoint is signature-verified with
 `STRIPE_WEBHOOK_SECRET`. Stores are rows in the Postgres state database when `STATE_DATABASE_URL` is set, and atomic files under `/data` otherwise.
 
 ## Key pieces

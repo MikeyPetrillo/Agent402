@@ -111,7 +111,7 @@ browser, PDF, memory) are payable on the connector over MPP: the call answers
 JSON-RPC error -32042 carrying the challenges, and an MCP client wrapped with
 `mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or natively on Tempo) and
 retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
-npm package with a wallet key (or a card-credits key bought earlier).
+npm package with a wallet key (or a prepaid card-credits key).
 
 ---
 

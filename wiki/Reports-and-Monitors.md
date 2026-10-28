@@ -7,7 +7,7 @@ Beside the 500+ per-call tools, Agent402 sells **outcome-priced report products*
 - **Agents** call the `/v1/...` route directly and pay on the 402 - USDC over x402 or MPP.
 - **People** buy the same report by card at [`/reports`](https://agent402.tools/reports) or subscribe to a monitor at [`/monitors`](https://agent402.tools/monitors).
 
-A prepaid credits key issued earlier keeps working on the agent routes (see "Credits keys issued earlier" below).
+A prepaid credits key also pays the agent routes (see "Credits keys" below).
 
 All of it is optional and env-gated on a self-hosted instance (see [[Self-Hosting]]); without the Stripe keys the `/v1` report routes still sell over x402 / MPP, and the card pages simply are not mounted.
 
@@ -78,9 +78,9 @@ A monitor is a Stripe subscription that keeps one report fresh for one target. T
 
 Operational bounds: a target is validated at checkout (the domain must parse, the manager must resolve on EDGAR); paid re-runs are capped per subscription per 30 days (alerts keep coming); a failing run backs off (1h doubling to 24h) and never sends an email, and a target that keeps failing tells the subscriber once. Billing is Stripe's recurring invoice and the Customer Portal (the manage link in every monitor email) cancels or updates it; subscription status is re-read from Stripe before every paid run, so a canceled monitor stops being fulfilled.
 
-## Credits keys issued earlier
+## Credits keys
 
-New prepaid credits are not on sale (on a self-hosted instance, sales are switched on with `CREDITS_SALES=on`). A key (`a402_…`) issued earlier keeps working:
+Prepaid credits are a prepayment for Agent402's own services, for business and developer use; they are not transferable or redeemable for cash, never expire and carry no fees. [`/credits`](https://agent402.tools/credits) says whether packs are on sale (on a self-hosted instance, sales are switched on with `CREDITS_SALES=on`). A key (`a402_…`) pays per call:
 
 ```bash
 curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domain=example.com'
@@ -90,6 +90,7 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 - **Debited only on success.** The gate holds the list price before the handler runs and converts the hold to a debit only when the final response is `200`; any error or settlement failure releases it, and so does a client abort while the call holds a hang-up forgiveness ticket. Amounts are exact to the micro-dollar.
 - **Balance:** `GET /api/credits/balance` (same header) returns what is left. An insufficient or unknown key answers `402` with `{ reason, balanceUsd }`.
 - **Identity-bound tools refuse credits.** The memory tools, `my-usage`, `receipts`, `attest` and `feedback` use the payer's signed wallet as identity; a credits key carries no verified wallet, so those routes answer `402` with `reason: "identity-bound"` and must be paid over an x402 rail.
+- **Outside-seller routes refuse credits.** The route-execute tiers, `seller-payability` and `/api/decide/execute` buy from an outside seller with our wallet, so they answer `402` with `reason: "third-party-purchase"` and take a wallet payment only (x402, or MPP on a chain).
 - **In the SDKs:** `agent402-mcp` (0.13.0+) reads `AGENT402_CREDITS_KEY`; `agent402-client` (0.7.0+) accepts `{ creditsKey }`. Both keep their per-call and budget caps in front of the key.
 
 ## How this fits the rest
@@ -97,7 +98,7 @@ curl -H 'Authorization: Bearer a402_…' 'https://agent402.tools/api/whois?domai
 | | Per-call tools | Report products | Monitors |
 |---|---|---|---|
 | Price | $0.001 and up per call | $0.60 to $2.00 per report over x402 / MPP ($0.05 for the IPO digest), or $2 to $5 by card | $5 per month per target |
-| Pay with | x402, MPP, proof-of-work (pure-CPU), a credits key issued earlier | x402, MPP, a credits key issued earlier, or card at `/reports` | card subscription at `/monitors` |
+| Pay with | x402, MPP, proof-of-work (pure-CPU), a credits key | x402, MPP, a credits key, or card at `/reports` | card subscription at `/monitors` |
 | Who | agents | agents and people | people (agents call the underlying report directly) |
 | Serving path | mostly deterministic code; the model-backed ones (LLM tiers, media, embeddings, `answer`) carry `modelBacked: true` in the `/api/pricing` listing | deterministic evidence + grounded synthesis (IPO digest: deterministic only) | the same report kits on a schedule |
 

@@ -61,8 +61,9 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > report, insider flow, market brief, deep research, FDA recall, domain audit)
 > are $2 to $5, **monitors** that re-run on change at
 > [/monitors](https://agent402.tools/monitors) are $5 a month, and a **prepaid
-> credits** key already issued keeps paying per successful call
-> (`Authorization: Bearer a402_…`; new credits are not on sale). The card price includes payment
+> credits** key pays per successful call on Agent402's own services
+> (`Authorization: Bearer a402_…`; [/credits](https://agent402.tools/credits) says whether
+> packs are on sale). The card price includes payment
 > processing. An agent paying per call pays the lower tool price for the same
 > report.
 >
@@ -93,7 +94,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 **500+ strong - live web search and cited answers as the MCP front door, then ready-to-use web tools and multi-tool skill packs for your AI agent, from one server. Every one priced per call and settled on-chain. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats, forecasting, and options/bond pricing (Black-Scholes, YTM), compression, and 150+ pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup - the free tier and x402/MPP payments never
-need a key; only a prepaid credits key already issued is a bearer key), connect
+need a key; only a prepaid credits key is a bearer key), connect
 it to Claude/ChatGPT/any MCP client, and add your own tools in a few lines.
 No language model writes a utility tool's answer, and every tool CI can run
 without a third-party key is re-tested against its own example before every release. The model-backed
@@ -218,7 +219,7 @@ so an agent skips the token-heavy "search around to find a tool" step.
 
 Point any OpenAI SDK at `base_url = https://agent402.tools/v1` and pay per call in
 USDC over x402 or MPP - no API key, no signup, no account (a prepaid credits key
-already issued also works, see [For humans](#for-humans-reports-monitors-and-prepaid-credits)):
+also works, see [For humans](#for-humans-reports-and-monitors)):
 
 | Endpoint | Price | Serves |
 |---|---|---|
@@ -296,9 +297,9 @@ enables it with `STRIPE_SECRET_KEY`, otherwise these pages simply do not mount):
 |---|---|
 | [agent402.tools/reports](https://agent402.tools/reports) | Buy any finished report from the table above by card (`POST /api/buy`) for $2 to $5 (the deepest tiers and the ticker pack sit at the top of that range; current prices on the page), delivered at `/r/<session>` - no wallet, no account. The card price includes payment processing; an agent paying per call pays the lower tool price for the same report. A report is generated only against a Stripe-verified paid session, once; a failed generation is refunded automatically. |
 | [agent402.tools/monitors](https://agent402.tools/monitors) | $5/month subscriptions that re-run a report when something changes and email you (up to 4 full reports in any 30 days; a change past that arrives as an alert email): **domain security monitor** (free daily re-probe, full paid re-run on a security change, a certificate inside 14 days of expiry, or every 30 days), **SEC filing watch** (new filing), **Solana token risk watch** (changed risk facts, available while its data source answers), **fund 13F watch** (new filing), **FDA recall watch** (new recall number), **insider flow watch** (new Form 4), **IPO pipeline watch** (weekly digest). Reports land at `/m/<id>`; manage or cancel through the Stripe Customer Portal at `/monitors/manage`. |
-| [agent402.tools/credits](https://agent402.tools/credits) | Prepaid credits: not on sale. A key already issued (`a402_…`) keeps working; send it as `Authorization: Bearer a402_…` on any priced route and the call is paid from the balance - **debited only on a successful response**, integer micro-dollars so sub-cent prices are exact, never expires. `GET /api/credits/balance` (same header) reads the balance; a 402 with `{reason, balanceUsd, topup}` means insufficient. Identity-bound tools (`/api/memory*`, `my-usage`) refuse credits because the payment is the identity there; pay those over an x402 rail. |
+| [agent402.tools/credits](https://agent402.tools/credits) | Prepaid credits: a prepayment for Agent402's own services, for business and developer use (the page says whether packs are on sale). Send a key (`a402_…`) as `Authorization: Bearer a402_…` on a priced route and the call is paid from the key - **debited only on a successful response**, integer micro-dollars so sub-cent prices are exact; credits never expire and carry no fees, and are not transferable or redeemable for cash. `GET /api/credits/balance` (same header) reads the balance; a 402 with `{reason, balanceUsd, topup}` means insufficient. Identity-bound tools (`/api/memory*`, `my-usage`) refuse credits because the payment is the identity there; pay those over an x402 rail. Routes that buy from an outside seller with our wallet (the route-execute tiers, `seller-payability`, `/api/decide/execute`) take a wallet payment only (x402, or MPP on a chain). |
 
-An issued credits key is understood by the SDKs: `agent402-mcp` reads
+A credits key is understood by the SDKs: `agent402-mcp` reads
 `AGENT402_CREDITS_KEY` and `agent402-client` takes `{ creditsKey }`.
 
 ## Decide - describe the job, get the plan
@@ -321,7 +322,8 @@ curl -X POST https://agent402.tools/api/decide \
 - **The fee comes back.** The decision fee is returned as a 24-hour credit toward
   `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps bought from the
   seller and resold at the seller's price plus a disclosed 5% markup. Spend stops at the budget,
-  fallbacks are tried in order, and a run where no step succeeds is not charged.
+  fallbacks are tried in order, and a run where no step succeeds is not charged. Because it can
+  buy from outside sellers, execute is paid from a wallet (x402, or MPP on a chain).
 - **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
   whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).
 
@@ -424,7 +426,7 @@ import { Agent402 } from "agent402-client";
 const a = new Agent402();                       // free tier (proof-of-work)
 const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 
-// a prepaid credits key already issued pays wallet-only tools (new credits are not on sale)
+// a prepaid credits key pays wallet-only tools on Agent402's own services
 const b = new Agent402({ creditsKey: "a402_..." });
 ```
 

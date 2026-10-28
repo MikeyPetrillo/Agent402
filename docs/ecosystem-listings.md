@@ -39,10 +39,12 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
 - **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo,
   Avalanche, Sei, Optimism, Arc, Stellar, Algorand; USDG on Robinhood Chain - 13 chains),
   MPP (Machine Payments Protocol) on the same 402 (Base/Celo, or natively on Tempo),
-  free proof-of-work on the pure-CPU tools. Prepaid card credits are not on sale;
-  a credits key bought earlier still pays any priced route except the
-  wallet-identity-bound ones with `Authorization: Bearer a402_…`, debited only on
-  a successful call, and never expires.
+  free proof-of-work on the pure-CPU tools. A prepaid card-credits key
+  (agent402.tools/credits says whether packs are on sale) pays Agent402's own
+  services with `Authorization: Bearer a402_…`, debited only on a successful call,
+  and never expires; the wallet-identity-bound routes and the routes that buy from
+  an outside seller (the route-execute tiers, `seller-payability`, `decide-execute`)
+  need a wallet payment.
 - **Report products** ($0.60 to $2.00 over x402/MPP, or $2 to $5 by card at
   https://agent402.tools/reports - the card price includes payment processing,
   an agent paying per call pays the lower tool price for the same report):

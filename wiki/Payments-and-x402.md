@@ -6,8 +6,8 @@ Agent402's payments toolkit is **non-custodial**: it helps an agent move its
 *own* USDC with its *own* key. These tools never hold, receive, sign, or send
 funds - they decode quotes, read public chain state, and build the
 authorization you sign. (Two paths elsewhere on the service are not
-non-custodial and are named as such: a prepaid credits balance is money held
-until it is spent, and a card report purchase is held by the payment processor
+non-custodial and are named as such: a prepaid credits key is a prepayment for
+Agent402's own services, spent call by call, and a card report purchase is held by the payment processor
 until the report is delivered. See [Security](https://agent402.tools/security).) The caller needs no API key: the
 tools read public chain state through the server's own RPC providers. The chain
 tools take a `network` param (default `base`): **Base, Polygon, Arbitrum,

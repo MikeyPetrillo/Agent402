@@ -94,8 +94,8 @@ export class Agent402 {
    * @param {string[]} [opts.payNetworks]    the chains your pre-wrapped `fetch` pays on (e.g. ["base"], the
    *                                         names withNetworkPreference takes): without an x402Client the
    *                                         caps count the dearest accept on these chains, not on every chain
-   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) already issued (new credits are
-   *                                         not on sale) - pays wallet-only tools when no payFetch is given
+   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) - pays wallet-only tools on
+   *                                         Agent402's own services when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.
    * @param {{id:string, validate:function}} [opts.outputValidator]
@@ -581,7 +581,7 @@ export class Agent402 {
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
-      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key already issued; new credits are not on sale)`);
+      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)`);
     }
 
     // Free (compute-payable) tool: succeeds plainly on a FREE_MODE instance,

@@ -5,8 +5,10 @@ Part of [Agent402](https://agent402.tools), the open-source paid door for AI age
 Agent402 as an [OpenClaw](https://openclaw.ai) model provider: the auto-routed
 tier at a **flat per-call price** and explicit frontier models **priced per
 request** from the body, paid in **USDC over x402** from a wallet or with a
-prepaid credits key already issued (new credits are not on sale). The same key
-and gateway reach Agent402's 500+ pay-per-call tools.
+prepaid credits key (agent402.tools/credits says whether packs are on sale). The
+same key and gateway reach Agent402's 500+ pay-per-call tools; credits pay
+Agent402's own services, so the routes that buy from an outside seller
+(the route-execute tiers, `seller-payability`, `decide-execute`) need a wallet.
 
 Guide: https://agent402.tools/guides/openclaw-model-provider
 
@@ -22,7 +24,7 @@ With no credits key and no `AGENT402_WALLET_KEY`, `setup` generates an EVM
 wallet into `~/.openclaw/agent402/wallet.key` (0600, the only copy, never
 printed) and prints its address: send it USDC on Base and every call is paid
 from it over x402. `agent402-openclaw wallet` shows the address and balance;
-`--no-wallet` skips the generation. Holding a credits key already issued? Run
+`--no-wallet` skips the generation. Holding a credits key? Run
 `AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` (key by env,
 or `--credits-key -` on stdin).
 

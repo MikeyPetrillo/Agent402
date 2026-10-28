@@ -5,7 +5,7 @@ instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-fin
 agents paying per request over x402 or MPP. **Resolve a task to a tool, then call it - with payment handled for
 you.** Free pure-CPU tools settle with a built-in proof-of-work (no wallet, zero
 dependencies); wallet-only tools settle via an x402- or MPP-wrapped fetch you
-provide, or through a prepaid credits key already issued. Results are cached, and every
+provide, or through a prepaid credits key. Results are cached, and every
 send carries an `Idempotency-Key` that is stable per client and per operation, so
 a retried lost response replays the paid answer on the credits and proof-of-work
 paths (the wallet path is different: see "Retries and double charges").
@@ -71,11 +71,14 @@ const a = new Agent402({ fetch: payFetch });
 const article = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
 
-## Prepaid credits (keys already issued)
+## Paying with a credits key
 
-New credits are not on sale. A key already issued (`a402_...`) still works: pass it
+A prepaid credits key (`a402_...`; agent402.tools/credits says whether packs are on
+sale) pays for Agent402's own services: pass it
 as `creditsKey` and the SDK sends `Authorization: Bearer a402_...` on wallet-only
-calls (the wallet-scoped routes, memory and usage, refuse it and need a wallet); the server authorizes
+calls (the wallet-scoped routes, memory and usage, refuse it and need a wallet, as do
+the routes that buy from an outside seller: the route-execute tiers,
+`seller-payability` and `decide-execute`); the server authorizes
 against the key's balance before the handler runs and debits the list price only
 on a successful (200) response (the `X-Credits-Balance` header carries what is
 left; credits never expire). A refused call throws with the balance; nothing is
@@ -371,7 +374,7 @@ each call reserves its amount synchronously, so N simultaneous calls can't each
 pass against the same pre-commit total.
 
 - **Zero dependencies** for the free/proof-of-work path (uses `node:crypto`).
-- **Non-custodial:** paid settlement is your `@x402/fetch` / `mppx` fetch + wallet (or a prepaid credits key you bought); this client never sees a private key.
+- **Non-custodial:** paid settlement is your `@x402/fetch` / `mppx` fetch + wallet (or a prepaid credits key); this client never sees a private key.
 - MIT licensed. Part of [Agent402](https://github.com/MikeyPetrillo/Agent402).
 
 ## Pick the settlement chain (`withNetworkPreference`)
