@@ -547,7 +547,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
-    "Agent402 is a catalog of 500+ tools for AI agents: per-call tools and metered models, paid in USDC over x402 or MPP, or free through proof-of-work for the pure-CPU tools.",
+    "Agent402 is the applied layer of Agentic Finance: a catalog of 500+ tools for AI agents: per-call tools and metered models, paid in USDC over x402 or MPP, or free through proof-of-work for the pure-CPU tools.",
     "Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
     "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
     // Only where the decide tools are listed: an instruction must never name a

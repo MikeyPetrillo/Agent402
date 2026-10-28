@@ -98,6 +98,7 @@ async function bootServer() {
       X402_PAYWALL_PROBES_PER_CYCLE: "0",
       AGENT402_TASK_DATA_DIR: join(TMP, "tasks"),
       AGENT402_MCP_MAX_PER_MIN: "1000000",
+      AGENT402_SHOW_ROUTER: "1",
       AGENT402_MCP_MAX_PER_HOUR: "1000000",
     },
     stdio: ["ignore", "pipe", "pipe"],
