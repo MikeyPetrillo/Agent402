@@ -319,7 +319,7 @@ import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { operatorWishesPage } from "./operator-wishes.js";
 import { initLeadsDb } from "./leads-db.js";
-import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
+import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
@@ -10981,7 +10981,7 @@ for (const tool of ALL_KIT) {
       res.on("finish", () => {
         if (res.statusCode !== 200) return;
         if (cacheKey && result && typeof result === "object" && !result.error) {
-          cacheSet(cacheKey, result, cachePolicy.ttl || 300).catch(() => {});
+          cacheSet(cacheKey, result, cacheTtlFor(cachePolicy, result) || 300).catch(() => {});
         }
         for (const w of req.__deferredCache || []) { try { promptCacheStore(w.key, w.body); } catch { /* cache is best-effort */ } }
       });

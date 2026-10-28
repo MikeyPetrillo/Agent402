@@ -1,7 +1,7 @@
 // The response cache answers a repeat call from Redis, so its key must change
-// whenever the answer would. A key built from field names a tool never reads
-// (geocode keyed on `address` while its input is `q`) gave every query one
-// entry: the first caller's answer was served to everyone for the TTL.
+// whenever the answer would. A key built from a list of field names can miss
+// an input the tool reads, and then calls with different inputs share one
+// entry.
 //
 // 1. Each cached kit route's keyFields name inputs its inputSchema declares,
 //    and every declared input is a keyField.
@@ -19,7 +19,7 @@ const ok = (cond, msg) => { if (cond) console.log("ok - " + msg); else { failed+
 
 // Routes the server defines itself rather than through a kit, and inputs a
 // handler reads without declaring them; each with where it is read.
-const SERVER_ROUTES = new Set(["/api/dns", "/api/find", "/api/route"]); // src/server.js
+const SERVER_ROUTES = new Set(["/api/find", "/api/route"]); // src/server.js, each with its own cache read
 const UNDECLARED_READS = { "/api/search": ["includeDomains", "excludeDomains"] }; // src/tools/search.js domainFilter
 
 // Import only the kit files that declare a cached route (some files in
@@ -60,6 +60,12 @@ const long = "https://example.com/" + "a".repeat(300);
 ok(k({ url: long + "1" }) !== k({ url: long + "2" }), "two long values sharing a prefix get different keys");
 ok(k({ ids: ["a", "b"] }) !== k({ ids: ["a", "c"] }), "array values are part of the key");
 ok(cacheKeyFor("/api/x", { q: "a" }, []) !== cacheKeyFor("/api/y", { q: "a" }, []), "the path is part of the key");
+
+import { cacheTtlFor } from "../src/cache.js";
+const geoPolicy = CACHEABLE_ROUTES["/api/geocode"];
+ok(cacheTtlFor(geoPolicy, { source: "photon.komoot.io (ODbL)" }) === geoPolicy.fallbackTtl && geoPolicy.fallbackTtl < geoPolicy.ttl, "a backup-geocoder answer is kept for the shorter fallbackTtl");
+ok(cacheTtlFor(geoPolicy, { source: "nominatim.openstreetmap.org (ODbL)" }) === geoPolicy.ttl, "a primary answer keeps the route ttl");
+ok(cacheTtlFor(CACHEABLE_ROUTES["/api/fx-rate"], { source: "photon" }) === CACHEABLE_ROUTES["/api/fx-rate"].ttl, "a route without a fallback policy keeps its ttl");
 
 console.log(failed ? `${failed} failed` : "all passed");
 process.exit(failed ? 1 : 0);
