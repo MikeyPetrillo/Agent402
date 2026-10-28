@@ -81,13 +81,13 @@ export function quickstartPage(baseUrl) {
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<span class="qs-label">2. Free npm install (pinned, no wallet)</span>
+<span class="qs-label">2. Free npm install</span>
 <div class="qs-code-wrap">
 <pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
-<span class="qs-label">3. Wallet for paid tools (optional, pinned)</span>
+<span class="qs-label">3. Wallet (optional)</span>
 <p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
 <div class="qs-code-wrap">
 <pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_NEW_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>

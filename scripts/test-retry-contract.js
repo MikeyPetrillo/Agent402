@@ -19,7 +19,7 @@ const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const llms = await (await fetch(`${TARGET}/llms.txt`)).text();
+const llms = await (await fetch(`${TARGET}/llms-full.txt`)).text();
 ok(llms.length > 500, "llms.txt served");
 
 // --- the four branches are all stated ---------------------------------------
