@@ -1174,7 +1174,7 @@ jobs:
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
-          t node scripts/test-listing-text-serve.js
+          t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -3670,7 +3670,7 @@ jobs:
       # while dead; issue #730). Filter never calls metered routes; own-boot
       # strips keys too. Uses the shared FREE_MODE server when TARGET_URL is set.
       - name: Remote MCP connector (/mcp — initialize, search, free call, paid refusal)
-        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-http.js
+        run: AGENT402_SHOW_ROUTER=1 TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-http.js
 
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-mcp-all.js
