@@ -1046,8 +1046,14 @@ export function normalizeUnitId(raw) {
   return null;
 }
 
+// A capital letter followed by a lowercase b is the bit spelling (Kb, Mb,
+// Gb, Tb); every other spelling is read case-insensitively, so MB and mb stay
+// megabytes.
+const BIT_SPELLINGS = { Kb: ["bits", 1e3], Mb: ["bits", 1e6], Gb: ["bits", 1e9], Tb: ["bits", 1e12] };
+
 function convertUnit(value, from, to) {
   const resolve = (u) => {
+    if (Object.hasOwn(BIT_SPELLINGS, String(u))) return BIT_SPELLINGS[String(u)];
     const key = String(u).toLowerCase();
     const a = UNIT_ALIASES[key] ?? (KNOWN_UNIT_IDS.has(key) ? key : normalizeUnitId(key) ?? key);
     return Array.isArray(a) ? a : [a, 1];
