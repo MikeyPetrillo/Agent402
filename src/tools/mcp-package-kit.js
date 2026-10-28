@@ -150,7 +150,7 @@ function parseJson(text, what) {
 }
 
 function ghHeaders() {
-  const h = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  const h = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" };
   // Optional, like github-repo: keyless reads share one per-IP ceiling; a
   // token raises it and changes nothing else.
   if (process.env.GITHUB_TOKEN) h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;

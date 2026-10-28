@@ -118,6 +118,11 @@ const res1 = uc.handler({ value: 1, from: "nautical-miles", to: "meters" });
 ok(res1.result === 1852, `unit-convert handles full table ids (got ${res1.result})`);
 const res2 = uc.handler({ value: 100, from: "f", to: "c" });
 ok(Math.abs(res2.result - 37.7777777778) < 1e-6, `unit-convert keeps old short aliases (100 f -> c = ${res2.result})`);
+const res4 = uc.handler({ value: 1, from: "Mb", to: "bits" });
+ok(res4.result === 1e6, `unit-convert reads Mb as megabits (1 Mb = ${res4.result} bits)`);
+const res5 = uc.handler({ value: 1, from: "MB", to: "bytes" });
+const res6 = uc.handler({ value: 1, from: "mb", to: "bytes" });
+ok(res5.result === res6.result && res5.result >= 1e6, `unit-convert keeps MB and mb as megabytes (${res5.result} bytes)`);
 const res3 = uc.handler(uc.discovery.input);
 ok(Math.abs(res3.result - uc.discovery.output.example.result) < 1e-6, `unit-convert answers its own example (got ${res3.result})`);
 try { uc.handler({ value: 1, from: "meters", to: "grams" }); ok(false, "unit-convert cross-category did not throw"); }

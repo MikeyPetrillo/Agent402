@@ -418,17 +418,22 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
 // Every word the catalog uses, with how many tools use it. Built once per
 // catalog list and reused, so a typo costs one scan of the vocabulary, not of
 // every tool's text.
-const vocabCache = new WeakMap();
+// Keyed on the list's slugs: the catalog list is rebuilt per call, so an
+// object key would never hit.
+const vocabCache = new Map();
 function catalogVocabulary(all) {
-  const key = all[0]?.t;
-  if (key && vocabCache.has(key) && vocabCache.get(key).n === all.length) return vocabCache.get(key).words;
+  const key = all.length ? all.map((e) => e.slug).join(",") : "";
+  if (key && vocabCache.has(key)) return vocabCache.get(key).words;
   const words = new Map();
   for (const e of all) {
     for (const w of new Set(`${e.slug.replace(/-/g, " ")} ${e.hay}`.split(/[^a-z]+/))) {
       if (w.length >= 4) words.set(w, (words.get(w) || 0) + 1);
     }
   }
-  if (key) vocabCache.set(key, { n: all.length, words });
+  if (key) {
+    if (vocabCache.size >= 4) vocabCache.delete(vocabCache.keys().next().value);
+    vocabCache.set(key, { words });
+  }
   return words;
 }
 

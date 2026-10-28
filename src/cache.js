@@ -18,6 +18,7 @@
 //     for ttl seconds).
 //   - Every read/write is wrapped in try/catch — a Redis stall NEVER takes
 //     down a tool. Worst case it adds a few ms then we serve fresh.
+import { createHash } from "node:crypto";
 import { loadRedis } from "./lazy-redis.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
@@ -75,41 +76,40 @@ export function cacheEnabled() {
 // Per-route cache policy.
 //   ttl       — seconds. Pick something that matches how stale the upstream
 //               answer can be without misleading the agent.
-//   keyFields — the request-input fields that materially change the answer.
-//               Anything not listed is ignored when computing the key.
+//   keyFields: the request-input fields that materially change the answer,
+//               named as the tool reads them (scripts/test-cache-keys.js
+//               checks each against the tool's inputSchema). They document
+//               the policy and /api/cacheable lists them; the key itself is
+//               built from every field the call carries (cacheKeyFor).
+//   fallbackTtl / fallbackSource: optional. An answer whose `source` starts
+//               with fallbackSource came from a backup provider and is kept
+//               for fallbackTtl seconds instead of ttl (cacheTtlFor).
 //
 // Add new entries here, NOT in the kit files — keeps cache policy in one place.
 //
-// SECURITY INVARIANT — only FREE routes belong in this map.
-//   The cache key is `path + keyFields`; it does NOT include the caller's
-//   gate credential (wallet address, PoW ticket, idempotency key). If a
-//   paid route were ever added here, a free/unauthenticated caller could
-//   read the body of a previously-paid call from cache — the cache would
-//   silently front the paywall. Every route below must be one whose
-//   response we'd serve to anyone. NEVER add memory tools, anything in
-//   WALLET_ONLY_SLUGS, or anything priced above $0.
+// SECURITY INVARIANT: the cache key is the path plus the call's input
+//   fields; it does NOT include the caller's gate credential (wallet address,
+//   PoW ticket, idempotency key). The response cache is read only after the
+//   payment gates (and by free discovery), so a hit is paid like any other
+//   200, but its body is shared by every caller with the same input. Only a
+//   route whose answer depends on nothing but its input belongs here: NEVER
+//   add memory tools, identity-bound routes or anything keyed on the payer.
 export const CACHEABLE_ROUTES = {
-  // Net/DNS — stable on the order of minutes-to-hours.
-  "/api/dns":            { ttl:   300, keyFields: ["domain", "type"] },
-  "/api/whois":          { ttl:  3600, keyFields: ["domain"] },
-  "/api/tls-cert":       { ttl:  3600, keyFields: ["host", "port"] },
-  "/api/http-check":     { ttl:    60, keyFields: ["url"] },
-  "/api/robots-check":   { ttl:  3600, keyFields: ["url", "userAgent"] },
-  "/api/sitemap":        { ttl:  1800, keyFields: ["url"] },
-  "/api/ip-info":        { ttl: 86400, keyFields: ["ip"] },
+  // Only GET kit routes are cached, so a POST tool (whois, tls-cert,
+  // http-check) or a route the server defines itself never belongs here.
   "/api/ens-resolve":    { ttl:  3600, keyFields: ["name"] },
-  "/api/email-validate": { ttl:  3600, keyFields: ["email"] },
 
   // Geo — almost never changes.
-  "/api/geocode":         { ttl: 86400, keyFields: ["address"] },
-  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon"] },
-  "/api/place-search":    { ttl:  3600, keyFields: ["query", "near"] },
+  // An answer from the backup geocoder (source photon...) is kept briefly.
+  "/api/geocode":         { ttl: 86400, keyFields: ["q", "limit", "countryCodes"], fallbackSource: "photon", fallbackTtl: 600 },
+  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon", "zoom"], fallbackSource: "photon", fallbackTtl: 600 },
+  "/api/place-search":    { ttl:  3600, keyFields: ["q", "limit", "countryCodes", "viewbox", "bounded"], fallbackSource: "photon", fallbackTtl: 600 },
 
   // Time-sensitive but coarsely cacheable.
-  "/api/fx-rate":          { ttl:   300, keyFields: ["base", "quote"] },
+  "/api/fx-rate":          { ttl:   300, keyFields: ["from", "to", "amount"] },
   "/api/weather-forecast": { ttl:   600, keyFields: ["lat", "lon"] },
-  "/api/weather-alerts":   { ttl:   300, keyFields: ["state"] },
-  "/api/earthquakes":      { ttl:   300, keyFields: ["min_magnitude", "hours"] },
+  "/api/weather-alerts":   { ttl:   300, keyFields: ["area"] },
+  "/api/earthquakes":      { ttl:   300, keyFields: ["minMag", "period"] },
   // Release dates are scheduled weeks ahead; FRED's /releases/dates endpoint
   // is its slowest (15-60s under load, per the 2026-07-16 incident) and agents
   // poll this route on fixed schedules — an hour of caching means most polls
@@ -153,18 +153,30 @@ export const CACHEABLE_ROUTES = {
   "/api/tx-status":   { ttl:    60, keyFields: ["hash", "network"] },
 };
 
-// Build a deterministic cache key from a path + the policy's keyFields. Values
-// are stringified and lowercased so trivial input variation ("Foo.com" vs
-// "foo.com") doesn't fragment the cache. Long values are hashed-by-truncation
-// rather than left whole so we don't blow past Redis key limits on URL inputs.
+// Build a deterministic cache key from a path + every input field the call
+// carried (keyFields are included for callers that pass a fixed object), so
+// two calls that differ in any field never share an entry. Values are kept as
+// sent (no case folding: base58 addresses and signatures are case-sensitive),
+// and the whole field list is hashed so long URL inputs neither collide on a
+// shared prefix nor exceed Redis key limits.
 export function cacheKeyFor(path, input, keyFields) {
-  const parts = [path];
-  for (const f of keyFields) {
-    const raw = input == null ? "" : input[f];
-    const v = raw == null ? "" : String(raw).toLowerCase().slice(0, 256);
-    parts.push(`${f}=${v}`);
+  const fields = new Set(keyFields);
+  if (input && typeof input === "object") for (const f of Object.keys(input)) fields.add(f);
+  const parts = [];
+  for (const f of [...fields].sort()) {
+    const raw = input == null ? undefined : input[f];
+    if (raw == null || raw === "") continue;
+    parts.push([f, typeof raw === "object" ? JSON.stringify(raw) : String(raw)]);
   }
-  return "a402:" + parts.join("|");
+  return `a402:${path}|${createHash("sha256").update(JSON.stringify(parts)).digest("hex")}`;
+}
+
+// Seconds to keep one answer: the policy's ttl, or fallbackTtl when the
+// answer came from the policy's backup provider.
+export function cacheTtlFor(policy, body) {
+  const src = body && typeof body === "object" && typeof body.source === "string" ? body.source : "";
+  if (policy?.fallbackSource && policy.fallbackTtl && src.startsWith(policy.fallbackSource)) return policy.fallbackTtl;
+  return policy?.ttl;
 }
 
 // Hard read timeout so a stalled Redis can never hang a request. The cache is

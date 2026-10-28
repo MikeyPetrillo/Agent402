@@ -245,7 +245,11 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
     return client;
   };
   return async function verifyContractSignature(auth, sig) {
-    const key = `${lc(auth.from)}|${lc(auth.nonce)}|${lc(sig)}`;
+    // The verdict covers the whole signed message (to, value, validity window,
+    // nonce), so the key is its EIP-712 digest, not only the payer and nonce.
+    let digest;
+    try { digest = hashTypedData(arcTypedData(auth)); } catch { return "unverifiable"; }
+    const key = `${lc(auth.from)}|${lc(digest)}|${lc(sig)}`;
     const hit = cache.get(key);
     if (hit && now() - hit.at < ttlMs) return hit.verdict;
     if (inflight >= maxInflight) return "unverifiable";
@@ -257,7 +261,7 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
       const data = encodeDeployData({
         abi: erc6492SignatureValidatorAbi,
         bytecode: erc6492SignatureValidatorByteCode,
-        args: [auth.from, hashTypedData(arcTypedData(auth)), sig],
+        args: [auth.from, digest, sig],
       });
       const res = await Promise.race([
         c.call({ data }),

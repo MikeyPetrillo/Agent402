@@ -4,6 +4,42 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.8.1 - 2026-10-28
+
+### 2026-10-28
+- The response cache keys each answer on every input the call sends, so calls
+  to geocode, place-search, fx-rate, weather-alerts, earthquakes and the other
+  cached tools with different inputs never share a cached answer. An answer
+  from the backup geocoder is kept for 10 minutes.
+- Decide keeps the task's letter case when it reuses a plan, so tasks that
+  differ only in a URL path or an address get their own plan.
+- Geocoding sends at most one request a second to its primary source across
+  the service; a call that would wait longer is answered by the backup
+  geocoder.
+- unit-convert reads Kb, Mb, Gb and Tb as bits; MB, mb and every other unit
+  name stay case-insensitive.
+- ens-resolve reads through the ENS universal resolver, so names whose records
+  moved (nick.eth) resolve; a name with no owner is found: false.
+- Payment verification reads Solana transactions sent as version 1.
+- page-change answers to urlwatch, url-watch and watch-page.
+- Every paid 402 fits the response-header limit of Node's built-in fetch: a
+  route's discovery block trims its input schema first and points to its full
+  output example when it would not fit.
+- llm-premium serves the retired o3-mini and o4-mini ids with gpt-5.6-terra.
+- The Kalshi tools read Kalshi's dedicated API host, every GitHub API call
+  names API version 2026-03-10, and hunter-email-verify fills result from
+  status when the source leaves it out.
+- agent402-mcp 0.13.20: tools that reach the network are labeled not read-only
+  and open-world; router.execute and sellers.list are listed only with a
+  wallet or credits key, or AGENT402_SHOW_ROUTER=1; every tool description on
+  both connectors is at most 400 characters and a paid tool opens with its
+  price; install commands are pinned to a published version; no default
+  session budget.
+- agent402-anthropic-tools, agent402-llamaindex, agent402-openai-tools and
+  agent402-strands 0.1.12: the npm listings name every settlement chain.
+- The Claude Code plugin is 2.8.1, with its icon, privacy policy link and
+  README.
+
 ## v2.8.0 - 2026-10-20
 
 ### 2026-10-23
