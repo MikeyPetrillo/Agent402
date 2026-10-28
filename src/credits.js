@@ -39,7 +39,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdir
 import { join, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
-import { creditsTopupFields } from "./credits-sales.js";
+import { creditsTopupFields, creditsDailyMaxCents } from "./credits-sales.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
@@ -56,14 +56,11 @@ export const CREDIT_PACKS = {
 };
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
 // PURCHASE LIMIT. One buyer (matched by email, card fingerprint or Stripe
-// customer) may buy at most CREDITS_DAILY_MAX_USD (default $1,000) of credits
-// in any 24 hours. A purchase that would pass it is refunded in full and no
-// key is issued; its session is recorded as refused so a later claim answers
-// the same. Read at call time.
-export const creditsDailyMaxCents = () => {
-  const n = Number(process.env.CREDITS_DAILY_MAX_USD);
-  return Math.round((Number.isFinite(n) && n > 0 ? n : 1000) * 100);
-};
+// customer) may buy at most creditsDailyMaxCents() (src/credits-sales.js) of
+// credits in any 24 hours. A purchase that would pass it is refunded in full
+// and no key is issued; its session is recorded as refused so a later claim
+// answers the same.
+export { creditsDailyMaxCents };
 const REFUSED = "refused";
 const DAY_MS = 86_400_000;
 const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
@@ -290,8 +287,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "Prepaid credits for pay-per-call tools. Spent per request at list price; never expire." } } }],
-      metadata: { credits_pack: packKey },
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} (${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; not cash, not transferable, not a gift card." } } }],
+      // The buyer sees the terms and the credit rules on the pay button's page.
+      custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire, and are not refundable except as the terms describe.` } },
+      metadata: { credits_pack: packKey, terms: "2026-10-28" },
       success_url: `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/credits?canceled=1`,
       payment_intent_data: { description: `Agent402 credits ${p.label}` },
@@ -562,6 +561,42 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     })();
   }
 
+  // GUESSING GUARD. A key is 24 random bytes, so it cannot be guessed, and a
+  // key works only when its hash is a stored record, so it cannot be made up.
+  // Failed attempts are still bounded: a client (keyed on req.ip) that sends
+  // CREDITS_BAD_KEY_MAX unknown or malformed keys (default 20) in
+  // CREDITS_BAD_KEY_WINDOW_MS (default 10 minutes) is refused with 429 before
+  // any lookup until the window ends. Per process; the map is bounded.
+  const badKeys = new Map(); // client -> { n, until }
+  const badKeyMax = () => { const n = Number(process.env.CREDITS_BAD_KEY_MAX); return Number.isFinite(n) && n > 0 ? n : 20; };
+  const badKeyWindowMs = () => { const n = Number(process.env.CREDITS_BAD_KEY_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
+  const badKeyStats = { failures: 0, refused: 0 };
+  function badKeyBlocked(client, at = now()) {
+    const e = badKeys.get(String(client || "?"));
+    if (!e) return 0;
+    if (e.until <= at) { badKeys.delete(String(client || "?")); return 0; }
+    return e.n >= badKeyMax() ? Math.ceil((e.until - at) / 1000) : 0;
+  }
+  function noteBadKey(client, at = now()) {
+    const k = String(client || "?");
+    badKeyStats.failures++;
+    let e = badKeys.get(k);
+    if (!e || e.until <= at) { e = { n: 0, until: at + badKeyWindowMs() }; }
+    e.n++;
+    badKeys.delete(k); badKeys.set(k, e);
+    while (badKeys.size > 5000) badKeys.delete(badKeys.keys().next().value);
+    if (e.n === badKeyMax()) log(`[credits] a client sent ${e.n} unknown or malformed keys; refused until the window ends`);
+  }
+  // Answered here when the client is over the limit: true.
+  function refuseGuessing(req, res) {
+    const wait = badKeyBlocked(req.ip);
+    if (!wait) return false;
+    badKeyStats.refused++;
+    res.setHeader("Retry-After", String(wait));
+    res.status(429).json({ error: "Too many unknown or malformed credits keys from this client. Try again later.", reason: "credits-key-attempts", retryAfterSeconds: wait });
+    return true;
+  }
+
   // Express gate: mount BEFORE the x402 paywall. `priceFor(method, path)` ->
   // { priceUsd } for catalog routes, null otherwise. A Bearer a402_ key on a
   // priced route either authorizes (req.creditsSettling = true, debit on 200)
@@ -577,6 +612,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       const key = auth.slice(7).trim();
       const item = priceFor(req.method, req.path, req);
       if (!item) return null; // not a priced catalog route - let the site handle it
+      if (refuseGuessing(req, res)) return { done: true };
       // Identity-bound routes (wallet-keyed memory, my-usage) derive the caller
       // from a SIGNED x402 payer; a credits key carries no verified wallet, so
       // they are refused here (same rule as the Tempo and Stripe gates).
@@ -598,6 +634,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     // After the hold: the refusal, or the settle-on-finish wiring.
     const arm = (req, res, next, a, item) => {
       if (!a.ok) {
+        if (a.reason === "unknown" || a.reason === "malformed") noteBadKey(req.ip);
         res.setHeader("X-Credits-Error", a.reason);
         return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...creditsTopupFields(baseUrl) });
       }
@@ -728,5 +765,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, refuseGuessing, noteBadKey, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

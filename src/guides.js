@@ -18,7 +18,7 @@ import { RAILS_OR, RAILS_AMP, resolveRailCountTokens } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -334,8 +334,7 @@ you don't want a middleman holding your money. Agent402's payments tools are
 **non-custodial**: they help an agent move its *own* USDC with its *own* key.
 These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
-the service are not non-custodial and we say so: a prepaid credits balance${CREDITS_ON ? "" : " (credits are no longer sold; keys issued earlier keep working)"} is
-money held until it is spent, and a card report purchase is held by the payment
+the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is held by the payment
 processor until the report is delivered.) Everything below works on
 **Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
 base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
