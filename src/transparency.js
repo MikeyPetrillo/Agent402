@@ -26,7 +26,7 @@ export async function repoTraffic() {
   const now = Date.now();
   if (now - trafficCache.at < 3600_000) return trafficCache.data;
   try {
-    const hdrs = { Authorization: `Bearer ${token}`, "User-Agent": "agent402-transparency" };
+    const hdrs = { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10", "User-Agent": "agent402-transparency" };
     const [c, v] = await Promise.all([
       fetch(`https://api.github.com/repos/${REPO_SLUG}/traffic/clones`, { headers: hdrs, signal: AbortSignal.timeout(10000) }),
       fetch(`https://api.github.com/repos/${REPO_SLUG}/traffic/views`, { headers: hdrs, signal: AbortSignal.timeout(10000) }),

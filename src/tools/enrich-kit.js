@@ -195,7 +195,7 @@ const GH_REPO_RE = /^[A-Za-z0-9._-]+$/;
 function ghHeaders() {
   const h = {
     Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
+    "X-GitHub-Api-Version": "2026-03-10",
   };
   // Optional env-gated enhancement: 60 req/hr/IP keyless → 5k/hr with a token.
   // Never required; absence changes nothing but the rate limit.

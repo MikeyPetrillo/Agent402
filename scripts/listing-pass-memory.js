@@ -52,7 +52,7 @@ export function pickArtifacts(artifacts, { now = Date.now(), days = DEFAULT_MEMO
 export async function fetchMemory({ repo, token, outDir, days = DEFAULT_MEMORY_DAYS, now = Date.now(), fetchImpl = fetch, unzip = unzipJson, log = (m) => console.log(m), api = "https://api.github.com" }) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(String(repo || ""))) throw new Error("GITHUB_REPOSITORY must be owner/repo");
   if (!token) throw new Error("GH_TOKEN (or GITHUB_TOKEN) is required");
-  const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" };
+  const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2026-03-10" };
   const getJson = async (path) => {
     const res = await fetchImpl(`${api}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`GET ${path}: HTTP ${res.status}`);
