@@ -96,7 +96,7 @@ export function buildTable() {
     if (!existsSync(join(ROOT, file))) { missing.push(file); continue; }
     if (dirty.has(file)) { files[file] = today(); continue; }
     let date = "";
-    try { date = git("log", "-1", "--format=%cs", "--", file); } catch { date = ""; }
+    try { date = git("log", "-1", "--no-merges", "--format=%cs", "--", file); } catch { date = ""; }
     files[file] = date || today();
   }
   const { toolSources, ambiguous } = scanToolSources();

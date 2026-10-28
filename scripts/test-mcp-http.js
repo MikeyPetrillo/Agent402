@@ -256,7 +256,8 @@ assert(search.result?.structuredContent?.results, "catalog.search call returns s
 // sellers.list wire=mpp: the MPP leaderboard behind the same tool (2026-08-18).
 // The board may still be warming in CI (first on-chain read is +120s after
 // boot), so the shape is asserted, never a non-empty ranking.
-{
+// The tool is listed only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+if (process.env.AGENT402_SHOW_ROUTER === "1") {
   const def = (list.result?.tools ?? []).find((t) => t.name === "sellers.list");
   assert(def?.inputSchema?.properties?.wire?.enum?.includes("mpp"), "sellers.list advertises the wire parameter with mpp");
   const mpp = await rpc("tools/call", { name: "sellers.list", arguments: { wire: "mpp", limit: 5 } });
