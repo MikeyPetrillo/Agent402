@@ -2,6 +2,22 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-28",
+    title: "Cache answers keyed on every input, steadier geocoding and ENS lookups",
+    items: [
+      "The response cache keys each answer on every input the call sends, so calls to geocode, place-search, fx-rate, weather-alerts, earthquakes and the other cached tools with different inputs never share a cached answer. An answer from the backup geocoder is kept for 10 minutes.",
+      "Decide keeps the task's letter case when it reuses a plan, so tasks that differ only in a URL path or an address get their own plan.",
+      "Geocoding sends at most one request a second to its primary source across the service; a call that would wait longer is answered by the backup geocoder.",
+      "unit-convert reads Kb, Mb, Gb and Tb as bits; MB, mb and every other unit name stay case-insensitive.",
+      "ens-resolve reads through the ENS universal resolver, so names whose records moved (nick.eth) resolve; a name with no owner is found: false.",
+      "Payment verification reads Solana transactions sent as version 1.",
+      "page-change answers to urlwatch, url-watch and watch-page.",
+      "Every paid 402 fits the response-header limit of Node's built-in fetch: a route's discovery block trims its input schema first and points to its full output example when it would not fit.",
+      "llm-premium serves the retired o3-mini and o4-mini ids with gpt-5.6-terra.",
+      "The Kalshi tools read Kalshi's dedicated API host, every GitHub API call names API version 2026-03-10, and hunter-email-verify fills result from status when the source leaves it out.",
+    ],
+  },
+  {
     date: "2026-10-27",
     title: "agent402-mcp 0.13.20: clearer tool safety labels and pinned install commands",
     items: [
