@@ -280,7 +280,8 @@ assert(await routeExists("/base"), "control: a template-literal route the source
 // service; its paid siblings are absent from the catalog without it).
 const decidePricing = await (await fetch(`${TARGET}/api/pricing`)).json().catch(() => ({}));
 const decideLive = JSON.stringify(decidePricing).includes("/api/decide");
-const FEATURE_GATED = new Map([["decide.feedback", decideLive]]);
+// sellers.list is listed only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+const FEATURE_GATED = new Map([["decide.feedback", decideLive], ["sellers.list", process.env.AGENT402_SHOW_ROUTER === "1"]]);
 for (const names of handlerBranches) {
   if (names.every((n) => FEATURE_GATED.has(n) && !FEATURE_GATED.get(n))) { console.log(`skip - [${names.join(", ")}] is feature-gated and the feature is off on this server`); continue; }
   assert(

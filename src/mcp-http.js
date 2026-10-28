@@ -192,6 +192,8 @@ export function mcpPaymentMethods() {
 }
 
 export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
+  // sellers.list is listed and answered only when the connector opts in (AGENT402_SHOW_ROUTER=1).
+  const sellersListed = Boolean(getLeaderboard) && process.env.AGENT402_SHOW_ROUTER === "1";
   const scoped = profile?.metaTools === false;
   const HIDDEN_WHEN_SCOPED = new Set([META_MCP_NAMES.search_tools, META_MCP_NAMES.find_tool, META_MCP_NAMES.call_tool, META_MCP_NAMES.request_tool, META_MCP_NAMES.list_top_sellers]);
   const listable = (arr) => (scoped ? arr.filter((t) => !HIDDEN_WHEN_SCOPED.has(t.name)) : arr);
@@ -589,7 +591,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
           },
         }] : []),
-        ...(getLeaderboard && process.env.AGENT402_SHOW_ROUTER === "1" ? [{
+        ...(sellersListed ? [{
           // Dotted Smithery Naming (sellers.list). Prior snake/digit names
           // remain CallTool aliases via resolveListedName.
           name: META_MCP_NAMES.list_top_sellers,
@@ -1045,7 +1047,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
             clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
             paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
-            ...(getLeaderboard ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
+            ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
           });
@@ -1054,7 +1056,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           try { return mcpJsonResult(decideFeedback(args, { ip })); }
           catch (err) { return { content: [{ type: "text", text: err.statusCode && err.statusCode < 500 ? err.message : "feedback failed" }], isError: true }; }
         }
-        if (name === "sellers.list" && getLeaderboard && args.wire === "mpp") {
+        if (name === "sellers.list" && sellersListed && args.wire === "mpp") {
           // The MPP leaderboard (src/mpp-leaderboard.js) - same row discipline
           // as the x402 branch below: token-cheap rows, self hidden by default,
           // seller names are self-reported external content and marked so.
@@ -1100,7 +1102,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             source: `${baseUrl}/api/mpp-leaderboard`,
           });
         }
-        if (name === "sellers.list" && getLeaderboard) {
+        if (name === "sellers.list" && sellersListed) {
           const snap = getLeaderboard() || {};
           const limit = Math.min(Math.max(parseInt(args.limit, 10) || 10, 1), 50);
           const sort = args.sort === "calls" ? "calls" : "usd";
