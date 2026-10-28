@@ -254,11 +254,11 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const g = cr.gate(() => ({ priceUsd: 0.001, slug: "hash" }));
   const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
   for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
-  const blocked = tryKey(KEY);
-  ok(blocked.r.statusCode === 429 && blocked.r.body.reason === "credits-key-attempts" && Number(blocked.r.headers["Retry-After"]) > 0 && !blocked.next, "after the limit of unknown keys, the client is refused 429 before any lookup (even with a real key)");
-  const other = tryKey(KEY, "198.51.100.7");
-  ok(other.r.statusCode !== 429, "another client is unaffected");
-  ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().refused >= 1, "the attempts are counted for the operator view");
+  const after = tryKey(KEY);
+  ok(after.r.statusCode !== 429 && after.next === true, "failed keys never block a valid key from the same client (a paying customer behind a shared address is served)");
+  ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
+  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i + 5).repeat(40), `2001:db8:1:2::${i + 1}`);
+  ok(cr.badKeyStats().clientsOverThreshold === 2, "IPv6 addresses in one /64 count as one client");
   delete process.env.CREDITS_BAD_KEY_MAX;
 }
 
@@ -294,6 +294,44 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
   t += 86_400_001;
   ok((await buy("cs_l8")).status === "minted", "limit: after 24 hours the same buyer can buy again");
+  // The webhook and the thanks page claiming one session at once, with the
+  // buyer one pack below the limit: one key, the other answers claimed, no refund.
+  t += 86_400_001;
+  ok((await buy("cs_r1")).status === "minted", "race: setup ($100 of $250)");
+  ls.cs_r2 = { id: "cs_r2", mode: "payment", payment_status: "paid", payment_intent: "pi_cs_r2", customer_details: { email: "a@x.com" }, metadata: { credits_pack: "credits-100" } };
+  fp.pi_cs_r2 = "fp_a";
+  const before = refunds.length;
+  const both = await Promise.all([lc.claim("cs_r2"), lc.claim("cs_r2"), lc.claim("cs_r2")]);
+  ok(both.filter((x) => x.status === "minted").length === 1 && both.every((x) => x.status === "minted" || x.status === "claimed") && refunds.length === before, `race: one session claimed three times at once issues one key and refunds nothing (${both.map((x) => x.status).join(", ")})`);
+  // Many sessions at once never pass the limit.
+  const many = await Promise.all([3, 4, 5, 6].map((i) => buy(`cs_r${i + 10}`)));
+  ok(many.filter((x) => x.status === "minted").length === 0 && many.every((x) => x.status === "over_limit"), "race: concurrent purchases past the limit are all refused");
+  // A refund that fails is recorded, answered truthfully and listed to refund by hand.
+  const failing = lstripe.refunds.create;
+  lstripe.refunds.create = async () => { throw new Error("card closed"); };
+  const f1 = await buy("cs_rf");
+  const f2 = await lc.claim("cs_rf");
+  ok(f1.status === "over_limit" && f1.refunded === false && f2.refunded === false, "a failed refund answers refunded:false, and a re-read says the same");
+  ok((await lc.refusalsToRefund()).includes("cs_rf"), "the failed refund is listed for a refund by hand");
+  await lc.markRefusalRefunded("cs_rf");
+  ok(!(await lc.refusalsToRefund()).includes("cs_rf") && (await lc.claim("cs_rf")).refunded === true, "marking it refunded clears the list and the answer");
+  lstripe.refunds.create = failing;
+  // An EU or UK billing address needs a business tax ID.
+  const euBuy = (id, { country, taxIds = [] }) => {
+    ls[id] = { id, mode: "payment", payment_status: "paid", payment_intent: "pi_" + id, customer_details: { email: `${id}@x.com`, address: { country }, tax_ids: taxIds }, metadata: { credits_pack: "credits-20" } };
+    fp["pi_" + id] = "fp_" + id;
+    return lc.claim(id);
+  };
+  const r0 = refunds.length;
+  const de = await euBuy("cs_de", { country: "DE" });
+  ok(de.status === "tax_id_required" && de.refunded === true && refunds.length === r0 + 1 && !de.key, "an EU billing address with no tax ID issues no key and is refunded");
+  ok((await lc.claim("cs_de")).status === "tax_id_required", "re-claiming it answers the same");
+  ok((await euBuy("cs_gb", { country: "GB" })).status === "tax_id_required", "the UK is included");
+  ok((await euBuy("cs_de2", { country: "DE", taxIds: [{ type: "eu_vat", value: "DE123456789" }] })).status === "minted", "an EU business with a VAT ID is issued a key");
+  ok((await euBuy("cs_us", { country: "US" })).status === "minted" && (await euBuy("cs_ch", { country: "CH" })).status === "minted", "other countries are unaffected");
+  process.env.CREDITS_EU_UK_REQUIRE_TAX_ID = "off";
+  ok((await euBuy("cs_fr", { country: "FR" })).status === "minted", "CREDITS_EU_UK_REQUIRE_TAX_ID=off lifts the rule");
+  delete process.env.CREDITS_EU_UK_REQUIRE_TAX_ID;
   delete process.env.CREDITS_DAILY_MAX_USD;
   try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* cleanup */ }
 }

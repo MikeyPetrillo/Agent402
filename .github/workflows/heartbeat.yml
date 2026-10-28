@@ -779,6 +779,35 @@ jobs:
               ;;
           esac
 
+      # Credits purchases refused by the daily limit whose card refund failed
+      # (src/credits.js): one word on /api/gateway-status. owed pages; ok
+      # closes; unknown does neither. Session ids stay on the operator view.
+      - name: Credits refunds check (alarm when a refused purchase was not refunded)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          WORD=$(printf '%s' "$GW" | jq -r '.creditsRefunds.status // "unknown"' 2>/dev/null || echo unknown)
+          case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
+          echo "credits refunds: $WORD"
+          TITLE="A refused credits purchase was not refunded"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            owed)
+              BODY="/api/gateway-status reports creditsRefunds.status=owed at $(date -u +%FT%TZ): a credits purchase over the daily limit issued no key and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {\"session\":\"cs_...\"}. Auto-closes when nothing is owed."
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: credits refunds reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Recipients our spending wallets paid for the first time
       # (src/outbound-destinations.js): one word on /api/gateway-status.
       # burst pages (more first-time recipients inside the window than the
