@@ -1,0 +1,28 @@
+{
+  "name": "agent402",
+  "owner": {
+    "name": "Havok Holdings LLC",
+    "url": "https://agent402.tools/company"
+  },
+  "metadata": {
+    "description": "Agent402.Tools: 500+ web tools AI agents call and pay for per request over x402 or MPP, or free via proof-of-work for pure-compute tools.",
+    "version": "2.8.0"
+  },
+  "plugins": [
+    {
+      "name": "agent402",
+      "source": "./plugins/agent402",
+      "description": "One MCP server with 500+ pay-per-call tools for AI agents: search, rendering, filings, market data and utilities. Pays in USDC over x402 or MPP.",
+      "version": "2.8.0",
+      "author": {
+        "name": "Havok Holdings LLC",
+        "url": "https://agent402.tools/company"
+      },
+      "homepage": "https://agent402.tools",
+      "repository": "https://github.com/MikeyPetrillo/Agent402",
+      "license": "AGPL-3.0-or-later",
+      "keywords": ["mcp", "x402", "mpp", "tools", "agents", "payments"],
+      "category": "developer-tools"
+    }
+  ]
+}
