@@ -109,9 +109,11 @@ try {
   // /llms.txt
   const llms = await (await get("/llms.txt")).text();
   ok(llms.includes("**MPP: start here.**"), "/llms.txt carries the MPP start-here block");
+  // The per-route lines are in /llms-full.txt, the complete catalog (llms.txt is the short index).
+  const llmsFull = await (await get("/llms-full.txt")).text();
   for (const slug of MPP_FLAGSHIP_SLUGS) {
     const e = bySlug.get(slug);
-    ok(e && llms.includes(`\`${e.method} ${e.path}\` (${e.price})`), `/llms.txt lists ${slug} at the catalog price`);
+    ok(e && llmsFull.includes(`\`${e.method} ${e.path}\` (${e.price})`), `/llms-full.txt lists ${slug} at the catalog price`);
   }
 
   // /what-is-mpp

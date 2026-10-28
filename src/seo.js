@@ -673,6 +673,8 @@ The full text, with every skill pack and every tool by category, is at ${baseUrl
 
 ${mppMethodsProse()}
 
+${mppFlagshipLlmsBlock(catalog)}
+
 ${gatewayNanopaymentsLine()}
 
 ${sections.join("\n\n")}

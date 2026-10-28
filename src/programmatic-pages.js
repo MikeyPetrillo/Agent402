@@ -495,7 +495,7 @@ function productLd(baseUrl, family, name, description, canonical) {
     name: `${p.label}: ${name}`, description,
     image: `${baseUrl}/tools/${p.slug}/card.png`,
     brand: { "@type": "Brand", name: "Agent402" },
-    offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: canonical, seller: { "@type": "Organization", name: "Havok Holdings" } },
+    offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: canonical, seller: { "@type": "Organization", name: "Havok Holdings LLC" } },
   };
 }
 function datasetLd(baseUrl, { name, description, canonical, modified }) {

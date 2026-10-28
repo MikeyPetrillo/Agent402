@@ -39,14 +39,14 @@ const catalog = pricing.endpoints || [];
 ok(catalog.length > 400, `catalog loaded (${catalog.length} entries)`);
 
 const [llms, specRaw, manifestRaw, sitemap] = await Promise.all([
-  get("/llms.txt"), get("/openapi.json"), get("/.well-known/x402"), get("/sitemap.xml"),
+  get("/llms-full.txt"), get("/openapi.json"), get("/.well-known/x402"), get("/sitemap.xml"),
 ]);
 const specPaths = new Set(Object.keys(JSON.parse(specRaw).paths || {}));
 const manifest = manifestRaw;
 
-const absent = { "llms.txt": [], "openapi.json": [], "/.well-known/x402": [], "sitemap.xml": [] };
+const absent = { "llms-full.txt": [], "openapi.json": [], "/.well-known/x402": [], "sitemap.xml": [] };
 for (const e of catalog) {
-  if (!llms.includes(`/tools/${e.slug}`)) absent["llms.txt"].push(e.slug);
+  if (!llms.includes(`/tools/${e.slug}`)) absent["llms-full.txt"].push(e.slug);
   if (!specPaths.has(e.path)) absent["openapi.json"].push(e.slug);
   if (!manifest.includes(e.path)) absent["/.well-known/x402"].push(e.slug);
   if (!sitemap.includes(`/tools/${e.slug}<`)) absent["sitemap.xml"].push(e.slug);
