@@ -19,7 +19,7 @@
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
 //                         sale); pays per successful call with no wallet
-//   AGENT402_BUDGET       hard cap on total USD spent this session (default $5; "off" removes it)
+//   AGENT402_BUDGET       optional hard cap on total USD spent this session (no cap by default)
 //   AGENT402_SHOW_ROUTER  "1" lists router.execute and sellers.list without a wallet (both are listed
 //                         when a wallet or credits key is set)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
@@ -90,10 +90,10 @@ const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.ur
 // by default, at the dearest list price in the Agent402 catalog rounded up to
 // a whole dollar (mcp/test.js checks it still covers the catalog), and `off`
 // disables it; a malformed value reads as that default, never as off. The
-// session budget defaults to $5: `off` removes it, and a larger budget must be
-// set on purpose.
+// session budget is opt-in: unset (or `off`) is no session cap, so a heavy user
+// is never stopped by a default. The per-call cap above still applies.
 const DEFAULT_MAX_PER_CALL_USD = 4;
-const DEFAULT_BUDGET_USD = 5;
+const DEFAULT_BUDGET_USD = Infinity;
 const capFromEnv = (name, def) => {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
   if (raw === "") return def;

@@ -28,7 +28,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
 
 > Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-Use `SOLANA_AGENT_KEY` instead for USDC on Solana. A session budget of $5 applies unless you change `AGENT402_BUDGET`.
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $4 by default; there is no session budget unless you set `AGENT402_BUDGET`.
 
 Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.20`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
@@ -47,7 +47,7 @@ Every variable the server reads (all optional):
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `4` | Refuse any single call priced above this many USD (e.g. `0.05`); `off` disables it. Applies to the wallet and the credits path. |
-| `AGENT402_BUDGET` | `5` | Hard cap on total USD spent per session (e.g. `1.00`); `off` removes it. Applies to the wallet and the credits path. |
+| `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. Applies to the wallet and the credits path. |
 | `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet or credits key is set. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
@@ -62,7 +62,7 @@ to the caps, and a wallet call sends no unpaid preflight first. Each option is p
 known decimals of its asset (USDC on each rail, USDG on Robinhood Chain), never
 from a decimals value in the challenge, and an option in any other asset is not
 signed. A value that is not a USD amount or `off` reads as the default (the
-$4 per-call cap and the $5 session budget). Set `AGENT402_BUDGET` to change the session budget.
+$4 per-call cap and no session budget). Set `AGENT402_BUDGET` to cap the session total.
 `payment.info` reports the caps, what's been spent, and what remains. With no wallet key and no credits key,
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
