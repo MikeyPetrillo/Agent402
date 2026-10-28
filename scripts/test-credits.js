@@ -316,6 +316,18 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   await lc.markRefusalRefunded("cs_rf");
   ok(!(await lc.refusalsToRefund()).includes("cs_rf") && (await lc.claim("cs_rf")).refunded === true, "marking it refunded clears the list and the answer");
   lstripe.refunds.create = failing;
+  // The guards behind the buyer lock, tested directly (another server, or a
+  // lock that is unavailable, reaches them without the lock):
+  // a session's own key never counts against it ...
+  const own = lc._internals;
+  const buyerA = { email: "a@x.com", cardFingerprint: "fp_a" };
+  const withOwn = await own.boughtInDayCents(buyerA, t, "cs_r2");
+  const withoutExclusion = await own.boughtInDayCents(buyerA, t, null);
+  ok(withoutExclusion - withOwn === 10000, `a session's own key is left out of its buyer's daily total (${withOwn} vs ${withoutExclusion} cents)`);
+  // ... and a claim that did not record the refusal never refunds.
+  const rBefore = refunds.length;
+  const lost = await own.refuseAndRefund("cs_r2", "pi_cs_r2", "refused", "daily_purchase_limit");
+  ok(lost.status === "claimed" && refunds.length === rBefore, "a claim that finds the session already issued answers claimed and refunds nothing");
   // An EU or UK billing address needs a business tax ID.
   const euBuy = (id, { country, taxIds = [] }) => {
     ls[id] = { id, mode: "payment", payment_status: "paid", payment_intent: "pi_" + id, customer_details: { email: `${id}@x.com`, address: { country }, tax_ids: taxIds }, metadata: { credits_pack: "credits-20" } };
