@@ -35,7 +35,7 @@ const SECTIONS = [
     h: "What the crawler reads",
     p: [
       `Agent402 publishes an index of services that advertise machine payments over x402 or MPP. For each x402 origin in it, the crawler reads <code>/robots.txt</code>, the x402 manifest at <code>/.well-known/x402</code>, and <code>/openapi.json</code> to name and describe the routes. When an origin publishes no manifest, it also tries <code>/agents.json</code> and then <code>/llms.txt</code>, two other places a service may list its paid routes.`,
-      `It sends an unpaid request to paid routes the index lists, to read the price and payment networks in their 402 challenge. When one origin claims to have moved from another, it reads <code>/.well-known/agent402-succession</code> on both to confirm the claim. When a listed seller submits a payout-wallet handoff, it reads <code>/.well-known/agent402-payto-handoff</code> on that origin once. For the MPP index, it reads a registered server's <code>/openapi.json</code> and sends one unpaid request to a paid endpoint to confirm its <code>WWW-Authenticate: Payment</code> challenge.`,
+      `It sends an unpaid request to paid routes the index lists, to read the price and payment networks in their 402 challenge. When one origin claims to have moved from another, it reads <code>/.well-known/agent402-succession</code> on both to confirm the claim. For the MPP index, it reads a registered server's <code>/openapi.json</code> and sends one unpaid request to a paid endpoint to confirm its <code>WWW-Authenticate: Payment</code> challenge.`,
       `We do not log in, submit forms, or pay to see more. A 402 challenge is a public advertisement of price and payment rails, and asking for one with no credential is the ordinary way to read it.`,
     ],
   },

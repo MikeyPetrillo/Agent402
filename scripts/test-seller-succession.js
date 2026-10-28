@@ -191,12 +191,9 @@ const NEW = `https://api.seller-${TAG}.com`;
     // Sized to the whole function rather than a byte count: the window was 900
     // and the comment explaining the fix pushed the guard out of it, which would
     // have read as "the guard is gone".
-    // Succession markers and the payTo handoff share one reader, readOwnWellKnown.
-    const marker = src.slice(src.indexOf("function readMarker"), src.indexOf("export async function readOwnWellKnown"));
-    ok(/return readOwnWellKnown\(origin, SUCCESSION_PATH/.test(marker), "readMarker reads through readOwnWellKnown");
-    const fn = src.slice(src.indexOf("export async function readOwnWellKnown"), src.indexOf("const sameOrigin"));
+    const fn = src.slice(src.indexOf("async function readMarker"), src.indexOf("const sameOrigin"));
     ok(/await safeFetch\(url,/.test(fn),
-       "readOwnWellKnown (behind readMarker) fetches through safeFetch - the STATICALLY imported guarded fetcher. Two earlier versions were flagged CRITICAL js/request-forgery: one made the guard injectable, the other reached it through a dynamic import, and CodeQL could follow neither. A control the tooling cannot see is not meaningfully a control");
+       "readMarker fetches through safeFetch - the STATICALLY imported guarded fetcher. Two earlier versions were flagged CRITICAL js/request-forgery: one made the guard injectable, the other reached it through a dynamic import, and CodeQL could follow neither. A control the tooling cannot see is not meaningfully a control");
     // Comments stripped first: the comment explaining this fix NAMES the old
     // injectable parameter, so a bare word search matched the explanation
     // rather than the code and failed on a correct tree.
