@@ -670,7 +670,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. Terms are defined once at ${baseUrl}/glossary, and the category is explained at ${baseUrl}/agentic-finance. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
 
 ${mppMethodsProse()}
 
