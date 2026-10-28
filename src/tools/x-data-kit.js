@@ -535,7 +535,9 @@ export const X_DATA_TOOLS = [
     tags: [...SHARED_TAGS, "users", "bulk", "lookup"],
     discovery: {
       bodyType: "json",
-      input: { usernames: ["coinbase", "base"] },
+      // One real account and one that does not exist, so the answer shows both
+      // lists the output example shows: the found profile and notFound.
+      input: { usernames: ["coinbase", "nosuchuser_xyz"] },
       inputSchema: {
         properties: {
           usernames: { type: "array", items: { type: "string" }, description: "1-10 usernames (array, or a comma-separated string)." },
