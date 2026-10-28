@@ -18,6 +18,7 @@
 //     for ttl seconds).
 //   - Every read/write is wrapped in try/catch — a Redis stall NEVER takes
 //     down a tool. Worst case it adds a few ms then we serve fresh.
+import { createHash } from "node:crypto";
 import { loadRedis } from "./lazy-redis.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
@@ -75,8 +76,10 @@ export function cacheEnabled() {
 // Per-route cache policy.
 //   ttl       — seconds. Pick something that matches how stale the upstream
 //               answer can be without misleading the agent.
-//   keyFields — the request-input fields that materially change the answer.
-//               Anything not listed is ignored when computing the key.
+//   keyFields — the request-input fields that materially change the answer,
+//               named as the tool reads them (scripts/test-cache-keys.js
+//               checks each against the tool's inputSchema). Every other
+//               field the call carries is part of the key too.
 //
 // Add new entries here, NOT in the kit files — keeps cache policy in one place.
 //
@@ -89,27 +92,21 @@ export function cacheEnabled() {
 //   response we'd serve to anyone. NEVER add memory tools, anything in
 //   WALLET_ONLY_SLUGS, or anything priced above $0.
 export const CACHEABLE_ROUTES = {
-  // Net/DNS — stable on the order of minutes-to-hours.
-  "/api/dns":            { ttl:   300, keyFields: ["domain", "type"] },
-  "/api/whois":          { ttl:  3600, keyFields: ["domain"] },
-  "/api/tls-cert":       { ttl:  3600, keyFields: ["host", "port"] },
-  "/api/http-check":     { ttl:    60, keyFields: ["url"] },
-  "/api/robots-check":   { ttl:  3600, keyFields: ["url", "userAgent"] },
-  "/api/sitemap":        { ttl:  1800, keyFields: ["url"] },
-  "/api/ip-info":        { ttl: 86400, keyFields: ["ip"] },
+  // Net/DNS — stable on the order of minutes-to-hours. Only GET routes are
+  // cached, so a POST tool (whois, tls-cert, http-check) never belongs here.
+  "/api/dns":            { ttl:   300, keyFields: ["name", "type"] },
   "/api/ens-resolve":    { ttl:  3600, keyFields: ["name"] },
-  "/api/email-validate": { ttl:  3600, keyFields: ["email"] },
 
   // Geo — almost never changes.
-  "/api/geocode":         { ttl: 86400, keyFields: ["address"] },
-  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon"] },
-  "/api/place-search":    { ttl:  3600, keyFields: ["query", "near"] },
+  "/api/geocode":         { ttl: 86400, keyFields: ["q", "limit", "countryCodes"] },
+  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon", "zoom"] },
+  "/api/place-search":    { ttl:  3600, keyFields: ["q", "limit", "countryCodes", "viewbox", "bounded"] },
 
   // Time-sensitive but coarsely cacheable.
-  "/api/fx-rate":          { ttl:   300, keyFields: ["base", "quote"] },
+  "/api/fx-rate":          { ttl:   300, keyFields: ["from", "to", "amount"] },
   "/api/weather-forecast": { ttl:   600, keyFields: ["lat", "lon"] },
-  "/api/weather-alerts":   { ttl:   300, keyFields: ["state"] },
-  "/api/earthquakes":      { ttl:   300, keyFields: ["min_magnitude", "hours"] },
+  "/api/weather-alerts":   { ttl:   300, keyFields: ["area"] },
+  "/api/earthquakes":      { ttl:   300, keyFields: ["minMag", "period"] },
   // Release dates are scheduled weeks ahead; FRED's /releases/dates endpoint
   // is its slowest (15-60s under load, per the 2026-07-16 incident) and agents
   // poll this route on fixed schedules — an hour of caching means most polls
@@ -153,18 +150,24 @@ export const CACHEABLE_ROUTES = {
   "/api/tx-status":   { ttl:    60, keyFields: ["hash", "network"] },
 };
 
-// Build a deterministic cache key from a path + the policy's keyFields. Values
-// are stringified and lowercased so trivial input variation ("Foo.com" vs
-// "foo.com") doesn't fragment the cache. Long values are hashed-by-truncation
-// rather than left whole so we don't blow past Redis key limits on URL inputs.
+// Build a deterministic cache key from a path + every input field the call
+// carried, plus the policy's keyFields. A key built from keyFields alone keyed
+// on names a tool never reads (geocode on `address` while its input is `q`),
+// so every query shared one entry and served the first caller's answer; any
+// field present now changes the key. Values are kept as sent (no case folding:
+// base58 addresses and signatures are case-sensitive), and the whole field
+// list is hashed so long URL inputs neither collide on a shared prefix nor
+// exceed Redis key limits.
 export function cacheKeyFor(path, input, keyFields) {
-  const parts = [path];
-  for (const f of keyFields) {
-    const raw = input == null ? "" : input[f];
-    const v = raw == null ? "" : String(raw).toLowerCase().slice(0, 256);
-    parts.push(`${f}=${v}`);
+  const fields = new Set(keyFields);
+  if (input && typeof input === "object") for (const f of Object.keys(input)) fields.add(f);
+  const parts = [];
+  for (const f of [...fields].sort()) {
+    const raw = input == null ? undefined : input[f];
+    if (raw == null || raw === "") continue;
+    parts.push([f, typeof raw === "object" ? JSON.stringify(raw) : String(raw)]);
   }
-  return "a402:" + parts.join("|");
+  return `a402:${path}|${createHash("sha256").update(JSON.stringify(parts)).digest("hex")}`;
 }
 
 // Hard read timeout so a stalled Redis can never hang a request. The cache is
