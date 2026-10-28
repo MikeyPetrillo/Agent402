@@ -624,6 +624,7 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { evidenceWatchList, LOW_VOLUME_USD } from "./evidence-watch.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
@@ -4783,6 +4784,28 @@ app.post("/__operator/seller-verification", express.json({ limit: "8mb" }), asyn
   } catch (e) {
     res.status(e?.statusCode || 500).json({ error: String(e?.message || e).slice(0, 200) });
   }
+});
+// Settlement evidence that clears the router floor but looks staged
+// (src/evidence-watch.js). For review only: no verdict reads it.
+app.get("/__operator/evidence-watch.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const snap = getLeaderboardSnapshot();
+  const self = new Set([WALLET_ADDRESS].filter(Boolean).map((w) => String(w).toLowerCase()));
+  const { clearing, listed } = evidenceWatchList(snap?.leaderboard || [], { minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, self });
+  res.set("Cache-Control", "no-store").json({
+    note: "wallets that clear the router floor on the leaderboard's own figures while no payer of theirs pays any other seller, plus at least one more signal; for review, nothing here changes a verdict",
+    snapshotBuiltAt: snap?.asOf || null,
+    floor: { minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, lowVolumeUsd: LOW_VOLUME_USD },
+    signals: {
+      lowVolume: `under $${LOW_VOLUME_USD} settled in the leaderboard window`,
+      isolatedPayers: "no payer of this wallet pays any other seller",
+      topPayerCarries: "the floor is not met without the busiest payer",
+      singlePayerShare: "one payer made most of the calls",
+    },
+    clearing,
+    listed: listed.length,
+    rows: listed,
+  });
 });
 app.get("/__operator/seller-verification.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
