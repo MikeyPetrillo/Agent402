@@ -19,6 +19,18 @@ ok(lock.version === root && lock.packages?.[""]?.version === root, "package-lock
 for (const p of [".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"]) {
   ok(read(p).version === root, `${p} version ${read(p).version} equals the release version ${root}`);
 }
+// The Claude Code marketplace (.claude-plugin/marketplace.json at the root)
+// lists one plugin whose manifest and MCP config live under plugins/agent402.
+// Its versions follow the same release version, and every source path it names
+// must exist, or `/plugin marketplace add` installs nothing.
+const market = read(".claude-plugin/marketplace.json");
+ok(market.metadata?.version === root, `.claude-plugin/marketplace.json metadata version equals ${root}`);
+for (const entry of market.plugins ?? []) {
+  ok(entry.version === root, `marketplace plugin ${entry.name} version equals ${root}`);
+  const dir = entry.source.replace(/^\.\//, "");
+  ok(read(`${dir}/.claude-plugin/plugin.json`).version === root, `${dir}/.claude-plugin/plugin.json version equals ${root}`);
+  ok(read(`${dir}/.mcp.json`).mcpServers?.agent402?.url === "https://agent402.tools/mcp", `${dir}/.mcp.json points at the hosted /mcp connector`);
+}
 // When the checkout has tags, the newest release tag must not be AHEAD of
 // package.json (a release cut without moving the version). A shallow CI
 // checkout has none; the manifest checks above still hold there.
