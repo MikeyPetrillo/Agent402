@@ -625,6 +625,10 @@ import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFro
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { paysThirdParty } from "./third-party-routes.js";
+import { createNcTaxLedger, ncTaxableKind, isNcBilling, NC_TAXABLE_SLUGS, NC_STATE_RATE } from "./nc-sales-tax.js";
+// North Carolina sales tax on credits spent on digital audio and video
+// (src/nc-sales-tax.js): tax-included, recorded per month and billing ZIP.
+const ncTaxLedger = createNcTaxLedger({ file: process.env.NC_SALES_TAX_FILE || "/data/nc-sales-tax.json", log: (m) => console.warn(m) });
 import { evidenceWatchList, LOW_VOLUME_USD } from "./evidence-watch.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
@@ -2932,7 +2936,10 @@ try {
     // non-paying rail "card-prepaid" for reconciliation, so /revenue counts
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
-    onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
+    onDebit: ({ slug, priceUsd, keyId, billing }) => {
+      recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" });
+      if (ncTaxableKind(slug) && isNcBilling(billing)) ncTaxLedger.record({ slug, grossUsd: priceUsd, billing }).catch(() => {});
+    },
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
@@ -4808,6 +4815,17 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
     clearing,
     listed: listed.length,
     rows: listed,
+  });
+});
+// North Carolina sales tax on credits spent on digital audio and video, by
+// month and billing ZIP, for filing (src/nc-sales-tax.js).
+app.get("/__operator/nc-sales-tax.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json({
+    note: "gross receipts are tax-included: credits charge the list price everywhere, and for a key billed in North Carolina a charge on a taxable route includes the tax. The state portion is computed at the state rate; apply each county's local rate from the ZIP breakdown when filing.",
+    stateRate: NC_STATE_RATE,
+    taxableRoutes: NC_TAXABLE_SLUGS,
+    months: ncTaxLedger.report(),
   });
 });
 app.get("/__operator/seller-verification.json", (req, res) => {

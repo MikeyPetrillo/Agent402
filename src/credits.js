@@ -288,8 +288,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       mode: "payment",
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
       line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} (${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; not cash, not transferable, not a gift card." } } }],
+      // A billing address sources sales tax (src/nc-sales-tax.js); a business
+      // may add its tax ID, and the buyer confirms business or developer use.
+      billing_address_collection: "required",
+      tax_id_collection: { enabled: true },
+      custom_fields: [{ key: "use", label: { type: "custom", custom: "Use" }, type: "dropdown", optional: false, dropdown: { options: [{ label: "Business or developer use", value: "business" }] } }],
       // The buyer sees the terms and the credit rules on the pay button's page.
-      custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire, and are not refundable except as the terms describe.` } },
+      custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire, and are not refundable except as the terms describe. Prices include North Carolina sales tax where it applies.` } },
       metadata: { credits_pack: packKey, terms: "2026-10-28" },
       success_url: `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/credits?canceled=1`,
@@ -380,7 +385,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const key = `a402_${randomBytes(24).toString("base64url")}`;
     const hash = hashKey(key);
     const keyId = hash.slice(0, 12);
-    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, customer: buyer.customer, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    // Where the buyer is billed (sales tax sourcing) and any business tax ID given.
+    const addr = session.customer_details?.address || {};
+    const billing = addr.country ? { country: String(addr.country).toUpperCase(), state: addr.state ? String(addr.state).toUpperCase() : null, postal: addr.postal_code ? String(addr.postal_code) : null } : null;
+    const taxIds = Array.isArray(session.customer_details?.tax_ids) ? session.customer_details.tax_ids.map((t) => ({ type: String(t?.type || ""), value: String(t?.value || "") })).filter((t) => t.value) : [];
+    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, customer: buyer.customer, billing, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
       // another container won in between leaves an orphan row, removed here.
@@ -442,7 +451,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const prior = holdId && !Object.hasOwn(rec.holds || {}, holdId) ? rec.settledHolds?.[holdId] : null;
     if (prior) {
       const taken = Number(prior.m) || 0;
-      return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+      return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, billing: rec.billing || null }) };
     }
     heldMicro = takeHold(rec, heldMicro, holdId);
     const held = Math.min(heldMicro, rec.heldMicro || 0);
@@ -451,7 +460,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
     if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
-    return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+    return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, billing: rec.billing || null }) };
   }
   // What each recent settle took, by hold id (database only): kept long
   // enough for a retry of a settle whose reply was lost, then dropped.
@@ -473,7 +482,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const need = usdToMicro(priceUsd);
     const taken = Math.min(need, a.balanceMicro);
     a.balanceMicro -= taken; a.spentMicro += taken; a.calls += 1; a.lastUsedAt = new Date(now()).toISOString();
-    return { rec: a, result: { balanceUsd: microToUsd(a.balanceMicro), chargedUsd: microToUsd(taken) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: a.keyId }) };
+    return { rec: a, result: { balanceUsd: microToUsd(a.balanceMicro), chargedUsd: microToUsd(taken) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: a.keyId, billing: a.billing || null }) };
   }
 
   // Pre-handler authorization WITH RESERVATION: the list price is moved from
