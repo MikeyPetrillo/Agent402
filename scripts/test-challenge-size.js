@@ -224,6 +224,7 @@ if (override.length) {
 
 const rows = [];
 const skipped = [];
+const statuses = {};
 const queue = [...probes];
 async function worker() {
   while (queue.length) {
@@ -236,7 +237,7 @@ async function worker() {
         body: bodyFor(t),
       });
     } catch (e) { skipped.push(`${t.slug}: ${String(e.message).slice(0, 40)}`); continue; }
-    if (res.status !== 402) continue; // free tier, or FREE_MODE: nothing to bound
+    if (res.status !== 402) { statuses[res.status] = (statuses[res.status] || 0) + 1; continue; } // free tier, or FREE_MODE: nothing to bound
     const h = res.headers.get("payment-required") || "";
     if (!h) { rows.push({ slug: t.slug, bytes: -1 }); continue; }
     const total = headerBytes(res);
@@ -267,7 +268,15 @@ const sized = rows.filter((r) => r.bytes >= 0).sort((a, b) => b.bytes - a.bytes)
 if (!sized.length) {
   // FREE_MODE boots answer 200 everywhere - there is no challenge to bound,
   // and reporting that as a pass would be a green run that proved nothing.
-  console.log(`no paywalled route answered a 402 on ${TARGET} - this guard needs a PAID-mode server`);
+  // A local FREE_MODE boot has nothing to measure. Production always has paid
+  // routes, so no 402 from it means the sweep could not read what a buyer gets:
+  // that is a failure, never a pass that proved nothing.
+  const seen = `statuses ${JSON.stringify(statuses)}; ${skipped.length} unreadable${skipped.length ? ` (${skipped.slice(0, 3).join("; ")})` : ""}`;
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(TARGET)) {
+    console.log(`FAIL - no paywalled route on ${TARGET} answered a readable 402 (${seen})`);
+    process.exit(1);
+  }
+  console.log(`no paywalled route answered a 402 on ${TARGET} - this guard needs a PAID-mode server (${seen})`);
   console.log("SKIPPED: nothing to measure");
   process.exit(0);
 }
