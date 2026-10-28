@@ -76,7 +76,7 @@ export function cacheEnabled() {
 // Per-route cache policy.
 //   ttl       — seconds. Pick something that matches how stale the upstream
 //               answer can be without misleading the agent.
-//   keyFields — the request-input fields that materially change the answer,
+//   keyFields: the request-input fields that materially change the answer,
 //               named as the tool reads them (scripts/test-cache-keys.js
 //               checks each against the tool's inputSchema). Every other
 //               field the call carries is part of the key too.
@@ -92,7 +92,7 @@ export function cacheEnabled() {
 //   response we'd serve to anyone. NEVER add memory tools, anything in
 //   WALLET_ONLY_SLUGS, or anything priced above $0.
 export const CACHEABLE_ROUTES = {
-  // Net/DNS — stable on the order of minutes-to-hours. Only GET routes are
+  // Net/DNS: stable on the order of minutes-to-hours. Only GET routes are
   // cached, so a POST tool (whois, tls-cert, http-check) never belongs here.
   "/api/dns":            { ttl:   300, keyFields: ["name", "type"] },
   "/api/ens-resolve":    { ttl:  3600, keyFields: ["name"] },
