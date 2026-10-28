@@ -54,7 +54,9 @@ export function normalizeTask(task) {
 
 export function cacheKeyFor(task, constraints, depth) {
   const c = constraints || {};
-  const canon = JSON.stringify([normalizeTask(task).toLowerCase(), depth,
+  // The task keeps its case: a plan's step params are written from its text,
+  // and URL paths and base58 addresses in it are case-sensitive.
+  const canon = JSON.stringify([normalizeTask(task), depth,
     Number.isFinite(c.maxBudgetUsd) ? c.maxBudgetUsd : null, Number.isFinite(c.maxLatencyMs) ? c.maxLatencyMs : null,
     [...(c.rails || [])].map(String).sort(), [...(c.chains || [])].map(String).sort(), [...(c.excludeSellers || [])].map((s) => String(s).toLowerCase()).sort(), !!c.requireDeterministic]);
   return createHash("sha256").update(canon).digest("hex").slice(0, 32);

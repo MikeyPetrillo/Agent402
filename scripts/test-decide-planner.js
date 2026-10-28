@@ -400,7 +400,8 @@ await rejects(() => parseDecideInput({ task: "abc", constraints: { chains: "base
 ok(parseDecideInput({ task: "  do   the thing ", constraints: { requireDeterministic: "yes" } }).constraints.requireDeterministic === undefined, "requireDeterministic must be literally true");
 
 // ---- cache, gate, prices ----
-ok(cacheKeyFor("Do the Thing", { rails: ["mpp", "x402"] }, "plan") === cacheKeyFor("do   the thing", { rails: ["x402", "mpp"] }, "plan"), "cache key normalizes case, spacing and list order");
+ok(cacheKeyFor("Do the  Thing", { rails: ["mpp", "x402"] }, "plan") === cacheKeyFor("Do the Thing", { rails: ["x402", "mpp"] }, "plan"), "cache key normalizes spacing and list order");
+ok(cacheKeyFor("Fetch https://example.com/Report.pdf", {}, "full") !== cacheKeyFor("fetch https://example.com/report.pdf", {}, "full"), "cache key keeps the task's case (URL paths and base58 addresses are case-sensitive)");
 ok(cacheKeyFor("x", {}, "plan") !== cacheKeyFor("x", {}, "full") && cacheKeyFor("x", {}, "plan") !== cacheKeyFor("x", { maxBudgetUsd: 1 }, "plan"), "depth and constraints are part of the key");
 {
   const c = makeDecisionCache(1000);
