@@ -775,11 +775,12 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // than 16 KB of response headers, and the buyer then sees an error instead of
 // the price. Every route carries the same payment offers and MPP challenge, so
 // the part that varies by route (the discovery extension plus the listing
-// description) has a byte budget. A route over it gives up, in order: the input
-// property descriptions (names and types stay), description length, its sample
-// output and the schema read from it, any input detail past each property's
-// name and type (required stays), then long strings in the input example (an
-// inline image, say), which /openapi.json keeps runnable. A route under the budget keeps
+// description) has a byte budget. A route over it gives up the input side
+// first: property descriptions, then any detail past each property's name and
+// type (required stays), then long strings in the input example (an inline
+// image, say). Only then, if still over, its description shortens and its
+// sample output becomes a pointer: those are what a buyer reads to decide, so
+// they go last. /openapi.json keeps every full version. A route under the budget keeps
 // everything, and /openapi.json always carries the full versions.
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_800;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
@@ -812,21 +813,25 @@ function withoutPropertyDescriptions(schema) {
 }
 /** Fit one route's discovery block and listing description into the budget.
  *  `declare` turns a slim discovery block into the extension the 402 carries. */
-export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES) {
+/** `keepListing`: the route's description and sample output are part of what it
+ *  sells (its 402 names prices, its example is the product), so only the input
+ *  side may give way. The size guard still checks the route's real total. */
+export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES, { keepListing = false } = {}) {
   const size = (b, d) => JSON.stringify(b ? declare(b) : {}).length + String(d || "").length;
   let b = slim, d = description;
   const trimmed = [];
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
+  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
+  if (b?.input !== undefined && size(b, d) > max) {
+    const input = shortExampleStrings(b.input);
+    if (JSON.stringify(input) !== JSON.stringify(b.input)) { b = { ...b, input }; trimmed.push("input-example-strings"); }
+  }
+  if (keepListing) return { slim: b, description: d, trimmed, bytes: size(b, d) };
   if (d && d.length > CHALLENGE_SHORT_DESCRIPTION_MAX && size(b, d) > max) { d = bazaarCapDescription(d, CHALLENGE_SHORT_DESCRIPTION_MAX); trimmed.push("description"); }
   if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
     const { schema: _schema, ...rest } = b.output;
     b = { ...b, output: { ...rest, example: examplePointer() } };
     trimmed.push("output-example");
-  }
-  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
-  if (b?.input !== undefined && size(b, d) > max) {
-    const input = shortExampleStrings(b.input);
-    if (JSON.stringify(input) !== JSON.stringify(b.input)) { b = { ...b, input }; trimmed.push("input-example-strings"); }
   }
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
@@ -2025,7 +2030,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
       const path = route.split(" ")[1];
-      const fitted = fitChallenge(item.bazaar !== false ? slimDiscovery(item.discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension);
+      const { keepListing, ...discovery } = item.discovery || {};
+      const fitted = fitChallenge(item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension, undefined, { keepListing: keepListing === true });
       if (fitted.slim) Object.assign(ext, declareDiscoveryExtension(fitted.slim));
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });

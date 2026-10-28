@@ -48,11 +48,11 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
   const roomy = fitChallenge(block, long, declare, 1_000_000);
   ok(roomy.trimmed.length === 0 && roomy.slim === block && roomy.description === long, "budget: a route under it keeps its block and description untouched");
   const one = fitChallenge(block, long, declare, JSON.stringify(declare(block)).length + long.length - 100);
-  ok(one.trimmed.join() === "input-descriptions" && !JSON.stringify(one.slim.inputSchema).includes("xxxx") && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example,
-    "budget: input property descriptions go first; names, types and the sample output stay");
+  ok(one.trimmed[0] === "input-descriptions" && !JSON.stringify(one.slim.inputSchema).includes("xxxx") && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example && one.description === long,
+    "budget: the input side gives way first; the description, names, types and the sample output stay");
   const all = fitChallenge(block, long, declare, 200);
-  ok(all.trimmed.slice(0, 4).join() === "input-descriptions,description,output-example,input-types-only" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
-    "budget: then the description shortens at a sentence, the sample output becomes a pointer (its schema goes with it), then input properties keep only name and type");
+  ok(all.trimmed.join() === "input-descriptions,input-types-only,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
+    "budget: input detail goes before the description and the sample output, which go last (the pointer takes the output schema with it)");
   // A tool's own sample output can carry a "truncated" field (a paged list): it is still trimmed.
   const paged = { ...block, output: { type: "json", example: { truncated: true, results: Array.from({ length: 60 }, (_, i) => ({ id: i })) } } };
   ok(isExamplePointer(fitChallenge(paged, "short", declare, 200).slim.output.example), "budget: a sample output with its own truncated field is still replaced by the pointer");
