@@ -243,6 +243,25 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   r3.setHeader("X-Metered-Usd", "9.5"); r3.statusCode = 200; r3.emit("finish");
   ok(Math.abs(cr.balance(KEY).balanceUsd - (b3 - 0.001)) < 1e-9, "gate (metered): a reported amount above the hold can never take more than the hold");
 }
+// ---- keys cannot be guessed or made up, and guessing is bounded ----
+{
+  const minted = await cr.claim("cs_paid");
+  ok(minted.status === "claimed" || minted.status === "minted", "guard: setup");
+  // A key in the right format that we never issued is unknown, however it was made.
+  const forged = "a402_" + "A".repeat(32);
+  ok(KEY_RE.test(forged) && cr.balance(forged) === null, "a well-formed key we never issued holds nothing (keys are checked against stored hashes)");
+  process.env.CREDITS_BAD_KEY_MAX = "3";
+  const g = cr.gate(() => ({ priceUsd: 0.001, slug: "hash" }));
+  const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
+  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
+  const blocked = tryKey(KEY);
+  ok(blocked.r.statusCode === 429 && blocked.r.body.reason === "credits-key-attempts" && Number(blocked.r.headers["Retry-After"]) > 0 && !blocked.next, "after the limit of unknown keys, the client is refused 429 before any lookup (even with a real key)");
+  const other = tryKey(KEY, "198.51.100.7");
+  ok(other.r.statusCode !== 429, "another client is unaffected");
+  ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().refused >= 1, "the attempts are counted for the operator view");
+  delete process.env.CREDITS_BAD_KEY_MAX;
+}
+
 // ---- daily purchase limit: one buyer, at most CREDITS_DAILY_MAX_USD in 24 hours ----
 {
   const LDIR = join("/tmp", `test-credits-limit-${process.pid}`);

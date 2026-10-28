@@ -4347,13 +4347,15 @@ if (_credits) {
   app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
+    if (/^Bearer a402_/.test(auth) && _credits.refuseGuessing(req, res)) return;
     const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
+    if (!b && /^Bearer a402_/.test(auth)) _credits.noteBadKey(req.ip);
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-    res.set("Cache-Control", "no-store").json(await _credits.status());
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats() });
   });
   app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -9179,13 +9181,13 @@ app.get("/api/pricing", (_req, res) => {
       // Follows the CREDITS_SALES gate: while sales are off the checkout
       // answers 503, so this block must not advertise packs or a checkout an
       // agent would be refused. Existing keys still spend, so it says how.
-      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
         // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
         // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
         checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
         balance: `${BASE_URL}/api/credits/balance` }
-        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),
