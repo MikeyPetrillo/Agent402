@@ -660,7 +660,8 @@ export function llmsTxt(baseUrl, catalog) {
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
-- Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.`;
+- Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
+- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
   return `${title}
 
@@ -669,6 +670,10 @@ ${summary}
 Base URL: ${baseUrl}
 
 The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+
+${mppMethodsProse()}
+
+${gatewayNanopaymentsLine()}
 
 ${sections.join("\n\n")}
 

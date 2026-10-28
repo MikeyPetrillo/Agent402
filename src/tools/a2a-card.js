@@ -135,7 +135,7 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
     preferredTransport: "HTTP+JSON",
     version: String(version || "1.0.0"),
     documentationUrl: `${base}/docs`,
-    provider: { organization: "Havok Holdings", url: base },
+    provider: { organization: "Havok Holdings LLC", url: base },
     // Stated as they are. A2A streaming means task streaming on this endpoint,
     // which we do not offer; the SSE on the LLM routes is a different thing.
     capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false },
