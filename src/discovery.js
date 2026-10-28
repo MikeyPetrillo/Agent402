@@ -29,7 +29,7 @@ import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 const REPO = REPO_URL;
-const MAINTAINER = { name: "Havok Holdings", email: "mike@agent402.tools", url: REPO };
+const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
 /** A dollar figure exactly as priced: cents at a cent or more ($3.30, $0.50),
  *  and every significant sub-cent digit ($0.0005, $0.0025), never rounded. */

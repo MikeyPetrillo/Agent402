@@ -1005,7 +1005,7 @@ export function openapiSpec(baseUrl, catalog) {
         `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
-      contact: { name: "Havok Holdings", email: "mike@agent402.tools", url: baseUrl },
+      contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":

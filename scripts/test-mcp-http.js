@@ -226,7 +226,7 @@ for (const aboutName of ["server.describe", "describe_server", "describe_agent40
   const aboutText = about.result?.content?.[0]?.text ?? "";
   assert(!about.result?.isError, `${aboutName} succeeds`);
   assert(aboutText.includes("firstJob") && aboutText.includes("search"), `${aboutName} leads with search/answer front door`);
-  assert(aboutText.includes("Havok Holdings"), `${aboutName} credits Havok Holdings`);
+  assert(aboutText.includes("Havok Holdings LLC"), `${aboutName} credits Havok Holdings LLC`);
   assert(aboutText.includes("claude mcp add") && aboutText.includes("cursorMcpJson"), `${aboutName} includes install one-liners`);
   assert(aboutText.includes("500+"), `${aboutName} uses evergreen 500+ count`);
   assert(!aboutText.includes("generate_hash"), `${aboutName} does not advertise removed curated utilities`);

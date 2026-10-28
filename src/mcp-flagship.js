@@ -119,7 +119,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 - pay-per-call tools and models for AI agents: live web search and cited answers, news, browser render, market data, speech-to-text, wallet-keyed memory, plus 500+ long-tail tools via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings.";
+  "Agent402 - pay-per-call tools and models for AI agents: live web search and cited answers, news, browser render, market data, speech-to-text, wallet-keyed memory, plus 500+ long-tail tools via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
@@ -534,7 +534,7 @@ export function mcpInstallHints(baseUrl) {
     },
     npm: "npx -y agent402-mcp",
     smithery: `Paste ${hosted} into the add-server form at https://smithery.ai/new. Submission is external; Agent402 does not auto-publish.`,
-    maintainer: "Havok Holdings",
+    maintainer: "Havok Holdings LLC",
   };
 }
 

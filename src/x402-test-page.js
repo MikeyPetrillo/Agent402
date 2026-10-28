@@ -100,7 +100,7 @@ ${ledgerFooterCompact()}`;
 
   const jsonLd = [
     { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` }, { "@type": "ListItem", position: 2, name: "Test your x402 client", item: canonical }] },
-    { "@type": "TechArticle", "@id": canonical, headline: title, description, publisher: { "@type": "Organization", name: "Havok Holdings", url: "https://havok.holdings" } },
+    { "@type": "TechArticle", "@id": canonical, headline: title, description, publisher: { "@type": "Organization", name: "Havok Holdings LLC", url: "https://havok.holdings" } },
   ];
   const extraCss = `@media (max-width:900px){h1{font-size:var(--fs-3xl)!important}}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/x402-test", extraCss, jsonLd, body });

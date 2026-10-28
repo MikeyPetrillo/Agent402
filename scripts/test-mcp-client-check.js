@@ -165,7 +165,7 @@ function stubConnector(brk = null) {
     }));
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args = {} } = req.params;
-      if (name === "server.describe") return text({ maintainer: "Havok Holdings", startHere: { firstJob: "call catalog.find" } });
+      if (name === "server.describe") return text({ maintainer: "Havok Holdings LLC", startHere: { firstJob: "call catalog.find" } });
       if (name === "payment.info") return text({ freeTier: {}, pay: {} });
       if (name === "catalog.search") return text({ results: [{ slug: "unit-convert" }] });
       if (name === "catalog.find") return text({ results: [{ slug: "unit-convert", callWith: { name: "catalog.call", arguments: { slug: "unit-convert", params: {} } } }] });

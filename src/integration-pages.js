@@ -693,7 +693,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
     programmingLanguage: i.registry === "pypi" ? "Python" : "JavaScript",
     license: "https://opensource.org/licenses/MIT",
     sameAs: [registryUrl(i)],
-    author: { "@type": "Organization", name: "Havok Holdings" },
+    author: { "@type": "Organization", name: "Havok Holdings LLC" },
   };
 
   const toolCards = tools.map((t) => `<a href="/tools/${esc(t.slug)}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:14px 16px;text-decoration:none;color:var(--ink);">

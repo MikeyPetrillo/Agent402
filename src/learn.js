@@ -363,7 +363,7 @@ export function learnPage(baseUrl, slug) {
     description: l.description,
     url: canonical,
     about: { "@id": `${canonical}#term` },
-    author: { "@type": "Organization", name: "Havok Holdings" },
+    author: { "@type": "Organization", name: "Havok Holdings LLC" },
     publisher: { "@type": "Organization", name: "Agent402", url: baseUrl },
   };
   const sections = l.sections.map(([h, blocks]) => `<h2>${esc(h)}</h2>\n${blocks.map(renderBlock).join("\n")}`).join("\n");

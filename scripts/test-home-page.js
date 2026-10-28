@@ -114,7 +114,7 @@ const catalog = {
 {
   const stats = { toolCallsServed: { viaUSDC: 100, viaProofOfWork: 200, viaMPPWire: 1, viaRouter: 1, viaUSDCByNetwork: {} } };
   const html = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, []);
-  ok(html.includes('"@type":"Organization"') && html.includes('"Havok Holdings"'), "Organization JSON-LD present, credits Havok Holdings");
+  ok(html.includes('"@type":"Organization"') && html.includes('"Havok Holdings LLC"'), "Organization JSON-LD present, credits Havok Holdings LLC");
   ok(html.includes('"@type":"WebSite"') && html.includes('"@type":"SearchAction"'), "WebSite + SearchAction JSON-LD present");
   ok(html.includes('"@type":"SoftwareApplication"') && html.includes('"@type":"AggregateOffer"'), "SoftwareApplication + AggregateOffer JSON-LD present");
   ok(html.includes('"@type":"Dataset"') && html.includes('"@type":"DataDownload"'), "Dataset + DataDownload JSON-LD present for the leaderboard");
