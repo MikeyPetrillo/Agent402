@@ -159,7 +159,7 @@ report is generated only against a paid, Stripe-verified session, once; if gener
 is refunded automatically. A report that was delivered is final. Prepaid credits are consumed as you
 call tools and are non-refundable except where required by law, with one exception: an unspent balance
 under $10 on a key is refunded to its card on request to the email on the purchase. A refunded or
-disputed purchase disables the key that purchase issued. One buyer may buy at most ${creditsLimitUsd} of
+disputed purchase disables the key that purchase issued. One buyer may buy at most $${creditsLimitUsd} of
 credits in any 24 hours; a purchase past that is refunded in full and issues no key. Card prices include
 payment processing and are shown before you pay. Prices are the same everywhere and include North Carolina
 sales tax where it applies: for a credits key billed to a North Carolina address, a call that returns

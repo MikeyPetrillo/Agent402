@@ -287,7 +287,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} (${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; not cash, not transferable, not a gift card." } } }],
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; not cash, not transferable, not a gift card." } } }],
       // A billing address sources sales tax (src/nc-sales-tax.js); a business
       // may add its tax ID, and the buyer confirms business or developer use.
       billing_address_collection: "required",

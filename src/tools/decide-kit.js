@@ -193,7 +193,12 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
       return ledger.saveDecisionIfAbsent(row);
     }, LEDGER_RETRY_MS, journalOf(ledger, "saveDecision", row));
     const settleMark = () => fireRetry(`settle decision ${id}`, () => markSettledRecorded(ledger, id), LEDGER_RETRY_MS, journalOf(ledger, "markDecisionSettled", { decisionId: id }));
-    const amount = roundUsd(priceUsd * cfg.credit.percentOfFee / 100);
+    // A plan paid with prepaid credits or a card earns no execution credit:
+    // the credit pays decide-execute, which buys from outside sellers, and
+    // card-funded value is spent only on Agent402's own services
+    // (src/third-party-routes.js).
+    const cardFunded = req?.creditsSettling === true || req?.stripeSettling === true;
+    const amount = cardFunded ? 0 : roundUsd(priceUsd * cfg.credit.percentOfFee / 100);
     let executionCredit = null;
     if (amount > 0 && out.plan?.length) {
       // The token is drawn first, so a retried or journaled mint names the same credit.
@@ -211,6 +216,7 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
       ...out,
       priceUsd,
       executionCredit,
+      ...(cardFunded && out.plan?.length ? { executionCreditNote: "no execution credit: a plan paid with prepaid credits or a card earns none, because decide-execute buys from outside sellers and is paid with a wallet" } : {}),
       feedbackToken,
       feedback: "POST /api/decide/feedback { decisionId, feedbackToken, step, outcome: success|failure, quality?: 1-5, latencyMs? } - free, one verdict per step",
       neutrality: NEUTRALITY_NOTE,
@@ -1149,7 +1155,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
-        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you (you pay on Base, or by credits or card) at the seller's price plus a disclosed markup. Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan with its price returned as credit. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
+        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you at Agent402's price (paid with a wallet on Base; prepaid credits and cards do not pay this route). Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan with its price returned as credit. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
       tags: ["agents", "execute", "planning", "router", "x402"],
       discovery: {
         bodyType: "json",

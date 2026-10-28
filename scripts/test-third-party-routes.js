@@ -31,5 +31,17 @@ ok(/identityBound: isIdentityBoundRoute\(def\), paysThirdParty: paysThirdParty\(
 ok(/slug: def\.slug, identityBound: isIdentityBoundRoute\(def\), paysThirdParty: paysThirdParty\(def\)/.test(server), "the credits gate receives paysThirdParty");
 ok(/!item\.paysThirdParty && priceUsd >= STRIPE_MIN_USD/.test(src("mpp-stripe.js")), "the card challenge is not offered on a third-party route");
 
+// Credits cannot reach an outside seller through decide's execution credit.
+const decide = src("tools/decide-kit.js");
+ok(/const cardFunded = req\?\.creditsSettling === true \|\| req\?\.stripeSettling === true;\n\s+const amount = cardFunded \? 0 :/.test(decide), "a decision paid with credits or a card mints no execution credit");
+ok(!/by credits or card/.test(decide), "decide-execute's description no longer offers credits or a card");
+// The surfaces that describe what a credits key pays read the same flag or name the exclusion.
+const pages = src("pages.js");
+ok(/tool\.identityBound \|\| paysThirdParty\(tool\) \? \[\] : \["a prepaid credits key"\]/.test(pages) && /paysThirdParty\(tool\) \? " It buys from an outside seller with our wallet/.test(pages), "tool pages do not offer credits on a third-party route");
+ok(/the operations that buy from an outside seller/.test(pages), "openapi's credits scheme names the excluded operations");
+ok(/except the ones that buy from an outside seller/.test(src("seo.js")), "llms.txt names the excluded routes");
+const mcpHttp = src("mcp-http.js");
+ok(/onSale: creditsSalesEnabled\(\)/.test(mcpHttp) && /the routes that buy from an outside seller/.test(mcpHttp), "payment.info reads the sales switch and names the excluded routes");
+
 console.log(failed ? `${failed} failed` : "all passed");
 process.exit(failed ? 1 : 0);

@@ -319,7 +319,7 @@ curl -X POST https://agent402.tools/api/decide \
 - **Neutral ranking.** One formula scores every candidate (fit, observed reliability, price,
   schema quality, freshness) with no term for who sells the tool, and every step says whether
   the tool is ours (`firstParty`).
-- **The fee comes back.** The decision fee is returned as a 24-hour credit toward
+- **The fee comes back.** A decision paid with a wallet returns its fee as a 24-hour credit toward
   `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps bought from the
   seller and resold at the seller's price plus a disclosed 5% markup. Spend stops at the budget,
   fallbacks are tried in order, and a run where no step succeeds is not charged. Because it can
