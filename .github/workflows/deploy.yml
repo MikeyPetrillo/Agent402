@@ -2156,6 +2156,11 @@ jobs:
         # a list cannot be.
         run: node scripts/test-free-tier-egress.js
 
+      - name: No free-tier tool or skill holds the event loop on adversarial strings
+        # Boots its own offline server on port 0 and times every string field
+        # of every free-tier tool and skill against a long-input corpus.
+        run: node scripts/test-redos-free-tier.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
