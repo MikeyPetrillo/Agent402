@@ -56,6 +56,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } fr
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -154,8 +155,9 @@ const PAID_LOOPBACK_TIMEOUT_MS = Math.max(1_000, MCP_REQ_DEADLINE_MS - 2_500);
 export const PAID_CUTOFF_TEXT = "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Check any payment by its settlement transaction, free, at GET /api/refunds/lookup?tx=<hash>: it answers whether a refund is recorded and, once sent, our refund transaction. Do not retry blindly: a retry is a new paid call.";
 export const UNPAID_CUTOFF_TEXT = "No payment was presented, so there was nothing to charge.";
 /** The clause every connector "not charged" line carries: a Tempo push
- *  transfer is final before the call and a failure on it is booked as owed. */
-export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
+ *  transfer is final before the call and a failure on it is booked as owed.
+ *  Shared with the HTTP sync windows (src/tempo-push-debts.js). */
+export { PUSH_EXCEPTION };
 // The RFC 9457 members of a 402 problem document, and nothing else. A paywall
 // 402 body also carries the full PaymentRequired offer (it mirrors the
 // PAYMENT-REQUIRED header, src/payment-required-body.js); the error data, the

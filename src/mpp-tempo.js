@@ -46,6 +46,7 @@ import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
+import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 
@@ -607,6 +608,14 @@ export function pushHashOf(authorizationHeader) {
   } catch {
     return null;
   }
+}
+
+/** True when the header is a Tempo credential naming a PUSH transfer (a hash
+ *  payload): the one payment a refusal ahead of this gate cannot leave
+ *  untaken, so the sync windows defer theirs to the gate for it
+ *  (src/slow-sync-window.js). Shape only; nothing is verified. */
+export function isTempoPushCredential(authorizationHeader) {
+  return isTempoCredential(authorizationHeader) && pushHashOf(authorizationHeader) !== null;
 }
 
 /** True when `authorizationHeader` deserializes to a WELL-FORMED credential
@@ -1461,23 +1470,28 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         const pushHash = pushHashOf(auth);
         req.mppTempoPushHash = pushHash;
         const pushAmountUsd = Number(binding.amountAtomic) / 10 ** envDecimals();
-        if (typeof preValidate === "function") {
-          let bad = null;
+        // A sync window's refusal (the call needs Prefer: respond-async) is
+        // deferred to here for a push credential, ahead of the body check:
+        // answered the same way, the transfer unclaimed and booked as owed
+        // until the credential comes back with the header.
+        let bad = syncWindowRefusalOf(req);
+        if (!bad && typeof preValidate === "function") {
           try { bad = preValidate(req); } catch { bad = null; }
-          if (bad && bad.status >= 400 && bad.status < 500) {
-            releaseReplay();
-            // Until it is claimed we hold the buyer's money for nothing, and
-            // they may never come back: book it as owed now. A later claim
-            // that is served voids the row (see src/tempo-push-debts.js).
-            let owed = false;
-            if (typeof onPushInputRefused === "function") {
-              const payer = await readPushSender();
-              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
-            }
-            logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
-            res.setHeader("Cache-Control", "no-store");
-            return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again with a corrected body and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
+          if (!(bad && bad.status >= 400 && bad.status < 500)) bad = null;
+        }
+        if (bad) {
+          releaseReplay();
+          // Until it is claimed we hold the buyer's money for nothing, and
+          // they may never come back: book it as owed now. A later claim
+          // that is served voids the row (see src/tempo-push-debts.js).
+          let owed = false;
+          if (typeof onPushInputRefused === "function") {
+            const payer = await readPushSender();
+            try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
           }
+          logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
+          res.setHeader("Cache-Control", "no-store");
+          return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
         }
         // A transfer whose debt is already being refunded (or was) no longer
         // pays for a request: claiming it now would serve AND refund it.

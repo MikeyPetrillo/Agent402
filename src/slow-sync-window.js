@@ -31,10 +31,35 @@
 // Unpaid calls get the ordinary 402 (which recommends the header), and our
 // own loopbacks (an async job's replay, the MCP connector) pass untouched.
 //
+// A Tempo PUSH credential (src/mpp-tempo.js: the buyer sent the transfer
+// before the call) is the one payment a refusal here cannot leave untaken:
+// the money is already at our recipient. Refused before the gate, the
+// transfer would stay unclaimed and unbooked. So the refusal is not sent
+// here but DEFERRED on the request (deferSyncWindowRefusal) and the Tempo
+// gate answers it from its push input check, after the relay has confirmed
+// the transfer and before the hash is claimed: the transfer is booked as
+// owed until the same credential is presented again with the header, and
+// that claim voids the debt (src/tempo-push-debts.js).
+//
 // SLOW_SYNC_WINDOW_SECONDS (default 20; "off" disables) is the longest wait
 // assumed of a client that did not say otherwise.
+import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 
 export const DEFAULT_SLOW_SYNC_WINDOW_SECONDS = 20;
+
+/** The retry a deferred refusal asks for (the Tempo gate's answer names it). */
+export const SYNC_WINDOW_RETRY = "with the header Prefer: respond-async";
+
+/** Park a sync window's refusal ({status, body}) on the request for the Tempo
+ *  gate to answer, for a push credential. Own property, never a header. */
+export function deferSyncWindowRefusal(req, refusal) {
+  req.syncWindowRefusal = { ...refusal, retry: SYNC_WINDOW_RETRY };
+}
+/** The refusal a sync window deferred on this request, or null. */
+export function syncWindowRefusalOf(req) {
+  const r = req && typeof req === "object" && Object.hasOwn(req, "syncWindowRefusal") ? req.syncWindowRefusal : null;
+  return r && typeof r === "object" && Number(r.status) >= 400 && r.body && typeof r.body === "object" ? r : null;
+}
 /** A route whose run budget is past this many seconds is advertised as slow
  *  (src/slow-routes.js re-exports it). */
 export const SLOW_ADVISE_SECONDS = 20;
@@ -73,10 +98,14 @@ export function preferWaitSeconds(req) {
  * @param {(req) => boolean} o.carriesPaymentAttempt
  * @param {(req) => boolean} o.followsJobAnswer
  * @param {(req) => boolean} o.isInternal         our own loopback replays
+ * @param {(req) => boolean} o.isTempoPush        a Tempo push credential the
+ *        mounted Tempo gate will judge: its refusal is deferred to that gate
  */
-export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal = () => false, windowSeconds = slowSyncWindowSeconds, log = console.log }) {
+export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal = () => false, isTempoPush = () => false, windowSeconds = slowSyncWindowSeconds, log = console.log }) {
   return function slowSyncWindow(req, res, next) {
     if (req.method !== "POST" || wantsAsync(req)) return next();
+    // The CDN window ahead of this one already deferred its refusal.
+    if (syncWindowRefusalOf(req)) return next();
     const window = typeof windowSeconds === "function" ? windowSeconds() : windowSeconds;
     if (window == null) return next();
     let def = null;
@@ -99,8 +128,9 @@ export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaym
       req.slowSyncAsyncApplied = true;
       return next();
     }
-    log(`[slow-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${window} s, ${wait == null ? "no Prefer" : `Prefer: wait=${wait} too short`})`);
-    return res.status(400).set("Cache-Control", "no-store").json({
+    let push = false;
+    try { push = isTempoPush(req) === true; } catch { push = false; }
+    const body = {
       error: "respond_async_required",
       slug: def.slug,
       maxSeconds: budget,
@@ -109,7 +139,14 @@ export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaym
       prefer: "respond-async",
       preferWait: `wait=${budget}`,
       statusUrl: "/api/jobs/{id}",
-      hint: `This route can take up to ${budget} s, longer than many clients wait. Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. To wait on this connection instead, send Prefer: wait=${budget} and keep the connection open for at least ${budget + 30} s. This call was refused before any payment was taken.`,
-    });
+      hint: `This route can take up to ${budget} s, longer than many clients wait. Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. To wait on this connection instead, send Prefer: wait=${budget} and keep the connection open for at least ${budget + 30} s. This call was refused before any payment was taken${push ? PUSH_EXCEPTION : ""}.`,
+    };
+    if (push) {
+      log(`[slow-sync-window] ${def.slug} refusal deferred to the Tempo gate (push credential, run budget ${budget} s over ${window} s)`);
+      deferSyncWindowRefusal(req, { status: 400, body });
+      return next();
+    }
+    log(`[slow-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${window} s, ${wait == null ? "no Prefer" : `Prefer: wait=${wait} too short`})`);
+    return res.status(400).set("Cache-Control", "no-store").json(body);
   };
 }

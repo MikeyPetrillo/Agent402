@@ -33,6 +33,11 @@ import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { followsJobAnswer, cdnSyncLeftMs, cdnSyncMaxSeconds, cdnSyncWindowMiddleware } from "../src/cdn-sync-window.js";
+import { syncWindowRefusalOf, SYNC_WINDOW_RETRY } from "../src/slow-sync-window.js";
+import { isTempoPushCredential } from "../src/mpp-tempo.js";
+import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
+import { carriesPaymentAttempt } from "../src/payment-attempt.js";
+import { Challenge, Credential } from "mppx";
 import { ORIGIN_AUTH_HEADER } from "../src/cdn-client-ip.js";
 import express from "express";
 import { requiredCacheControl, paidNoStoreMiddleware } from "../src/paid-no-store.js";
@@ -107,6 +112,28 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   let nexted = false;
   cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1 })({ viaCdn: false, method: "POST", headers: {} }, {}, () => { nexted = true; });
   ok(nexted, "the window middleware passes a direct request through");
+  // A Tempo push credential's transfer is final before the call: the window
+  // defers its 504 to the Tempo gate (which books the transfer as owed, and
+  // claims it on the retry with the header) instead of sending it, and the
+  // hint carries the push exception. Any other payment is refused here.
+  {
+    const pushCredential = () => Credential.serialize({
+      challenge: Challenge.from({ realm: "test.local", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "50000", currency: "0x2000000000000000000000000000000000000000", decimals: 6, recipient: "0x000000000000000000000000000000000000dEaD", methodDetails: { chainId: 4217 } }, secretKey: "window-test" }),
+      payload: { hash: `0x${"ab".repeat(32)}`, type: "hash" }, source: "did:pkh:eip155:4217:0x1111111111111111111111111111111111111111",
+    });
+    const mw = cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt, isTempoPush: (req) => isTempoPushCredential(req.headers.authorization), maxSeconds: 1, log: () => {} });
+    const resStub = () => { const r = { code: null, sent: null, status(s) { r.code = s; return r; }, set() { return r; }, json(b) { r.sent = b; return r; } }; return r; };
+    const pushReq = { viaCdn: true, method: "POST", headers: { authorization: pushCredential(), "content-type": "application/json" } };
+    let passed = false; const r1 = resStub();
+    mw(pushReq, r1, () => { passed = true; });
+    const d = syncWindowRefusalOf(pushReq);
+    ok(passed && r1.sent === null && d?.status === 504 && d.body?.error === "sync_answer_too_slow_for_connection" && d.retry === SYNC_WINDOW_RETRY && d.body.hint.endsWith(`Nothing was charged${PUSH_EXCEPTION}.`),
+      `a push credential passes the CDN window with its 504 deferred to the Tempo gate, hint carrying the push exception (${JSON.stringify(d && { status: d.status, retry: d.retry })})`);
+    const x402Req = { viaCdn: true, method: "POST", headers: { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64"), "content-type": "application/json" } };
+    passed = false; const r2 = resStub();
+    mw(x402Req, r2, () => { passed = true; });
+    ok(!passed && r2.code === 504 && r2.sent?.hint.endsWith("Nothing was charged.") && syncWindowRefusalOf(x402Req) === null, "an x402 payment is refused by the CDN window itself, nothing deferred, hint without the push clause");
+  }
   // Our own loopback replay passes before the async marker exists: the same
   // predicate the slow window reads decides here.
   {
@@ -119,7 +146,8 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
     mw((req) => req.headers["x-loopback"] === "1")({ viaCdn: true, method: "POST", headers: { "user-agent": "curl/8" } }, r2, () => { passed2 = true; });
     ok(!passed2 && r2.code === 504, `CONTROL: the same request without the marker is refused (${r2.code})`);
     const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-    ok(/cdnSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay \}\)/.test(server) && /slowSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay \}\)/.test(server), "server.js hands both sync windows the one internal-replay predicate");
+    ok(/cdnSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay, isTempoPush \}\)/.test(server) && /slowSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush \}\)/.test(server), "server.js hands both sync windows the one internal-replay predicate and the one push-credential predicate");
+    ok(/const isTempoPush = \(req\) => tempoGateMounted && isTempoPushCredential\(req\.headers\.authorization\)/.test(server) && /app\.use\(tempoGate\);\s*\n\s*tempoGateMounted = true;/.test(server), "the push predicate holds only while the Tempo gate is mounted, so a window never defers to a gate that is not there");
     ok(server.indexOf("const isInternalReplay = ") < server.indexOf("app.use(cdnSyncWindowMiddleware("), "...defined before the CDN window is mounted");
   }
 }

@@ -9,7 +9,11 @@
 //   - refused twice: booked once;
 //   - finalize refused: one owed row AND one genuine charged failure (not for
 //     our own synthetic traffic); an already-claimed hash books nothing;
-//   - a transfer whose debt is being refunded no longer pays for a request.
+//   - a transfer whose debt is being refunded no longer pays for a request;
+//   - a sync window's refusal (a slow route called without Prefer:
+//     respond-async, src/slow-sync-window.js and src/cdn-sync-window.js) is
+//     deferred to the gate for a push credential and booked as owed there;
+//     the retry with the header claims the transfer and voids the row.
 // The relay and the chain are stubs: offline, nothing moves.
 import express from "express";
 import { mkdtempSync } from "node:fs";
@@ -24,8 +28,12 @@ process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CUR;
 
-const { createTempoGate, PUSH_SENDER_WAIT_MS } = await import("../src/mpp-tempo.js");
-const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoGate, PUSH_SENDER_WAIT_MS, isTempoPushCredential } = await import("../src/mpp-tempo.js");
+const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
+const { cdnSyncWindowMiddleware } = await import("../src/cdn-sync-window.js");
+const { wantsAsync } = await import("../src/async-jobs.js");
+const { carriesPaymentAttempt } = await import("../src/payment-attempt.js");
 const { isRepeatHangup, isLastingEffectHangup, HANGUP_STATUS } = await import("./refund-run.js");
 const ledger = await import("../src/refund-ledger.js");
 const { createReplayGuard } = await import("../src/replay-guard.js");
@@ -36,7 +44,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { conso
 const SECRET = "push-debts-secret";
 const REALM = "test.local";
 const SENDER = "0x5555555555555555555555555555555555555555";
-const priceFor = (_m, path) => (path === "/paid" ? { priceUsd: 0.05 } : null);
+const priceFor = (_m, path) => (path === "/paid" || path === "/slow" ? { priceUsd: 0.05 } : null);
 let n = 0;
 let credSeq = 0;
 const hashFor = (i) => `0x${i.toString(16).padStart(64, "0")}`;
@@ -77,6 +85,15 @@ app.use((req, res, next) => {
   });
   next();
 });
+// The sync windows ahead of the gate, as server.js mounts them (the real
+// payment-attempt, respond-async and push-credential predicates): /slow is a
+// slow route whose run budget is past both bounds.
+const SLOW_DEF = { slug: "slow-tool", asyncProfile: { slow: true, maxSeconds: 75, expectedSeconds: 40 } };
+const asyncRouteOf = (req) => (req.path === "/slow" ? SLOW_DEF : null);
+const isTempoPush = (req) => isTempoPushCredential(req.headers.authorization);
+app.use((req, _res, next) => { if (req.headers["x-test-via-cdn"]) req.viaCdn = true; next(); });
+app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isTempoPush, maxSeconds: 8, log: () => {} }));
+app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer: () => false, isTempoPush, windowSeconds: 20, log: () => {} }));
 // A refund send claims the debt in the moment after the gate's check and
 // before the handler (another container's refund run), when armed.
 let claimInWindow = null;
@@ -102,17 +119,20 @@ app.use(async (req, res, next) => {
   return res.status(402).json({ details: { reason: "refunded", transferClaimed: true } });
 });
 app.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
-app.post("/paid", (req, res) => {
+const handler = (req, res) => {
   handlerRuns++;
   if (req.body?.text === "boom") return res.status(500).json({ error: "handler failed" });
   // A handler refusal written for the settle-after rails, as the kits write them.
   if (req.body?.text === "refuse") return res.status(422).json({ error: "The text is over the cap. Nothing was charged.", hint: "Send a shorter text; you were not charged.", problem: { detail: "Refused before any upstream call, so nothing was charged." } });
   return res.json({ ok: true, note: "Nothing was charged for the free part." });
-});
+};
+app.post("/paid", handler);
+app.post("/slow", handler);
 const server = app.listen(0);
 await new Promise((r) => server.once("listening", r));
 const url = `http://127.0.0.1:${server.address().port}/paid`;
-const post = async (cred, body) => { const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json", Authorization: cred }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+const postTo = async (path, cred, body, headers = {}) => { const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred, ...headers }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+const post = (cred, body) => postTo("/paid", cred, body);
 const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).filter((r) => r.evidence === hash);
 
 // Control: a clean push buy books a sale and no debt.
@@ -395,6 +415,48 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   claimInWindow = h2;
   const held = await post(cred2, { text: "refuse" });
   ok(held.status === 402 && held.body.details?.reason === "refunded" && held.body.refundOwed === undefined && held.body.payment === undefined, `a claim the refund run holds is answered as refunded, not restated (${JSON.stringify(held.body)})`);
+}
+
+// A slow route called with a push credential and no Prefer: the window's
+// respond_async_required refusal is not sent ahead of the gate (the
+// transfer is already final) but answered by the gate's push input check,
+// so the transfer is booked as owed until claimed; the retry with the header
+// passes the window, is claimed, served, and voids the row. The handler never
+// runs on the refusal. The same for the CDN window's 504.
+for (const [label, headers, status, error, tail] of [
+  ["direct window", {}, 400, "respond_async_required", `before any payment was taken${PUSH_EXCEPTION}.`],
+  ["CDN window", { "x-test-via-cdn": "1" }, 504, "sync_answer_too_slow_for_connection", `Nothing was charged${PUSH_EXCEPTION}.`],
+]) {
+  const h = hashFor(label === "direct window" ? 50 : 51);
+  const cred = pushCred(h);
+  const runs = handlerRuns, fails = failures.length;
+  const r = await postTo("/slow", cred, { text: "x" }, headers);
+  ok(r.status === status && r.body.error === error && r.body.charged === false && r.body.transferClaimed === false && handlerRuns === runs,
+    `${label}: a push credential on a slow route without Prefer is refused ${status} ${error} by the gate, transfer unclaimed, handler not run (got ${r.status} ${r.body.error}, runs +${handlerRuns - runs})`);
+  ok(typeof r.body.hint === "string" && r.body.hint.endsWith(tail) && r.body.payment.includes(SYNC_WINDOW_RETRY) && /recorded as owed/.test(r.body.payment),
+    `${label}: the hint carries the push exception and the payment line names the header and the owed row (${String(r.body.payment).slice(0, 120)})`);
+  const rows = rowsFor(h);
+  ok(rows.length === 1 && rows[0].status === "owed" && rows[0].note === PUSH_INPUT_REFUSED_NOTE && rows[0].httpStatus === status && rows[0].payer === SENDER && rows[0].priceUsd === 0.05 && failures.length === fails,
+    `${label}: one owed row keyed on the hash, no charged failure (${JSON.stringify(rows)})`);
+  const again = await postTo("/slow", cred, { text: "x" }, headers);
+  ok(again.status === status && rowsFor(h).length === 1, `${label}: refused again, booked once`);
+  const r2 = await postTo("/slow", cred, { text: "x" }, { ...headers, prefer: "respond-async" });
+  const after = rowsFor(h);
+  ok(r2.status === 200 && after.length === 1 && after[0].status === "void" && after[0].note.includes(PUSH_CLAIMED_NOTE) && sales.filter((s) => s === h).length === 1 && handlerRuns === runs + 1,
+    `${label}: the retry with Prefer: respond-async claims the transfer, is served, voids the row and books the sale once (${r2.status}, ${after[0]?.status} "${after[0]?.note}")`);
+}
+// Controls: the windows leave a push credential on a fast route alone, and
+// refuse a non-push payment themselves (nothing reaches the gate, no row).
+{
+  const h = hashFor(52);
+  const r = await post(pushCred(h), { text: "x" });
+  ok(r.status === 200 && rowsFor(h).length === 0, "control: a push credential on a fast route is served, no window in the way");
+  const x402 = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+  const rows0 = ledger.listRefunds({ status: "all", limit: 1000 }).length;
+  const rx = await fetch(`http://127.0.0.1:${server.address().port}/slow`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": x402 }, body: JSON.stringify({ text: "x" }) });
+  const jx = await rx.json();
+  ok(rx.status === 400 && jx.error === "respond_async_required" && jx.hint.endsWith("before any payment was taken.") && jx.payment === undefined && ledger.listRefunds({ status: "all", limit: 1000 }).length === rows0,
+    `control: an x402 payment on the slow route is refused by the window itself, before the gate, no row and no push clause (${rx.status})`);
 }
 
 server.close();
