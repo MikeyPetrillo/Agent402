@@ -44,7 +44,6 @@ import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
-const IMAGE_TOKENS = 1600; // same flat per-image estimate as the chat wire
 const MAX_STOP_SEQUENCES = 8;
 const MAX_TOOLS = 64;
 
@@ -88,12 +87,6 @@ export function isPostOpus46(model) {
  *  measured 2026-09-18. Fable 5 still lists tool_choice and is not admitted. */
 export function noForcedToolChoice(model) {
   return /^anthropic\/claude-fable-5\.1/.test(String(model || ""));
-}
-
-function textOfBlocks(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map((b) => (b?.type === "text" && typeof b.text === "string" ? b.text : "")).join("\n");
 }
 
 /** Walk Anthropic content blocks: validate, count chars, count images, and
