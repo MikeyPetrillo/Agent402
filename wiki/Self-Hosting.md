@@ -113,7 +113,7 @@ Set these on your host. None are committed to the repo.
 | `TEMPO_CURRENCY` | No | CSV of TIP-20 token addresses to offer (first = preferred; default PathUSD, the hosted instance offers USDC.e then PathUSD) |
 | `STRIPE_SECRET_KEY` | For card paths | Rollout switch for the human front door: `/reports` (card checkout), `/monitors` (subscriptions), `/credits` (prepaid credits) and the `Authorization: Bearer a402_…` credits gate. Unset = none of it is mounted; the `/v1` report routes still sell over x402 / MPP |
 | `CREDITS_SALES` | No | `on` opens new prepaid credit sales at `/credits`. Off by default: the checkout answers 503, and existing keys keep working either way |
-| `STRIPE_WEBHOOK_SECRET` | With Stripe | Signing secret for the Stripe webhook endpoint (subscription status, invoices, credit packs, refunds and disputes). The webhook is verified only when set |
+| `STRIPE_WEBHOOK_SECRET` | With Stripe | Signing secret for the Stripe webhook endpoint (subscription status, invoices, credits purchases, refunds and disputes). The webhook is verified only when set |
 | `STRIPE_PROFILE_ID` | No | With `STRIPE_SECRET_KEY`, mounts cards over the MPP wire (`stripe/charge` via Shared Payment Tokens) on routes priced $0.50 or more |
 | `STRIPE_AUTOMATIC_TAX` | No | `true` adds Stripe Tax to every Checkout Session (enable Stripe Tax in the dashboard first) |
 | `EMAIL_FROM` | For emails | Verified sender address; with a provider key below, report links, monitor reports and credits keys are emailed |

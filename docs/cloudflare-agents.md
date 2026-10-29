@@ -114,7 +114,7 @@ presented credential that is refused answers JSON-RPC `-32043`, and a call on
 the tasks path answers `-32042`, both with `data.challenges`), and an MCP
 client wrapped with `mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or
 natively on Tempo) and retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
-npm package with a wallet key (or a prepaid card-credits key).
+npm package with a wallet key (or a prepaid credits key, where sold or already issued).
 
 ---
 

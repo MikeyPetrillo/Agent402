@@ -39,8 +39,8 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
 - **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo,
   Avalanche, Sei, Optimism, Arc, Stellar, Algorand; USDG on Robinhood Chain - 13 chains),
   MPP (Machine Payments Protocol) on the same 402 (Base/Celo, or natively on Tempo),
-  free proof-of-work on the pure-CPU tools. A prepaid card-credits key
-  (agent402.tools/credits says whether packs are on sale) pays Agent402's own
+  free proof-of-work on the pure-CPU tools. A prepaid credits key, where sold or
+  already issued (agent402.tools/credits says whether credits are on sale), pays Agent402's own
   services with `Authorization: Bearer a402_…`, debited only on a successful call,
   and never expires; the wallet-identity-bound routes and the routes that buy from
   an outside seller (the route-execute tiers, `seller-payability`, `decide-execute` and the flight routes)

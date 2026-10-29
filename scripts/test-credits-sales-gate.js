@@ -59,8 +59,14 @@ const boot = (env) => new Promise(async (resolve) => {
   ];
   const isText = (f) => /\.(md|js|ts|py|json)$/.test(f);
   const packageFiles = packageDirs().flatMap(shippedFiles).filter(isText);
-  const files = [join(ROOT, "README.md"), ...packageFiles];
-  ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files)`);
+  // The ecosystem-listing copy (docs/) and the wiki source (wiki/) are static
+  // text too, read from GitHub and the listing sites: held to the package
+  // rules, so a key is described as sold or issued, never as a card purchase.
+  const { walk } = await import("./lib/shipped-files.js");
+  const docFiles = ["docs", "wiki"].flatMap((d) => walk(join(ROOT, d))).filter(isText);
+  const files = [join(ROOT, "README.md"), ...packageFiles, ...docFiles];
+  ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files + docs and wiki)`);
+  ok(docFiles.length >= 20 && docFiles.some((f) => /\/wiki\/MCP-Connector\.md$/.test(f)) && docFiles.some((f) => /\/docs\/ecosystem-listings\.md$/.test(f)), `the scan covers docs/ and wiki/ (${docFiles.length} files)`);
   const scanWith = (rules) => (text) => rules.filter(([re]) => re.test(text)).map(([, why]) => why);
   const scan = scanWith(OFFERS), scanPackage = scanWith(PACKAGE_OFFERS);
   ok(scan("## For humans: reports, monitors and prepaid credits\n(credits keys: https://agent402.tools/credits)").length === 2, "control: the retired heading and key pointer are both reported");
@@ -70,7 +76,7 @@ const boot = (env) => new Promise(async (resolve) => {
   ok(scanPackage("Payment mode: card credits.").length === 1 && scanPackage("agent402PaymentMode === \"card-credits\"").length === 1, "control: the bare payment-mode word, with a space or a hyphen, is reported");
   ok(scanPackage("a card credits key already issued keeps working\nprepaid credits: a key already issued\na prepaid card-credits key issued at the credits page").length === 0, "control: a line that says the key is issued is not an offer");
   ok(packageFiles.some((f) => /\/mcp\/index\.js$/.test(f)) && packageFiles.some((f) => /\/adapters\/eliza\/index\.js$/.test(f)) && packageFiles.some((f) => /\/client\/index\.js$/.test(f)), "the package scan covers the mcp, adapter and client code");
-  const hits = files.flatMap((f) => (packageFiles.includes(f) ? scanPackage : scan)(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
+  const hits = files.flatMap((f) => (packageFiles.includes(f) || docFiles.includes(f) ? scanPackage : scan)(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
   ok(hits.length === 0, `no static surface offers credits for sale${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
 }
 
