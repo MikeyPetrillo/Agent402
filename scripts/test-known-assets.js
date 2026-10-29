@@ -63,5 +63,24 @@ ok(acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1500000", extra: { 
 ok(acceptUsd({ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1" }) === null, "an unknown asset cannot be priced");
 ok(knownAsset("eip155:8453", BASE.toLowerCase()) && !knownAsset("stellar:pubnet", KNOWN_ASSETS["stellar:pubnet"][0].asset.toLowerCase()), "EVM addresses match without case; Stellar ones exactly");
 
+// A table change ships only with a version bump: scripts/known-assets-pins.json
+// holds the table's sha256 at the package version it was pinned at (no
+// network: the published tarball is not read). A table that differs from its
+// pin needs a version past the pinned one, then
+// `node scripts/test-known-assets.js --write` to re-pin; a bump alone re-pins nothing.
+{
+  const { createHash } = await import("node:crypto");
+  const { writeFileSync } = await import("node:fs");
+  const PINS = join(ROOT, "scripts/known-assets-pins.json");
+  const pins = JSON.parse(readFileSync(PINS, "utf8"));
+  const current = Object.fromEntries(COPIES.map((p, i) => [p.split("/")[0], { version: JSON.parse(readFileSync(join(ROOT, p.split("/")[0], "package.json"), "utf8")).version, sha256: createHash("sha256").update(texts[i]).digest("hex") }]));
+  if (process.argv.includes("--write")) { writeFileSync(PINS, JSON.stringify(current, null, 2) + "\n"); Object.assign(pins, current); console.log(`wrote ${PINS}`); }
+  for (const [dir, now] of Object.entries(current)) {
+    const pin = pins[dir] || {};
+    ok(now.sha256 === pin.sha256 || now.version !== pin.version, `${dir}/known-assets.js changed since ${pin.version || "?"}, so ${dir}/package.json must bump its version`);
+    ok(now.sha256 === pin.sha256, `${dir} pin records its table at ${pin.version || "?"} (after the bump, run with --write)`);
+  }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
