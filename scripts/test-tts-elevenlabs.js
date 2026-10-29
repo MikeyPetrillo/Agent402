@@ -4,8 +4,8 @@
 // stubbed fetch; the format encoding runs the real local ffmpeg.
 //
 // What it pins:
-//   - the money bound: 2,000 chars at the private per-char row stays within
-//     70% of each tier's price,
+//   - the money bound: the cap at the private per-char row stays within 70%
+//     of each tier's quote at the cap (every length: test-tts-margins.js),
 //     and each Scribe-backed duration cap within 70% of its tier;
 //   - the ten voice names map to ten DISTINCT ElevenLabs voices (the first
 //     replacement chain was turned down for folding them onto five or one);
@@ -17,7 +17,7 @@
 //     the backup's nearest and every format still served; the first backup
 //     gives nine of the ten names their own voice id (coral and sage share
 //     one); a bad request is a 400 and never reaches a backup.
-import { TTS_TOOLS, TTS_TIERS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
+import { TTS_TOOLS, TTS_TIERS, ttsQuoteUsd, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
@@ -57,7 +57,8 @@ const throwsWith = async (fn) => { try { await fn(); return null; } catch (e) { 
 // --- the money bound -------------------------------------------------------
 for (const slug of ["tts", "tts-hd"]) {
   const t = TTS_TIERS[slug];
-  const price = Number(bySlug[slug].price.replace("$", ""));
+  // The quoted price of the longest call this tier serves.
+  const price = ttsQuoteUsd(slug, t.maxChars);
   ok(t.chain[0] === t.model, `${slug}: the documented model is the first link`);
   for (const model of t.chain) {
     const row = upstreamCosts().speech[model];
@@ -108,8 +109,8 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(e?.statusCode === 400 && /or a named voice: .*george/.test(e.message) && calls.length === 0, "an unknown voice is a 400 listing both sets, before any upstream call");
   const lite = await throwsWith(() => run("tts-lite", { text: "hi", voice: "george" }));
   ok(lite?.statusCode === 400, "ElevenLabs names are refused on tts-lite, which is not ElevenLabs");
-  const long = await throwsWith(() => run("tts", { text: "x".repeat(2001) }));
-  ok(long?.statusCode === 400 && calls.length === 0, "2,001 chars is refused before any upstream call");
+  const long = await throwsWith(() => run("tts", { text: "x".repeat(TTS_TIERS.tts.maxChars + 1) }));
+  ok(long?.statusCode === 400 && calls.length === 0, `${TTS_TIERS.tts.maxChars + 1} chars is refused before any upstream call`);
 }
 
 // --- a full encoder pool queues, never refuses (the speech is already bought) -
@@ -314,7 +315,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const served = await run("tts", { text: "hi", voice: "nova" });
   ok(served.model === FIRST_BACKUP && served.voice === firstBackup.map.nova, `a throttle is served by ${served.model} (voice ${served.voice}), never an error`);
   for (const slug of ["tts", "tts-hd"]) {
-    const price = Number(bySlug[slug].price.replace("$", ""));
+    const price = ttsQuoteUsd(slug, TTS_TIERS[slug].maxChars);
     for (const id of TTS_BACKUP_MODELS) {
       const row = upstreamCosts().speech[id];
       ok(Number.isFinite(row) && row * TTS_TIERS[slug].maxChars <= price * 0.7 + 1e-12, `${slug}: backup ${id} fits within 70% of $${price}`);

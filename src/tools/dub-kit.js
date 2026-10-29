@@ -9,15 +9,18 @@
 // asked for (its voices, formats, cap, chain and backups, unchanged). Neither
 // inner call is a second payment: the buyer pays this route's price once.
 //
-// PRICE. The sum of the two tiers it composes, read from their tool
-// definitions at module load, never typed: a tier repriced in its kit
-// reprices this route with it. `tier: "hd"` composes /api/tts-hd instead of
-// /api/tts, so the route carries a per-request `quote` (the gates price the
-// body the handler serves) between the standard sum and the hd sum.
+// PRICE. The sum of the two tiers it composes, read from their kits at module
+// load, never typed: the translate tier's list price plus the speech tier's
+// per-request quote at DUB_MAX_CHARS (the most a dub can speak), so a tier
+// repriced in its kit reprices this route with it. `tier: "hd"` composes
+// /api/tts-hd instead of /api/tts, so the route carries a per-request `quote`
+// (the gates price the body the handler serves) between the standard sum and
+// the hd sum.
 //
-// CAP. The speech tier's character cap applies to the translated text. The
-// source text is checked against that cap, with the voice and the format,
-// before any model call, so a text that cannot be spoken costs nothing; a
+// CAP. DUB_MAX_CHARS applies to the source text and to the translated text
+// (the translate tier's output cap holds a translation of that length). The
+// source text is checked against it, with the voice and the format, before
+// any model call, so a text that cannot be spoken costs nothing; a
 // translation that comes out over the cap is a 422 (uncharged).
 //
 // FAILURE. A failed step answers 4xx/5xx naming the step, and a status of
@@ -29,7 +32,7 @@
 // `json: 1` or `format: "json"` answers JSON instead, the audio base64 in it.
 
 import { LLM_GATEWAY_TOOLS, TIERS as GATEWAY_TIERS } from "./llm-gateway-kit.js";
-import { TTS_TOOLS, TTS_TIERS, VOICES, FORMATS, FORMAT_CONTENT_TYPES, ELEVENLABS_VOICES, validateInput as validateTtsInput, makeTtsHandler } from "./tts-kit.js";
+import { TTS_TOOLS, VOICES, FORMATS, FORMAT_CONTENT_TYPES, ELEVENLABS_VOICES, validateInput as validateTtsInput, makeTtsHandler, ttsQuoteUsd } from "./tts-kit.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 function bad(message, statusCode = 400) {
@@ -46,10 +49,14 @@ export const DUB_TIERS = Object.freeze({ standard: "tts", hd: "tts-hd" });
 const ttsDefOf = (tier) => TTS_TOOLS.find((t) => t.slug === DUB_TIERS[tier]);
 for (const tier of Object.keys(DUB_TIERS)) if (!ttsDefOf(tier)) throw new Error(`dub-kit: ${DUB_TIERS[tier]} missing from TTS_TOOLS`);
 
+/** The most characters a dub speaks: the cap on the source text and on its
+ *  translation, and the length its speech step is priced at. */
+export const DUB_MAX_CHARS = 2_000;
 const priceUsdOf = (def) => Number(String(def.price).replace(/[^0-9.]/g, "")) || 0;
-/** The price of a dub tier: the translate tier's price plus its speech tier's. */
+/** The price of a dub tier: the translate tier's price plus its speech tier's
+ *  quote at DUB_MAX_CHARS. */
 export function dubPriceUsd(tier = "standard") {
-  return Math.round((priceUsdOf(translateDef) + priceUsdOf(ttsDefOf(tier))) * 1e6) / 1e6;
+  return Math.round((priceUsdOf(translateDef) + ttsQuoteUsd(DUB_TIERS[tier], DUB_MAX_CHARS)) * 1e6) / 1e6;
 }
 const priceLabel = (tier) => `$${dubPriceUsd(tier).toFixed(3)}`;
 
@@ -141,10 +148,11 @@ async function dub(input) {
   const tier = input.tier === undefined ? "standard" : String(input.tier).trim().toLowerCase();
   if (!Object.hasOwn(DUB_TIERS, tier)) throw bad(`Unknown tier "${tier}". Supported: ${Object.keys(DUB_TIERS).join(", ")}`);
   const ttsSlug = DUB_TIERS[tier];
-  const cap = TTS_TIERS[ttsSlug].maxChars;
+  const cap = DUB_MAX_CHARS;
 
   const text = typeof input.text === "string" ? input.text.trim() : "";
   if (!text) throw bad('"text" is required - the text to translate and speak');
+  if (text.length > cap) throw bad(`Text too long (${text.length} chars). A dub allows up to ${cap} chars`);
   const target = normalizeLanguage(input.targetLanguage);
   if (!target) throw bad('"targetLanguage" is required: a BCP-47 tag (es, pt-BR, zh-Hans) or an English language name (Spanish, Brazilian Portuguese)');
   let source = null;
@@ -171,7 +179,7 @@ async function dub(input) {
   if (!translation) throw stepError("translate", bad("the model returned no translation", 502));
   if (choice?.finish_reason === "length") throw stepError("translate", bad("the translation was cut off at the model's output limit; send a shorter text", 502));
   if (translation.length > cap) {
-    throw bad(`The translation is ${translation.length} chars, over the ${cap}-char cap of the ${ttsSlug} tier; send a shorter text. Nothing was charged.`, 422);
+    throw bad(`The translation is ${translation.length} chars, over the ${cap}-char cap of a dub; send a shorter text. Nothing was charged.`, 422);
   }
   const detected = (reported && normalizeLanguage(reported)?.tag) || source?.tag || null;
 
@@ -198,7 +206,7 @@ async function dub(input) {
   };
 }
 
-const standardCap = TTS_TIERS[DUB_TIERS.standard].maxChars;
+const standardCap = DUB_MAX_CHARS;
 export const DUB_TOOLS = [
   {
     route: "POST /api/dub",

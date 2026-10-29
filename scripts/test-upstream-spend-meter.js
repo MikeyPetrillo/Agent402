@@ -25,7 +25,7 @@ delete process.env.TYPESAFE_API_KEY;
 
 const U = await import("../src/upstream-costs.js");
 const PH = await import("../src/posthog.js");
-const { TTS_TOOLS, TTS_BACKUP_MODELS, __resetTtsBreakerForTest } = await import("../src/tools/tts-kit.js");
+const { TTS_TOOLS, TTS_BACKUP_MODELS, ttsQuoteUsd, __resetTtsBreakerForTest } = await import("../src/tools/tts-kit.js");
 const { STT_TIERS, makeMultipartHandler } = await import("../src/tools/stt-kit.js");
 const { IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
 const { EMBED_TOOLS } = await import("../src/tools/embed-kit.js");
@@ -97,7 +97,7 @@ try {
     const out = await bySlug(TTS_TOOLS, "tts").handler({ text, format: "mp3" });
     restore();
     ok(out.model === "elevenlabs/eleven-v4-turbo", "tts served on the primary ElevenLabs link");
-    recorded(await take(), { source: "speech", usd: text.length * T.speech["elevenlabs/eleven-v4-turbo"], tier: "tts", model: "elevenlabs/eleven-v4-turbo", priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts");
+    recorded(await take(), { source: "speech", usd: text.length * T.speech["elevenlabs/eleven-v4-turbo"], tier: "tts", model: "elevenlabs/eleven-v4-turbo", priceUsd: ttsQuoteUsd("tts", text.length) }, "tts (priced at the quote for the text)");
   }
   // ---- tts served by a backup speech model: priced at THAT row ----
   {
@@ -108,7 +108,7 @@ try {
     const out = await bySlug(TTS_TOOLS, "tts").handler({ text, format: "mp3" });
     restore();
     ok(out.model === backup && out.provider === "openrouter", `the backup spoke (${out.model})`);
-    recorded(await take(), { source: "speech", usd: text.length * T.speech[backup], tier: "tts", model: backup, priceUsd: priceOf(TTS_TOOLS, "tts") }, "tts backup");
+    recorded(await take(), { source: "speech", usd: text.length * T.speech[backup], tier: "tts", model: backup, priceUsd: ttsQuoteUsd("tts", text.length) }, "tts backup");
   }
   // ---- no rate row for the model that spoke: served, nothing metered, the event says unreported ----
   {

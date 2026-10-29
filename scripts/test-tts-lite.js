@@ -3,7 +3,7 @@
 // request/response contract as the two OpenAI tiers, at a tenth of the price.
 // Offline - the upstream is a stubbed fetch, so this asserts the contract and
 // the money bound, never a live voice.
-import { TTS_TOOLS } from "../src/tools/tts-kit.js";
+import { TTS_TOOLS, TTS_TIERS } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -31,7 +31,8 @@ process.env.OPENROUTER_API_KEY = "test-key";
   const worst = upstreamCosts().speech[kokoro.id] * cap;
   ok(price === 0.005, `the lite tier is $0.005 (got ${lite.price})`);
   ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is within the margin rule on $${price}`);
-  ok(worst * 10 < Number(full.price.replace("$", "")), "and an order of magnitude under the premium tier it sits beside");
+  // The premium tier is quoted from the text: compare the same text at the lite cap.
+  ok(worst * 10 < full.quote({ text: "x".repeat(cap) }), "and an order of magnitude under the premium tier's quote for the same text");
 }
 
 // --- the contract: same shape in, same shape out ---------------------------
@@ -81,7 +82,8 @@ process.env.OPENROUTER_API_KEY = "test-key";
 
 // --- the premium tiers (ElevenLabs since 2026-10-07; test-tts-elevenlabs.js) --
 {
-  ok(Number(full.price.replace("$", "")) > Number(lite.price.replace("$", "")) * 10, "the premium tier stays well above the lite tier");
+  const atLiteCap = { text: "x".repeat(TTS_TIERS["tts-lite"].maxChars) };
+  ok(full.quote(atLiteCap) > Number(lite.price.replace("$", "")) * 10, "for a text at the lite cap, the premium tier's quote stays well above the lite tier");
   ok(/tts-lite/.test(full.description), "the premium description names the cheaper sibling, so a buyer can find it");
   ok(full.discovery.output.example.model.startsWith("elevenlabs/"), "and documents the ElevenLabs model it serves");
 }

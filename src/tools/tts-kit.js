@@ -2,9 +2,21 @@
 // Returns base64-encoded audio.
 //
 // Tiers (prices live on each tool below):
-//   tts-lite: Kokoro-82M via OpenRouter (800 chars) [OPENROUTER_API_KEY]
-//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars)
-//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (2000 chars)
+//   tts-lite: Kokoro-82M via OpenRouter (800 chars, flat) [OPENROUTER_API_KEY]
+//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (5000 chars, quoted)
+//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (5000 chars, quoted)
+//
+// PER-REQUEST QUOTE: the two ElevenLabs tiers bill upstream per input
+// character, so each is priced from the text it is sent: a floor plus a
+// per-character rate, rounded up to the next $0.001 (ttsQuoteUsd). The rate
+// is derived from two anchors per tier (the floor, and the price at
+// TTS_QUOTE_ANCHOR_CHARS), never typed. The tool's `quote` is the x402 price
+// function for the 402 and the paid retry (src/payments.js acceptsForItem),
+// and the Tempo, card and credits gates price through the same quote
+// (server.js quotedPriceUsd); per-chain floors and premiums sit on top. The
+// cap is the smallest request limit across each tier's ElevenLabs links (5,000
+// on Eleven v3), so the quote is bounded by quoteMaxUsd. The margin bound at
+// every length is pinned in scripts/test-tts-quote.js against the private rows.
 //
 // ELEVENLABS (2026-10-07): the two premium tiers moved from OpenAI speech to
 // ElevenLabs over the OpenRouter speech wire. The first replacement chain was
@@ -70,12 +82,47 @@ const TIERS = {
   // `chain`: ElevenLabs models at the SAME per-char rate, tried in order after
   // a server error or a connection that never opened (both unbilled). A 429
   // or a refusal stops the walk and opens the breaker. Same 21 voices on every link.
-  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000,
+  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 5000,
                 chain: ["elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-turbo-v2.5", "elevenlabs/eleven-flash-v2.5"] },
-  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000,
+  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 5000,
                 chain: ["elevenlabs/eleven-v4", "elevenlabs/eleven-v3", "elevenlabs/eleven-multilingual-v2"] },
 };
 export const TTS_TIERS = TIERS;
+
+// --- the per-request quote ---------------------------------------------------
+// Two anchors per quoted tier, in thousandths of a dollar: the floor, and the
+// price at TTS_QUOTE_ANCHOR_CHARS. The per-character rate is the slope
+// between them; the HD tier is twice the standard tier at both anchors.
+export const TTS_QUOTE_ANCHOR_CHARS = 2_000;
+const TTS_FLOOR_MILLI = 5;    // $0.005
+const TTS_ANCHOR_MILLI = 120; // $0.120 at TTS_QUOTE_ANCHOR_CHARS
+const TTS_HD_MULTIPLE = 2;
+export const TTS_QUOTE = Object.freeze({
+  tts: Object.freeze({ floorMilli: TTS_FLOOR_MILLI, anchorMilli: TTS_ANCHOR_MILLI }),
+  "tts-hd": Object.freeze({ floorMilli: TTS_FLOOR_MILLI * TTS_HD_MULTIPLE, anchorMilli: TTS_ANCHOR_MILLI * TTS_HD_MULTIPLE }),
+});
+/** The USD quote of a quoted tier for `chars` characters: floor plus rate x
+ *  chars, rounded UP to the next $0.001. Integer arithmetic in thousandths
+ *  (the numerator over TTS_QUOTE_ANCHOR_CHARS), so 2,000 characters is the
+ *  anchor exactly. Clamped to the tier's cap: a longer text is refused by the
+ *  handler before any spend, and its 402 never quotes past quoteMaxUsd. */
+export function ttsQuoteUsd(tierSlug, chars) {
+  const q = TTS_QUOTE[tierSlug];
+  if (!q) throw new Error(`ttsQuoteUsd: ${tierSlug} is not a quoted tier`);
+  const n = Math.min(Math.max(0, Math.floor(Number(chars) || 0)), TIERS[tierSlug].maxChars);
+  const a = TTS_QUOTE_ANCHOR_CHARS;
+  const numerator = q.floorMilli * a + (q.anchorMilli - q.floorMilli) * n;
+  return Math.floor((numerator + a - 1) / a) / 1000;
+}
+/** The characters a request is quoted on: the text the handler speaks
+ *  (trimmed, counted as validateInput counts it). */
+export const ttsQuoteChars = (input) => (input && typeof input.text === "string" ? input.text.trim().length : 0);
+/** The quote in words, for the descriptions and the price surfaces. */
+export function ttsQuoteFormula(tierSlug) {
+  const q = TTS_QUOTE[tierSlug];
+  const per1k = Number(((q.anchorMilli - q.floorMilli) / TTS_QUOTE_ANCHOR_CHARS).toFixed(6));
+  return `$${(q.floorMilli / 1000).toFixed(3)} plus $${per1k} per 1,000 characters of text, rounded up to the next $0.001 (${TTS_QUOTE_ANCHOR_CHARS.toLocaleString("en-US")} characters: $${(q.anchorMilli / 1000).toFixed(3)})`;
+}
 
 // One distinct ElevenLabs voice per standard voice name, chosen by character
 // (neutral, warm, deep, British, bright...). Buyers may also name any of the
@@ -360,8 +407,13 @@ async function callBackups(text, voice, format, deadline, first) {
   throw last || Object.assign(bad("Speech upstream unavailable - retry shortly", 503), { outage: false });
 }
 
-// The list price of a tier, read from its own tool def so it is never typed twice.
-const tierPriceUsd = (slug) => { const t = TTS_TOOLS.find((x) => x.slug === slug); return t ? Number(String(t.price).replace("$", "")) || 0 : 0; };
+// The price of a served call: the quote for the characters spoken on a quoted
+// tier, else the list price read from the tier's own tool def.
+const tierPriceUsd = (slug, chars) => {
+  if (TTS_QUOTE[slug]) return ttsQuoteUsd(slug, chars);
+  const t = TTS_TOOLS.find((x) => x.slug === slug);
+  return t ? Number(String(t.price).replace("$", "")) || 0 : 0;
+};
 
 /** Speech bills per character at the private rate of the model that SPOKE
  *  (a backup link bills at its own row), so the spend is
@@ -373,7 +425,7 @@ function recordSpeechSpend(tierSlug, out) {
     const rate = upstreamCosts().speech?.[out?.model];
     const chars = Number(out?.chars) || 0;
     const upstreamUsd = rate != null && chars > 0 ? Math.round(chars * rate * 1e6) / 1e6 : null;
-    capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: tierPriceUsd(tierSlug), upstreamUsd, source: "speech" });
+    capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: tierPriceUsd(tierSlug, chars), upstreamUsd, source: "speech" });
   } catch { /* telemetry must never fail a served response */ }
 }
 
@@ -414,6 +466,33 @@ function makeServe(tierSlug) {
  *  spends what that budget has left. Records the spend like the route does. */
 export const makeTtsHandler = makeHandler;
 export const __makeHandlerForTest = makeHandler;
+
+/** The route handler of a quoted tier: a request gated at a quote below the
+ *  quote of the text being served (req.__meteredQuoteUsd, stashed by the gate
+ *  that priced it) is refused before any model call, so a call is never
+ *  served past what was paid. */
+function makeRouteHandler(tierSlug) {
+  const inner = makeHandler(tierSlug);
+  if (!TTS_QUOTE[tierSlug]) return inner;
+  return async (input, req) => {
+    const gated = Number(req?.__meteredQuoteUsd);
+    if (Number.isFinite(gated) && gated > 0) {
+      const q = ttsQuoteUsd(tierSlug, ttsQuoteChars(input));
+      if (q > gated + 1e-9) throw bad(`This request was quoted at $${gated} but the text being served quotes $${q}. Nothing was charged; resend the request exactly as it should be served.`);
+    }
+    return inner(input);
+  };
+}
+/** The tool fields of a quoted tier: its floor as the list price, the quote
+ *  function every gate prices through, the ceiling at the cap, the formula in
+ *  words, and the input check the Tempo gate runs before its relay. */
+const quotedFields = (tierSlug) => ({
+  price: `$${(TTS_QUOTE[tierSlug].floorMilli / 1000).toFixed(3)}`,
+  quote: (body) => ttsQuoteUsd(tierSlug, ttsQuoteChars(body)),
+  quoteMaxUsd: ttsQuoteUsd(tierSlug, TIERS[tierSlug].maxChars),
+  quoteFormula: ttsQuoteFormula(tierSlug),
+  validateInput: (input) => { validateInput(input, tierSlug); },
+});
 
 // The lite price, read by the /api/tts description so it is never typed twice.
 const TTS_LITE_PRICE = "$0.005";
@@ -459,16 +538,16 @@ export const TTS_TOOLS = [
     name: "Text-to-speech",
     slug: "tts",
     category: "ai",
-    price: "$0.120",
+    ...quotedFields("tts"),
     description:
-      `Convert text to speech with the eleven-v4-turbo model: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten standard voice names each map to their own voice, or name one of 21 named voices directly; the answer names the voice that spoke. 90+ languages. If the primary speech model is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
+      `Convert text to speech with the eleven-v4-turbo model, quoted per request from the text: ${ttsQuoteFormula("tts")}. Returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten standard voice names each map to their own voice, or name one of 21 named voices directly; the answer names the voice that spoke. 90+ languages. If the primary speech model is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at ${TIERS.tts.maxChars} chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
     tags: [...SHARED_TAGS, "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
+          text: { type: "string", description: `Text to convert to speech (max ${TIERS.tts.maxChars} chars)` },
           voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
@@ -485,23 +564,23 @@ export const TTS_TOOLS = [
         },
       },
     },
-    handler: makeHandler("tts"),
+    handler: makeRouteHandler("tts"),
   },
   {
     route: "POST /api/tts-hd",
     name: "Text-to-speech (HD)",
     slug: "tts-hd",
     category: "ai",
-    price: "$0.240",
+    ...quotedFields("tts-hd"),
     description:
-      "Convert text to speech with the eleven-v4 model, the most expressive speech tier (inline audio tags such as [whispering] are read as delivery cues). Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at 2000 chars. Model-backed.",
+      `Convert text to speech with the eleven-v4 model, the most expressive speech tier, quoted per request from the text: ${ttsQuoteFormula("tts-hd")}. Inline audio tags such as [whispering] are read as delivery cues. Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at ${TIERS["tts-hd"].maxChars} chars. Model-backed.`,
     tags: [...SHARED_TAGS, "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to convert to speech (max 2000 chars)" },
+          text: { type: "string", description: `Text to convert to speech (max ${TIERS["tts-hd"].maxChars} chars)` },
           voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
@@ -518,7 +597,7 @@ export const TTS_TOOLS = [
         },
       },
     },
-    handler: makeHandler("tts-hd"),
+    handler: makeRouteHandler("tts-hd"),
   },
 ];
 
