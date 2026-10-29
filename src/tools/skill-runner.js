@@ -119,11 +119,10 @@ export { PACK_PRICES };
 // ──────────────────────────────────────────────────────────────────────────
 // Parsers for natural-language pack args.
 //
-// The finance packs (loan-comparison, investment-decision, retirement-planning,
-// savings-goal) accept free-form strings like "$300,000 at 6.5% for 30 years"
-// from the prompt — the underlying finance-math tools take structured numeric
-// inputs. parseLoanString and friends pull dollars/percent/years out of the
-// string with regex. Any field they can't extract returns NaN and surfaces as
+// The loan-comparison pack accepts a free-form string like "$300,000 at 6.5%
+// for 30 years" from the prompt — the underlying finance-math tools take
+// structured numeric inputs. parseLoanString pulls dollars/percent/years out
+// of the string with regex. Any field they can't extract returns NaN and surfaces as
 // a clean per-step partial-failure in the envelope (the tool will reject
 // NaN with a 400); the agent learns which field the parser missed.
 // ──────────────────────────────────────────────────────────────────────────
@@ -153,52 +152,13 @@ function parseLoanString(s) {
   };
 }
 
-// "$500,000 ... returning $150,000/year for 5 years" → { upfront, annualReturn, years }
-function parseProjectString(s) {
-  const dollars = [..._scenario(s).matchAll(new RegExp(DOLLARS_RE.source, "g"))]
-    .map((m) => Number(m[1].replace(/,/g, "")));
-  return {
-    upfront: dollars[0] ?? NaN,
-    annualReturn: dollars[1] ?? NaN,
-    years: _years(_firstNumber(YEARS_RE, s)),
-  };
-}
-
-// "35 years old with $100,000 saved, contributing $1,500/month, retiring at 65"
-// → { currentAge, savings, monthlyContrib, retireAge, yearsToRetirement }
-function parseRetirementScenario(s) {
-  const str = _scenario(s);
-  const dollars = [...str.matchAll(new RegExp(DOLLARS_RE.source, "g"))]
-    .map((m) => Number(m[1].replace(/,/g, "")));
-  const currentAge = _firstNumber(/(?<![\d.])(\d{1,3})\s*y(?:ea)?rs?\s*old/i, str);
-  const retireAge  = _firstNumber(/retir\w{0,20}\s+at\s+(\d{1,3})(?!\d)/i, str);
-  return {
-    currentAge,
-    savings: dollars[0] ?? NaN,
-    monthlyContrib: dollars[1] ?? NaN,
-    retireAge,
-    yearsToRetirement: Number.isFinite(retireAge) && Number.isFinite(currentAge)
-      ? _years(retireAge - currentAge)
-      : NaN,
-  };
-}
-
-// "save $1,000,000 for retirement in 30 years" → { target, years }
-function parseGoalString(s) {
-  return {
-    target: _firstNumber(DOLLARS_RE, s),
-    years: _years(_firstNumber(YEARS_RE, s)),
-  };
-}
-
 // ──────────────────────────────────────────────────────────────────────────
 // Per-pack step configuration.
 //
 //   { mode: "fanout"|"chain", steps: [ { slug, mapInput(args, prior) → input } ] }
 //
-// All 39 packs have explicit entries. Any pack added to SKILL_PACKS without
-// a matching PACK_STEPS entry falls back to the auto-stub in getStepConfig
-// (every step returns 501 — the envelope is still well-formed).
+// Every live SKILL_PACKS slug has an entry (test-skill-pack-steps requires
+// it); a pack with no entry is refused by getStepConfig's caller.
 // ──────────────────────────────────────────────────────────────────────────
 // stock-history is priced per session now and takes `days`, not the old
 // range vocabulary. Every pack here used to pass range: "1y" / "2y" / "3mo",
@@ -391,26 +351,6 @@ export const PACK_STEPS = {
     ],
   },
 
-  // Forge a fresh user identity in one call: stable UUIDs (random + email-derived),
-  // a URL-safe handle, a strong password, an email hash for indexing, a signed
-  // JWT, and a display-name token. All steps key off displayName/email/secret.
-  "identity-mint": {
-    mode: "fanout",
-    steps: [
-      { slug: "uuid",       mapInput: ()  => ({ version: "7", count: "1" }) },
-      { slug: "uuid-v5",    mapInput: (a) => ({ namespace: "url", name: `mailto:${a.email}` }) },
-      { slug: "slugify",    mapInput: (a) => ({ text: a.displayName }) },
-      { slug: "password",   mapInput: ()  => ({ length: "24", symbols: "true", count: "1" }) },
-      { slug: "hash",       mapInput: (a) => ({ text: a.email.toLowerCase().trim(), algo: "sha256" }) },
-      { slug: "jwt-sign",   mapInput: (a) => ({
-          payload: { sub: a.email, name: a.displayName, iat: Math.floor(Date.now() / 1000) },
-          secret: a.signingSecret,
-          alg: "HS256",
-      }) },
-      { slug: "base64",     mapInput: (a) => ({ text: a.displayName, mode: "encode" }) },
-    ],
-  },
-
   // Validate the seven prerequisites of a sign-up form: email shape, password
   // entropy, a freshly minted user UUID, a URL slug, a salted password hash,
   // an email fingerprint, and a TOTP check. Catches weak passwords, malformed
@@ -428,102 +368,6 @@ export const PACK_STEPS = {
       { slug: "password",          mapInput: ()  => ({ length: "32", symbols: "true", count: "1" }) },
       { slug: "hash",              mapInput: (a) => ({ text: a.password, algo: "sha256" }) },
       { slug: "totp",              mapInput: (a) => ({ secret: a.totpSecret }) },
-    ],
-  },
-
-  // Prep a document for RAG ingestion: count tokens, chunk with overlap,
-  // extract entities + keywords, then express the chunks as JSONL and
-  // sanity-check against a minimal schema. All steps consume the same `doc`.
-  "rag-prep": {
-    mode: "fanout",
-    steps: [
-      { slug: "text-stats",       mapInput: (a) => ({ text: a.doc }) },
-      { slug: "token-count",      mapInput: (a) => ({ text: a.doc, model: "gpt-4o" }) },
-      { slug: "text-chunk",       mapInput: (a) => ({ text: a.doc, size: 800, overlap: 100, unit: "chars" }) },
-      { slug: "extract-entities", mapInput: (a) => ({ text: a.doc }) },
-      { slug: "keywords",         mapInput: (a) => ({ text: a.doc, limit: 15 }) },
-      { slug: "jsonl",            mapInput: (a) => ({ data: [{ doc: a.doc }], mode: "to-jsonl" }) },
-      { slug: "json-validate",    mapInput: (a) => ({
-          data: { doc: a.doc },
-          schema: { type: "object", required: ["doc"], properties: { doc: { type: "string", minLength: 1 } } },
-      }) },
-    ],
-  },
-
-  // The classic "is this JWT valid?" workflow: decode (without verifying — you
-  // need the alg to decide which verification path to take), render exp/iat in
-  // human time, compute time-to-expiry, then HMAC-verify against the supplied
-  // secret. base64+hash are long-tail follow-ups (custom-claim decoding, SHA
-  // fingerprints). Chain mode so time-convert/date-diff can read the decoded
-  // payload's exp claim from prior["jwt-decode"].
-  "jwt-forensics": {
-    mode: "chain",
-    steps: [
-      { slug: "jwt-decode",   mapInput: (a) => ({ token: a.token }) },
-      // Render exp claim as ISO/local; fall back to "now" if exp is missing so
-      // the step doesn't fail on tokens without an expiry (rare but valid).
-      { slug: "time-convert", mapInput: (_a, p) => ({ value: p["jwt-decode"]?.payload?.exp ?? "now" }) },
-      // Time-to-expiry — negative for expired tokens, positive for live ones.
-      { slug: "date-diff",    mapInput: (_a, p) => {
-          const exp = p["jwt-decode"]?.payload?.exp;
-          return { from: "now", to: exp ? Number(exp) : "now" };
-      } },
-      // The conclusive answer for HMAC-signed tokens. Non-HMAC algs (RS256
-      // etc.) fail by design — that failure surfaces as a partial-failure step.
-      { slug: "jwt-verify",   mapInput: (a) => ({ token: a.token, secret: a.secret }) },
-      // Decode the header segment as a fingerprint — catches tokens with
-      // base64-encoded custom claims in the header.
-      { slug: "base64",       mapInput: (a) => ({ text: (a.token.split(".")[0] || ""), mode: "decode" }) },
-      // sha256 fingerprint of the full token — useful for log correlation and
-      // detecting reuse without leaking the token itself.
-      { slug: "hash",         mapInput: (a) => ({ text: a.token, algo: "sha256" }) },
-    ],
-  },
-
-  // Inbound-webhook triage: pretty-print, decode any JWT auth header (will
-  // fail loudly on plain JSON bodies — that's the design signal that the
-  // body itself isn't a token), HMAC-verify the body against the shared
-  // secret, schema-check the parsed payload, translate the event timestamp,
-  // redact PII before logging, and index entities. Chain mode so json-validate
-  // / time-convert / redact / extract-entities all read the parsed body from
-  // prior["json-format"].parsed instead of re-parsing per step.
-  "webhook-debug": {
-    mode: "chain",
-    steps: [
-      { slug: "json-format",     mapInput: (a) => ({ json: a.rawBody, indent: 2 }) },
-      // Try the body as a JWT — expected to fail for JSON webhooks. The
-      // failure itself tells the agent "no JWT auth header embedded".
-      { slug: "jwt-decode",      mapInput: (a) => ({ token: a.rawBody }) },
-      // Compute the expected signature so the agent can compare against the
-      // provider's X-Hub-Signature-256 / Stripe-Signature / etc. The tool
-      // returns both hex and base64 so the agent picks the right one.
-      { slug: "hmac",            mapInput: (a) => ({ text: a.rawBody, key: a.signingSecret, algo: "sha256" }) },
-      // Minimal envelope schema — every webhook of this shape has id+type.
-      // Replace with a provider-specific schema in your own integration.
-      // json-format returns {valid, formatted} only, so parse rawBody locally
-      // for the actual payload. Try/catch keeps a malformed body from killing
-      // the whole step before json-validate gets to surface the schema gap.
-      { slug: "json-validate",   mapInput: (a) => {
-          let data = {};
-          try { data = JSON.parse(a.rawBody); } catch {}
-          return {
-            data,
-            schema: { type: "object", required: ["id", "type"], properties: {
-                id:      { type: "string" },
-                type:    { type: "string" },
-                created: { type: "integer" },
-            } },
-          };
-      } },
-      // Render the event timestamp (Stripe-style epoch seconds) as ISO + local.
-      // Defaults to "now" if no created field — keeps the step from failing.
-      { slug: "time-convert",    mapInput: (a) => {
-          let created;
-          try { created = JSON.parse(a.rawBody)?.created; } catch {}
-          return { value: created ?? "now" };
-      } },
-      { slug: "redact",          mapInput: (a) => ({ text: a.rawBody }) },
-      { slug: "extract-entities", mapInput: (a) => ({ text: a.rawBody }) },
     ],
   },
 
@@ -578,120 +422,6 @@ export const PACK_STEPS = {
       // Redact-before-log: the redacted string is the only version that may
       // touch the log pipeline.
       { slug: "redact", mapInput: (a) => ({ text: a.rawBody }) },
-    ],
-  },
-
-  // Deterministic WCAG 2.x first-pass: meta (title + lang), strip-to-text,
-  // link enumeration, heading order, color contrast on the supplied brand
-  // pair, reading grade, and final shape stats. Chain mode so readability and
-  // text-stats reuse the stripped text from prior["html-strip"] instead of
-  // re-stripping. color-contrast keys off the user-supplied fg/bg pair (we
-  // don't try to compute CSS from a plain HTML string).
-  "a11y-audit": {
-    mode: "chain",
-    steps: [
-      { slug: "html-meta",   mapInput: (a) => ({ html: a.html }) },
-      { slug: "html-strip",  mapInput: (a) => ({ html: a.html }) },
-      { slug: "html-links",  mapInput: (a) => ({ html: a.html }) },
-      { slug: "html-select", mapInput: (a) => ({ html: a.html, selector: "h1, h2, h3, h4, h5, h6" }) },
-      { slug: "color-contrast", mapInput: (a) => ({ foreground: a.foreground, background: a.background }) },
-      { slug: "readability", mapInput: (_a, p) => ({ text: p["html-strip"]?.text ?? "" }) },
-      { slug: "text-stats",  mapInput: (_a, p) => ({ text: p["html-strip"]?.text ?? "" }) },
-    ],
-  },
-
-  // Universal format bridge: YAML → JSON → deep-merge with overrides →
-  // diff (so you can prove which keys changed) → flatten (dot-path for
-  // env-var injection) → emit CSV (audit trail) and YAML (canonical config).
-  // Chain mode is essential — every step except the YAML parse reads the
-  // previous step's parsed JSON. overridesJson arrives as a JSON string;
-  // json-merge accepts a JSON string under either input so we pass it raw.
-  "data-interchange": {
-    mode: "chain",
-    steps: [
-      { slug: "yaml-to-json",  mapInput: (a) => ({ yaml: a.baseYaml }) },
-      { slug: "json-merge",    mapInput: (a, p) => ({
-          a: p["yaml-to-json"]?.json ?? {},
-          b: a.overridesJson,
-      }) },
-      // Diff base vs merged — produces the rollout audit trail.
-      { slug: "json-diff",     mapInput: (_a, p) => ({
-          a: p["yaml-to-json"]?.json ?? {},
-          b: p["json-merge"]?.result ?? {},
-      }) },
-      // Flatten the merged config — gives you the env-var key=value envelope.
-      { slug: "json-flatten",  mapInput: (_a, p) => ({
-          json: p["json-merge"]?.result ?? {},
-          mode: "flatten",
-      }) },
-      // CSV needs a non-empty array of objects — wrap the flat dot-path
-      // object as a single row so every key becomes a column.
-      { slug: "json-to-csv",   mapInput: (_a, p) => ({
-          json: [p["json-flatten"]?.result ?? {}],
-      }) },
-      // YAML emission — the canonical config-system / git-commit output.
-      { slug: "json-to-yaml",  mapInput: (_a, p) => ({ json: p["json-merge"]?.result ?? {} }) },
-    ],
-  },
-
-  // Standard data-profiling workup over a CSV: load rows, sanity-check column
-  // access, then run four stats-kit tools (descriptive → outliers → pairwise
-  // correlation → linear regression) over the two named numeric columns. The
-  // stats steps extract the columns directly from prior["csv-to-json"].rows in
-  // JS — json-query supports indexed paths only, not column wildcards, so we
-  // use it as a discovery primitive (first-row value) and do the column-pull
-  // in mapInput where the agent can see what was extracted.
-  "csv-profile": {
-    mode: "chain",
-    steps: [
-      { slug: "csv-to-json", mapInput: (a) => ({ csv: a.csv }) },
-      // Discovery / sanity-check: confirm the named column exists by pulling
-      // the first row's value. Fails cleanly if columnA isn't a header.
-      { slug: "json-query",  mapInput: (a, p) => ({
-          json: p["csv-to-json"]?.rows ?? [],
-          path: `[0].${a.columnA}`,
-      }) },
-      { slug: "stats-summary", mapInput: (a, p) => ({
-          values: (p["csv-to-json"]?.rows ?? []).map((r) => Number(r[a.columnA])).filter((n) => Number.isFinite(n)),
-      }) },
-      { slug: "outliers",     mapInput: (a, p) => ({
-          values: (p["csv-to-json"]?.rows ?? []).map((r) => Number(r[a.columnA])).filter((n) => Number.isFinite(n)),
-      }) },
-      // Pairwise correlation between the two named columns — drops any row
-      // where either value isn't numeric so the series stay aligned.
-      { slug: "correlation",  mapInput: (a, p) => {
-          const rows = p["csv-to-json"]?.rows ?? [];
-          const pairs = rows
-            .map((r) => [Number(r[a.columnA]), Number(r[a.columnB])])
-            .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
-          return { x: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
-      } },
-      // Baseline OLS of columnB on columnA — if this can't fit, no model can.
-      { slug: "linear-regression", mapInput: (a, p) => {
-          const rows = p["csv-to-json"]?.rows ?? [];
-          const pairs = rows
-            .map((r) => [Number(r[a.columnA]), Number(r[a.columnB])])
-            .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
-          return { x: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
-      } },
-    ],
-  },
-
-  // Cross-TZ scheduling: anchor → translate → validate → project → narrate → recur → confirm.
-  // attendeeTzs is comma-separated; first TZ is canonical, the agent re-calls the
-  // pack with a different first TZ to see another attendee's perspective.
-  "meeting-scheduler": {
-    mode: "chain",
-    steps: [
-      { slug: "time",          mapInput: (a) => ({ tz: String(a.attendeeTzs ?? "").split(",")[0]?.trim() || "UTC" }) },
-      { slug: "time-convert",  mapInput: (a) => ({ value: a.proposedTime, tz: String(a.attendeeTzs ?? "").split(",")[0]?.trim() || "UTC" }) },
-      { slug: "business-days", mapInput: (a) => ({ from: new Date().toISOString().slice(0, 10), to: String(a.proposedTime ?? "").slice(0, 10) }) },
-      { slug: "add-time",      mapInput: (a) => ({ date: a.proposedTime, duration: a.durationStr || "1h" }) },
-      { slug: "relative-time", mapInput: (a) => ({ time: a.proposedTime }) },
-      // Default recurrence proxy: "every Monday 14:00 UTC" preview. Agents that
-      // know the actual recurrence rule will re-call cron-next directly.
-      { slug: "cron-next",     mapInput: (a) => ({ expr: "0 14 * * 1", count: 5, from: a.proposedTime }) },
-      { slug: "date-diff",     mapInput: (a) => ({ from: new Date().toISOString(), to: a.proposedTime }) },
     ],
   },
 
@@ -765,127 +495,6 @@ export const PACK_STEPS = {
           const periods = Math.round((termYears || 0) * 12);
           const cashflows = [principal];
           for (let i = 0; i < periods; i++) cashflows.push(-payment);
-          return { cashflows };
-      } },
-    ],
-  },
-
-  // Capital-budgeting decision: NPV at hurdle → IRR → passive alternative →
-  // levered case. Parses "$500,000 ... returning $150,000/year for 5 years".
-  "investment-decision": {
-    mode: "chain",
-    steps: [
-      { slug: "npv",               mapInput: (a) => {
-          const { upfront, annualReturn, years } = parseProjectString(a.project);
-          const rate = Number(a.hurdleRate ?? 0.10) || 0.10;
-          const cashflows = [-upfront];
-          for (let i = 0; i < years; i++) cashflows.push(annualReturn);
-          return { cashflows, discountRate: rate };
-      } },
-      { slug: "irr",               mapInput: (a) => {
-          const { upfront, annualReturn, years } = parseProjectString(a.project);
-          const cashflows = [-upfront];
-          for (let i = 0; i < years; i++) cashflows.push(annualReturn);
-          return { cashflows };
-      } },
-      // Passive alternative: what does the upfront capital earn at a 7%
-      // benchmark return over the same horizon? If the project's NPV doesn't
-      // beat passive, the hurdle rate is unrealistically low.
-      { slug: "compound-interest", mapInput: (a) => {
-          const { upfront, years } = parseProjectString(a.project);
-          return { principal: upfront, annualRate: 0.07, years, compoundingPerYear: 1 };
-      } },
-      // Levered case: assume 80% debt at 8% over the project horizon.
-      { slug: "loan-payment",      mapInput: (a) => {
-          const { upfront, years } = parseProjectString(a.project);
-          return { principal: upfront * 0.8, annualRate: 0.08, termYears: years };
-      } },
-      { slug: "amortization",      mapInput: (a) => {
-          const { upfront, years } = parseProjectString(a.project);
-          return { principal: upfront * 0.8, annualRate: 0.08, termYears: years, maxRows: 12 };
-      } },
-    ],
-  },
-
-  // Retirement plan: accumulation (compound-interest, npv) → drawdown
-  // (loan-payment, amortization). Parses scenario string for currentAge,
-  // savings, monthlyContrib, retireAge.
-  "retirement-planning": {
-    mode: "chain",
-    steps: [
-      // Project current balance forward to retirement.
-      { slug: "compound-interest", mapInput: (a) => {
-          const { savings, yearsToRetirement } = parseRetirementScenario(a.scenario);
-          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
-          return { principal: savings, annualRate: rate, years: yearsToRetirement, compoundingPerYear: 12 };
-      } },
-      // Target nest egg from expected spending: 30 years at $48k/yr drawdown
-      // discounted at 5%. The |NPV| is the lump sum needed at retirement.
-      { slug: "npv",               mapInput: () => {
-          const cashflows = [0];
-          for (let i = 0; i < 30; i++) cashflows.push(-48000);
-          return { cashflows, discountRate: 0.05 };
-      } },
-      // Back-solve required return if monthly contribution is fixed: cashflow
-      // stream is [-savings, -annualContrib×N, +nestEgg].
-      { slug: "irr",               mapInput: (a, p) => {
-          const { savings, monthlyContrib, yearsToRetirement } = parseRetirementScenario(a.scenario);
-          const projected = Number(p["compound-interest"]?.futureValue) || 0;
-          const cashflows = [-savings];
-          for (let i = 0; i < yearsToRetirement; i++) cashflows.push(-monthlyContrib * 12);
-          cashflows.push(projected);
-          return { cashflows };
-      } },
-      // Drawdown: sustainable monthly withdrawal = PMT(nest egg, 5%, 30y, m12).
-      { slug: "loan-payment",      mapInput: (_a, p) => {
-          const projected = Number(p["compound-interest"]?.futureValue) || 0;
-          return { principal: projected, annualRate: 0.05, termYears: 30, paymentsPerYear: 12 };
-      } },
-      // Year-by-year retirement portfolio balance.
-      { slug: "amortization",      mapInput: (_a, p) => {
-          const projected = Number(p["compound-interest"]?.futureValue) || 0;
-          return { principal: projected, annualRate: 0.05, termYears: 30, maxRows: 30 };
-      } },
-    ],
-  },
-
-  // Savings goal: project no-contrib baseline → solve required PMT via the
-  // PV-discount trick → real-dollar target (3% inflation) → back-solved return.
-  "savings-goal": {
-    mode: "chain",
-    steps: [
-      // Per-dollar future-value multiplier: project $1 forward at the expected
-      // return for the horizon. Result.futureValue is the multiplier — the
-      // agent multiplies by actual starting savings to get the no-contrib
-      // baseline, then subtracts from target to get the gap.
-      { slug: "compound-interest", mapInput: (a) => {
-          const { years } = parseGoalString(a.goal);
-          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
-          return { principal: 1, annualRate: rate, years, compoundingPerYear: 12 };
-      } },
-      // Required monthly contribution via PV-discount trick: PV_of_target /
-      // (1+r)^n is the principal that, paid as PMT, accumulates to target.
-      { slug: "loan-payment",      mapInput: (a) => {
-          const { target, years } = parseGoalString(a.goal);
-          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
-          const pv = target / Math.pow(1 + rate, years);
-          return { principal: pv, annualRate: rate, termYears: years, paymentsPerYear: 12 };
-      } },
-      // Real-dollar target: discount at 3% inflation to surface today's-dollar value.
-      { slug: "npv",               mapInput: (a) => {
-          const { target, years } = parseGoalString(a.goal);
-          const cashflows = [0];
-          for (let i = 1; i < years; i++) cashflows.push(0);
-          cashflows.push(target);
-          return { cashflows, discountRate: 0.03 };
-      } },
-      // Back-solve required return: with a $500/mo contribution, what rate
-      // hits the target? IRR of [-monthly×12 × N years, +target].
-      { slug: "irr",               mapInput: (a) => {
-          const { target, years } = parseGoalString(a.goal);
-          const cashflows = [];
-          for (let i = 0; i < years; i++) cashflows.push(-500 * 12);
-          cashflows.push(target);
           return { cashflows };
       } },
     ],
@@ -1839,92 +1448,6 @@ export const PACK_STEPS = {
   // Light tier — batch 2 (2026-07). All pure-CPU, PoW-eligible.
   // ──────────────────────────────────────────────────────────────────────
 
-  // Full color analysis: color info + contrast check + blindness simulation.
-  "color-palette": {
-    mode: "fanout",
-    steps: [
-      { slug: "color",           mapInput: (a) => ({ color: a.color }) },
-      { slug: "color-contrast",  mapInput: (a) => ({ foreground: a.color, background: "#ffffff" }) },
-      { slug: "color-blindness", mapInput: (a) => ({ color: a.color }) },
-    ],
-  },
-
-  // Check a password's strength + generate a strong replacement.
-  "password-audit": {
-    mode: "fanout",
-    steps: [
-      { slug: "password-strength", mapInput: (a) => ({ password: a.password }) },
-      { slug: "password",          mapInput: () => ({ length: "16", symbols: "true", count: "1" }) },
-    ],
-  },
-
-  // Generate all ID formats at once.
-  "uuid-suite": {
-    mode: "fanout",
-    steps: [
-      { slug: "uuid",    mapInput: () => ({}) },
-      { slug: "ulid",    mapInput: () => ({}) },
-      { slug: "uuid-v5", mapInput: () => ({ name: "test", namespace: "url" }) },
-    ],
-  },
-
-  // Test a regex against text + get text stats.
-  "regex-test": {
-    mode: "fanout",
-    steps: [
-      { slug: "regex",      mapInput: (a) => ({ pattern: a.pattern, text: a.text, flags: a.flags || "g" }) },
-      { slug: "text-stats", mapInput: (a) => ({ text: a.text }) },
-    ],
-  },
-
-  // Calculate + summarize + percentages.
-  "math-suite": {
-    mode: "fanout",
-    steps: [
-      { slug: "calc",       mapInput: (a) => ({ expression: a.expression }) },
-      { slug: "stats",      mapInput: (a) => ({ numbers: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
-      { slug: "percentage", mapInput: (a) => ({ op: "of", a: Number(String(a.values || "").split(",")[0]) || 0, b: Number(String(a.values || "").split(",").reduce((s, v) => s + (Number(v) || 0), 0)) || 1 }) },
-    ],
-  },
-
-  // Date calculations: diff + add + age.
-  // add-time takes a duration string (e.g. "30d", "2h", "1w") not amount/unit.
-  "date-math": {
-    mode: "fanout",
-    steps: [
-      { slug: "date-diff", mapInput: (a) => ({ from: a.from, to: a.to }) },
-      { slug: "add-time",  mapInput: (a) => ({ date: a.from, duration: "30d" }) },
-      { slug: "age",       mapInput: (a) => ({ birthdate: a.from }) },
-    ],
-  },
-
-  // Compare semantic versions.
-  "semver-check": {
-    mode: "fanout",
-    steps: [
-      { slug: "semver",    mapInput: (a) => ({ a: a.a, b: a.b }) },
-      { slug: "json-diff", mapInput: (a) => ({ a: { version: a.a }, b: { version: a.b } }) },
-    ],
-  },
-
-  // Generate placeholder text then analyze it (chain: lorem feeds text-stats).
-  "lorem-gen": {
-    mode: "chain",
-    steps: [
-      { slug: "lorem",      mapInput: (a) => ({ words: Number(a.words) || 50 }) },
-      { slug: "text-stats", mapInput: (_a, p) => ({ text: p["lorem"]?.text ?? "" }) },
-    ],
-  },
-
-  // QR code + URL validation.
-  "qr-gen": {
-    mode: "fanout",
-    steps: [
-      { slug: "qr",        mapInput: (a) => ({ text: a.text, size: 512 }) },
-      { slug: "url-parse",  mapInput: (a) => ({ url: a.text }) },
-    ],
-  },
-
   // Statistical analysis suite: summary + correlation + outliers.
   "number-crunch": {
     mode: "fanout",
@@ -1938,28 +1461,6 @@ export const PACK_STEPS = {
     ],
   },
 
-  // Financial calculators: compound interest + amortization + loan comparison.
-  "finance-calc": {
-    mode: "fanout",
-    steps: [
-      { slug: "compound-interest", mapInput: (a) => ({ principal: Number(a.principal) || 10000, annualRate: (Number(a.rate) || 7) / 100, years: Number(a.years) || 10, compoundingPerYear: 12 }) },
-      { slug: "amortization",      mapInput: (a) => ({ principal: Number(a.principal) || 300000, annualRate: (Number(a.rate) || 6.5) / 100, termYears: Number(a.years) || 30, maxRows: 12 }) },
-      { slug: "loan-payment",      mapInput: (a) => ({ principal: Number(a.principal) || 300000, annualRate: (Number(a.rate) || 6.5) / 100, termYears: Number(a.years) || 30 }) },
-    ],
-  },
-
-  // Convert text to all cases.
-  "text-transform": {
-    mode: "fanout",
-    steps: [
-      { slug: "case",    mapInput: (a) => ({ text: a.text, to: "camel" }) },
-      { slug: "slugify", mapInput: (a) => ({ text: a.text }) },
-      // Second case call with snake — slug collision in the steps array is
-      // intentional; nothing downstream reads prior["case"].
-      { slug: "case",    mapInput: (a) => ({ text: a.text, to: "snake" }) },
-    ],
-  },
-
   // Markdown round-trip: markdown → HTML → markdown (chain).
   "markdown-convert": {
     mode: "chain",
@@ -1968,36 +1469,6 @@ export const PACK_STEPS = {
       { slug: "html-to-markdown",  mapInput: (_a, p) => ({ html: p["markdown-to-html"]?.html ?? "" }) },
       // Advertised and never run until 2026-09-02: the diff IS the fidelity report.
       { slug: "text-diff",         mapInput: (a, p) => ({ a: String(a.markdown ?? ""), b: String(p["html-to-markdown"]?.markdown ?? "") }) },
-    ],
-  },
-
-  // XML → JSON + format (chain).
-  "xml-json": {
-    mode: "chain",
-    steps: [
-      { slug: "xml-to-json", mapInput: (a) => ({ xml: a.xml }) },
-      { slug: "json-format", mapInput: (_a, p) => ({ json: JSON.stringify(p["xml-to-json"]?.json ?? {}), indent: 2 }) },
-    ],
-  },
-
-  // All checksums at once: sha256 + crc32 + multi-digest.
-  // checksum tool expects `data` (not `text`) and computes all digests at once.
-  "checksum-suite": {
-    mode: "fanout",
-    steps: [
-      { slug: "hash",     mapInput: (a) => ({ text: a.text, algo: "sha256" }) },
-      { slug: "crc32",    mapInput: (a) => ({ text: a.text }) },
-      { slug: "checksum", mapInput: (a) => ({ data: a.text }) },
-    ],
-  },
-
-  // Validate identifiers: ISBN + IBAN + credit card.
-  "validator-suite": {
-    mode: "fanout",
-    steps: [
-      { slug: "isbn-validate", mapInput: () => ({ isbn: "978-3-16-148410-0" }) },
-      { slug: "iban-validate", mapInput: (a) => ({ iban: a.iban }) },
-      { slug: "card-validate", mapInput: (a) => ({ number: a.number || "4242424242424242" }) },
     ],
   },
 
@@ -2088,15 +1559,6 @@ export const PACK_STEPS = {
     ],
   },
 
-  // CSV → JSON → YAML pipeline (chain: json-to-yaml needs csv-to-json output).
-  "data-convert": {
-    mode: "chain",
-    steps: [
-      { slug: "csv-to-json", mapInput: (a) => ({ csv: a.csv }) },
-      { slug: "json-to-yaml", mapInput: (_a, p) => ({ json: p["csv-to-json"]?.rows ?? p["csv-to-json"] ?? [] }) },
-    ],
-  },
-
   // API endpoint health: liveness + headers + TLS.
   "api-health": {
     mode: "fanout",
@@ -2158,26 +1620,6 @@ export const PACK_STEPS = {
     ],
   },
 
-  // All three major hashes at once.
-  "hash-verify": {
-    mode: "fanout",
-    steps: [
-      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "sha256" }) },
-      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "sha512" }) },
-      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "md5" }) },
-    ],
-  },
-
-  // Encode text in all formats.
-  "encoding-suite": {
-    mode: "fanout",
-    steps: [
-      { slug: "base64",   mapInput: (a) => ({ text: a.text, mode: "encode" }) },
-      { slug: "hex",      mapInput: (a) => ({ text: a.text, mode: "encode" }) },
-      { slug: "url-code", mapInput: (a) => ({ text: a.text, mode: "encode" }) },
-    ],
-  },
-
   // JWT decode + verify.
   "jwt-toolkit": {
     // Chain, not fanout: jwt-sign re-issues the claims jwt-decode read (the
@@ -2216,16 +1658,6 @@ export const PACK_STEPS = {
     ],
   },
 
-  // Content cleaning: redact + dedupe + sort.
-  "content-clean": {
-    mode: "fanout",
-    steps: [
-      { slug: "redact",       mapInput: (a) => ({ text: a.text, patterns: ["email", "phone"] }) },
-      { slug: "dedupe-lines", mapInput: (a) => ({ text: a.text }) },
-      { slug: "sort-lines",   mapInput: (a) => ({ text: a.text }) },
-    ],
-  },
-
   // ──────────────────────────────────────────────────────────────────────
   // Strategy additions (2026-07): packs that were in SKILL_PACKS but
   // previously fell through to TODO_MAPINPUT.
@@ -2250,16 +1682,6 @@ export const PACK_STEPS = {
       { slug: "crypto-price",   mapInput: (a) => ({ coins: a.coin, currency: "usd" }) },
       { slug: "crypto-history", mapInput: (a) => ({ coin: a.coin, days: "365", currency: "usd" }) },
       { slug: "date-format",    mapInput: () => ({ datetime: new Date().toISOString() }) },
-    ],
-  },
-
-  // Content quality report: readability + word frequency + slug generation.
-  "content-quality": {
-    mode: "fanout",
-    steps: [
-      { slug: "readability-score", mapInput: (a) => ({ text: a.text }) },
-      { slug: "word-frequency",    mapInput: (a) => ({ text: a.text, top: 10 }) },
-      { slug: "slug-generate",     mapInput: (a) => ({ text: a.title || String(a.text || "").split(/[.!?]/)[0] || "" }) },
     ],
   },
 
@@ -2445,8 +1867,7 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
-  // End of PACK_STEPS. getStepConfig auto-stubs any SKILL_PACKS entry that
-  // lands here without a matching PACK_STEPS row.
+  // End of PACK_STEPS.
   // ──────────────────────────────────────────────────────────────────────
 };
 
@@ -2815,7 +2236,7 @@ export function modelBackedPackSlugs(packs, isModelBacked) {
   return (packs || []).filter((p) => (p.toolSlugs || []).some((s) => isModelBacked(s))).map((p) => `skill-${p.slug}`);
 }
 
-// Test surface — used by scripts/test-skill-runner.js.
+// Test surface — used by scripts/test-skill-pack-steps.js.
 export const __test = {
   runPack,
   lookupHandler,
