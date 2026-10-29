@@ -20,7 +20,7 @@
 // instructions would be billed again for every question, so names are only
 // ever placed in state.
 import { randomUUID } from "node:crypto";
-import { deflateSync } from "node:zlib";
+import { deflateSync, crc32 as zlibCrc32 } from "node:zlib";
 import { upstreamCosts } from "../upstream-costs.js";
 import { buildQuestions, post, upstreamJevModel, LIMITS } from "./judge-kit.js";
 
@@ -270,11 +270,7 @@ export async function judgeLong(input, { fetchImpl = fetch } = {}) {
 // The published examples carry a real image: a 300x300 white PNG with a red
 // square in its lower right, built here from pixels so no binary lives in the
 // source. Every example answers against it (test-all calls each example).
-function crc32(buf) {
-  let c = ~0;
-  for (const b of buf) { c ^= b; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); }
-  return ~c >>> 0;
-}
+const crc32 = (buf) => zlibCrc32(buf) >>> 0;
 function pngChunk(type, data) {
   const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
   const td = Buffer.concat([Buffer.from(type, "latin1"), data]);

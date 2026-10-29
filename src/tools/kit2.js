@@ -3,6 +3,7 @@
 // scripts/test-kit2.js.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
+import zlib from "node:zlib";
 import { convertAnyUnit, UNIT_CATEGORIES } from "./convert-gen.js";
 
 function bad(message) {
@@ -117,21 +118,8 @@ function base32decode(str) {
   return Buffer.from(out);
 }
 
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-function crc32(str) {
-  let c = 0xffffffff;
-  const buf = Buffer.from(str, "utf8");
-  for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
-  return ((c ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0");
-}
+// CRC-32 (IEEE) of the UTF-8 text as 8 lowercase hex digits.
+const crc32 = (str) => (zlib.crc32(Buffer.from(str, "utf8")) >>> 0).toString(16).padStart(8, "0");
 
 const MORSE = {
   A: ".-", B: "-...", C: "-.-.", D: "-..", E: ".", F: "..-.", G: "--.", H: "....", I: "..", J: ".---",

@@ -4,6 +4,7 @@
 // Built entirely on node:crypto (stdlib, no new deps). All pure CPU, no
 // network, no LLM -> automatically proof-of-work eligible (free tier).
 import { createHash } from "node:crypto";
+import zlib from "node:zlib";
 
 function bad(message) {
   const err = new Error(message);
@@ -17,25 +18,8 @@ function need(input, field) {
   return v;
 }
 
-// ---------------------------------------------------------------------------
-// CRC32 — table-based implementation (IEEE polynomial 0xEDB88320)
-// ---------------------------------------------------------------------------
-const CRC32_TABLE = new Uint32Array(256);
-for (let i = 0; i < 256; i++) {
-  let c = i;
-  for (let j = 0; j < 8; j++) {
-    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-  }
-  CRC32_TABLE[i] = c;
-}
-
-function crc32(buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) {
-    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
-  }
-  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, "0");
-}
+// CRC-32 (IEEE) as 8 lowercase hex digits.
+const crc32 = (buf) => (zlib.crc32(buf) >>> 0).toString(16).padStart(8, "0");
 
 // ---------------------------------------------------------------------------
 export const CRYPTO_HASH_TOOLS = [
