@@ -909,7 +909,7 @@ await check("a gateway-batched debt is proven by Gateway's transfer record and r
   assert.equal(out.ok, 1); assert.equal(out.unverified, 4);
   const why = (id) => warned.find((m) => m.startsWith(`HOLD  #${id} `)) || "";
   assert.match(why(2), /not settled yet \(status received\)/);
-  assert.match(why(3), /failed - it was never charged/);
+  assert.match(why(3), /transfer failed - no charge landed, nothing to repay/);
   assert.match(why(4), /different payer/);
   assert.match(why(5), /short/);
   assert.ok(gw.calls.some((c) => c.url === `${GATEWAY_API_BASE}/v1/x402/transfers/${rows[0].evidence}` && c.init.headers.Authorization === undefined), "proven by the keyless transfer lookup");
