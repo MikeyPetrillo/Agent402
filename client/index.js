@@ -128,7 +128,7 @@ export class Agent402 {
    * @param {string[]} [opts.payNetworks]    the chains your pre-wrapped `fetch` pays on (e.g. ["base"], the
    *                                         names withNetworkPreference takes): without an x402Client the
    *                                         caps count the dearest accept on these chains, not on every chain
-   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) - pays wallet-only tools on
+   * @param {string} [opts.creditsKey]       a prepaid credits key (a402_...) - pays wallet-only tools on
    *                                         Agent402's own services when no payFetch is given
    * @param {{signer: {address: string, signTypedData: function}, networks?: string[]}} [opts.gateway]
    *        Pay the Circle Gateway batched accept where a 402 offers one: `signer` is an

@@ -396,7 +396,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 
   let res;
   if (!HAS_WALLET && HAS_CREDITS) {
-    // Card credits: same budget guards as the wallet path, against the same
+    // Credits key: same budget guards as the wallet path, against the same
     // number - the credits gate holds and debits what the 402 quotes for THIS
     // body, not the route's list price.
     const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;

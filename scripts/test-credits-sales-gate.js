@@ -48,13 +48,14 @@ const boot = (env) => new Promise(async (resolve) => {
     // switch may have closed.
     [/\bpaid by card or USDC\b/i, "card payment for a tool call"],
   ];
-  // "Card credits" names the purchase. A shipped package cannot read the
-  // switch, so its code and docs describe the key they hold; a line that says
-  // the key is already issued describes rather than sells. (The root README's
-  // module map names the server's own credits module and is not package copy.)
+  // "Card credits", bare or as a key, names the purchase. A shipped package
+  // cannot read the switch, so its code and docs describe the key they hold
+  // (a "credits key"); a line that says the key is issued describes rather
+  // than sells. (The root README's module map names the server's own credits
+  // module and is not package copy.)
   const PACKAGE_OFFERS = [
     ...OFFERS,
-    [/^(?!.*already issued).*\b(?:prepaid card credits|card credits key)\b/im, "credits described as a card purchase"],
+    [/^(?!.*\bissued\b).*\bcard[ -]credits\b/im, "credits described as a card purchase"],
   ];
   const isText = (f) => /\.(md|js|ts|py|json)$/.test(f);
   const packageFiles = packageDirs().flatMap(shippedFiles).filter(isText);
@@ -66,7 +67,8 @@ const boot = (env) => new Promise(async (resolve) => {
   ok(scan("## Prepaid credits (keys already issued)\n\nPrepaid credits: not on sale. A key already issued keeps working.").length === 0, "control: describing an issued key is not an offer");
   ok(scan("models at a flat per-call price, paid by card or USDC.").length === 1, "control: a package that sells the card path is reported");
   ok(scanPackage("each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY)").length === 1 && scanPackage("how: \"prepaid card credits (Authorization: Bearer a402_...)\"").length === 1, "control: a package describing credits as a card purchase is reported");
-  ok(scanPackage("a card credits key already issued keeps working\nprepaid credits: a key already issued").length === 0, "control: a line that says the key is already issued is not an offer");
+  ok(scanPackage("Payment mode: card credits.").length === 1 && scanPackage("agent402PaymentMode === \"card-credits\"").length === 1, "control: the bare payment-mode word, with a space or a hyphen, is reported");
+  ok(scanPackage("a card credits key already issued keeps working\nprepaid credits: a key already issued\na prepaid card-credits key issued at the credits page").length === 0, "control: a line that says the key is issued is not an offer");
   ok(packageFiles.some((f) => /\/mcp\/index\.js$/.test(f)) && packageFiles.some((f) => /\/adapters\/eliza\/index\.js$/.test(f)) && packageFiles.some((f) => /\/client\/index\.js$/.test(f)), "the package scan covers the mcp, adapter and client code");
   const hits = files.flatMap((f) => (packageFiles.includes(f) ? scanPackage : scan)(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
   ok(hits.length === 0, `no static surface offers credits for sale${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
