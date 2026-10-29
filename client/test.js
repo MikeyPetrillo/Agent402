@@ -322,24 +322,50 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "1e6" }) === null, "an amount that is not whole base units cannot be priced");
   }
 
-  // wallet, no signing guard: a capped wallet may sign any accept, so one it
-  // cannot price is refused before anything is signed
+  // wallet, no signing guard: an accept in an asset this client cannot price
+  // is skipped beside one it can (the priced one is the quote the cap is
+  // checked against); only an offer with nothing priceable is refused.
   {
-    const counters = { paid: 0, preflights: 0 };
-    const unknownOffer = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
-      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead" },
-      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } },
-    ] })).toString("base64");
-    const c = new Agent402({
-      baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.1,
-      fetch: async () => { counters.paid++; return okResp; },
-      fetchImpl: async () => { counters.preflights++; return { ok: false, status: 402, headers: new Headers({ "payment-required": unknownOffer }), json: async () => ({}) }; },
-    });
-    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
-    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
-    ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset", `an accept in an unknown asset is refused under a cap (${e?.message})`);
-    ok(counters.paid === 0, "nothing was signed for it");
+    const mkOffer = (accepts) => Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64");
+    const unknown = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } };
+    const build = (offer, caps = { maxPerCallUsd: 0.1 }) => {
+      const counters = { paid: 0, preflights: 0 };
+      const c = new Agent402({
+        baseUrl: "https://seller.example", cache: false, ...caps,
+        fetch: async () => { counters.paid++; return okResp; },
+        fetchImpl: async () => { counters.preflights++; return { ok: false, status: 402, headers: new Headers({ "payment-required": offer }), json: async () => ({}) }; },
+      });
+      c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
+      return { c, counters };
+    };
+    {
+      const { c, counters } = build(mkOffer([{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead" }, unknown]));
+      const r = await c.call("chat", {});
+      ok(r && counters.paid === 1 && counters.preflights === 1, "an unknown-asset accept beside a priced Base accept is skipped: the call is paid under the cap");
+      ok(c.spendingSummary().dailyUsd === 0.001, `the ledger books the priced accept (${c.spendingSummary().dailyUsd})`);
+    }
+    {
+      const { c, counters } = build(mkOffer([{ scheme: "exact", network: "eip155:8453", amount: "5000000", asset: BASE_USDC, payTo: "0xdead" }, unknown]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && counters.paid === 0, `the cap is still checked against the priced accept ($5 over $0.1: ${e?.limit})`);
+    }
+    {
+      const { c, counters } = build(mkOffer([unknown, { ...unknown, network: "eip155:999" }]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 2, `an offer with no priceable accept is refused under a cap (${e?.message})`);
+      ok(counters.paid === 0, "nothing was signed for it");
+    }
   }
+}
+
+// Offline: a chain name resolves through the known-asset table to every id
+// the chain is spelled with; the short-name map agrees with it.
+{
+  const { NETWORK_NAMES, networkIdsOf, KNOWN_ASSETS } = await import("./index.js");
+  const listed = new Set(Object.values(NETWORK_NAMES).flat());
+  ok(Object.keys(KNOWN_ASSETS).every((id) => listed.has(id)), "every network in the known-asset table belongs to a named chain");
+  ok(Object.entries(NETWORK_CAIP2).every(([name, id]) => NETWORK_NAMES[name]?.[0] === id), "NETWORK_CAIP2 names each chain's canonical id");
+  ok(JSON.stringify(networkIdsOf("Algorand")) === JSON.stringify(NETWORK_NAMES.algorand) && networkIdsOf("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=").length === 2 && JSON.stringify(networkIdsOf("eip155:1")) === '["eip155:1"]' && networkIdsOf("").length === 0, "a name, either spelling of a chain, an unknown id and an empty preference resolve as expected");
 }
 
 // Offline: the caps hold on the payment that is SIGNED. A real @x402/core
