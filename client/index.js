@@ -97,6 +97,8 @@ const GATEWAY_PENDING_MAX_WAIT_MS = 30_000;
 // asking for years is refused unsigned. Gateway's kinds publish a minimum
 // validity of seven days, and a seller derives its window from that plus a
 // small buffer, so seven days and an hour admits every honest accept.
+// Agent402's own accept adds VALIDITY_BUFFER_SECONDS (src/gateway-nanopayments.js)
+// to that minimum; scripts/test-gateway-nanopayments.js keeps it under this ceiling.
 export const GATEWAY_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600 + 3600;
 const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway";
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -1049,11 +1051,17 @@ export async function signGatewayPayment(accept, { signer, resource = undefined,
 
 /** The message for a 402 that refused a batched payment: the seller's own
  *  explanation first, and when it says the Gateway balance came up short,
- *  what to do about it (deposit, never a resend of the same authorization). */
+ *  what to do about it (deposit, never a resend of the same authorization).
+ *  A short balance is read from the machine fields the seller sends (reason
+ *  insufficient-funds, or retry fund-gateway-deposit); the prose is read only
+ *  when a body carries neither field. */
 function gatewayRefusalMessage(slug, body, accept, address) {
   const said = body && typeof body === "object" ? (body.hint ?? body.detail ?? body.error ?? body.message) : null;
-  const words = `${body?.reason || ""} ${typeof said === "string" ? said : ""}`;
-  const short = /insufficient|balance|underflow|not enough/i.test(words);
+  const reason = typeof body?.reason === "string" ? body.reason : null;
+  const retry = typeof body?.retry === "string" ? body.retry : null;
+  const short = reason != null || retry != null
+    ? reason === "insufficient-funds" || retry === "fund-gateway-deposit"
+    : /insufficient|balance|underflow|not enough/i.test(typeof said === "string" ? said : "");
   const chain = String(accept.network);
   return `call "${slug}" refused on the Circle Gateway batched option (${chain}): HTTP 402${said != null ? ` - ${typeof said === "string" ? said : JSON.stringify(said)}` : ""}${short
     ? ` The signer ${address} needs a USDC balance in Circle Gateway on that chain: deposit through Circle's GatewayWallet contract first (this client never deposits), then call again; see ${GATEWAY_DOCS_URL}.`

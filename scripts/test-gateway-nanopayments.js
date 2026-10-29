@@ -66,6 +66,7 @@ import {
   CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf,
   gatewayPendingLost, _resetGatewayPendingLostForTests, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
 } from "../src/gateway-nanopayments.js";
+import { GATEWAY_MAX_TIMEOUT_SECONDS } from "../client/index.js";
 import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader, isGatewayBatchedRequest, isGatewayWire } from "../src/gateway-wire.js";
 import { hintFor } from "../src/verify-hint.js";
 import { verifyInboundPayment } from "../src/payment-verify.js";
@@ -138,6 +139,9 @@ await check("/supported: every listed chain parses to a kind with the Gateway do
   assert.equal(baseKind.chainId, 8453);
   assert.equal(baseKind.asset, BASE_USDC.toLowerCase());
   assert.equal(baseKind.maxTimeoutSeconds, 604900, "minValiditySeconds plus the buffer");
+  // The client signs no accept whose window is past its ceiling, so the window
+  // built from Gateway's published minimum validity must stay under it.
+  assert.ok(baseKind.maxTimeoutSeconds <= GATEWAY_MAX_TIMEOUT_SECONDS, `the kind's window (${baseKind.maxTimeoutSeconds} s) is at or under agent402-client's GATEWAY_MAX_TIMEOUT_SECONDS (${GATEWAY_MAX_TIMEOUT_SECONDS} s)`);
   assert.deepEqual(gatewayAcceptFields(baseKind), { maxTimeoutSeconds: 604900, extra: { name: GATEWAY_KIND_NAME, version: "1", verifyingContract: GW_WALLET } });
   // A wanted list narrows it.
   assert.deepEqual([...gatewayKindsFromSupported(SUPPORTED, ["eip155:5042"]).keys()], ["eip155:5042"]);
@@ -1322,6 +1326,7 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
       assert.equal(b.asset.toLowerCase(), p.asset.toLowerCase(), "the same USDC the plain accept names");
       assert.deepEqual(b.extra, { name: GATEWAY_KIND_NAME, version: "1", verifyingContract: GW_WALLET });
       assert.equal(b.maxTimeoutSeconds, 604900, "the kind's minValiditySeconds plus the buffer");
+      assert.ok(b.maxTimeoutSeconds <= GATEWAY_MAX_TIMEOUT_SECONDS, `the server-built accept's window is one agent402-client signs (${b.maxTimeoutSeconds} <= ${GATEWAY_MAX_TIMEOUT_SECONDS})`);
       assert.equal(b.outputSchema, undefined, "the typed output schema rides the first accept only");
       assert.equal(p.maxTimeoutSeconds, 300, "the plain accept is untouched");
     }

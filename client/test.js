@@ -1202,6 +1202,10 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     try { valid = await verifyTypedData({ address: a.from, domain: domainOf(p.accepted.network), types: TYPES, primaryType: "TransferWithAuthorization", message: bigMsg(a), signature: p.payload.signature }); } catch { valid = false; }
     if (!valid) return send(402, { reason: "invalid-signature", hint: "the signature does not verify under the Gateway domain" }, { "payment-required": b64(offer) });
     if (st.mode === "short") return send(402, { reason: "insufficient-funds", retry: "fund-gateway-deposit", hint: "the signer's Circle Gateway balance holds less than this call costs" }, { "payment-required": b64(offer), "retry-after": "60" });
+    // Another refusal whose prose happens to say "balance": the machine fields name the reason.
+    if (st.mode === "nonce") return send(402, { reason: "nonce-used", retry: "new-payment", hint: "this authorization's nonce was already used; the signer's Gateway balance is untouched" }, { "payment-required": b64(offer) });
+    // A seller with no machine fields: only its prose says the balance is short.
+    if (st.mode === "prose") return send(402, { hint: "insufficient Gateway balance for this call" }, { "payment-required": b64(offer) });
     if (st.mode === "pending" && st.pendingLeft-- > 0) return send(402, { reason: "settlement-pending", retry: "same-payment", retryAfterSeconds: 1, hint: "not confirmed yet" }, { "retry-after": "1" });
     return send(200, { paid: "gateway", payer: a.from, nonce: a.nonce });
   });
@@ -1334,6 +1338,15 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       let e3 = null; try { await capped.call("thing", { q: 16 }); } catch (err) { e3 = err; }
       let e4 = null; try { await capped.call("thing", { q: 17 }); } catch (err) { e4 = err; }
       ok(e3?.status === 402 && e4 instanceof SpendingLimitError && e4.limit === "dailyLimitUsd", "a second call after a refusal is held to the daily cap net of the refused authorization");
+      // The deposit advice keys on the seller's machine fields, not on the
+      // word "balance" in its prose: another reason whose hint mentions the
+      // balance gets none, and a body with no fields falls back to the prose.
+      st.mode = "nonce";
+      let e5 = null; try { await mk({ gateway: { signer } }).call("thing", { q: 18 }); } catch (err) { e5 = err; }
+      ok(e5?.status === 402 && /nonce was already used/.test(e5.message) && !/deposit through/.test(e5.message), `a refusal whose hint merely mentions the balance, with another reason, gets no deposit advice (${e5?.message?.slice(0, 140)})`);
+      st.mode = "prose";
+      let e6 = null; try { await mk({ gateway: { signer } }).call("thing", { q: 19 }); } catch (err) { e6 = err; }
+      ok(e6?.status === 402 && /deposit through Circle's GatewayWallet contract/.test(e6.message), "a seller that sends no reason or retry field is read by its prose");
       st.mode = "ok";
     }
     // settlement-pending: the same header is resent after Retry-After, never a new signature.
