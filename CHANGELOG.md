@@ -17,16 +17,18 @@ Payments and refunds:
   its last frame reports, not at the quote held when it started.
 - A card report refund that could not be sent is read on the refundsOwed word
   of /api/gateway-status, so the status probe and the heartbeat page on it.
-- A buyer that leaves while its payment settles is charged, and a resend of
-  the same payment is now served the answer and voids the debt. A hang-up
-  forgiveness ticket is priced on the chain the verified header names.
+- A buyer that leaves while its payment settles is charged; a resend of the
+  same payment voids the debt and is served the answer, and a resend after
+  the refund was paid is refused. A hang-up forgiveness ticket is priced on
+  the chain the verified header names.
 - A refusal on a Tempo push payment says the transfer was claimed and a refund
   is owed; copy that says a refusal is not charged names x402, the rail that
   holds on.
 - A credits pack refunded in full before its claim mints no key; a partial
   refund mints net of it; after minting, a refund takes its amount off the
   balance and a full refund or a dispute disables the key. A disputed
-  subscription payment drops the subscription from the active list.
+  subscription payment drops the subscription from the active list until the
+  dispute is won, which also re-enables a key the dispute disabled.
 - The unpaid-quote limiters and the gateway cache count a payment header only
   when it decodes to a payment on a chain this server sells on.
 
