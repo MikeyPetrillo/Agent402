@@ -9,6 +9,22 @@ let pass = 0;
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 
+// 0. Offline: a tool call names this package in its User-Agent, the token
+// matching package.json's version.
+{
+  const { readFileSync } = await import("node:fs");
+  const version = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+  const seen = [];
+  const stub = async (url, init = {}) => {
+    if (String(url).endsWith("/api/pricing")) return new Response(JSON.stringify({ endpoints: [{ slug: "hash", path: "/api/hash", method: "POST", computePayable: true }] }), { status: 200 });
+    seen.push(init.headers?.["User-Agent"] ?? null);
+    return new Response(JSON.stringify({ hex: "b94d27b9" }), { status: 200 });
+  };
+  const call = agent402ToolSpecs({ baseUrl: "http://offline.test", fetchImpl: stub }).find((s) => s.name === "agent402_call");
+  await call.execute({ slug: "hash", params: { text: "hello world" } });
+  ok(seen.length === 1 && seen[0] === `agent402-ai-sdk/${version}`, `a tool call sends User-Agent agent402-ai-sdk/${version} (got ${JSON.stringify(seen)})`);
+}
+
 const specs = agent402ToolSpecs({ baseUrl: BASE });
 
 // 1. Four meta tools, all with the expected fields.
