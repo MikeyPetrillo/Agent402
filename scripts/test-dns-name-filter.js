@@ -74,6 +74,30 @@ await refusesBeforeQuery("dkim-lookup", () => tool(NETWORK_TOOLS, "dkim-lookup")
 
 const asn = tool(NETWORK_TOOLS2, "asn-info");
 await refusesBeforeQuery("asn-info (host)", () => asn.handler({ host: "db.internal" }));
+// network-kit2 reads a host the way network-kit does: a name its rule refuses
+// never reaches the resolver or the upstream, and the handler keeps its own 400.
+const badHosts = ["a..example.com", "-lead.example.com", `${"a".repeat(60)}.${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(60)}.example.com`, "exa_mple.com"];
+for (const h of badHosts) await refusesBeforeQuery(`asn-info refuses host ${h.slice(0, 24)}`, () => asn.handler({ host: h }));
+await queries("asn-info", () => asn.handler({ host: "example.com" }));
+{
+  const ct = tool(NETWORK_TOOLS2, "cert-transparency");
+  const tech = tool(NETWORK_TOOLS2, "tech-stack");
+  const realFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = async () => { fetched++; throw new Error("stub: no network"); };
+  const refusesBeforeFetch = async (label, fn, msg) => {
+    const before = fetched + queried.length;
+    let err = null;
+    try { await fn(); } catch (e) { err = e; }
+    ok(err?.statusCode === 400 && (!msg || msg.test(err.message)) && fetched + queried.length === before, `${label}: refused 400 before any request (status ${err?.statusCode}: ${err?.message})`);
+  };
+  for (const h of badHosts) await refusesBeforeFetch(`cert-transparency refuses ${h.slice(0, 24)}`, () => ct.handler({ domain: h }), /^Missing "domain"/);
+  await refusesBeforeFetch("cert-transparency refuses an internal zone", () => ct.handler({ domain: "corp.internal" }));
+  await refusesBeforeFetch("cert-transparency refuses an internal URL host", () => ct.handler({ url: "https://db.internal/x" }));
+  await refusesBeforeFetch("tech-stack with no url", () => tech.handler({}), /^Missing "url"/);
+  await refusesBeforeFetch("tech-stack refuses a non-http scheme", () => tech.handler({ url: "file:///etc/passwd" }));
+  globalThis.fetch = realFetch;
+}
 
 const emailVerify = KIT.find((t) => t.slug === "email-validate");
 if (emailVerify) await refusesBeforeQuery("email-validate", () => emailVerify.handler({ email: "a@corp.internal" }));
