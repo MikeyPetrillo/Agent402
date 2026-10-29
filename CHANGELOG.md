@@ -88,7 +88,8 @@ Surfaces:
   without its edge secret.
 - /.well-known/x402 states under payment.dataHandling that payment
   annotations are not read as readsAnnotationFields, which replaces
-  readsPaymentMetadata; the privacy page names both fields.
+  readsPaymentMetadata; the privacy page names readsOnly and
+  readsAnnotationFields.
 - The router's dispatch legend on /api/index carries settlementNetting (on or
   off) and its self-funded reason says it is read only while netting is on; a
   seller's historyLegend says a crawl outcome counts the routes found, from
