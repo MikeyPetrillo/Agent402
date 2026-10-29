@@ -21,9 +21,11 @@ export function tokenize(text) {
     .filter((t) => t.length > 1 && t.length < 40 && !STOP.has(t));
 }
 
-const grownU32 = (a, need) => {
+// Grown by a quarter (the arena) or a half (postings): slack is resident
+// memory, and copies stay amortized constant per element.
+const grownU32 = (a, need, factor = 1.5) => {
   if (need <= a.length) return a;
-  const b = new Uint32Array(Math.max(need, a.length * 2, 16));
+  const b = new Uint32Array(Math.max(need, Math.ceil(a.length * factor), 16));
   b.set(a);
   return b;
 };
@@ -69,7 +71,7 @@ export class LexicalIndex {
     this.lens[slot] = toks.length;
     this.start[slot] = this.arenaLen;
     this.width[slot] = tf.size;
-    this.arena = grownU32(this.arena, this.arenaLen + tf.size);
+    this.arena = grownU32(this.arena, this.arenaLen + tf.size, 1.25);
     this.totalLen += toks.length;
     this.live++;
     for (const [t, f] of tf) {
@@ -78,7 +80,7 @@ export class LexicalIndex {
       const used = this.postLen[tid];
       let p = this.postings[tid];
       if (2 * used + 2 > p.length) {
-        const q = new Uint32Array(Math.max(4, p.length * 2));
+        const q = new Uint32Array(Math.max(4, 2 * Math.ceil(p.length * 0.75)));
         q.set(p);
         this.postings[tid] = p = q;
       }
