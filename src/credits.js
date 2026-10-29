@@ -42,6 +42,7 @@ import { sendEmail } from "./email.js";
 import { creditsTopupFields, creditsDailyMaxCents, TERMS_VERSION } from "./credits-sales.js";
 import { limiterKey } from "./rate-limit.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
+import { meteredUsdOf } from "./gateway-meter.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { sharedLimitsEnabled } from "./shared-limits.js";
@@ -796,9 +797,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         // a metered route at the FULL worst-case hold, since no X-Metered-Usd
         // header exists on a replay (found in the 2026-08-26 security review).
         const cacheHit = servedWithoutRun(req, res);
-        // A metered route reports actual usage x markup on X-Metered-Usd
-        // (gateway-meter.js); the debit is that, never more than the hold.
-        const metered = Number(res.getHeader?.("X-Metered-Usd"));
+        // A metered route reports actual usage x markup on X-Metered-Usd, or,
+        // for a stream whose usage frame came after the headers, on the
+        // request (gateway-meter.js); the debit is that, never more than the hold.
+        const metered = meteredUsdOf(req, res);
         if (res.statusCode === 200 && !cacheHit) settleHold(Number.isFinite(metered) && metered > 0 ? metered : null);
         else releaseHold();
       });

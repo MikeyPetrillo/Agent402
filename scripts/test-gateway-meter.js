@@ -240,4 +240,20 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   ok(overrides.length === 1, "an override was set");
 }
 
+// ---- streamed usage: recorded on the request for a credits hold only ----
+{
+  const { recordStreamedUsage, meteredUsdOf } = await import("../src/gateway-meter.js");
+  const credits = { creditsSettled: true, creditsPriceUsd: 0.05 };
+  const amount = recordStreamedUsage({ req: credits, upstreamUsd: 0.01, enabled: true });
+  ok(amount === meteredUsd({ upstreamUsd: 0.01, ceilingUsd: 0.05 }) && credits.__meteredUsageUsd === amount, "a credits stream records actual x markup under the held price on the request");
+  ok(meteredUsdOf(credits, { getHeader: () => undefined }) === amount, "meteredUsdOf reads the recorded amount when no header was set");
+  ok(meteredUsdOf(credits, { getHeader: (k) => (k === "X-Metered-Usd" ? "0.002" : undefined) }) === 0.002, "...and the header wins when the buffered path set it");
+  ok(Number.isNaN(meteredUsdOf({}, { getHeader: () => undefined })), "nothing recorded and no header reads as not metered");
+  const upto = reqWith({ "payment-signature": paymentHeader(uptoPayload) });
+  ok(recordStreamedUsage({ req: upto, upstreamUsd: 0.01, enabled: true }) === null && upto.__meteredUsageUsd === undefined, "an upto stream records nothing: it settled at its ceiling when the headers went out");
+  ok(recordStreamedUsage({ req: { creditsSettled: true, creditsPriceUsd: 0.05 }, upstreamUsd: 0.01, enabled: false }) === null, "metering off records nothing");
+  ok(recordStreamedUsage({ req: { creditsSettled: true, creditsPriceUsd: 0.05 }, upstreamUsd: null, enabled: true }) === null, "a missing cost records nothing (the hold is debited in full)");
+  ok(recordStreamedUsage({ req: { creditsSettled: true, creditsPriceUsd: 0.05 }, upstreamUsd: 9, enabled: true }) === 0.05, "a cost that meters above the hold records the hold (never more than it)");
+}
+
 console.log(`\n${pass} passed, 0 failed`);

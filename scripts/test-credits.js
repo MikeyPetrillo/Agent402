@@ -242,6 +242,43 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   gateM({ method: "POST", path: "/v1/metered/chat/completions", headers: { authorization: `Bearer ${KEY}` }, body: {} }, r3, () => {});
   r3.setHeader("X-Metered-Usd", "9.5"); r3.statusCode = 200; r3.emit("finish");
   ok(Math.abs(cr.balance(KEY).balanceUsd - (b3 - 0.001)) < 1e-9, "gate (metered): a reported amount above the hold can never take more than the hold");
+  // STREAMED: the usage frame arrives after the 200 went out, so no header can
+  // carry the amount; the stream writer records it on the request and the
+  // gate debits that on finish (hold = quote, debit = usage). A stub upstream
+  // stream drives the real writer (src/tools/llm-gateway-kit.js).
+  {
+    const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
+    const { meteredUsd } = await import("../src/gateway-meter.js");
+    setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
+    const prevMeter = process.env.GATEWAY_METERED_BILLING, prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.GATEWAY_METERED_BILLING = "on"; process.env.OPENROUTER_API_KEY = "test-key";
+    const { streamOpenRouterTo } = await import("../src/tools/llm-gateway-kit.js");
+    const COST = 0.01, QUOTE = 0.05; // a quote the rail can settle under (the floor is tested in test-gateway-meter.js)
+    const gateS = cr.gate((m, p) => (p === "/v1/metered/stream" ? { priceUsd: QUOTE, slug: "v1-chat-metered" } : priceFor(m, p)));
+    const expected = meteredUsd({ upstreamUsd: COST, ceilingUsd: QUOTE });
+    ok(expected > 0 && expected < QUOTE, `the stub cost meters under the quote (${expected})`);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, body: (async function* () {
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`);
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1, cost: COST } })}\n\n`);
+      yield Buffer.from("data: [DONE]\n\n");
+    })() });
+    const r4 = fakeRes(); r4.getHeader = (k) => r4.headers[k];
+    r4.writeHead = (code) => { r4.statusCode = code; r4.headersSent = true; }; r4.write = () => true; r4.on = r4.addListener;
+    const req4 = { method: "POST", path: "/v1/metered/stream", headers: { authorization: `Bearer ${KEY}` }, body: { stream: true } };
+    r4.req = req4;
+    const b4 = cr.balance(KEY).balanceUsd, held4 = cr.balance(KEY).heldUsd;
+    gateS(req4, r4, () => {});
+    ok(Math.abs(cr.balance(KEY).balanceUsd - (b4 - QUOTE)) < 1e-9 && req4.creditsPriceUsd === QUOTE, "gate (streamed): the quote is held at authorize");
+    await streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, r4, { timeoutMs: 2000 });
+    globalThis.fetch = realFetch;
+    ok(Math.abs(req4.__meteredUsageUsd - expected) < 1e-9 && r4.headers["X-Metered-Usd"] === undefined, "the stream writer records the metered usage on the request (no header after the 200)");
+    r4.statusCode = 200; r4.emit("finish");
+    ok(Math.abs(cr.balance(KEY).balanceUsd - (b4 - expected)) < 1e-9 && Math.abs(cr.balance(KEY).heldUsd - held4) < 1e-9, `gate (streamed): the debit is the metered usage, the rest of the hold is returned (balance ${cr.balance(KEY).balanceUsd})`);
+    ok(Math.abs(debits[debits.length - 1].priceUsd - expected) < 1e-9, "gate (streamed): the accounting hook books the metered amount");
+    if (prevMeter === undefined) delete process.env.GATEWAY_METERED_BILLING; else process.env.GATEWAY_METERED_BILLING = prevMeter;
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey;
+  }
 }
 // ---- keys cannot be guessed or made up, and guessing is bounded ----
 {

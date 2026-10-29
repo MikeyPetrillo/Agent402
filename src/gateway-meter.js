@@ -197,6 +197,43 @@ export function setMeterSentinel(result, upstreamUsd) {
   return result;
 }
 
+/** The operator's metering switch (GATEWAY_METERED_BILLING=on), the same
+ *  reading the route binder passes as `enabled`. */
+export const meterEnabled = () => String(process.env.GATEWAY_METERED_BILLING || "").toLowerCase() === "on";
+
+/**
+ * The streamed twin of applyMeteredSettlement. A stream's usage frame is the
+ * last one, long after the 200 and its headers went out, so neither the
+ * settlement override nor X-Metered-Usd can be set on it: an upto payment
+ * settles at the ceiling it authorized, as before. A prepaid-credits call is
+ * different: its gate HOLDS the quote and debits on finish, so the metered
+ * amount is kept on the request for that debit (and for every reader that
+ * takes the header's place through meteredUsdOf). The ceiling is the price
+ * the gate held (req.creditsPriceUsd). Fails safe exactly like the buffered
+ * path: no number, metering off, a ceiling the rail cannot settle, or
+ * anything thrown records nothing and the hold is debited in full.
+ * @returns {number|null} the amount recorded, or null when not metered.
+ */
+export function recordStreamedUsage({ req, upstreamUsd, enabled = meterEnabled() }) {
+  try {
+    if (!enabled || !req || req.creditsSettled !== true) return null;
+    const amount = meteredUsd({ upstreamUsd, ceilingUsd: Number(req.creditsPriceUsd) });
+    if (amount == null) return null;
+    req.__meteredUsageUsd = amount;
+    return amount;
+  } catch { return null; }
+}
+
+/** The metered amount a finished response settles at: X-Metered-Usd when the
+ *  buffered path set it, else what a stream recorded on the request; NaN when
+ *  neither (the caller keeps its ceiling). */
+export function meteredUsdOf(req, res) {
+  const header = Number(res?.getHeader?.("X-Metered-Usd"));
+  if (Number.isFinite(header) && header > 0) return header;
+  const streamed = Number(req?.__meteredUsageUsd);
+  return Number.isFinite(streamed) && streamed > 0 ? streamed : NaN;
+}
+
 export function applyMeteredSettlement({ result, req, tool, res, enabled, setOverrides, log = console.warn }) {
   if (!result || typeof result !== "object" || typeof result.__meterUpstreamUsd === "undefined") return null;
   const upstream = result.__meterUpstreamUsd;

@@ -90,7 +90,7 @@ import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerSt
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
-import { applyMeteredSettlement } from "./gateway-meter.js";
+import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -123,11 +123,13 @@ function quotedPriceUsd(def, req) {
   } catch { return flat; }
 }
 // The USD a metered call was actually settled/held at, for the books: the upto
-// meter's override (settled actual x markup), else the per-request quote, else
-// the catalog price. Flat tiers fall through to the catalog price unchanged.
+// meter's override (settled actual x markup; a credits stream's amount rides
+// on the request instead, gateway-meter.js meteredUsdOf), else the
+// per-request quote, else the catalog price. Flat tiers fall through to the
+// catalog price unchanged.
 function settledPriceUsd(def, req, res) {
   const flat = Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
-  const metered = Number(res?.getHeader?.("X-Metered-Usd"));
+  const metered = meteredUsdOf(req, res);
   if (Number.isFinite(metered) && metered > 0) return metered;
   if (priceFnOf(def) && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   return flat;
@@ -137,7 +139,7 @@ function settledPriceUsd(def, req, res) {
 // the buyer signed on an EVM rail (src/paid-price.js). Books and debts read
 // this, so a chain priced above the list records what moved.
 function paidUsdOf(def, req, res, caip2) {
-  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: res?.getHeader?.("X-Metered-Usd"), paymentHeader: paymentHeaderOf(req) });
+  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: meteredUsdOf(req, res), paymentHeader: paymentHeaderOf(req) });
 }
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
