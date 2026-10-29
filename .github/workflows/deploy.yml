@@ -2763,6 +2763,8 @@ jobs:
           # AVM validity guard (short-window Algorand payment rejected pre-handler, no upstream burn — offline)
           t node scripts/test-avm-validity.js
           t node scripts/test-decide-index.js
+          # Decide BM25 index in typed arrays: same scores, tie order, filtered searches and suite plans as the Map-and-Set index it replaced, over a mutation sequence (offline)
+          t node scripts/test-decide-lexical.js
           t node scripts/test-decide-planner.js
           # Decide specialized planners: one seam each, router threshold and fallback, seller neutrality, synthetic suite plan-only (offline)
           t node scripts/test-decide-harness.js
