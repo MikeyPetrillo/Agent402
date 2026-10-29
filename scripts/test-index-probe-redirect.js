@@ -179,7 +179,8 @@ const crawl = async (origin) => { asked.length = 0; __resetRobotsCacheForTest();
   const { crossHostRedirectAccepted } = idx;
   __resetRobotsCacheForTest();
   // Every live probe lands on the paywall listener, whatever host it names.
-  __setProbeFetchForTest((url, opts) => { asked.push(url); return fetch(url.replace(/^https?:\/\/[^/]+/, live.origin), { ...opts, redirect: "manual" }); });
+  // The listener is the only host contacted; the probed URL contributes its path and query.
+  __setProbeFetchForTest((url, opts) => { asked.push(url); const u = new URL(url); return fetch(new URL(u.pathname + u.search, live.origin), { ...opts, redirect: "manual" }); });
   const bare = "https://bare.test", victim = "https://victim.test", own = "https://api.bare.test";
   served.set(`${bare}/.well-known/x402`, { body: manifestFor(bare), finalUrl: `${victim}/.well-known/x402` });
   served.set(`${bare}/openapi.json`, { body: { openapi: "3.0.0", paths: { "/v1/quote": { get: { summary: "One quote", "x-price": "$0.005" } } } }, finalUrl: `${victim}/openapi.json` });
