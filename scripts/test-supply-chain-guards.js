@@ -92,6 +92,31 @@ for (const dir of pkgDirs) {
   ok(!existsSync(join(ROOT, dir, ".npmignore")), `${pkg.name}: no .npmignore (allowlist-only is the safe pattern)`);
 }
 
+// --- 2b. signing libraries resolve to what was tested ---------------------------
+// A package that signs payments ships exact versions of the libraries that
+// sign, equal to the versions its lockfile was tested with: a range lets a
+// consumer's install take a newer patch nobody here ran. A peer range on the
+// x402 packages carries an upper bound, so the next major is never accepted
+// unseen.
+{
+  const SIGNING = ["viem", "@solana/kit", "@modelcontextprotocol/sdk", "@x402/core", "@x402/evm", "@x402/fetch", "@x402/svm"];
+  const pkg = JSON.parse(readFileSync(join(ROOT, "mcp/package.json"), "utf8"));
+  const lock = JSON.parse(readFileSync(join(ROOT, "mcp/package-lock.json"), "utf8"));
+  for (const name of SIGNING) {
+    const spec = pkg.dependencies?.[name];
+    if (spec === undefined) continue;
+    const locked = lock.packages?.[`node_modules/${name}`]?.version;
+    ok(/^\d+\.\d+\.\d+$/.test(spec), `${pkg.name}: ${name} is pinned to an exact version (${spec})`);
+    ok(spec === locked, `${pkg.name}: ${name} ${spec} is the version its lockfile resolves (${locked})`);
+    ok(lock.packages?.[""]?.dependencies?.[name] === spec, `${pkg.name}: the lockfile's root records ${name} as ${spec}`);
+  }
+  ok(lock.packages?.[""]?.version === pkg.version && lock.version === pkg.version, `${pkg.name}: the lockfile carries the package version (${pkg.version})`);
+  const tb = JSON.parse(readFileSync(join(ROOT, "tollbooth/package.json"), "utf8"));
+  for (const [name, range] of Object.entries(tb.peerDependencies || {})) {
+    ok(/<\s*\d/.test(range), `${tb.name}: peer ${name} carries an upper bound (${range})`);
+  }
+}
+
 // --- 3. remote installs in tests are pinned + scriptless --------------------
 // A range like ^0.12 is NOT a pin: it takes any new 0.12.x, which is precisely
 // how worm-published patch versions land in CI.

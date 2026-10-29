@@ -43,7 +43,7 @@ Speech:
 
 Packages:
 - agent402-client 0.8.21 takes a userAgent option (a calling package's own
-  product token, sent before the client's). agent402-mcp 0.13.23,
+  product token, sent before the client's). agent402-mcp 0.13.24,
   agent402-agentkit 0.1.10, agent402-ai-sdk 0.2.12, agent402-anthropic-tools
   0.1.13, elizaos-plugin-agent402 0.2.10, agent402-google-adk 0.1.12,
   agent402-langchain 0.2.12, agent402-llamaindex 0.1.13,
@@ -52,6 +52,10 @@ Packages:
   themselves in the User-Agent of every request; the adapters that pass it
   require agent402-client 0.8.21 or later. agent402-openclaw 0.5.8 ships its
   README's metered-default wording.
+- agent402-mcp 0.13.24 pins viem, @solana/kit and @modelcontextprotocol/sdk
+  to exact versions, so an install resolves the signing libraries it was
+  tested with. agent402-tollbooth 0.10.8 accepts the x402 packages from 2.0.0
+  up to, not including, 3.
 
 Operations:
 - Each sale records the path it arrived on: the hosted connector's loopback,

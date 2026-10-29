@@ -1,6 +1,6 @@
 {
   "name": "agent402-tollbooth",
-  "version": "0.10.7",
+  "version": "0.10.8",
   "description": "Agent402 tollbooth: open-source, self-hostable pay-per-crawl for x402 AND MPP (the sell side of Agentic Finance): charge AI bots per request (USDC via x402, or MPP - the Machine Payments Protocol - through the same settlement, or USDG on Robinhood Chain, or free proof-of-work) while humans browse free. Drop-in Express middleware or reverse proxy that settles both wires from env alone, on your own server with no account or signup.",
   "type": "module",
   "main": "index.js",
@@ -53,10 +53,10 @@
     "express": "^5.0.0"
   },
   "peerDependencies": {
-    "@coinbase/x402": ">=2.0.0",
-    "@x402/core": ">=2.0.0",
-    "@x402/evm": ">=2.0.0",
-    "@x402/express": ">=2.0.0"
+    "@coinbase/x402": ">=2.0.0 <3",
+    "@x402/core": ">=2.0.0 <3",
+    "@x402/evm": ">=2.0.0 <3",
+    "@x402/express": ">=2.0.0 <3"
   },
   "peerDependenciesMeta": {
     "@coinbase/x402": {
