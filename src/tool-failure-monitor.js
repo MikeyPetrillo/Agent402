@@ -82,7 +82,9 @@ export const ANSWER_WORDS = ["ok", "degraded"];
 export const BUYER_REFUSAL_WORDS = ["ok", "refusing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
 // Rails whose outcomes count on the free lane: no payment was taken, so a free
-// caller's 5xx is shown but never pages.
+// caller's 5xx is shown, and pages only when nearly every free call to a tool
+// fails over many calls (freeFailRate over freeMinCalls), which is a broken
+// tool rather than one caller's inputs.
 export const FREE_RAILS = new Set(["pow", "trial"]);
 /** The lane an outcome counts on: s (ours), f (free rail) or o (outside buyer). */
 export function toolLaneOf({ synthetic = false, rail = null } = {}) {
@@ -106,6 +108,10 @@ export function thresholds(env = process.env) {
     // failing: one tool's outside 5xx share passed this over at least minCalls in 1 h.
     toolFailRate: num(env.TOOL_FAIL_RATE, 0.25),
     toolMinCalls: num(env.TOOL_FAIL_MIN_CALLS, 8),
+    // failing: one tool's free-lane 5xx share reached this over at least
+    // freeMinCalls free calls in 1 h.
+    freeFailRate: num(env.TOOL_FREE_FAIL_RATE, 0.9),
+    freeMinCalls: num(env.TOOL_FREE_FAIL_MIN_CALLS, 20),
     // degraded: one upstream had at least this many timeouts, 5xx or network
     // failures in 1 h (synthetic traffic excluded).
     upstreamDegraded: num(env.UPSTREAM_FAIL_DEGRADED, 5),
@@ -497,13 +503,15 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     for (const [slug, rows] of Object.entries(m.tools)) {
       const h = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, hourFloor);
       const d = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, dayFloor);
-      // The word reads the outside lane only: synthetic and free outcomes are
-      // in the rows, never in the word.
-      const o = named(TOOL_CLASSES, h.o);
+      // The word reads the outside lane; synthetic outcomes never count, and
+      // the free lane counts only when nearly all of its calls fail.
+      const o = named(TOOL_CLASSES, h.o), f = named(TOOL_CLASSES, h.f);
       const s5 = o.fail + o.timeout;
       const calls = o.ok + o.buyer + o.fail + o.timeout;
+      const f5 = f.fail + f.timeout, fCalls = f.ok + f.buyer + f.fail + f.timeout;
       let word = "ok";
       if (calls >= th.toolMinCalls && s5 / calls > th.toolFailRate) word = "failing";
+      else if (fCalls >= th.freeMinCalls && f5 / fCalls >= th.freeFailRate) word = "failing";
       else if (s5 >= th.tool5xxDegraded) word = "degraded";
       if (word === "failing" || (word === "degraded" && toolWord === "ok")) toolWord = word;
       const anyFail = d.o[2] + d.o[3] + d.s[2] + d.s[3] + d.f[2] + d.f[3] > 0;
@@ -707,7 +715,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   return {
     id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 

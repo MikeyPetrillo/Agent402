@@ -72,7 +72,7 @@ await check("free lane: nine free 5xx do not move toolFailures; nine paid 5xx st
   const m = createToolFailureMonitor({ now: c.now, env: {} });
   for (let i = 0; i < 9; i++) m.noteTool("hash", 500, { rail: "pow" });
   for (let i = 0; i < 9; i++) m.noteTool("hash", 503, { rail: "trial" });
-  assert.equal((await m.status({ fresh: true })).toolFailures.status, "ok", "free proof-of-work and trial 5xx never page");
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "ok", "18 free 5xx (under the free lane minimum of 20 calls) do not page");
   const r = await m.report();
   assert.equal(r.tools[0].slug, "hash", "free failures stay visible on the operator view");
   assert.equal(r.tools[0].hour.free.fail, 18);
@@ -88,6 +88,21 @@ await check("free lane: nine free 5xx do not move toolFailures; nine paid 5xx st
   for (let i = 0; i < 9; i++) none.noteTool("hash", 500);
   assert.equal((await none.status({ fresh: true })).toolFailures.status, "failing", "an outcome with no rail is an outside buyer's");
   assert.equal(toolLaneOf({ synthetic: true, rail: "pow" }), "s", "our own traffic stays synthetic on any rail");
+});
+
+await check("free lane: a tool failing nearly every free call over many calls pages; a partial failure does not", async () => {
+  const c = clock();
+  const broken = createToolFailureMonitor({ now: c.now, env: {} });
+  for (let i = 0; i < 2; i++) broken.noteTool("hash", 200, { rail: "pow" });
+  for (let i = 0; i < 18; i++) broken.noteTool("hash", 500, { rail: "pow" });
+  assert.equal((await broken.status({ fresh: true })).toolFailures.status, "failing", "18 of 20 free calls failing (90%) is a broken tool");
+  const partial = createToolFailureMonitor({ now: c.now, env: {} });
+  for (let i = 0; i < 3; i++) partial.noteTool("hash", 200, { rail: "pow" });
+  for (let i = 0; i < 17; i++) partial.noteTool("hash", 500, { rail: "pow" });
+  assert.equal((await partial.status({ fresh: true })).toolFailures.status, "ok", "17 of 20 (85%) stays on the operator view only");
+  const tuned = createToolFailureMonitor({ now: c.now, env: { TOOL_FREE_FAIL_MIN_CALLS: "5", TOOL_FREE_FAIL_RATE: "0.5" } });
+  for (let i = 0; i < 5; i++) tuned.noteTool("hash", 503, { rail: "trial" });
+  assert.equal((await tuned.status({ fresh: true })).toolFailures.status, "failing", "the free thresholds are read from the environment");
 });
 
 await check("free lane merges across replicas, and a snapshot without it reads as zeros", async () => {
