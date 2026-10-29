@@ -74,7 +74,7 @@ The simplest home for a pure-CPU tool is `AGENT_TOOLS` in
   name: "Reverse text",
   slug: "reverse",                     // unique; how MCP/PoW refer to it
   category: "text",                    // see the category list below
-  price: "$0.001",                     // pure-CPU tools are free via proof-of-work
+  price: "$0.001",                     // free via proof-of-work once listed in src/free-tier.js
   description: 'Reverse a string. Example: {"text":"abc"} → {"reversed":"cba"}',
   discovery: {
     inputSchema: { properties: { text: { type: "string" } }, required: ["text"] },
@@ -111,10 +111,12 @@ The simplest home for a pure-CPU tool is `AGENT_TOOLS` in
    `discovery.example` and blocks the build on any failure, so keep it valid.
 4. **Reliable** - if an upstream is flaky from datacenter IPs, the tool gets
    removed rather than charge-and-502.
-5. **Free-tier safe or wallet-only** - by default a tool is pure-CPU and free
-   via proof-of-work. Anything that spends real resources per call (browser,
-   network egress, paid APIs, disk) must add its `slug` to `WALLET_ONLY_SLUGS`
-   in [`src/pow.js`](src/pow.js), and route every caller-supplied URL through
+5. **Wallet-only unless listed free** - a new tool is wallet-only by default.
+   The free (proof-of-work) tier is an allowlist: add the `slug` to
+   `FREE_TIER_SLUGS` in [`src/free-tier.js`](src/free-tier.js) only for a
+   pure-CPU tool (no network egress, API key or model call);
+   `WALLET_ONLY_SLUGS` in [`src/pow.js`](src/pow.js) overrides that list.
+   A tool that fetches must route every caller-supplied URL through
    `safeFetch`/`assertPublicUrl` from
    [`src/tools/fetch-guard.js`](src/tools/fetch-guard.js) - never raw `fetch`
    (that's the SSRF guard).

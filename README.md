@@ -514,7 +514,7 @@ and it's live - routed, schema-published, MCP-exposed, and covered by the
   name: "Reverse text",
   slug: "reverse",
   category: "text",
-  price: "$0.001",                       // free via proof-of-work for pure-CPU tools
+  price: "$0.001",                       // free via proof-of-work once listed in src/free-tier.js
   description: "Reverse a string. Example: {\"text\":\"abc\"} → {\"reversed\":\"cba\"}",
   discovery: {
     inputSchema: { properties: { text: { type: "string" } }, required: ["text"] },
@@ -528,9 +528,9 @@ and it's live - routed, schema-published, MCP-exposed, and covered by the
 ```
 
 That's the whole contract: `handler(input)` returns a JSON-serializable object
-(or throws an `Error` with `.statusCode` for a 4xx). Pure-CPU tools are
-automatically free-via-proof-of-work; tools that hit the network or disk stay
-wallet-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full walkthrough.
+(or throws an `Error` with `.statusCode` for a 4xx). A new tool is wallet-only;
+a pure-CPU tool joins the free proof-of-work tier when its slug is added to
+`FREE_TIER_SLUGS` in `src/free-tier.js`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full walkthrough.
 
 ## Optional: charge per call with x402
 
