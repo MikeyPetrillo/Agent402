@@ -84,7 +84,8 @@ ok(stdio.toolInputBoundRefusal("t", { v: series(MAX) }) === hosted.toolInputBoun
 // --- the bound fits the inputs and the parser in front of it -----------------
 {
   const server = readFileSync(join(ROOT, "src/server.js"), "utf8");
-  const m = server.match(/app\.use\(express\.json\(\{ limit: "(\d+)kb" \}\)\);/);
+  // The global parser may be wrapped (unlessBodyUnread), so match either form.
+  const m = server.match(/app\.use\((?:unlessBodyUnread\()?express\.json\(\{ limit: "(\d+)kb" \}\)\)?\);/);
   ok(m, "the global JSON body parser is found in server.js");
   const parserBytes = Number(m?.[1]) * 1024;
   ok(MAX >= Math.floor(parserBytes / 2), `the bound (${MAX}) is at least the most elements a ${m?.[1]}kb body can carry at two bytes each (${Math.floor(parserBytes / 2)}), so it never refuses a body the parser accepts`);
