@@ -349,9 +349,9 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
 // The image and video paragraph typed five prices beside their routes; they
 // read the catalog now, rendered here against odd prices a typed figure
 // cannot match by chance. The "most tools" per-call band is one named
-// constant (src/typical-price-range.js) that /llms.txt, the quickstart guide
-// and the FAQ all read; test-docs-truth measures it against the served
-// catalog.
+// constant (src/typical-price-range.js) that /llms.txt, the quickstart guide,
+// the FAQ and the connector's instructions and payment.info all read;
+// test-docs-truth measures it against the served catalog.
 {
   const { llmsFullTxt } = await import("../src/seo.js");
   const { TYPICAL_PRICE_RANGE, typicalPriceShare } = await import("../src/typical-price-range.js");
@@ -369,10 +369,14 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(/^\$\d/.test(TYPICAL_PRICE_RANGE.text) && TYPICAL_PRICE_RANGE.text === `$${TYPICAL_PRICE_RANGE.minUsd} to $${TYPICAL_PRICE_RANGE.maxUsd}`, `the band's text is its bounds (${TYPICAL_PRICE_RANGE.text})`);
   ok(typicalPriceShare(["$0.001", "$0.004", "$0.02", "$0.50", "quoted", 0.3]) === 0.6, "control: the share counts priced tools inside the band and skips a quoted price");
   ok(llms.includes(`most tools ${TYPICAL_PRICE_RANGE.text}`), "llms.txt quotes the band from the constant");
-  for (const f of ["src/seo.js", "src/guides.js", "src/pages.js"]) {
+  for (const f of ["src/seo.js", "src/guides.js", "src/pages.js", "src/mcp-http.js"]) {
     const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
     ok(/TYPICAL_PRICE_RANGE\.text/.test(src) && !/\$0\.001[–-]\$0\.02|\$0\.001 to \$0\.02/.test(src), `${f} reads the band from the constant and types no range`);
   }
+  // The connector states the band twice, in its instructions (paidAccess) and
+  // on payment.info (prices); both sites read the constant.
+  const mcpSrc = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
+  ok((mcpSrc.match(/most tools \$\{TYPICAL_PRICE_RANGE\.text\} per call/g) || []).length === 2, "the connector's instructions and payment.info both read the band from the constant");
 }
 
 console.log(`\n${pass} passed, 0 failed`);
