@@ -364,9 +364,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     return Math.round(micro / 10_000);
   }
   // Record a session as refused, claim-once like a minted one. True only when
-  // THIS call wrote the entry: only that call refunds.
-  async function refuseSession(sessionId, prefix) {
-    const pending = `${prefix}:pending@${now()}`;
+  // THIS call wrote the entry: only that call refunds. A refusal whose
+  // outcome is already known (the payment was refunded before the claim, so
+  // there is nothing to refund) is claimed with that outcome in the same
+  // write, so no second write can leave it pending, which would list it as
+  // owed.
+  async function refuseSession(sessionId, prefix, outcome = null) {
+    const pending = outcome ? `${prefix}:${outcome}` : `${prefix}:pending@${now()}`;
     if (usePg) return !!(await claimSessionPg(sessionId, pending));
     const idx = sessionsIdx();
     if (idx[sessionId]) return false;
@@ -509,11 +513,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     // A payment already refunded in full mints nothing (claim-once, nothing
     // to refund); a partial refund is minted net of what went back.
     if (buyer.refundedCents >= p.cents) {
-      if (!(await refuseSession(sessionId, REFUSAL_KINDS.refunded))) {
+      // Claimed with its outcome in one write: nothing is owed for it.
+      if (!(await refuseSession(sessionId, REFUSAL_KINDS.refunded, "refunded"))) {
         const theirs = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
         return isRefused(theirs[sessionId]) ? refusedAnswer(theirs[sessionId]) : claimedAnswer(theirs[sessionId] ? await readRec(theirs[sessionId]) : null);
       }
-      await setRefusal(sessionId, "refunded").catch(() => {});
       log(`[credits] session ${sessionId} was refunded before its claim; no key issued`);
       return refundedAnswer();
     }
@@ -702,6 +706,22 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => paidBy(x.rec, paymentIntent)); return hit ? mutatePg(hit.hash, (r) => (paidBy(r, paymentIntent) ? { rec: r, result: clawback(r) } : { result: null })) : null; });
     for (const { hash, rec: r } of allKeys()) {
       if (paidBy(r, paymentIntent)) { const id = clawback(r); save(hash, r); return id; }
+    }
+    return null;
+  }
+
+  // The reverse of a dispute clawback: the dispute closed in our favor (won,
+  // or an inquiry closed without a chargeback), so the key it disabled is
+  // enabled again. Only a key disabled for that `reason` is touched: a key
+  // disabled because its payment was refunded, or by the operator, stays
+  // disabled. Returns the key id or null.
+  function enableByPaymentIntent(paymentIntent, reason = "disputed") {
+    if (!paymentIntent) return answer(null);
+    const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason;
+    const lift = (r) => { r.disabled = false; r.disabledReason = null; log(`[credits] key ${r.keyId} enabled again (${reason} closed, ${paymentIntent})`); return r.keyId; };
+    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => held(x.rec)); return hit ? mutatePg(hit.hash, (r) => (held(r) ? { rec: r, result: lift(r) } : { result: null })) : null; });
+    for (const { hash, rec: r } of allKeys()) {
+      if (held(r)) { const id = lift(r); save(hash, r); return id; }
     }
     return null;
   }
@@ -921,5 +941,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

@@ -2935,6 +2935,8 @@ try {
     // A refunded or disputed pack payment: the refunded amount leaves the key's
     // balance; the key is disabled once the payment is fully reversed.
     onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
+    // A dispute that closed in our favor gives the key it disabled back.
+    onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -4744,7 +4746,10 @@ app.get("/__operator/monitors.json", async (req, res) => {
   // The wallet-billed subscribers carry billing state the scheduler never sees
   // (paid period, charge failures, next retry), so they get their own block.
   const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: String(e?.message || e).slice(0, 200) })) : { enabled: false };
-  res.set("Cache-Control", "no-store").json({ ...(_monitors ? _monitors.status() : { enabled: false }), mppSubscriptions: mpp });
+  // Card subscriptions a dispute holds out of fulfillment: Stripe may still
+  // bill one whose dispute ended, so the operator sees each with its outcome.
+  const disputed = _subs ? _subs.listDisputed() : [];
+  res.set("Cache-Control", "no-store").json({ ...(_monitors ? _monitors.status() : { enabled: false }), disputedSubscriptions: disputed, mppSubscriptions: mpp });
 });
 // Close stale rail-canary subscriptions now (the boot sweep's lever). Canary
 // product only; a real subscriber is never touched. Status writes only.

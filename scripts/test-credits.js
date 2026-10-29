@@ -6,7 +6,7 @@
 // request passes through untouched; accounting hooks fire; state survives a
 // reload; operator status never exposes key material.
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
-import { rmSync } from "node:fs";
+import { rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import express from "express";
@@ -336,6 +336,13 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     const r1 = await buy("cs_rf1", { email: "rf@x.com", card: "fp_rf" });
     ok(r1.status === "refunded" && !r1.key && !r1.keyId, "a pack refunded in full before its claim mints no key and answers refunded");
     ok((await lc.claim("cs_rf1")).status === "refunded" && refunds.length === refundsBefore && !(await lc.refusalsToRefund()).includes("cs_rf1"), "claiming it again answers the same; nothing is refunded twice and nothing is owed");
+    ok(JSON.parse(readFileSync(join(LDIR, "_sessions.json"), "utf8")).cs_rf1 === "refused-refunded:refunded", "the refusal is claimed with its outcome, never through a pending marker");
+    // The claim-once write carries the outcome when it is known: such a
+    // refusal is never owed, where one left pending is owed after five minutes.
+    ok((await lc._internals.refuseSession("cs_rf_final", "refused-refunded", "refunded")) && (await lc._internals.refuseSession("cs_rf_pending", "refused-refunded")), "setup: one refusal claimed with its outcome, one left pending");
+    t += 6 * 60_000;
+    const owedNow = await lc.refusalsToRefund();
+    ok(!owedNow.includes("cs_rf_final") && owedNow.includes("cs_rf_pending"), `a refusal claimed with its outcome is never owed; a pending one is after five minutes (${JSON.stringify(owedNow)})`);
     refundedCents.pi_cs_rf2 = 2500;
     const r2 = await buy("cs_rf2", { email: "rf@x.com", card: "fp_rf" });
     ok(r2.status === "minted" && r2.balanceUsd === 75, `a pack partly refunded before its claim is minted net of the refund (${r2.balanceUsd})`);
@@ -352,6 +359,13 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
       "a full refund takes the rest and disables the key");
     const r3 = await buy("cs_rf3", { email: "rf2@x.com", card: "fp_rf2" });
     ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "disabled", "a dispute disables the key outright");
+    // The dispute closing in our favor gives the key back; a key disabled
+    // because its payment was refunded is not touched by a dispute closing.
+    ok(lc.enableByPaymentIntent("pi_cs_rf3", "disputed") === r3.keyId, "a dispute closed in our favor enables the key it disabled");
+    const back = lc.authorize(r3.key, 0.001);
+    ok(back.ok === true, "...and it authorizes again");
+    lc.release(back.hash, back.heldMicro);
+    ok(lc.enableByPaymentIntent("pi_cs_rf3", "disputed") === null && lc.enableByPaymentIntent("pi_cs_rf2", "disputed") === null && lc.authorize(r2.key, 0.001).reason === "disabled", "an enabled key, and a key disabled for a refund, are left as they are");
   }
   ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
   t += 86_400_001;

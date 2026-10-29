@@ -146,7 +146,8 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
 // reaches the clawback hook with what was refunded and whether all of it.
 {
   const reversed = [];
-  const dsubs = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE, onInvoicePaid: () => {}, onChargeReversed: (pi, type, reversal) => reversed.push({ pi, type, reversal }) });
+  const closed = [];
+  const dsubs = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE, onInvoicePaid: () => {}, onChargeReversed: (pi, type, reversal) => reversed.push({ pi, type, reversal }), onDisputeClosed: (pi, o) => closed.push({ pi, ...o }) });
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d0", type: "customer.subscription.updated", data: { object: { id: "sub_1", customer: "cus_1", status: "active", metadata: { product: "domain-monitor", target: "example.com" }, items: { data: [{ current_period_end: 1893456000 }] } } } })), "goodsig");
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d1", type: "invoice.paid", data: { object: { id: "in_9", subscription: "sub_1", customer: "cus_1", amount_paid: 900, payments: { data: [{ payment: { payment_intent: "pi_in9" } }] } } } })), "goodsig");
   ok(dsubs.get("sub_1")?.lastPaymentIntent === "pi_in9" && dsubs.listActive("domain").some((x) => x.subId === "sub_1"), "a paid invoice records the PaymentIntent it was paid with; the subscription is active");
@@ -155,8 +156,25 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   ok(reversed.length === 1 && reversed[0].pi === "pi_in9" && reversed[0].type === "charge.dispute.created" && reversed[0].reversal.fullyRefunded === true, "the dispute still reaches the clawback hook");
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d3", type: "customer.subscription.updated", data: { object: { id: "sub_1", customer: "cus_1", status: "active", metadata: { product: "domain-monitor", target: "example.com" } } } })), "goodsig");
   ok(dsubs.get("sub_1")?.status === "active" && !dsubs.listActive("domain").some((x) => x.subId === "sub_1"), "a later active status does not resume a disputed subscription");
+  ok(dsubs.listDisputed().some((d) => d.subId === "sub_1" && d.lastPaymentIntent === "pi_in9" && d.disputeOutcome === null), "the operator list names the held subscription and its payment");
+  // The dispute closes. Lost: the hold stays and the outcome is noted. Won:
+  // the hold ends, the subscription runs again, and the hook hears it so the
+  // credits key the dispute disabled can be enabled again.
+  await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d5", type: "charge.dispute.closed", data: { object: { id: "dp_1", charge: "ch_9", payment_intent: "pi_in9", status: "lost" } } })), "goodsig");
+  ok(dsubs.get("sub_1")?.disputed === true && dsubs.get("sub_1").disputeOutcome === "lost" && !dsubs.listActive("domain").some((x) => x.subId === "sub_1") && dsubs.listDisputed().some((d) => d.subId === "sub_1" && d.disputeOutcome === "lost"), "a dispute lost leaves the hold; the operator list carries the outcome");
+  ok(closed.length === 1 && closed[0].pi === "pi_in9" && closed[0].won === false && closed[0].status === "lost", "the hook hears a lost dispute as not won");
+  await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d6", type: "charge.dispute.closed", data: { object: { id: "dp_1", charge: "ch_9", payment_intent: "pi_in9", status: "won" } } })), "goodsig");
+  ok(dsubs.get("sub_1")?.disputed === false && dsubs.get("sub_1").disputeOutcome === "won" && dsubs.listActive("domain").some((x) => x.subId === "sub_1") && dsubs.listDisputed().length === 0, "a dispute won ends the hold: the subscription is fulfilled again and leaves the operator list");
+  ok(closed.length === 2 && closed[1].pi === "pi_in9" && closed[1].won === true, "the hook hears the win");
+  // An inquiry closed without a chargeback (warning_closed) is a withdrawal: the same release.
+  await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d7", type: "charge.dispute.created", data: { object: { id: "dp_2", charge: "ch_9", payment_intent: "pi_in9", amount: 900 } } })), "goodsig");
+  ok(dsubs.get("sub_1")?.disputed === true && !dsubs.listActive("domain").some((x) => x.subId === "sub_1"), "a second dispute on the payment holds it again");
+  await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d8", type: "charge.dispute.closed", data: { object: { id: "dp_2", charge: "ch_9", payment_intent: "pi_in9", status: "warning_closed" } } })), "goodsig");
+  ok(dsubs.get("sub_1")?.disputed === false && dsubs.listActive("domain").some((x) => x.subId === "sub_1") && closed.length === 3 && closed[2].won === true && closed[2].status === "warning_closed", "an inquiry closed without a chargeback releases the hold too");
+  await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d9", type: "charge.dispute.closed", data: { object: { id: "dp_x", charge: "ch_other", payment_intent: "pi_other", status: "won" } } })), "goodsig");
+  ok(closed.length === 4 && dsubs.listDisputed().length === 0 && dsubs.get("sub_1")?.disputed === false, "a closed dispute on an unknown payment changes no record (the hook still hears it)");
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d4", type: "charge.refunded", data: { object: { id: "ch_5", payment_intent: "pi_pack", amount: 10000, amount_refunded: 2500, refunded: false } } })), "goodsig");
-  ok(reversed.length === 2 && reversed[1].pi === "pi_pack" && reversed[1].reversal.amountRefundedCents === 2500 && reversed[1].reversal.fullyRefunded === false, "a partial refund reaches the clawback hook with its amount and that it is partial");
+  ok(reversed.length === 3 && reversed[2].pi === "pi_pack" && reversed[2].reversal.amountRefundedCents === 2500 && reversed[2].reversal.fullyRefunded === false, "a partial refund reaches the clawback hook with its amount and that it is partial");
 }
 
 try { rmSync(STORE); } catch { /* ignore */ }
