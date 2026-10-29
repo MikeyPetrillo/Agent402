@@ -2505,6 +2505,8 @@ jobs:
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
           t node scripts/test-replay-guard.js
+          # "Replay guard with its shared store unreachable: long-running routes refuse 503 before any payment, fast routes keep the per-process claim (real server + stub facilitator - offline)"
+          t node scripts/test-replay-store-outage.js
           # "agent402-client pays over MPP (real mppx fetch as the SDK's fetch; real server + stub facilitator — offline)"
           t node scripts/test-client-mpp.js
           # "Facilitator diagnostics (an HTML error page must name itself: block vs rate limit vs origin failure, and never touch the response — offline)"

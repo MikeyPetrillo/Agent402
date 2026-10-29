@@ -10345,7 +10345,18 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      const verdict = await replayGuard.begin(replayKey);
+      // A long-running or composite route needs the shared claim: with the
+      // shared store configured but unreachable it is refused here, before
+      // any payment is taken, rather than claimed on this replica alone.
+      const replayDef = CATALOG[`${req.method} ${req.path}`];
+      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      if (verdict === "unavailable") {
+        res.setHeader("Retry-After", "30");
+        return res.status(503).json({
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          reason: "replay-store-unavailable",
+        });
+      }
       if (verdict !== "ok") {
         res.setHeader("X-Payment-Replay", verdict); // "consumed" | "inflight"
         return res.status(409).json({

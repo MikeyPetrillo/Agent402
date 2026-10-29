@@ -12,6 +12,7 @@
 // Offline, no facilitator, no network.
 import express from "express";
 import { paymentReplayKey, createReplayGuard } from "../src/replay-guard.js";
+import { __setTestClient } from "../src/shared-limit.js";
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -87,6 +88,26 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   const g = createReplayGuard({ maxEntries: 3 });
   for (let i = 0; i < 5; i++) { await g.begin(`k${i}`); await g.settle(`k${i}`); }
   ok(g._state().consumed <= 3, `consumed capped at maxEntries (got ${g._state().consumed})`);
+}
+
+// ---- A3. A shared store that is configured and does not answer ---------------
+// A caller that requires the shared store (the long-running and composite
+// routes) is told "unavailable" and refuses; every other caller keeps the
+// per-process fallback. With no shared store configured at all (one process)
+// the fallback is the guarantee for both.
+{
+  const g = createReplayGuard();
+  ok(await g.begin("n:solo", undefined, { requireShared: true }) === "ok", "no shared store configured: a route that requires it still claims locally");
+  const broken = { get: async () => { throw new Error("simulated outage"); }, set: async () => { throw new Error("simulated outage"); }, del: async () => { throw new Error("simulated outage"); }, expire: async () => { throw new Error("simulated outage"); } };
+  __setTestClient(broken);
+  try {
+    ok(await g.begin("n:slow", undefined, { requireShared: true }) === "unavailable", "store configured and failing: a route that requires it is refused");
+    ok(g._state().inFlight === 1, "and the refusal claims nothing locally");
+    ok(await g.begin("n:fast") === "ok", "store configured and failing: a fast route falls back to the per-process claim");
+    ok(await g.begin("n:fast") === "inflight", "and the per-process claim still refuses a concurrent duplicate");
+  } finally {
+    __setTestClient(null);
+  }
 }
 
 // ---- B. HTTP harness: the real guard code path in an Express app -------------

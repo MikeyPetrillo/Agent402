@@ -31,19 +31,20 @@
  *
  * Now backed by the SAME Redis connection shared-limit.js already maintains
  * (via getSharedRedisClient - one connection per process, not a second one to
- * the same server) when REDIS_URL is configured and reachable. FAILS OPEN to
- * the original per-process Map/Set on any Redis absence or failure - this is
- * the opposite fail-direction from shared-limit.js's rate limiter, and
- * deliberately so: that limiter protects a metered FREE-TIER budget, where
- * failing open means unmetered free access (a direct loss). This guard is
- * documented defense-in-depth on top of a chain-enforced guarantee that holds
- * with or without it, so degrading to "exactly today's per-process guarantee"
- * during a Redis blip is strictly better than refusing every paid call over
- * an optimization layer going dark.
+ * the same server) when REDIS_URL is configured and reachable. On a Redis
+ * absence or failure a fast route FALLS BACK to the per-process Map/Set: that
+ * holds the guarantee within one replica only, so while Redis is out the same
+ * authorization can run once on each replica (the chain still settles it at
+ * most once). For a fast route that bounded duplicate run is preferred to
+ * refusing every paid call while an optimization layer is dark. A caller that
+ * passes `requireShared` (the long-running and composite routes, where one
+ * extra run is expensive upstream work) gets "unavailable" instead whenever a
+ * shared store is configured but cannot be reached, and refuses the call
+ * before any payment is taken.
  */
 import { createHash } from "node:crypto";
 import { paymentHeaderOf } from "./payer.js";
-import { getSharedRedisClient } from "./shared-limit.js";
+import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
 
 // The claim's lifetime in Redis without a renewal. A claim is renewed every
 // INFLIGHT_RENEW_MS while its call is open (the slow routes run for minutes),
@@ -103,8 +104,9 @@ export function paymentReplayKey(req) {
  */
 export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
   // Local (per-process) fallback state — used whenever Redis is unset or a
-  // call to it fails, so a single replica or a Redis outage degrades to
-  // exactly the pre-Redis guarantee, never to zero protection.
+  // call to it fails (unless the caller requires the shared store), so a
+  // single replica keeps its full guarantee and a Redis outage degrades to a
+  // per-replica one, never to zero protection.
   const consumed = new Map(); // key -> settledAt (ms)
   const inFlight = new Set();
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
@@ -146,9 +148,12 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
      *   "ok"       — first use; caller proceeds to the paywall
      *   "inflight" — an identical authorization is mid-settle (concurrent replay)
      *   "consumed" — this authorization already settled (sequential replay)
+     *   "unavailable" — only with `requireShared`: a shared store is
+     *                   configured and did not answer; the caller refuses
      */
-    async begin(key, now = Date.now()) {
+    async begin(key, now = Date.now(), { requireShared = false } = {}) {
       const c = await getSharedRedisClient();
+      if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
         try {
           if (await c.get(REDIS_PREFIX + "c:" + key)) return "consumed";
@@ -160,6 +165,10 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
           startRenew(key);
           return "ok";
         } catch (e) {
+          if (requireShared) {
+            console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
+            return "unavailable";
+          }
           console.error("[replay-guard] redis begin failed, falling back to local state:", e.message);
           // fall through to the local path below
         }
