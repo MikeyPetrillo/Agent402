@@ -808,6 +808,37 @@ jobs:
               ;;
           esac
 
+      # CDN-range peers reaching the origin without the shared origin secret
+      # (src/cdn-client-ip.js): one word on /api/gateway-status. unauthenticated
+      # pages; ok and off close; unknown does neither. The count and whether a
+      # secret is configured stay on the operator view. The status Worker runs
+      # the same check every five minutes under the same title.
+      - name: CDN origin secret check (alarm when edge traffic reaches the origin unauthenticated)
+        if: always()
+        continue-on-error: true
+        run: |
+          GW=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          WORD=$(printf '%s' "$GW" | jq -r '.cdnOrigin.status // "unknown"' 2>/dev/null || echo unknown)
+          case "$WORD" in unauthenticated|ok|off|unknown) ;; *) WORD=unknown ;; esac
+          echo "cdn origin: $WORD"
+          TITLE="CDN origin secret: edge traffic reached the origin unauthenticated"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unauthenticated)
+              BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unauthenticated at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: cdnOrigin reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Recipients our spending wallets paid for the first time
       # (src/outbound-destinations.js): one word on /api/gateway-status.
       # burst pages (more first-time recipients inside the window than the

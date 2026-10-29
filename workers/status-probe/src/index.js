@@ -774,6 +774,19 @@ Check, in order: recent runs of \`paid-canary.yml\` and whether the \`canary\` j
 This observer cannot dispatch the canary itself (it holds an issues-only credential by design). To heal it: \`gh workflow run paid-canary.yml --repo MikeyPetrillo/Agent402 --ref main\` - a dispatch always buys, because the freshness gate applies to scheduled runs only.`;
     },
   },
+  {
+    // CDN-range peers reaching the origin without the shared origin secret
+    // (cdnOrigin on /api/gateway-status, src/cdn-client-ip.js): each such
+    // request is keyed on the edge address, not its client. unauthenticated
+    // pages; ok and off clear; unknown or absent does neither.
+    title: "CDN origin secret: edge traffic reached the origin unauthenticated",
+    verdict: ({ gateway: b }) => {
+      const w = b.cdnOrigin?.status;
+      if (w === "unauthenticated") return "bad";
+      return w === "ok" || w === "off" ? "good" : "quiet";
+    },
+    body: () => `/api/gateway-status reports cdnOrigin.status=unauthenticated: requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok.`,
+  },
 ];
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);

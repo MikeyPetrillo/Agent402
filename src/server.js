@@ -305,7 +305,7 @@ import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
-import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -2441,6 +2441,10 @@ if (CDN_PROXY_ON) {
 // Paid answers, every 402 and operator surfaces are never kept by a shared
 // cache (src/paid-no-store.js).
 app.use(paidNoStoreMiddleware());
+// Browser security headers on every answer, ahead of every route (the
+// email-link routes under /followups and /alerts are registered early; the
+// PostHog proxy sets its own nosniff as well).
+app.use(securityHeaders());
 // Server-side memo for public surfaces whose body is built from SQLite
 // aggregates (revenue, sales, status, proof). A Cache-Control header only
 // asks browsers to reuse a response; every crawler and bot hit still rebuilt
@@ -3369,8 +3373,6 @@ app.use(rugcheckPauseMiddleware(
   Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
 ));
 
-app.use(securityHeaders());
-
 // Free, unauthenticated routes
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
 // the top nav doesn't re-render the world every time. stale-while-revalidate
@@ -3700,6 +3702,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // POST /__operator/credits/refusal-refunded. A word only; the session ids
     // are on /__operator/credits.json.
     creditsRefunds: _credits ? await _credits.refusalsToRefund().then((l) => ({ status: l.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
+    // CDN-range peers that reached the origin without the shared origin
+    // secret (src/cdn-client-ip.js): with the resolver on, each such request
+    // is keyed on the edge address instead of its client, so a missing or
+    // rotated CDN_ORIGIN_SECRET folds the per-address controls onto a few
+    // addresses. ok / unauthenticated / off; the count and whether a secret
+    // is configured for the operator.
+    cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement

@@ -113,6 +113,37 @@ export function resolveClientIp(edgeIp, cfHeader, ranges, originAuthed = false) 
   return { ip: cand && cand.length <= 64 && isIP(cand) ? cand : peer, viaCdn: true };
 }
 
+// CDN-range peers that reached the origin without a valid origin secret: with
+// the resolver on, each such request is keyed on the edge address instead of
+// its client. A missing or rotated CDN_ORIGIN_SECRET looks exactly like this,
+// so it is one word on /api/gateway-status (ok / unauthenticated / off) with
+// the count for the operator. Per process; the window is an hour.
+const CDN_ORIGIN_WINDOW_MS = 60 * 60_000;
+const CDN_ORIGIN_MAX_KEPT = 5_000;
+const unauthenticatedCdnPeers = []; // timestamps
+let unauthenticatedCdnPeersTotal = 0;
+let lastUnauthenticatedCdnPeerAt = 0;
+function noteUnauthenticatedCdnPeer(now = Date.now()) {
+  unauthenticatedCdnPeersTotal++;
+  lastUnauthenticatedCdnPeerAt = now;
+  unauthenticatedCdnPeers.push(now);
+  if (unauthenticatedCdnPeers.length > CDN_ORIGIN_MAX_KEPT) unauthenticatedCdnPeers.splice(0, unauthenticatedCdnPeers.length - CDN_ORIGIN_MAX_KEPT);
+}
+/** The status word (/api/gateway-status): off while the resolver is off,
+ *  unauthenticated when a CDN-range peer reached the origin without a valid
+ *  X-Origin-Auth inside the window, else ok. `full` adds the counts. */
+export function cdnOriginStatus({ full = false, now = Date.now(), enabled = cdnProxyEnabled(), secret = cdnOriginSecret() } = {}) {
+  if (!enabled) return { status: "off" };
+  while (unauthenticatedCdnPeers.length && now - unauthenticatedCdnPeers[0] > CDN_ORIGIN_WINDOW_MS) unauthenticatedCdnPeers.shift();
+  const n = unauthenticatedCdnPeers.length;
+  const status = n ? "unauthenticated" : "ok";
+  return full
+    ? { status, unauthenticatedInWindow: n, unauthenticatedSinceBoot: unauthenticatedCdnPeersTotal, windowMinutes: CDN_ORIGIN_WINDOW_MS / 60_000, lastAt: lastUnauthenticatedCdnPeerAt ? new Date(lastUnauthenticatedCdnPeerAt).toISOString() : null, secretConfigured: Boolean(secret) }
+    : { status };
+}
+/** Tests: forget the counted peers. */
+export function __resetCdnOriginStatus() { unauthenticatedCdnPeers.length = 0; unauthenticatedCdnPeersTotal = 0; lastUnauthenticatedCdnPeerAt = 0; }
+
 /** Express middleware: mount right after app.set("trust proxy", ...) and
  *  before any middleware that reads req.ip. Off (CDN_PROXY unset), it only
  *  calls next(). */
@@ -125,6 +156,7 @@ export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cd
     try { edgeIp = req.ip || ""; } catch { edgeIp = ""; }
     const authed = originAuthOk(req.headers[ORIGIN_AUTH_HEADER], secret);
     delete req.headers[ORIGIN_AUTH_HEADER];
+    if (!authed && inCdnRanges(edgeIp, list)) noteUnauthenticatedCdnPeer();
     const { ip, viaCdn } = resolveClientIp(edgeIp, req.headers["cf-connecting-ip"], list, authed);
     if (viaCdn) {
       Object.defineProperty(req, "ip", { value: ip, configurable: true, enumerable: true, writable: true });
