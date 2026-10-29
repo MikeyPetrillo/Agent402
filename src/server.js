@@ -10827,7 +10827,9 @@ function sendToolError(res, err, slug) {
 // sends the self-explaining 400 and returns null.
 function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
-  const input = handlerInputOf(req, def);
+  let input;
+  try { input = handlerInputOf(req, def); }
+  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
   const refused = shapeRefusal(input, def);
   if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
   if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }

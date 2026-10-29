@@ -1576,6 +1576,9 @@ jobs:
       # Input aliases may never change the MEANING of a call (offline, mutation-tested)
       - name: Input parameter aliases (offline)
         run: node scripts/test-input-aliases.js
+      # An input nested past the depth bound is a 400 on HTTP and MCP (boots its own server on port 0)
+      - name: Input nesting depth bound
+        run: node scripts/test-input-depth.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
