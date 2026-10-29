@@ -94,8 +94,10 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
     const base = `http://127.0.0.1:${srv.address().port}`;
     const cc = async (p, h = {}) => (await fetch(`${base}${p}`, { headers: h })).headers.get("cache-control");
     ok(await cc("/q402") === "no-store", "middleware: a 402 marked public goes out no-store");
-    ok(await cc("/paid", { "payment-signature": "x" }) === "private, no-store", "middleware: a paid answer marked public goes out private, no-store");
-    ok(await cc("/inline", { authorization: "Payment abc" }) === "private, no-store", "middleware: the writeHead(status, headers) form is covered");
+    const paidHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+    const mppHeader = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", realm: "t", method: "evm", intent: "charge", request: {} }, payload: {} })).toString("base64url")}`;
+    ok(await cc("/paid", { "payment-signature": paidHeader }) === "private, no-store", "middleware: a paid answer marked public goes out private, no-store");
+    ok(await cc("/inline", { authorization: mppHeader }) === "private, no-store", "middleware: the writeHead(status, headers) form is covered");
     ok(await cc("/free") === "public, max-age=600", "middleware: a free public answer keeps its header");
     ok(await cc("/__operator/x.json") === "private, no-store", "middleware: an operator answer is private, no-store");
     srv.close();

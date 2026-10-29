@@ -37,6 +37,7 @@
 import { DISCOVERY_PATHS, OWN_UA, indexerFor, uaToken } from "./traffic-classifier.js";
 import { perReplica } from "./rate-limit.js";
 import { cacheGet, cacheSet, cacheEnabled } from "./cache.js";
+import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 import { createHash } from "node:crypto";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
@@ -78,14 +79,15 @@ const headerText = (v) => (Array.isArray(v) ? v[0] : v);
 
 /** A PLAUSIBLE payment or credits credential. Deliberately the same shapes the
  *  metered quote limiter accepts (server.js): a credits key, an MPP `Payment`
- *  credential, or a payment header long enough to be one. Shape, not validity:
- *  the gates verify, and this only decides whether a request is a price check. */
+ *  credential that decodes, or an x402 payment header that decodes to a
+ *  payload naming an offered network (src/payment-attempt.js, the gateway
+ *  cache's reader too). Shape, not validity: the gates verify, and this only
+ *  decides whether a request is a price check. */
 export function looksLikePayment(headers = {}) {
   const a = String(headerText(headers?.authorization) ?? "");
-  if (/^Bearer\s+a402_[A-Za-z0-9_-]{8,}/.test(a) || /^Payment\s+\S{16,}/i.test(a)) return true;
+  if (/^Bearer\s+a402_[A-Za-z0-9_-]{8,}/.test(a) || decodesAsMppCredential(a)) return true;
   for (const k of ["payment-signature", "x-payment"]) {
-    const v = headerText(headers?.[k]);
-    if (typeof v === "string" && v.length >= 32) return true;
+    if (decodesAsX402Payment(headerText(headers?.[k]))) return true;
   }
   return false;
 }

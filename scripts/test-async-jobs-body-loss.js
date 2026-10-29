@@ -32,7 +32,7 @@ async function run(fetchImpl) {
     asyncRouteOf: () => ({ slug: "slow-report", priceUsd: 1.5 }),
     onChargedFailure: async (info) => { booked.push(info); return true; },
   });
-  const req = { method: "POST", headers: { prefer: "respond-async", "payment-signature": "x" }, body: {}, ip: "1.2.3.4", originalUrl: "/api/slow" };
+  const req = { method: "POST", headers: { prefer: "respond-async", "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64") }, body: {}, ip: "1.2.3.4", originalUrl: "/api/slow" };
   const res = { statusCode: 0, status(c) { this.statusCode = c; return this; }, set() { return this; }, json(b) { this.body = b; return this; } };
   await jobs.middleware(req, res, () => {});
   for (let i = 0; i < 100 && !store.failed.length && !store.completed.length; i++) await new Promise((r) => setTimeout(r, 10));
