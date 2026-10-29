@@ -9762,17 +9762,28 @@ app.use(createIdempotency({
   isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
   freeMode: FREE_MODE,
   implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
-  onReplay: (req, { implicit, charged }) => {
+  onReplay: async (req, { implicit, charged }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
     // The stored answer was charged but never delivered (the buyer left while
-    // it settled); it is delivered now, so the debt booked for it is void: a
-    // buyer is served once, never both served and refunded.
-    if (charged && typeof charged.tx === "string" && charged.tx) {
-      Promise.resolve(voidOwedOnClaim(charged.tx, "served on the resend of the same payment"))
-        .then((voided) => { if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); })
-        .catch(() => { /* the row stays owed and is reviewed by hand */ });
-    }
+    // it settled). Its debt is voided BEFORE the answer goes out, like the
+    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
+    // has already claimed or paid is not voided, and then the answer is not
+    // served either, so a buyer is served once, never both served and
+    // refunded. No row, or one already void, serves.
+    let voided = false;
+    try { voided = (await voidOwedOnClaim(charged.tx, "served on the resend of the same payment")) === true; } catch { voided = false; }
+    if (voided) { console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); return; }
+    let row = null;
+    try { row = await refundByEvidenceFresh(charged.tx); } catch { row = null; }
+    if (!row || row.status === "void") return;
+    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+    } };
   },
 }));
 

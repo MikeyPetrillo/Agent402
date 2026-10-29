@@ -26,9 +26,11 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
  *  implicitReplay(req): true when a re-sent x402 payment on this route may be
  *  answered from its first answer (the server excludes routes with a lasting
  *  effect and streamed calls); absent, no implicit key is derived.
- *  onReplay(req, { implicit, key, charged }): called once per answer served from
- *  the store; `charged` names the charge ({ tx, network, wire }) when the stored
- *  answer was charged and never delivered (see below), else null. */
+ *  onReplay(req, { implicit, key, charged }): awaited once per stored answer
+ *  before it is served; `charged` names the charge ({ tx, network, wire }) when
+ *  the stored answer was charged and never delivered (see below), else null.
+ *  Resolving { serve: false, status, body } answers that instead of the stored
+ *  body (the charge was refunded); any other result serves it. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -128,9 +130,18 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       // settlement, and none of the finish-time bookkeeping behind the gates
       // (the sale, the served-call tally, the tool-answer classes) sees it.
       const { body, charged } = unwrapStored(hit);
+      if (typeof onReplay === "function") {
+        // The hook runs before the body goes out and may refuse the replay
+        // ({ serve: false, status, body }: the charge behind the stored
+        // answer was refunded); anything else serves it.
+        let verdict;
+        try { verdict = await onReplay(req, { implicit, key, charged }); } catch { verdict = undefined; }
+        if (verdict && typeof verdict === "object" && verdict.serve === false) {
+          return res.status(Number(verdict.status) || 402).json(verdict.body && typeof verdict.body === "object" ? verdict.body : { error: "replay_refused" });
+        }
+      }
       res.setHeader("X-Idempotent-Replay", "true");
       if (implicit) res.setHeader("X-Replayed-Answer", "1");
-      if (typeof onReplay === "function") { try { onReplay(req, { implicit, key, charged }); } catch { /* counting only */ } }
       return res.status(200).json(body);
     }
     // The same keyed call is still running (a client that timed out and retried
