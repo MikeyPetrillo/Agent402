@@ -49,7 +49,9 @@ Packages:
   agent402-langchain 0.2.12, agent402-llamaindex 0.1.13,
   agent402-openai-agents 0.1.13, agent402-openai-tools 0.1.13,
   agent402-strands 0.1.13 and agent402-langchain 0.1.6 on PyPI name
-  themselves in the User-Agent of every request.
+  themselves in the User-Agent of every request; the adapters that pass it
+  require agent402-client 0.8.21 or later. agent402-openclaw 0.5.8 ships its
+  README's metered-default wording.
 
 Operations:
 - Each sale records the path it arrived on: the hosted connector's loopback,
