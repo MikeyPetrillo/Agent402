@@ -476,8 +476,9 @@ export const TIERS = {
       // ("openai/gpt-5" matches gpt-5-*, not gpt-5.6-*). claude-opus covers
       // claude-opus-5; the -fast ids left the catalog 2026-07-24.
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
-      // 2026-10-23 removal: o4-mini stays by its own id, gpt-5.6-terra is the successor.
-      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3", "openai/o4-mini",
+      // 2026-10-23 removal; o4-mini left the upstream catalog 2026-10-27 and a
+      // request naming it is served by gpt-5.6-terra (RETIRING_MODELS).
+      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
       // (REASONING_MODELS). gpt-6-astra also admits gpt-6-astra-pro under the
@@ -778,6 +779,10 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
   "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
   "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  // Gone from the upstream catalog 2026-10-27 (the live-catalog guard). Its
+  // family successor on premium, the one the /api/llm-premium proxy already
+  // serves for the retired o3-mini and o4-mini ids (llm-kit.js).
+  "openai/o4-mini": { until: "2026-10-27", use: "openai/gpt-5.6-terra" },
 });
 let retiringClock = () => Date.now();
 /** Tests only: read scheduled retirements against another clock (null resets). */
@@ -3845,7 +3850,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.50",
     description:
-      "OpenAI-compatible chat completions, premium tier: gpt-5, gpt-6 astra, o3 and o4-mini, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
+      "OpenAI-compatible chat completions, premium tier: gpt-5, gpt-6 astra, o3, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5" } } },
     handler: makeHandler("v1-chat-premium"),

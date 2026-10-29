@@ -48,7 +48,7 @@ Because tiers are flat-priced while upstream bills per token, every request is a
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
-| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus incl. opus-5.5, claude fable 5.1, and gemini 3.1 pro) | 200k chars | 8,192 tokens |
+| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3, claude opus incl. opus-5.5, claude fable 5.1, and gemini 3.1 pro) | 200k chars | 8,192 tokens |
 | `POST /v1/embeddings` | $0.002 | text-embedding-3-small (default), 3-large, ada-002 - batch up to 64 inputs | 16k chars | - |
 | `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with GPT-5 Image Mini as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
 | `POST /v1/audio/speech` | $0.06 | a five-model failover chain; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
