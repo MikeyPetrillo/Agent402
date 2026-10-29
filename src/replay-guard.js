@@ -45,13 +45,16 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 
-// Generous vs. any realistic single-request duration (the STT margin cap's
-// 60s upstream timeout is the longest known handler in this catalog) - long
-// enough that a healthy request always clears it via settle()/release()
-// before it matters, short enough that a replica that crashes mid-request
-// without ever releasing its claim self-heals well within a minute rather
-// than leaving that nonce artificially blocked.
+// The claim's lifetime in Redis without a renewal. A claim is renewed every
+// INFLIGHT_RENEW_MS while its call is open (the slow routes run for minutes),
+// so a healthy call keeps it until settle()/release(), and a replica that
+// dies mid-request without releasing stops renewing and its claim lapses
+// within this.
 const INFLIGHT_TTL_SECONDS = 120;
+export const INFLIGHT_RENEW_MS = 30_000;
+// Renewal stops after this long, so a caller that never settles or releases
+// cannot hold a nonce (or a timer) forever. Far past any run budget.
+const MAX_HOLD_MS = 30 * 60_000;
 const REDIS_PREFIX = "replay:";
 
 /**
@@ -98,13 +101,32 @@ export function paymentReplayKey(req) {
  * (the facilitator would reject it anyway); this guard only makes the rejection
  * earlier and cheaper.
  */
-export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000 } = {}) {
+export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
   // Local (per-process) fallback state — used whenever Redis is unset or a
   // call to it fails, so a single replica or a Redis outage degrades to
   // exactly the pre-Redis guarantee, never to zero protection.
   const consumed = new Map(); // key -> settledAt (ms)
   const inFlight = new Set();
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
+  // key -> interval renewing this process's Redis claim on it.
+  const renewers = new Map();
+  function startRenew(key) {
+    stopRenew(key);
+    const until = Date.now() + maxHoldMs;
+    const t = setInterval(async () => {
+      if (Date.now() >= until) { stopRenew(key); return; }
+      try {
+        const c = await getSharedRedisClient();
+        if (c) await c.expire(REDIS_PREFIX + "f:" + key, inflightTtlSeconds);
+      } catch { /* the next tick retries */ }
+    }, renewMs);
+    t.unref?.();
+    renewers.set(key, t);
+  }
+  function stopRenew(key) {
+    const t = renewers.get(key);
+    if (t) { clearInterval(t); renewers.delete(key); }
+  }
 
   // Prune expired local consumed entries. Keys are inserted in non-decreasing
   // settle time (each key is consumed at most once, always with the current
@@ -133,8 +155,10 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000 
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
-          const claimed = await c.set(REDIS_PREFIX + "f:" + key, String(now), { NX: true, EX: INFLIGHT_TTL_SECONDS });
-          return claimed ? "ok" : "inflight";
+          const claimed = await c.set(REDIS_PREFIX + "f:" + key, String(now), { NX: true, EX: inflightTtlSeconds });
+          if (!claimed) return "inflight";
+          startRenew(key);
+          return "ok";
         } catch (e) {
           console.error("[replay-guard] redis begin failed, falling back to local state:", e.message);
           // fall through to the local path below
@@ -148,6 +172,7 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000 
     },
     /** Mark the nonce consumed — call only when the gated call was granted (200). */
     async settle(key, now = Date.now()) {
+      stopRenew(key);
       const c = await getSharedRedisClient();
       if (c) {
         try {
@@ -169,6 +194,7 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000 
     /** Release the nonce — call when the gated call was NOT granted, so a
      *  legitimate retry of the still-valid authorization can proceed. */
     async release(key) {
+      stopRenew(key);
       const c = await getSharedRedisClient();
       if (c) {
         try {
@@ -183,7 +209,7 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000 
     /** Introspection for tests / stats — LOCAL fallback state only; Redis
      *  state is shared and has no single-process notion of "size". */
     _state() {
-      return { consumed: consumed.size, inFlight: inFlight.size };
+      return { consumed: consumed.size, inFlight: inFlight.size, renewing: renewers.size };
     },
   };
 }
