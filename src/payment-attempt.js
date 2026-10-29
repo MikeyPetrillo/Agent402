@@ -18,15 +18,21 @@
 // discovery validator, anyone) gets the route's 402 instead of someone
 // else's paid answer.
 import { decodeB64Json } from "./payment-reject.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 
-// CAIP-2: namespace:reference (the Algorand reference ends in "=").
+// CAIP-2: namespace:reference (the legacy Algorand reference ends in "=").
 const CAIP2 = /^[a-z0-9]{3,8}:[A-Za-z0-9._=-]{1,64}$/;
 let offeredNetworks = null;
 
 /** The x402 network ids this server sells on, registered at boot. Until one
- *  is registered (unit tests, a leaf import) any well-formed id counts. */
+ *  is registered (unit tests, a leaf import) any well-formed id counts. A
+ *  network with a second spelling on the wire (the Algorand genesis-hash id
+ *  the paywall folds to its CAIP-2 form, src/x402-v1-accepts.js) is
+ *  registered under both, so a payment header carrying the other spelling
+ *  reads as the attempt it is everywhere this module is consulted. */
 export function registerOfferedNetworks(ids) {
   const list = Array.isArray(ids) ? ids.filter((n) => typeof n === "string" && CAIP2.test(n)) : [];
+  if (list.includes(ALGORAND_MAINNET_CAIP2)) list.push(ALGORAND_MAINNET_LEGACY_CAIP2);
   offeredNetworks = list.length ? new Set(list) : null;
 }
 
