@@ -137,6 +137,13 @@ doesn't reconcile, and tools that are invisible to agents.
 
 ## Test your change
 
+The MCP sweep drives the whole catalog through `/mcp`, so boot the server with
+the connector's rate limit raised first:
+
+```bash
+AGENT402_MCP_MAX_PER_MIN=999999 AGENT402_MCP_MAX_PER_HOUR=9999999 FREE_MODE=true npm start
+```
+
 ```bash
 node scripts/test-all.js                 # every endpoint vs its own example (the key one)
 node scripts/test-kit2.js                # exact-output tests for pure-CPU tools
