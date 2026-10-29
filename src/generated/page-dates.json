@@ -155,7 +155,7 @@
     "src/tools/price-feed-kit.js": "2026-10-15",
     "src/tools/provenance.js": "2026-07-18",
     "src/tools/recall-report-kit.js": "2026-10-21",
-    "src/tools/redact.js": "2026-07-14",
+    "src/tools/redact.js": "2026-10-29",
     "src/tools/regex-worker.js": "2026-06-11",
     "src/tools/render.js": "2026-10-21",
     "src/tools/research-deep-kit.js": "2026-10-28",
