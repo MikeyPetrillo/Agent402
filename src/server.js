@@ -435,6 +435,7 @@ import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
+import { redactSecrets } from "./tools/redact.js";
 import { warmLazyDeps } from "./tools/lazy-deps.js";
 import { KIT2 } from "./tools/kit2.js";
 import { UNIT_CATEGORIES, convertAnyUnit } from "./tools/convert-gen.js";
@@ -6816,6 +6817,9 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
 function logToolError(slug, status, message, shape, synthetic, probe) {
+  // Every caller's message is scrubbed of configured secrets and credential-
+  // bearing URLs before the log line, PostHog and the failure monitor read it.
+  message = redactSecrets(message || "");
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
   // Probe 4xx = an empty-input scanner sweeping the catalog and every tool
   // correctly rejecting it — expected behavior, not an error. An indexer sweep
@@ -6832,7 +6836,7 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
-  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${String(message || "").slice(0, 200)}`);
+  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${message.slice(0, 200)}`);
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
@@ -11313,7 +11317,11 @@ for (const tool of ALL_KIT) {
         const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
         probe = meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
       }
-      logToolError(tool.slug, status, err.message, shape, synthetic, probe);
+      // What a handler throws is answered and logged, so a configured secret
+      // or a credential-bearing URL an error quotes (an upstream echo, a
+      // database driver's connection string) is scrubbed first, on every status.
+      const errorMessage = redactSecrets(err?.message);
+      logToolError(tool.slug, status, errorMessage, shape, synthetic, probe);
       // WHOSE FAILURE IS THIS? Every 4xx carried the self-correction envelope -
       // the tool's input schema, its required keys and a working example - which
       // says one thing to a machine: your input was wrong, here is the shape.
@@ -11341,7 +11349,7 @@ for (const tool of ALL_KIT) {
       };
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
-          error: err.message,
+          error: errorMessage,
           tool: tool.slug,
           ...provenance,
           // A repeated decide execution key returns the earlier run to the
@@ -11352,7 +11360,7 @@ for (const tool of ALL_KIT) {
           example: tool.discovery?.input || {},
         });
       } else {
-        res.status(status).json({ error: err.message, tool: tool.slug, ...provenance });
+        res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
       }
     } finally {
       const latencyMs = Date.now() - startedAt;

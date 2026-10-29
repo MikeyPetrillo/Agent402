@@ -3560,6 +3560,8 @@ jobs:
           # (e.g. data.gov downtime) must never mask whether the tools actually work.
           # Secret-leak guard (canary keys never reach responses, caches, or errors; gateway cost-strip — offline)
           t node scripts/test-leak-guard.js
+          # Tool errors: the route binder and the error log scrub configured secrets and credential-bearing URLs (own port-0 boot)
+          t node scripts/test-tool-error-redaction.js
           # Paid-canary verdict (pages on real buying breaks, warns on upstream)
           t node scripts/test-paid-canary.js
           # derivatives kit (offline)
