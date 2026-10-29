@@ -49,7 +49,7 @@ import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
-import { GATEWAY_LABEL, GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
+import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the

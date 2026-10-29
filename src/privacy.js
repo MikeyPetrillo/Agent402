@@ -1,7 +1,7 @@
 // Privacy policy — a stable URL is required for listing the remote MCP
 // connector in Anthropic's directory, and it should be true: this service
 // has no accounts, so there is genuinely little to say.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";

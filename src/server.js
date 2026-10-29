@@ -78,7 +78,7 @@ import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accep
 import { mountShortlinks } from "./shortlinks.js";
 import { withHouseStyle } from "./house-style.js";
 import { withNextCall, nextCallFor } from "./next-call.js";
-import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport, readPublicReportFresh } from "./human-checkout.js";
+import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReportFresh } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { kitDisclaimer } from "./report-disclosure.js";
 import { shownGroundingNote } from "./report-grounding.js";
@@ -309,7 +309,7 @@ import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend, globalUnsettledStatus } from "./external-spend-guard.js";
-import { registerWellKnown, removeWellKnown, getWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
+import { registerWellKnown, removeWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
 import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
@@ -398,7 +398,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategories, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -524,7 +524,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGet, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -633,7 +633,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDaily, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
@@ -753,14 +753,13 @@ import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerR
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
-import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
+import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
 import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
-import { sweepStaleTsMap } from "./rate-sweep.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
