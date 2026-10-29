@@ -9787,7 +9787,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug) } : null;
     },
   });
   if (stripeGate) {

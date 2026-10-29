@@ -152,7 +152,7 @@ export function checkStripeCredentialBinding(authorizationHeader, { secretKey, r
   try { amount = parseInt(String(r.amount), 10); } catch { return bad("challenge amount is not an integer cents string"); }
   if (!Number.isFinite(amount)) return bad("challenge amount is not an integer cents string");
   if (amount < expected) return bad(`challenge amount ${amount} is below this route's price ${expected} cents`);
-  return { ok: true, challenge: ch, amountCents: amount, expectedCents: expected };
+  return { ok: true, challenge: ch, amountCents: amount, expectedCents: expected, longRunning: item.longRunning === true };
 }
 
 /** Non-mutating pre-check, run BEFORE the handler: is this a well-formed,
@@ -314,7 +314,14 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       req.mppStripeCredential = true;
       const replayKey = replayGuard ? `stripe:${binding.challenge.id}` : null;
       if (replayGuard && replayKey) {
-        const verdict = await replayGuard.begin(replayKey);
+        // A long-running or composite route needs the shared claim: with the
+        // shared store configured but unreachable it is refused before the
+        // handler runs, and nothing is captured.
+        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: binding.longRunning });
+        if (verdict === "unavailable") {
+          res.setHeader("Retry-After", "30");
+          return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });
+        }
         if (verdict !== "ok") return sendMppProblem(res, mppProblem("invalid-challenge", `Challenge is invalid: this credential was already used or is in flight (${verdict}). Request the resource again for a fresh challenge.`));
       }
       const releaseReplay = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
