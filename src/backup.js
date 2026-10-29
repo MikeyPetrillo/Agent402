@@ -420,13 +420,21 @@ export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...s
 //   held    the last run left a state table without an offsite copy
 //   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
 //           window plus slack), including none at all since configured
-//   unencrypted  BACKUP_ENCRYPTION_KEY unset in production (NODE_ENV): the
-//           runs succeed but every object goes up as plain gzip
+//   unencrypted  BACKUP_ENCRYPTION_KEY unset in production (backupProduction):
+//           the runs succeed but every object goes up as plain gzip
 //   ok      the last run succeeded and is recent
 //   unknown the stored status has not been read yet (database unreachable)
 //           and this process has not run a backup: no page either way
 // A key that is set but does not parse reads failed at once: every run
 // refuses it, so the word does not wait for the next nightly run to say so.
+// Production is the image's NODE_ENV=production (the Dockerfile sets it, and
+// the PostHog, PoW, stats and tweet-queue guards read the same thing) or the
+// platform's own environment name, which Railway sets on every deployment
+// whatever the image does; never a FREE_MODE boot.
+export function backupProduction(env = process.env) {
+  if (env.FREE_MODE === "true") return false;
+  return env.NODE_ENV === "production" || env.RAILWAY_ENVIRONMENT_NAME === "production" || env.RAILWAY_ENVIRONMENT === "production";
+}
 export function backupAlarmStatus(now = Date.now()) {
   if (!backupConfigured()) return "off";
   const keyState = encKeyState();
@@ -439,7 +447,7 @@ export function backupAlarmStatus(now = Date.now()) {
   const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;
   const last = Date.parse(status.lastSuccess || "");
   if (!Number.isFinite(last) || now - last > staleMs) return "stale";
-  if (keyState === "unset" && process.env.NODE_ENV === "production") return "unencrypted";
+  if (keyState === "unset" && backupProduction()) return "unencrypted";
   return "ok";
 }
 

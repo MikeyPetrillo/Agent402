@@ -226,13 +226,22 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(20);
   ok(backupAlarmStatus() === "failed", `a malformed key reads failed before the next run (${backupAlarmStatus()})`);
   delete process.env.BACKUP_ENCRYPTION_KEY;
-  const prevEnv = process.env.NODE_ENV;
-  delete process.env.NODE_ENV;
+  const PROD_VARS = ["NODE_ENV", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT", "FREE_MODE"];
+  const prevEnv = Object.fromEntries(PROD_VARS.map((k) => [k, process.env[k]]));
+  for (const k of PROD_VARS) delete process.env[k];
   ok(backupAlarmStatus() === "ok", "no key outside production: ok (a local or test run)");
   process.env.NODE_ENV = "production";
-  ok(backupAlarmStatus() === "unencrypted", `no key in production: the alarm word is unencrypted (${backupAlarmStatus()})`);
+  ok(backupAlarmStatus() === "unencrypted", `no key in production (the image's NODE_ENV): the alarm word is unencrypted (${backupAlarmStatus()})`);
   ok(backupAlarmStatus(Date.now() + 27 * 3600_000) === "stale", "...a stale run still reads stale first");
-  if (prevEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = prevEnv;
+  delete process.env.NODE_ENV;
+  process.env.RAILWAY_ENVIRONMENT_NAME = "production";
+  ok(backupAlarmStatus() === "unencrypted", `no key, NODE_ENV unset, Railway's production environment: unencrypted (${backupAlarmStatus()})`);
+  process.env.RAILWAY_ENVIRONMENT_NAME = "staging";
+  ok(backupAlarmStatus() === "ok", "a Railway environment not named production: ok");
+  process.env.RAILWAY_ENVIRONMENT_NAME = "production";
+  process.env.FREE_MODE = "true";
+  ok(backupAlarmStatus() === "ok", "a FREE_MODE boot is never production: ok");
+  for (const k of PROD_VARS) { if (prevEnv[k] === undefined) delete process.env[k]; else process.env[k] = prevEnv[k]; }
   process.env.BACKUP_ENCRYPTION_KEY = good;
   ok(backupAlarmStatus() === "ok", "the key back: ok");
 }
