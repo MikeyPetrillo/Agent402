@@ -9,6 +9,7 @@
 - [[Paying with MPP]]
 - [[Robinhood Chain (USDG)|Robinhood-Chain]]
 - [[Arc (USDC)|Arc]]
+- [[Circle Gateway (batched USDC)|Circle-Gateway]]
 - [[Paying with Compute]]
 - [[MCP Connector]]
 - [[Adapters]]

@@ -295,12 +295,27 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ];
   // A markdown surface cannot derive, so a pack range it does quote must equal
   // the derived one; a range that drifts again is reported here, not by a buyer.
+  // The same for the "most tools" per-call band: a band typed beside "most"
+  // (a dash, two hyphens or "to" between the bounds) must be the constant's
+  // text, so the wiki, the docs and the package READMEs move with it. A
+  // category's own range in a catalog table is a different claim and is not
+  // read.
+  const { TYPICAL_PRICE_RANGE } = await import("../src/typical-price-range.js");
+  const MOST_BAND = /\bmost\b[^.\n|]{0,40}?(\$\d+(?:\.\d+)?\s*(?:–|-{1,2}|to)\s*\$\d+(?:\.\d+)?)/gi;
+  const mostBands = (text) => [...text.matchAll(MOST_BAND)].map((m) => m[1]);
+  ok(mostBands("Most tools are $0.001–$0.02; most single tools cost $0.001--$0.02 (most $0.001 to $0.02; media higher) | `memory-*` | $0.001–$0.003 |").join() === "$0.001–$0.02,$0.001--$0.02,$0.001 to $0.02", "control: the three ways to type the band beside \"most\" are read, a table's own range is not");
+  let mostQuoted = 0;
   for (const f of files.filter((x) => x.endsWith(".md"))) {
     const text = (() => { try { return rf(join(root, f), "utf8"); } catch { return ""; } })();
     for (const m of text.matchAll(/skill packs run (\$[0-9.]+ to \$[0-9.]+)/g)) {
       ok(m[1] === PACK_PRICE_RANGE.text, `${f} quotes the pack range ${m[1]}, and PACK_PRICE_RANGE is ${PACK_PRICE_RANGE.text}`);
     }
+    for (const band of mostBands(text)) {
+      mostQuoted++;
+      ok(band === TYPICAL_PRICE_RANGE.text, `${f} quotes the "most tools" band as ${band}, and TYPICAL_PRICE_RANGE is ${TYPICAL_PRICE_RANGE.text}`);
+    }
   }
+  ok(mostQuoted >= 5, `${mostQuoted} markdown surfaces quote the "most tools" band - if this hits zero the check above is vacuous`);
   // Control first: the sweep must report a planted figure through this path.
   const scan = (entries) => {
     const hits = [];
@@ -343,6 +358,40 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(quoted.length >= 1, `pack prose quotes ${quoted.length} price(s) - if this hits zero the check below is vacuous`);
   const bad = scan(SKILL_PACKS);
   ok(bad.length === 0, `every dollar figure in pack prose is that pack's derived price${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
+}
+
+// --- the media tiers in llms-full.txt and the "most tools" band -------------
+// The image and video paragraph typed five prices beside their routes; they
+// read the catalog now, rendered here against odd prices a typed figure
+// cannot match by chance. The "most tools" per-call band is one named
+// constant (src/typical-price-range.js) that /llms.txt, the quickstart guide,
+// the FAQ and the connector's instructions and payment.info all read;
+// test-docs-truth measures it against the served catalog.
+{
+  const { llmsFullTxt } = await import("../src/seo.js");
+  const { TYPICAL_PRICE_RANGE, typicalPriceShare } = await import("../src/typical-price-range.js");
+  const { readFileSync } = await import("node:fs");
+  const odd = {
+    "POST /v1/images/fast": { slug: "v1-images-fast", price: "$0.023", category: "llm" },
+    "POST /v1/images/pro": { slug: "v1-images-pro", price: "$0.057", category: "llm" },
+    "POST /v1/images/generations": { slug: "v1-images", price: "$0.089", category: "llm" },
+    "POST /v1/images/edits": { slug: "v1-images-edit", price: "$0.021", category: "llm" },
+    "POST /v1/videos/generations": { slug: "v1-videos", price: "$0.207", category: "llm" },
+  };
+  const llms = llmsFullTxt("https://agent402.tools", odd);
+  for (const [route, def] of Object.entries(odd)) ok(llms.includes(`\`${route}\` (${def.price},`), `llms-full.txt states the catalog price beside ${route} (${def.price})`);
+  ok(!/\$0\.08, flagship|\$0\.20, one silent/.test(llms), "the typed media prices cannot come back");
+  ok(/^\$\d/.test(TYPICAL_PRICE_RANGE.text) && TYPICAL_PRICE_RANGE.text === `$${TYPICAL_PRICE_RANGE.minUsd} to $${TYPICAL_PRICE_RANGE.maxUsd}`, `the band's text is its bounds (${TYPICAL_PRICE_RANGE.text})`);
+  ok(typicalPriceShare(["$0.001", "$0.004", "$0.02", "$0.50", "quoted", 0.3]) === 0.6, "control: the share counts priced tools inside the band and skips a quoted price");
+  ok(llms.includes(`most tools ${TYPICAL_PRICE_RANGE.text}`), "llms.txt quotes the band from the constant");
+  for (const f of ["src/seo.js", "src/guides.js", "src/pages.js", "src/mcp-http.js"]) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    ok(/TYPICAL_PRICE_RANGE\.text/.test(src) && !/\$0\.001[–-]\$0\.02|\$0\.001 to \$0\.02/.test(src), `${f} reads the band from the constant and types no range`);
+  }
+  // The connector states the band twice, in its instructions (paidAccess) and
+  // on payment.info (prices); both sites read the constant.
+  const mcpSrc = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
+  ok((mcpSrc.match(/most tools \$\{TYPICAL_PRICE_RANGE\.text\} per call/g) || []).length === 2, "the connector's instructions and payment.info both read the band from the constant");
 }
 
 console.log(`\n${pass} passed, 0 failed`);

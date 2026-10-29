@@ -29,8 +29,15 @@
 //      seller waits by it.
 //   3. Streams that have sent their first frame are untouched: bytes flow.
 //
+// A Tempo PUSH credential's transfer is final before the call, so treatment
+// 1's refusal is deferred to the Tempo gate for it, exactly as the direct
+// window does (src/slow-sync-window.js): the gate books the transfer as owed
+// until the same credential is presented again with the header.
+//
 // CDN_SYNC_MAX_SECONDS (default 90) is the bound, under the proxy's 100 s so
 // settlement and the write fit after the handler.
+import { deferSyncWindowRefusal } from "./slow-sync-window.js";
+import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 
 export const DEFAULT_CDN_SYNC_MAX_SECONDS = 90;
 export function cdnSyncMaxSeconds(env = process.env) {
@@ -81,8 +88,10 @@ export function followsJobAnswer(req) {
  * @param {(req) => boolean} o.isInternal         our own loopback replays (an
  *        async job's, the MCP connector's): mounted before the async marker
  *        exists, so the predicate the slow window reads decides here too
+ * @param {(req) => boolean} o.isTempoPush        a Tempo push credential the
+ *        mounted Tempo gate will judge: its refusal is deferred to that gate
  */
-export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal = () => false, maxSeconds = cdnSyncMaxSeconds, log = console.log }) {
+export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal = () => false, isTempoPush = () => false, maxSeconds = cdnSyncMaxSeconds, log = console.log }) {
   return function cdnSyncWindow(req, res, next) {
     if (req.viaCdn !== true || req.method !== "POST" || req.asyncJobLoopback) return next();
     let internal = false;
@@ -104,13 +113,21 @@ export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPayme
       req.cdnAsyncApplied = true;
       return next();
     }
-    log(`[cdn-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${bound} s)`);
-    return res.status(504).set("Cache-Control", "no-store").json({
+    let push = false;
+    try { push = isTempoPush(req) === true; } catch { push = false; }
+    const body = {
       error: "sync_answer_too_slow_for_connection",
       slug: def.slug,
       maxSeconds: budget,
       syncLimitSeconds: bound,
-      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. Prefer: wait is not served on this connection for this route. Nothing was charged.`,
-    });
+      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. Prefer: wait is not served on this connection for this route. Nothing was charged${push ? PUSH_EXCEPTION : ""}.`,
+    };
+    if (push) {
+      log(`[cdn-sync-window] ${def.slug} refusal deferred to the Tempo gate (push credential, run budget ${budget} s over ${bound} s)`);
+      deferSyncWindowRefusal(req, { status: 504, body });
+      return next();
+    }
+    log(`[cdn-sync-window] ${def.slug} refused synchronously (run budget ${budget} s over ${bound} s)`);
+    return res.status(504).set("Cache-Control", "no-store").json(body);
   };
 }

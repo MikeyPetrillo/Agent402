@@ -15,6 +15,11 @@
 //   2. every price stated next to a route matches that route's real price
 //   3. every /tools/<slug> and /skills/<slug> link resolves to a real entry
 //   4. no doc states an exact catalog count (those must stay evergreen)
+//   5. no doc says the hosted connector's first payment ask is JSON-RPC
+//      error -32042: it is an isError tool result with the challenges in
+//      _meta (src/mcp-http.js translateMppResponse); only the tasks path
+//      answers -32042. test-mcp-mpp.js reads the served ask and holds the
+//      connector docs to it.
 //
 // It is deliberately conservative: it only judges a price when the doc puts one
 // adjacent to a specific route, because that is the pattern that misleads a
@@ -58,6 +63,12 @@ const packs = await (await fetch(`${TARGET}/api/skill-packs.json`)).json();
   }
   console.log(`llms.txt: ${seen} route prices checked, ${stale} stale`);
   if (seen < 20 || stale) { console.error(`FAIL: llms.txt route prices (${seen} seen, ${stale} stale)`); process.exit(1); }
+  // "most tools $a to $b" is one constant the prose reads; it must still
+  // describe most of the served catalog's flat prices.
+  const { TYPICAL_PRICE_RANGE, typicalPriceShare } = await import("../src/typical-price-range.js");
+  const share = typicalPriceShare((pricing.endpoints || []).map((e) => e.price));
+  ok(share > 0.5, `the "most tools ${TYPICAL_PRICE_RANGE.text}" band covers ${(share * 100).toFixed(0)}% of the served catalog's priced tools`);
+  ok(llms.includes(`most tools ${TYPICAL_PRICE_RANGE.text}`), "llms-full.txt quotes that band");
 }
 const routeByPath = new Map();   // "/api/x" -> { price, method }
 const priceBySlug = new Map();
@@ -128,7 +139,7 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/credits/claim", "/api/credits/balance",
 ]);
 
-let deadRoutes = 0, priceMismatches = 0, badSlugLinks = 0, exactCounts = 0;
+let deadRoutes = 0, priceMismatches = 0, badSlugLinks = 0, exactCounts = 0, wrongFirstAsk = 0;
 for (const file of files) {
   const rel = relative(ROOT, file);
   const text = readFileSync(file, "utf8");
@@ -226,6 +237,12 @@ for (const file of files) {
         if (priceMismatches <= 12) console.error(`  price: ${rel} -> ${routesOnLine[0]} says $${pricesOnLine[0]}, catalog says $${real}`);
       }
     }
+
+    // 5. -32042 is the tasks path's ask only; a first ask is a tool result.
+    if (line.includes("32042") && (!/task/i.test(line) || /(?:paid )?call answers JSON-RPC error `?-32042/.test(line))) {
+      wrongFirstAsk++;
+      if (wrongFirstAsk <= 8) console.error(`  first ask: ${rel} -> "${line.trim().slice(0, 140)}"`);
+    }
   }
 
   // 3. /tools/<slug> and /skills/<slug> links must resolve.
@@ -262,6 +279,7 @@ ok(deadRoutes === 0, `no documentation references a route the server does not se
 ok(priceMismatches === 0, `every price stated beside a route matches the catalog (${priceMismatches} mismatched)`);
 ok(badSlugLinks === 0, `every /tools and /skills link resolves to a real entry (${badSlugLinks} dead)`);
 ok(exactCounts === 0, `no doc hard-codes an exact catalog count (${exactCounts} found)`);
+ok(wrongFirstAsk === 0, `no doc says the connector's first payment ask is JSON-RPC -32042 (${wrongFirstAsk} found; it is a tool result, -32042 is the tasks path)`);
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

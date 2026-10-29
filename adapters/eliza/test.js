@@ -120,7 +120,7 @@ async function main() {
 
   // provider: names the payment mode without leaking a key
   const p = await agent402Provider.get(rtKey, msg({ text: "" }), {});
-  ok(/card credits/.test(p.text) && p.values.agent402PaymentMode === "card credits" && !p.text.includes(KEY), "provider context names the payment mode (card credits) and never the key");
+  ok(/credits key/.test(p.text) && p.values.agent402PaymentMode === "credits key" && !p.text.includes(KEY), "provider context names the payment mode (credits key) and never the key");
   const p2 = await agent402Provider.get(runtime({ AGENT402_BASE_URL: BASE }), msg({ text: "" }), {});
   ok(/free tier only/.test(p2.text), "provider says free tier only when nothing is configured");
 }

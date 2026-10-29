@@ -20,7 +20,7 @@ The 402 lists the challenges in a fixed order: `tempo` (one per currency, USDC.e
 - `tempo` is offered on every paid route except the identity-bound ones (wallet-keyed memory, usage history, attestations, feedback), whose identity is the signed EIP-3009 payer, and the long-running ones (report products, video, the fast and pro image tiers, seller payability checks), which can outlive a Tempo credential.
 - `stripe` is offered on routes priced $0.50 or more. Identity-bound routes and the routes that buy from an outside seller (the route-execute tiers, `seller-payability`, `/api/decide/execute` and the flight routes) never offer it.
 
-Each paid operation in [`/openapi.json`](https://agent402.tools/openapi.json) lists the same offers in the same order under `x-payment-info.offers` (method, currency, chain, amount in the currency's smallest unit), and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) summarises them under `mpp`.
+Each paid operation in [`/openapi.json`](https://agent402.tools/openapi.json) lists the same offers in the same order under `x-payment-info.offers` (method, currency, chain, amount in the currency's smallest unit), and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) summarizes them under `mpp`.
 
 ### Signing an `evm` challenge: use the token's own EIP-712 domain
 
@@ -28,7 +28,7 @@ An `evm`/`charge` credential is an EIP-3009 `TransferWithAuthorization` signed u
 
 There is nothing to guess: the challenge carries the verbatim x402 accepts entry it was minted from, and that entry's `extra.name` / `extra.version` are the domain to sign under, read from the token on chain.
 
-If a credential arrives signed under a different known name, we recover the signer and recognise it before spending a facilitator round trip. The reply is a `402` with an RFC 9457 `application/problem+json` body naming both the name you signed under and the one the token uses. That response deliberately carries no `WWW-Authenticate` header, so a client whose manager prefers MPP has nothing to select and falls through to the x402 offer in the same `402`, which the same wallet can pay. The hold is short, self-clearing, and never applied to a request that presents a credential.
+If a credential arrives signed under a different known name, we recover the signer and recognize it before spending a facilitator round trip. The reply is a `402` with an RFC 9457 `application/problem+json` body naming both the name you signed under and the one the token uses. That response deliberately carries no `WWW-Authenticate` header, so a client whose manager prefers MPP has nothing to select and falls through to the x402 offer in the same `402`, which the same wallet can pay. The hold is short, self-clearing, and never applied to a request that presents a credential.
 
 The [MPP marketplace](https://agent402.tools/mpp-marketplace) lists other MPP sellers we can verify live and ranks them on the **MPP leaderboard**: inbound USDC.e transfers on Tempo to the recipient each seller's live challenge names, read from the chain by us over the most recent window (transfers, distinct payers, volume; rows at or above the router's floor are marked routable). Machine-readable at [`/api/mpp-index`](https://agent402.tools/api/mpp-index) and [`/api/mpp-leaderboard`](https://agent402.tools/api/mpp-leaderboard). The [transactions page](https://agent402.tools/revenue) shows every MPP-wire settlement per rail with explorer links, led by transaction counts (adoption) with external revenue underneath.
 

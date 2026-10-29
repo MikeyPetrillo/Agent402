@@ -377,7 +377,7 @@ curl -X POST https://agent402.tools/api/route \
 curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
 ```
 
-**Dispatch is labelled, never implied:** every `/api/route` row and `/api/index`
+**Dispatch is labeled, never implied:** every `/api/route` row and `/api/index`
 seller carries `routerDispatchEligible` and `routerDispatchReason` (`crawl_failed`,
 `network_unknown`, `settlement_required`, `settlement_checked_at_pay_time`,
 `eligible`, ...); `executeVia` appears only on a row the router will pay right
@@ -423,12 +423,19 @@ npm install agent402-client
 ```
 ```js
 import { Agent402 } from "agent402-client";
+import { privateKeyToAccount } from "viem/accounts";
 const a = new Agent402();                       // free tier (proof-of-work)
 const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 
 // a prepaid credits key pays wallet-only tools on Agent402's own services
 const b = new Agent402({ creditsKey: "a402_..." });
+
+// a signer that deposited USDC into Circle Gateway pays the batched accept
+// where a 402 offers one (no gas per call); off by default
+const c = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGENT_KEY) } });
 ```
+
+`agent402-client` has no dependencies: install `viem` for `privateKeyToAccount`, or pass any EIP-712 signer with `address` and `signTypedData`.
 
 ## Live payments view (`services/live`)
 
@@ -527,7 +534,8 @@ Optional: `GATEWAY_NANOPAYMENTS=on` adds a Circle Gateway batched accept on Arc
 and Base beside the plain one (same price, same payTo; buyers who deposited
 USDC into Gateway sign per call with no gas, and Gateway settles off chain into
 your Gateway balance, withdrawn with `scripts/gateway-withdraw.js`). Off by
-default; see the wiki's Self-Hosting page.
+default; see the wiki's Self-Hosting page. Buyers pay it from `agent402-client`
+with the `gateway` option ([wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway)).
 
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";

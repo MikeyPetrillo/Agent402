@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
-import { classifySettlementPending, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
+import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const BALANCE_TTL_MS = 60_000;
@@ -182,7 +182,7 @@ export function balanceBucket(balanceUsd, priceUsd) {
 }
 
 /** The plain-language hint. Pure; exported for tests. */
-export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
+export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false }) {
   const r = String(reason || "");
   // A Circle Gateway batched payment resent while Gateway is still settling
   // it (src/gateway-nanopayments.js): the same payment, later; never a new
@@ -191,6 +191,17 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer }) {
   if (/^settlement_failed$/.test(r)) return { reason: "settlement-failed", retry: "fresh-authorization", hint: SETTLEMENT_FAILED_DETAIL };
   const price = Number.isFinite(priceUsd) ? `$${priceUsd.toFixed(priceUsd < 0.01 ? 4 : 3)}` : "the listed price";
   const short = payer ? `${payer.slice(0, 6)}...${payer.slice(-4)}` : "your wallet";
+  // A batched payment is paid from the signer's USDC balance inside Circle
+  // Gateway, not from its wallet: a balance word from Gateway means that
+  // deposit came up short, and funding the wallet changes nothing.
+  if (gateway && /insufficient|balance|not enough/i.test(r)) {
+    const rail = network ? ` on ${String(network).split(":")[0]}` : "";
+    return {
+      reason: "insufficient-funds",
+      retry: "fund-gateway-deposit",
+      hint: `${short}'s Circle Gateway balance holds less than this call costs (${price})${rail}. Deposit USDC into Circle Gateway for that address (an on-chain transfer, gas paid once) or pay the plain accept from the wallet, then sign a NEW authorization; re-sending this one will keep failing.`,
+    };
+  }
   const reverted = /execution reverted|contract call failed|insufficient|balance/i.test(r);
   // The facilitator simulated the transfer and the wallet came up short, said
   // in the facilitator's own words: an AVM simulation reports "underflow on
@@ -254,9 +265,11 @@ export async function noteVerifyFailure({ paymentPayload, payer, network, reason
   const key = paymentPayload ? credentialKeyOf(paymentPayload) : null;
   if (!from && !key) return null;
   // A Gateway settlement word is not about the wallet's balance: no read.
-  const isBase = /^eip155:8453$/.test(String(network || "")) && !/^settlement_(pending|failed)$/.test(String(reason || ""));
+  // Nor is any refusal of a batched payment (paid from the Gateway deposit).
+  const gateway = isGatewayBatchedPayment(paymentPayload);
+  const isBase = !gateway && /^eip155:8453$/.test(String(network || "")) && !/^settlement_(pending|failed)$/.test(String(reason || ""));
   const balanceUsd = isBase && from ? await balanceReader(from) : null;
-  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from });
+  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway });
   // `reason` on the entry is the facilitator's text (telemetry reads it);
   // the refusal class the hint names rides as `reasonClass`.
   const entry = { ...h, balanceUsd, priceUsd, network, reasonClass: h.reason || null, reason: String(reason || "").slice(0, 200), at: now() };
@@ -314,7 +327,7 @@ export function verifyHintMiddleware() {
         }
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {
-          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
+          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" || h.retry === "fund-gateway-deposit" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
           // A hint that names its class carries it as `reason`, the field
           // every refusal class is read from (and the paywall rollup).
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;

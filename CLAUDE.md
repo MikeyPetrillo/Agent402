@@ -81,8 +81,10 @@ LLC: credit the entity, never a personal name.
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,
   and fails when a published route is neither live, key-gated nor retired).
 - **Upstream costs are private.** Model, speech, embedding, media and STT rates, vendor cards
-  (Exa, X), fixed fees and the meter markup live in `src/upstream-costs.js`'s table, loaded
-  from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`. Never commit a
+  (Exa, X) and fixed fees live in `src/upstream-costs.js`'s table, loaded
+  from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`, as does the
+  meter markup (a buyer can derive it from any metered 402, so it is not a secret; it is kept
+  in the table and never printed). Never commit a
   rate, never print one in a CI log, never type one in a test (`scripts/test-upstream-costs.js`
   scans the shipped trees and scripts). Blank the secret in every step that installs packages
   (`scripts/test-ci-secretless-install.js`). A drifted rate is a table edit, not a code change.
@@ -94,21 +96,25 @@ LLC: credit the entity, never a personal name.
   the committed `src/generated/page-dates.json`: after editing a page module or a tool kit run
   `node scripts/gen-page-dates.js --write` (`scripts/test-page-dates.js` fails when it is stale).
 - Prices quoted in prose are derived from the catalog, never typed
-  (`scripts/test-price-prose.js`). Skill-pack prices are generated
-  (`node scripts/pack-prices.js --write`).
+  (`scripts/test-price-prose.js`); the "most tools" per-call band is `TYPICAL_PRICE_RANGE`
+  (`src/typical-price-range.js`), and a markdown surface that quotes it must match its `text`.
+  Skill-pack prices are generated (`node scripts/pack-prices.js --write`).
 - A list answer that is a page or a capped sample says so in fields (`src/partial-answer.js`),
   not only in a prose note.
 - Before adding a data source, read its terms.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
-- Public copy: first-party and affirmative, no competitor names, no em dashes.
+- Public copy: first-party and affirmative, no competitor names, no em dashes, US spelling
+  (`scripts/test-us-spelling.js` reads the markdown trees, the page modules and every tool
+  description; a quoted token or an object key is a contract value and is not read).
 - Copy that offers something reads the switch that sells it (`creditsSalesEnabled()`), and is
   guarded by test-static-pages, test-legal-dates, test-wire-count-copy, test-pack-copy-retired
   and copy-absolutes. No third-party seller or counterparty name in any tracked file
   (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`). No hidden
   character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
   instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
-  the READMEs and `src/mcp-http.js`; the same scan (`src/hidden-chars.js`) is a listing finding
+  the package READMEs, the adapter READMEs, `src/mcp-http.js`, `src/mcp-flagship.js`,
+  `src/server.js` and `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding
   in the index's injection screen.
 
 ## Key machine-readable surfaces (free)
@@ -210,6 +216,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
 
 ## Subsystem pointers
 - **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it. Jobs report progress: `status` keeps working/completed/failed, `state` is queued/running/succeeded/failed with `stage`, `progress`, `etaSeconds` and `Retry-After` (`src/job-progress.js`); which routes are slow, and what the 402, /api/pricing, /openapi.json and /llms-full.txt say about them, comes from `src/slow-routes.js`.
+  A Tempo push credential's transfer is final before the call, so neither sync window refuses it directly: `src/slow-sync-window.js` and `src/cdn-sync-window.js` park the refusal on the request with `deferSyncWindowRefusal` and the Tempo gate answers it from `syncWindowRefusalOf(req)` in its push input check (the transfer booked as owed until the same credential returns with the header); server.js defers only while `tempoGateMounted` is true, set right after the gate mounts, so with no gate the windows refuse as for any other payment. That deferred answer applies to a slow route that offers Tempo, of which the current catalog has none: every slow route is long-running (`isLongRunningSlug`), so `tempoOfferedFor` is false there and the gate's binding check refuses the push credential first (`routeRefusal`: long-running, identity-bound, priced above the challenge, free), asks the relay whether the transfer pays the challenge and books a confirmed one as owed the same way; `scripts/test-tempo-push-debts.js` pins that no slow route offers Tempo, so a change that adds one is noticed and covers the deferred path there.
   Through the CDN proxy (`req.viaCdn`), a paid call without the header to a route whose run budget is past `CDN_SYNC_MAX_SECONDS` (default 90) runs as a job only for a client that follows a 202 on its own (agent402-client 0.8.16+) and is otherwise refused with a 504 before any gate, while LLM attempts, image fallback links and route-execute's seller waits are bounded by `cdnSyncLeftMs(req)` (`src/cdn-sync-window.js`).
 - **Client address:** `src/cdn-client-ip.js` redefines `req.ip` right after `trust proxy`: CF-Connecting-IP is the client only when the edge-reported peer is inside the embedded CDN ranges (plus `CF_IP_RANGES_EXTRA`) and the header parses as an address; from any other peer it is ignored. `CDN_PROXY` (`cloudflare` or `on`, default off) turns the resolver and the CDN sync window on, and while on a peer's CF-Connecting-IP counts (and the request is `req.viaCdn`) only when it also carries `CDN_ORIGIN_SECRET` in `X-Origin-Auth` (constant-time compare, stripped before handlers), so off or without the secret `req.ip` is the trust-proxy address. Read the client address only through `req.ip`.
   `cdnOrigin` on `/api/gateway-status` reads `unauthenticated` while a CDN-range peer reached the origin without the secret inside the window.
@@ -328,4 +335,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
-`X_BEARER_TOKEN`). Per-variable notes and thresholds live in `CLAUDE.local.md`.
+`X_BEARER_TOKEN`). Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
+bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
+into the service variables, never in Actions: the deploy job's variable upsert must not name a
+variable whose source of truth is Railway (`scripts/test-ci-secretless-install.js`).

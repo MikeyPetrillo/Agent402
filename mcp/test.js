@@ -140,7 +140,7 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const stub = createServer((req, res) => {
     const u = new URL(req.url, "http://stub");
     const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
-    if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "slow-report", method: "POST", path: "/v1/slow-report", price: "$0.60", description: "A slow report", category: "Research", computePayable: false, async: { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", statusUrl: "/api/jobs/{id}" } }] });
+    if (u.pathname === "/api/pricing") return send(200, { credits: { onSale: false, how: "new credits are not on sale; a key already issued keeps working" }, endpoints: [{ slug: "slow-report", method: "POST", path: "/v1/slow-report", price: "$0.60", description: "A slow report", category: "Research", computePayable: false, async: { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", statusUrl: "/api/jobs/{id}" } }] });
     if (u.pathname === "/openapi.json") return send(200, { paths: { "/v1/slow-report": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { query: { type: "string" } } } } } } } } } });
     if (u.pathname === "/v1/slow-report") {
       seen.prefer = req.headers.prefer || null; seen.auth = req.headers.authorization || null; seen.polls = 0;
@@ -164,8 +164,15 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     // credits mode does not list router.execute.
     const credNames = (await jobClient.listTools()).tools.map((t) => t.name);
     if (credNames.includes("router.execute")) fail(`credits mode lists router.execute, which credits do not pay (got: ${credNames.join(", ")})`);
-    const notes = [];
     const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    // Whether credits are sold is the server's switch (credits.onSale on
+    // /api/pricing): with the stub saying they are not, payment.info offers
+    // no buy or topup link and says an issued key keeps working.
+    const infoOut = await jobClient.callTool({ name: "payment.info", arguments: {} }, CallToolResultSchema);
+    const info = JSON.parse(text(infoOut));
+    if (info.credits?.configured !== true || info.credits.onSale !== false || info.credits.topup || info.credits.buy || !/already issued/.test(String(info.credits.note))) fail(`payment.info in credits mode reads the sale switch from the catalog (got ${JSON.stringify(info.credits)})`);
+    if (/prepaid card credits|card credits key/i.test(JSON.stringify(info))) fail("payment.info never describes a credits key as a card purchase");
+    const notes = [];
     const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, CallToolResultSchema, { onprogress: (p) => notes.push(p), timeout: 30_000 });
     if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
     if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);

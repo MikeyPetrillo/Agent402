@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // No hidden character in an instruction file. The files an agent reads as
 // instructions (CLAUDE.md, the committed .claude agents and skills, the wiki
-// and docs sources, the READMEs, and the MCP server's instructions string in
-// src/mcp-http.js) must spell everything they say in characters a reader sees.
+// and docs sources, the READMEs of every published package and adapter, the
+// npm MCP server's source, and the hosted connector's instructions, server
+// description and tool descriptions in src/mcp-flagship.js, the connector
+// module src/mcp-http.js and the SEC profile's instructions in src/server.js)
+// must spell everything they say in characters a reader sees.
 // A TAG-block character, a zero-width or bidi control, a variation selector
 // used as a carrier or a soft hyphen can hide text in them that a person
 // reviewing the diff never sees and a model reading the file does; the scan in
@@ -27,14 +30,19 @@ const ALLOW = new Map([]);
 
 // Instruction surfaces. Directories are read recursively; only .md files count
 // there, and only files git tracks (an untracked draft is not an instruction).
-const PATHS = ["CLAUDE.md", "README.md", ".claude", "wiki", "docs", "mcp/README.md", "tollbooth/README.md", "src/mcp-http.js"];
+// The source files are scanned whole: a hidden character in a code line of
+// one of them needs its own ALLOW entry, the same as in prose.
+const SOURCE_FILES = ["src/mcp-flagship.js", "src/mcp-http.js", "src/server.js", "mcp/index.js"];
+const PATHS = ["CLAUDE.md", "README.md", ".claude", "wiki", "docs", "mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md", "adapters", ...SOURCE_FILES];
 const tracked = execFileSync("git", ["ls-files", "-z", "--", ...PATHS], { cwd: ROOT, encoding: "utf8" })
   .split("\0").filter(Boolean)
-  .filter((f) => /\.md$/i.test(f) || f === "src/mcp-http.js")
+  .filter((f) => /\.md$/i.test(f) || SOURCE_FILES.includes(f))
   .sort();
 ok(tracked.length >= 10, `found the instruction files (${tracked.length})`);
-ok(tracked.includes("CLAUDE.md") && tracked.includes("src/mcp-http.js") && tracked.some((f) => f.startsWith("wiki/")),
-  "the project map, the MCP instructions module and the wiki source are in the set");
+ok(tracked.includes("CLAUDE.md") && SOURCE_FILES.every((f) => tracked.includes(f)) && tracked.some((f) => f.startsWith("wiki/")),
+  "the project map, the MCP instruction modules, the npm server and the wiki source are in the set");
+ok(["mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md"].every((f) => tracked.includes(f)) && tracked.filter((f) => /^adapters\/[^/]+\/README\.md$/.test(f)).length >= 5,
+  "every published package README and the adapter READMEs are in the set");
 
 // --- the scanner bites before the tree is read -----------------------------------
 const tag = (s) => Array.from(s).map((c) => String.fromCodePoint(0xe0000 + c.codePointAt(0))).join("");

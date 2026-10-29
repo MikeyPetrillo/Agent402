@@ -168,7 +168,7 @@ function makeLinkedInHandlerInner(tierSlug) {
 - key_takeaways: 3-5 one-sentence bullets, each grounded.
 - post_caption: a companion LinkedIn POST (<= ${LINKEDIN_LIMITS.postChars} characters, ideally 900-1,300) to publish the article with: a hook line, 3-6 short lines or bullets, a line inviting readers to the article, then ${p.hashtags} hashtags on the last line. No em dashes.
 - hashtags: the same ${p.hashtags} hashtags as an array, CamelCase, no spaces.
-- image_briefs: ${p.cover ? '1 "cover"' : "no cover"}${p.inlineN ? ` and 1 "inline"` : ""} image brief(s): {slot, prompt, alt}. prompt = a concrete, generation-ready description in this style: "${p.imageStyle}"; composition must read at 16:9 AND square (keep the subject centred, generous margins, no text, no logos, no real people's faces, no charts with numbers). alt = a plain-language description for accessibility.
+- image_briefs: ${p.cover ? '1 "cover"' : "no cover"}${p.inlineN ? ` and 1 "inline"` : ""} image brief(s): {slot, prompt, alt}. prompt = a concrete, generation-ready description in this style: "${p.imageStyle}"; composition must read at 16:9 AND square (keep the subject centered, generous margins, no text, no logos, no real people's faces, no charts with numbers). alt = a plain-language description for accessibility.
 - sources_used: the [n] numbers you drew on.
 Tone: ${p.tone}.${p.audience ? ` Audience: ${p.audience}.` : ""}${p.angle ? ` Angle: ${p.angle}.` : ""}
 

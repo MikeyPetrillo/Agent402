@@ -19,6 +19,7 @@ import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gate
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
+import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -121,9 +122,37 @@ console.log(await res.json()); // { title, markdown, wordCount, … }
 \`\`\`
 
 That one wrapped \`fetch\` now covers 500+ tools - browser rendering,
-live search, PDFs, durable memory - most a flat $0.001–$0.02 per call, with premium AI, media and multi-tool packs priced higher.
+live search, PDFs, durable memory - most a flat ${TYPICAL_PRICE_RANGE.text} per call, with premium AI, media and multi-tool packs priced higher.
 The full catalog is machine-readable at
 [/api/pricing](https://agent402.tools/api/pricing).
+
+## No gas per call: pay from a Circle Gateway deposit
+
+Where the 402 on Arc or Base carries a second \`exact\` accept whose
+\`extra.name\` is \`GatewayWalletBatched\` (it does while the operator turns the
+option on; \`/api/pricing\` says under \`payment.gatewayNanopayments\`), a buyer
+who deposited USDC into Circle Gateway once (an on-chain transfer through
+Circle's GatewayWallet contract, gas paid once) pays each call by signing the
+same EIP-3009 authorization under the Gateway domain the accept carries, for
+the same price to the same payTo. Circle Gateway verifies it against the
+deposit, settles it off chain and lands the batch on chain later. A stock
+x402 client signs under the USDC contract's domain and keeps paying the plain
+accept, which stays first; [agent402-client](https://www.npmjs.com/package/agent402-client)
+0.8.20 and later pays the batched one when it is given the signer:
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const a = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGENT_KEY) }, maxPerCallUsd: 0.05 });
+const out = await a.call("extract", { url: "https://example.com/article" });
+\`\`\`
+
+agent402-client has no dependencies: install viem for \`privateKeyToAccount\`, or pass any EIP-712 signer with \`address\` and \`signTypedData\`.
+
+Off by default; a 402 with no batched accept falls back to the plain payment
+fetch. The mechanism, the pending-settlement resend and the signing helpers:
+[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway).
 
 ## Or from the command line
 
@@ -798,7 +827,7 @@ was minted from, and that entry's \`extra.name\` and \`extra.version\` are the
 domain to sign under, read from the token on chain.
 
 If a credential does arrive signed under a different known name, we recover the
-signer and recognise it before spending a facilitator round trip on it. You get
+signer and recognize it before spending a facilitator round trip on it. You get
 a \`402\` with an RFC 9457 \`application/problem+json\` body naming both the name
 you signed under and the one the token uses, so the mistake is readable instead
 of looking like an outage. That response also carries no \`WWW-Authenticate\`

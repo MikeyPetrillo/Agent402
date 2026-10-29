@@ -5,7 +5,7 @@ export const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(proces
 
 // The terms version a credits checkout records (the date printed on /terms;
 // scripts/test-nc-sales-tax.js checks they match).
-export const TERMS_VERSION = "2026-10-28";
+export const TERMS_VERSION = "2026-10-29";
 
 // The most one buyer may buy in any 24 hours (CREDITS_DAILY_MAX_USD, default
 // $1,000), in cents. Read at call time; src/credits.js enforces it.

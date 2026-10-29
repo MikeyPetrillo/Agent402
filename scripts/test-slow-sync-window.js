@@ -23,8 +23,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-import { slowSyncWindowSeconds, preferWaitSeconds, needsAsyncOrWait, slowSyncWindowMiddleware } from "../src/slow-sync-window.js";
+import { Challenge, Credential } from "mppx";
+import { slowSyncWindowSeconds, preferWaitSeconds, needsAsyncOrWait, slowSyncWindowMiddleware, syncWindowRefusalOf, SYNC_WINDOW_RETRY } from "../src/slow-sync-window.js";
+import { isTempoPushCredential } from "../src/mpp-tempo.js";
+import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
+import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 requireUpstreamCosts("test-slow-sync-window");
+
+// A Tempo PUSH credential (a transfer the buyer already sent), shape only.
+const pushCredential = () => Credential.serialize({
+  challenge: Challenge.from({ realm: "test.local", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "50000", currency: "0x2000000000000000000000000000000000000000", decimals: 6, recipient: "0x000000000000000000000000000000000000dEaD", methodDetails: { chainId: 4217 } }, secretKey: "window-test" }),
+  payload: { hash: `0x${"ab".repeat(32)}`, type: "hash" }, source: "did:pkh:eip155:4217:0x1111111111111111111111111111111111111111",
+});
+const x402Header = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
 
 let pass = 0, fail = 0, proc = null, facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "slow-sync-"));
@@ -46,6 +57,28 @@ setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.
   let passed = false;
   slowSyncWindowMiddleware({ asyncRouteOf: () => def, wantsAsync: () => false, carriesPaymentAttempt: () => true, followsJobAnswer: () => false, windowSeconds: () => null, log: () => {} })({ method: "POST", headers: {} }, {}, () => { passed = true; });
   ok(passed, "with the window off, a paid call without Prefer passes through untouched");
+  // A Tempo push credential's transfer is final before the call: the window
+  // defers its refusal to the Tempo gate (which books the transfer as owed)
+  // instead of sending it, and the hint carries the push exception. Any
+  // other payment is refused here, hint unchanged. Real predicates throughout.
+  const mw = slowSyncWindowMiddleware({ asyncRouteOf: () => def, wantsAsync: () => false, carriesPaymentAttempt, followsJobAnswer: () => false, isTempoPush: (req) => isTempoPushCredential(req.headers.authorization), windowSeconds: () => 20, log: () => {} });
+  const resStub = () => { const r = { code: null, sent: null, status(s) { r.code = s; return r; }, set() { return r; }, json(b) { r.sent = b; return r; } }; return r; };
+  const pushReq = { method: "POST", headers: { authorization: pushCredential(), "content-type": "application/json" } };
+  let nexted = false; const r1 = resStub();
+  mw(pushReq, r1, () => { nexted = true; });
+  const d = syncWindowRefusalOf(pushReq);
+  ok(nexted && r1.sent === null && d?.status === 400 && d.body?.error === "respond_async_required" && d.retry === SYNC_WINDOW_RETRY && d.body.hint.endsWith(`before any payment was taken${PUSH_EXCEPTION}.`),
+    `a push credential passes the window with its refusal deferred to the Tempo gate, hint carrying the push exception (${JSON.stringify(d && { status: d.status, retry: d.retry })})`);
+  const x402Req = { method: "POST", headers: { "payment-signature": x402Header, "content-type": "application/json" } };
+  nexted = false; const r2 = resStub();
+  mw(x402Req, r2, () => { nexted = true; });
+  ok(!nexted && r2.code === 400 && r2.sent?.error === "respond_async_required" && r2.sent.hint.endsWith("before any payment was taken.") && syncWindowRefusalOf(x402Req) === null,
+    "an x402 payment is refused by the window itself, nothing deferred, hint without the push clause");
+  const noGate = slowSyncWindowMiddleware({ asyncRouteOf: () => def, wantsAsync: () => false, carriesPaymentAttempt, followsJobAnswer: () => false, windowSeconds: () => 20, log: () => {} });
+  const pushReq2 = { method: "POST", headers: { authorization: pushCredential(), "content-type": "application/json" } };
+  nexted = false; const r3 = resStub();
+  noGate(pushReq2, r3, () => { nexted = true; });
+  ok(!nexted && r3.code === 400 && syncWindowRefusalOf(pushReq2) === null, "without a Tempo gate to defer to, a push-shaped credential is refused like any other payment");
 }
 
 const [PORT, FAC_PORT, UP_PORT] = await getFreePorts(3);
@@ -163,6 +196,13 @@ try {
     const rs = await post({ prefer: "wait=10", "x-forwarded-for": "10.8.0.2", "payment-signature": credential(wallet(2)) });
     await sleep(300);
     ok(rs.status === 400 && fac.verify === c2.v && fac.settle === c2.s && up.calls === c2.u, `a Prefer: wait shorter than the run budget is refused alike (got ${rs.status})`);
+    // This boot mounts no Tempo gate (TEMPO_API_KEY unset), so a push-shaped
+    // Tempo credential has no gate to defer to: the window refuses it like
+    // any other payment, before every gate (not a 402 from the gates below).
+    const c3 = counts();
+    const rp = await post({ "x-forwarded-for": "10.8.0.21", authorization: pushCredential() });
+    const jp = await rp.json();
+    ok(rp.status === 400 && jp.error === "respond_async_required" && jp.hint.endsWith("before any payment was taken.") && fac.verify === c3.v && fac.settle === c3.s && up.calls === c3.u, `with no Tempo gate mounted, a push-shaped credential is refused by the window itself (got ${rp.status} ${jp.error})`);
   }
 
   // 2. Paid, no Prefer, a client that follows a 202: a job, settled once on the delivered result.

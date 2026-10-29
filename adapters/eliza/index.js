@@ -2,7 +2,7 @@
 // context provider. No runtime import of @elizaos/core (types only), so the
 // package installs with nothing but agent402-client.
 //
-// Payment: a prepaid card-credits key (AGENT402_CREDITS_KEY) or an x402 wallet
+// Payment: a prepaid credits key (AGENT402_CREDITS_KEY) or an x402 wallet
 // (AGENT402_WALLET_KEY, with @x402/fetch + @x402/evm + viem present). Free-tier
 // tools pay with proof-of-work and need neither. Spend bounds ride with every
 // paid call (AGENT402_MAX_PER_CALL_USD, default $1; AGENT402_DAILY_LIMIT_USD).
@@ -314,7 +314,7 @@ export const aboutAction = {
   description: "What Agent402 is, how it is paid, and how many tools it serves right now. Free.",
   examples: [[
     { name: "user", content: { text: "What is Agent402?" } },
-    { name: "agent", content: { text: "Agent402 is a catalog of pay-per-call web tools, paid by card credits or USDC over x402.", actions: ["AGENT402_ABOUT"] } },
+    { name: "agent", content: { text: "Agent402 is a catalog of pay-per-call web tools, paid in USDC over x402 or with a prepaid credits key.", actions: ["AGENT402_ABOUT"] } },
   ]],
   validate: async () => true,
   handler: async (runtime, _message, _state, _options, callback) => {
@@ -328,7 +328,7 @@ export const aboutAction = {
         pay: "a prepaid credits key for Agent402's own services (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
         discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/#why`,
       };
-      return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid by card credits or USDC over x402. Docs: ${data.docs}`, data });
+      return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid in USDC over x402 or with a prepaid credits key. Docs: ${data.docs}`, data });
     } catch (e) {
       return reply(callback, { success: false, text: `Agent402 is unreachable at ${baseUrl}: ${errorText(e)}`, error: errorText(e) });
     }
@@ -341,7 +341,7 @@ export const agent402Provider = {
   description: "Agent402 pay-per-call tool catalog: how to find and call a tool.",
   get: async (runtime) => {
     const baseUrl = (setting(runtime, "AGENT402_BASE_URL") || DEFAULT_BASE).replace(/\/+$/, "");
-    const paid = setting(runtime, "AGENT402_CREDITS_KEY") ? "card credits" : /^0x[0-9a-fA-F]{64}$/.test(setting(runtime, "AGENT402_WALLET_KEY") || "") ? "x402 wallet" : "free tier only (no credits key or wallet configured)";
+    const paid = setting(runtime, "AGENT402_CREDITS_KEY") ? "credits key" : /^0x[0-9a-fA-F]{64}$/.test(setting(runtime, "AGENT402_WALLET_KEY") || "") ? "x402 wallet" : "free tier only (no credits key or wallet configured)";
     const text = `Agent402 (${baseUrl}) is a catalog of pay-per-call web tools. Use AGENT402_FIND with a plain-language task to get a slug and example input, then AGENT402_CALL with that slug and params. Payment mode: ${paid}.`;
     return { text, values: { agent402BaseUrl: baseUrl, agent402PaymentMode: paid }, data: {} };
   },

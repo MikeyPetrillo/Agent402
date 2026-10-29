@@ -45,7 +45,7 @@
         },
         {
           "name": "AGENT402_CREDITS_KEY",
-          "description": "Prepaid card-credits key (a402_...) for Agent402's own services. With it set and no wallet key, every tool except the wallet-scoped ones (memory, usage) and the outside-seller routes (router.execute, seller-payability, decide.execute, the flight tools) is debited from the key; the list price is debited only on a successful call.",
+          "description": "Prepaid credits key (a402_...) for Agent402's own services. With it set and no wallet key, every tool except the wallet-scoped ones (memory, usage) and the outside-seller routes (router.execute, seller-payability, decide.execute, the flight tools) is debited from the key; the list price is debited only on a successful call.",
           "isRequired": false,
           "isSecret": true
         },

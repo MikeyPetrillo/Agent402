@@ -77,9 +77,12 @@ right now is machine-readable: `/api/pricing` (`payment.acceptKinds`,
   my-usage) and routes with a lasting effect (such as the route-execute tiers)
   carry the plain accept only.
 
-`agent402-client` and `agent402-mcp` pay the plain accept (the stock x402
-client takes the first accept it can pay); a client that signs under the
-Gateway domain can choose the batched one.
+`agent402-client` 0.8.20 and later pays the batched accept when constructed
+with `{ gateway: { signer } }` (an EIP-712 signer whose address holds a Gateway
+deposit; off by default, and a 402 with no batched accept falls back to the
+payment `fetch`); `agent402-mcp` and a stock x402 client pay the plain accept,
+the first one they can pay. The mechanism, the SDK option and the signing
+helpers are on [[Circle Gateway (batched USDC)|Circle-Gateway]].
 
 ## Paying over MPP instead (dual-stack)
 

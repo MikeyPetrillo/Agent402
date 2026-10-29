@@ -142,6 +142,19 @@ try {
   // The loopback 402's body now mirrors the PAYMENT-REQUIRED offer; a plain
   // unpaid 402 is still not a problem document, so a first ask carries none.
   ok(soft._meta["org.paymentauth/payment-required"].problem === undefined, "a first ask's _meta carries no problem (a plain unpaid 402 is not a problem document)");
+  // The connector docs describe the first ask the way this boot just answered
+  // it: an isError tool result with the challenges in _meta, never "a paid
+  // call answers JSON-RPC error -32042" (the tasks path's ask only).
+  {
+    const { readFileSync } = await import("node:fs");
+    const metaKey = "org.paymentauth/payment-required";
+    const askIsResult = soft.isError === true && Array.isArray(soft._meta?.[metaKey]?.challenges) && soft.error === undefined;
+    for (const f of ["mcp/README.md", "docs/cloudflare-agents.md", "docs/base-mcp-plugin.md", "wiki/MCP-Connector.md"]) {
+      const t = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+      ok(askIsResult && t.includes(`_meta["${metaKey}"]`) && t.includes("`isError`") && !/(?:paid )?call answers JSON-RPC error `?-32042/.test(t),
+        `${f} describes the first ask as the isError tool result with _meta challenges this server answered`);
+    }
+  }
 
   // 4. Free tool untouched
   const free = await plain.callTool({ name: "catalog.call", arguments: { slug: "uuid", params: {} } });

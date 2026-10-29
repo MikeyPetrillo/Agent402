@@ -1,6 +1,6 @@
 // Budget image tiers + a bounded video tier over OpenRouter's DEDICATED media
 // APIs (`POST /api/v1/images`, `POST /api/v1/videos`), not the chat wire the
-// $0.08 `/v1/images/generations` route rides.
+// flagship `/v1/images/generations` route rides.
 //
 // Why a second kit: the chat wire only reaches the Gemini/GPT image models
 // that are token-priced per image, while

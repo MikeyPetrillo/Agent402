@@ -78,7 +78,9 @@ export const GATEWAY_DOMAINS = Object.freeze({ "eip155:5042": 26, "eip155:8453":
 export const DEFAULT_NETWORKS = "arc,base";
 /** Dollars in our Gateway balance past which the status word reads "withdraw". */
 export const DEFAULT_WITHDRAW_ALERT_USD = 25;
-/** Seconds added above the kind's minValiditySeconds, as Circle's own scheme does. */
+/** Seconds added above the kind's minValiditySeconds, as Circle's own scheme does.
+ *  Kept well under the hour agent402-client's GATEWAY_MAX_TIMEOUT_SECONDS
+ *  (client/index.js) allows past the published minimum, or the client signs no accept. */
 export const VALIDITY_BUFFER_SECONDS = 100;
 
 const MAX_BODY_BYTES = 64 * 1024;

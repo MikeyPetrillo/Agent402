@@ -416,7 +416,7 @@ import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNet
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
-import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
+import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
@@ -9539,16 +9539,22 @@ app.use(progressMiddleware());
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const isInternalReplay = (req) => isMcpLoopback(req)
   || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOOPBACK_ADDRESSES.has(String(req.socket?.remoteAddress || "")));
+// A Tempo push credential's transfer is final before the call: both windows
+// defer its refusal to the Tempo gate (which books the transfer as owed until
+// the credential comes back with the header), but only while that gate is
+// mounted below; with no gate the window refuses as for any other payment.
+let tempoGateMounted = false;
+const isTempoPush = (req) => tempoGateMounted && isTempoPushCredential(req.headers.authorization);
 // Through the CDN proxy, a paid call to a route that can outlast the proxy's
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
-if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay }));
+if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay, isTempoPush }));
 // A paid call to a slow route sent without Prefer: respond-async (or a Prefer:
 // wait that covers the run budget) runs as a job when the client follows a 202
 // on its own, and is refused before any gate otherwise, so a client that gives
 // up early is never charged for an answer it cannot collect
 // (src/slow-sync-window.js).
-app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
+app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
@@ -9709,9 +9715,13 @@ if (!FREE_MODE) {
     // The mirror is enough here: the decision that keeps a push from being
     // both served and refunded is the claim hold below, not this read.
     pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
+    // The row a push transfer already holds, read before a route refusal
+    // books one (createTempoGate refuseConfirmedPush).
+    pushRowOf: (hash) => refundByEvidence(hash) || null,
   });
   if (tempoGate) {
     app.use(tempoGate);
+    tempoGateMounted = true;
     // A claimed push credential is served only once its owed debt (an
     // earlier input refusal) is voided, in one statement a refund send's
     // claim cannot interleave with (tempoPushDebts.claimForServe). A debt

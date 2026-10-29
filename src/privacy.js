@@ -45,12 +45,12 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-28.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-29.</p>
 </section>
 
 <section>
 <div class="pv-body">
-<p>Agent402 has no accounts. Pages run Google Analytics (advertising features off) and a first-party page counter
+<p>Agent402 has no accounts. Pages run a first-party page counter
 (PostHog, served from our own domain). It records page views, page leaves (time on the page and how far
 you scrolled) and page load timings (web vitals), with your browser, user agent string, operating system,
 device type, screen and window size, browser language and time zone, the page address with any query
@@ -59,7 +59,7 @@ cut the same way. It keeps a random per-visit id in session storage, never a coo
 events and forwards only their body and content type, so your IP address is not passed on to the
 analytics provider. It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
-<b>Google Analytics</b> to count visits and see how people find the site. It sets a measurement cookie
+<b>Google Analytics</b> (advertising features off) to count visits and see how people find the site. It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
 features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
@@ -162,7 +162,8 @@ so every claim below is verifiable in code.</p>
   as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
   on a refused payment, the resource URL it names (see telemetry above). The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
-  <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>.</li>
+  <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>
+  names the fields read, and <code>readsAnnotationFields: false</code> states that the annotations are not.</li>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
   it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner: each entry
@@ -225,10 +226,24 @@ us at the address below to delete your email from our alert, follow-up and subsc
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
-<p><b>Backups.</b> Each night we copy the stored records above (the state database and the data volume,
-including the email, memory and ledger records) to separate object storage, and each copy is deleted
+<p><b>Backups.</b> Each night we copy the stored records above (the state database, including the
+email, memory and ledger records) to separate object storage, and each copy is deleted
 after ${backupKeepDays()} days. A deletion you ask for therefore reaches the last backup that still holds
 the record within ${backupKeepDays()} days.</p>
+
+<h2>Your rights (EU and UK)</h2>
+<p>If you are in the European Economic Area or the United Kingdom, the controller of the data described
+on this page is <strong>Cardhavok LLC</strong>, doing business as <strong>Havok Holdings LLC</strong>
+(see <a href="/company">/company</a>). Our legal bases are: the contract you enter by paying, for a paid
+call or a purchase; our legitimate interest in running and protecting the service, for the operational logs,
+rate limiting and abuse control above; and your consent, for the analytics cookie and for email alerts,
+which you can withdraw at any time ("analytics choices" at the foot of the page, or the unsubscribe link
+in every alert). Where your browser reports a European time zone, the cookie waits for your choice;
+elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
+receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
+consent, and to complain to your supervisory authority. To exercise a right, email
+<a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
+operated from the United States, and the data described here is processed and stored there.</p>
 
 <h2>Children</h2>
 <p>The service is for people 18 and older (see the <a href="/terms">terms</a>) and is not directed at

@@ -17,6 +17,12 @@
 //     a 402. Our own synthetic traffic is booked (flagged) but not counted.
 // Every write is keyed on the transaction hash, so a repeat books nothing new.
 
+/** The clause a "refused before any payment was taken" line carries where a
+ *  Tempo push credential can reach the route: its transfer is final before
+ *  the call, so such a refusal books the transfer as owed instead. Read by
+ *  the MCP connector's slow-call refusal and the HTTP sync windows. */
+export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
+
 export const PUSH_INPUT_REFUSED_NOTE = "push unclaimed: input refused";
 export const PUSH_FINALIZE_REFUSED_NOTE = "push unclaimed: finalize refused";
 export const PUSH_CLAIMED_NOTE = "claimed on retry";

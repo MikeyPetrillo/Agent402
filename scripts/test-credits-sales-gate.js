@@ -44,13 +44,39 @@ const boot = (env) => new Promise(async (resolve) => {
     [/\bbuy (prepaid )?credits\b/i, "an invitation to buy credits"],
     [/\btop up (your )?credits\b/i, "an invitation to top up credits"],
     [/\bcredits? packs?\b/i, "a credit pack on offer"],
+    // A key is "already issued"; "paid by card" offers the purchase the
+    // switch may have closed.
+    [/\bpaid by card or USDC\b/i, "card payment for a tool call"],
   ];
-  const files = [join(ROOT, "README.md"), ...packageDirs().flatMap(shippedFiles)].filter((f) => /\.(md|js|ts|py|json)$/.test(f));
-  ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files)`);
-  const scan = (text) => OFFERS.filter(([re]) => re.test(text)).map(([, why]) => why);
+  // "Card credits", bare or as a key, names the purchase. A shipped package
+  // cannot read the switch, so its code and docs describe the key they hold
+  // (a "credits key"); a line that says the key is issued describes rather
+  // than sells. (The root README's module map names the server's own credits
+  // module and is not package copy.)
+  const PACKAGE_OFFERS = [
+    ...OFFERS,
+    [/^(?!.*\bissued\b).*\bcard[ -]credits\b/im, "credits described as a card purchase"],
+  ];
+  const isText = (f) => /\.(md|js|ts|py|json)$/.test(f);
+  const packageFiles = packageDirs().flatMap(shippedFiles).filter(isText);
+  // The ecosystem-listing copy (docs/) and the wiki source (wiki/) are static
+  // text too, read from GitHub and the listing sites: held to the package
+  // rules, so a key is described as sold or issued, never as a card purchase.
+  const { walk } = await import("./lib/shipped-files.js");
+  const docFiles = ["docs", "wiki"].flatMap((d) => walk(join(ROOT, d))).filter(isText);
+  const files = [join(ROOT, "README.md"), ...packageFiles, ...docFiles];
+  ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files + docs and wiki)`);
+  ok(docFiles.length >= 20 && docFiles.some((f) => /\/wiki\/MCP-Connector\.md$/.test(f)) && docFiles.some((f) => /\/docs\/ecosystem-listings\.md$/.test(f)), `the scan covers docs/ and wiki/ (${docFiles.length} files)`);
+  const scanWith = (rules) => (text) => rules.filter(([re]) => re.test(text)).map(([, why]) => why);
+  const scan = scanWith(OFFERS), scanPackage = scanWith(PACKAGE_OFFERS);
   ok(scan("## For humans: reports, monitors and prepaid credits\n(credits keys: https://agent402.tools/credits)").length === 2, "control: the retired heading and key pointer are both reported");
   ok(scan("## Prepaid credits (keys already issued)\n\nPrepaid credits: not on sale. A key already issued keeps working.").length === 0, "control: describing an issued key is not an offer");
-  const hits = files.flatMap((f) => scan(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
+  ok(scan("models at a flat per-call price, paid by card or USDC.").length === 1, "control: a package that sells the card path is reported");
+  ok(scanPackage("each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY)").length === 1 && scanPackage("how: \"prepaid card credits (Authorization: Bearer a402_...)\"").length === 1, "control: a package describing credits as a card purchase is reported");
+  ok(scanPackage("Payment mode: card credits.").length === 1 && scanPackage("agent402PaymentMode === \"card-credits\"").length === 1, "control: the bare payment-mode word, with a space or a hyphen, is reported");
+  ok(scanPackage("a card credits key already issued keeps working\nprepaid credits: a key already issued\na prepaid card-credits key issued at the credits page").length === 0, "control: a line that says the key is issued is not an offer");
+  ok(packageFiles.some((f) => /\/mcp\/index\.js$/.test(f)) && packageFiles.some((f) => /\/adapters\/eliza\/index\.js$/.test(f)) && packageFiles.some((f) => /\/client\/index\.js$/.test(f)), "the package scan covers the mcp, adapter and client code");
+  const hits = files.flatMap((f) => (packageFiles.includes(f) || docFiles.includes(f) ? scanPackage : scan)(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
   ok(hits.length === 0, `no static surface offers credits for sale${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
 }
 
@@ -75,6 +101,8 @@ try {
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
+  const descOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  ok(/not on sale/.test(descOf(pageOff)) && !/Buy \$/.test(descOf(pageOff)), `/credits describes itself as closed while sales are off ("${descOf(pageOff).slice(0, 40)}...")`);
   // A closed product is kept out of search: no sitemap slot, noindex on the
   // page, while the page itself still answers 200 for key holders.
   const robotsMeta = (html) => (html.match(/<meta name="robots" content="([^"]*)"/) || [])[1] || "";
@@ -95,6 +123,7 @@ try {
   const pageOnRes = await fetch(`${B}/credits`);
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
+  ok(!/not on sale/.test(descOf(pageOn)) && /\$20/.test(descOf(pageOn)), `/credits describes the purchase when sales are on ("${descOf(pageOn).slice(0, 40)}...")`);
   for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);

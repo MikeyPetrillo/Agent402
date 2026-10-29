@@ -46,6 +46,7 @@ import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
+import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 
@@ -609,6 +610,27 @@ export function pushHashOf(authorizationHeader) {
   }
 }
 
+/** A push transfer's chain-read sender (lowercased), or null when the read
+ *  fails or outlasts PUSH_SENDER_WAIT_MS. Bounded here as well as inside
+ *  tempoPushSender: an injected reader gets the same ceiling, and a read past
+ *  it names nobody. */
+async function readPushSenderBounded(pushSender, authorizationHeader) {
+  if (typeof pushSender !== "function") return null;
+  let timer = null;
+  try {
+    const bound = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PUSH_SENDER_WAIT_MS); timer.unref?.(); });
+    return lcAddress(await Promise.race([Promise.resolve().then(() => pushSender(authorizationHeader)), bound]));
+  } catch { return null; } finally { if (timer) clearTimeout(timer); }
+}
+
+/** True when the header is a Tempo credential naming a PUSH transfer (a hash
+ *  payload): the one payment a refusal ahead of this gate cannot leave
+ *  untaken, so the sync windows defer theirs to the gate for it
+ *  (src/slow-sync-window.js). Shape only; nothing is verified. */
+export function isTempoPushCredential(authorizationHeader) {
+  return isTempoCredential(authorizationHeader) && pushHashOf(authorizationHeader) !== null;
+}
+
 /** True when `authorizationHeader` deserializes to a WELL-FORMED credential
  *  bound to a `method: "tempo"` challenge — used to decide whether a request
  *  belongs on the Tempo path at all before doing anything mutating. Never
@@ -646,6 +668,11 @@ export function isTempoCredential(authorizationHeader) {
  *  Pure, synchronous, never throws. Exported for tests. */
 export function checkTempoCredentialBinding(authorizationHeader, { secretKey, realm, priceFor, method, path, req = null, now = Date.now() } = {}) {
   const bad = (reason) => ({ ok: false, reason });
+  // A refusal of a challenge this server verified as its own (minted here,
+  // unexpired, our payTo, our currency, Tempo mainnet) by the ROUTE it was
+  // presented at. The money a push credential names already paid that
+  // challenge, so the gate books it as owed instead of answering "not charged".
+  const badRoute = (reason) => ({ ok: false, reason, routeRefusal: true });
   let credential;
   try { credential = Credential.deserialize(authorizationHeader); } catch { return bad("credential does not deserialize"); }
   const ch = credential?.challenge;
@@ -665,18 +692,18 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   if (chainId !== TEMPO_MAINNET_CHAIN_ID) return bad(`challenge chainId ${chainId} is not Tempo mainnet`);
   const item = typeof priceFor === "function" ? priceFor(method, path, req) : null;
   const priceUsd = Number(item?.priceUsd);
-  if (!(priceUsd > 0)) return bad("route has no price - a tempo credential buys nothing here");
+  if (!(priceUsd > 0)) return badRoute("route has no price - a tempo credential buys nothing here");
   // Security review 2026-08-19: the memory family / my-usage derive the
   // caller's identity from the SIGNED x402 payer; Tempo settles through the
   // relay with no payer this server verifies, so a tempo credential must never
   // reach those handlers (it would be served under whatever payer header the
   // request also carried).
-  if (item.identityBound) return bad("this route is wallet-identity bound (the payment IS the identity); Tempo credentials carry no payer this server verifies - pay it over an x402 rail");
-  if (item.longRunning) return bad("this route runs longer than a Tempo credential stays valid (settlement happens after the handler); pay it over an EVM x402 rail or by card");
+  if (item.identityBound) return badRoute("this route is wallet-identity bound (the payment IS the identity); Tempo credentials carry no payer this server verifies - pay it over an x402 rail");
+  if (item.longRunning) return badRoute("this route runs longer than a Tempo credential stays valid (settlement happens after the handler); pay it over an EVM x402 rail or by card");
   const expected = BigInt(Math.round(priceUsd * 10 ** envDecimals()));
   let amount;
   try { amount = BigInt(String(r.amount)); } catch { return bad("challenge amount is not an integer base-units string"); }
-  if (amount < expected) return bad(`challenge amount ${amount} is below this route's price ${expected}`);
+  if (amount < expected) return badRoute(`challenge amount ${amount} is below this route's price ${expected}`);
   // Only the two credential kinds that pay: a signed transaction for the
   // relay to broadcast (pull), or the hash of a transfer the buyer already
   // sent (push). A "proof" credential moves no money and is valid only for a
@@ -1252,7 +1279,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  free handler executions before Tempo's relay rejects the (N-1) duplicate
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
-export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
+export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null, pushRowOf = null } = {}) {
   if (!tempoConfigured()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
@@ -1289,9 +1316,65 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // a reason class and a next step.
       if (binding.reason !== "not a tempo/charge challenge") {
         const b = bindingRefusal(binding.reason);
+        // A PUSH credential the ROUTE refuses (identity-bound, long-running,
+        // priced above the challenge, free) names a transfer that already
+        // paid a challenge this server verified as its own: "not charged"
+        // would be false. The relay is asked whether the transfer pays that
+        // challenge; confirmed, it is booked as owed (src/tempo-push-debts.js)
+        // and the credential is consumed, so the refund run repays it. The
+        // relay saying no, nothing to confirm, a credential that already paid
+        // a served call or is mid-claim elsewhere, or a transfer the ledger
+        // already holds: the plain refusal, nothing booked.
+        const pushHash = binding.routeRefusal === true ? pushHashOf(auth) : null;
+        if (pushHash) return void refuseConfirmedPush(pushHash, b).catch(() => next());
         logTempoRefusal(req, { cls: b.cls, amountAtomic: amountOfCredential(auth), timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}` });
         markMppProblem(req, res, mppProblem(b.kind, b.detail, { hint: b.hint, details: { reason: b.cls, charged: false } }));
       }
+      return next();
+    }
+    async function refuseConfirmedPush(pushHash, b) {
+      const amount = amountOfCredential(auth);
+      const replayKey = replayGuard ? tempoReplayKey(auth) : null;
+      const releaseKey = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
+      const consumeKey = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
+      const plain = (why, timings = {}, requestId = null) => {
+        logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { ...timings, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, ${why}, nothing booked`, requestId });
+        markMppProblem(req, res, mppProblem(b.kind, b.detail, { hint: b.hint, details: { reason: b.cls, charged: false } }));
+        return next();
+      };
+      // The credential's identity is claimed FIRST, as the paid path does:
+      // one that paid a served call (consumed) or is mid-claim on another
+      // request (in flight) is never booked as owed for a call it paid.
+      if (replayGuard && replayKey) {
+        const verdict = await replayGuard.begin(replayKey);
+        if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
+      }
+      // A transfer the ledger already holds: an owed row stands as it is; a
+      // void (claimed and served), sending or paid row leaves nothing to book.
+      let existing = null;
+      if (typeof pushRowOf === "function") { try { existing = (await pushRowOf(pushHash)) || null; } catch { existing = null; } }
+      if (existing && existing.status !== "owed") { releaseKey(); return plain(`transfer ${existing.status === "void" ? "already claimed and served" : `already ${existing.status}`}`); }
+      const t0 = Date.now();
+      let v = null;
+      try { v = await validate(auth); } catch (e) { v = { ok: false, cls: "unknown", error: e?.message || String(e) }; }
+      const tValidated = Date.now();
+      if (!v?.ok) { releaseKey(); return plain(`transfer not confirmed by the relay (${v?.cls || "unknown"})`, { validate: tValidated - t0 }, v?.requestId); }
+      let owed = !!existing;
+      if (!existing && typeof onPushInputRefused === "function") {
+        const payer = await readPushSenderBounded(pushSender, auth);
+        const amountUsd = /^\d+$/.test(amount) ? Number(amount) / 10 ** envDecimals() : NaN;
+        try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: amount, amountUsd, status: 402 })) === true; } catch { owed = false; }
+      }
+      // Booked as owed: the credential is consumed, as a finalize refusal
+      // consumes it, so the transfer is repaid and never also served. Not
+      // booked: released, so it still pays on a route that offers Tempo.
+      if (owed) consumeKey(); else releaseKey();
+      logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, transfer confirmed and not claimed (${owed ? `booked as owed${existing ? " already" : ""}, credential consumed` : "no debt booked"})`, requestId: v?.requestId });
+      const expires = (() => { try { return Credential.deserialize(auth)?.challenge?.expires || null; } catch { return null; } })();
+      const detail = `${b.detail} The transfer you sent has not been claimed${owed
+        ? " and is recorded as owed to the sender, to be refunded; it pays for no further request."
+        : `; until the challenge expires${expires ? ` (${expires})` : ""} the same credential pays for a request on a route that offers Tempo.`}`;
+      markMppProblem(req, res, mppProblem(b.kind, detail, { hint: b.hint, details: { reason: b.cls, charged: false, transferClaimed: false, ...(owed ? { refundOwed: true } : {}) } }));
       return next();
     }
 
@@ -1448,36 +1531,32 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // refund. Nothing is claimed yet, so the same credential still pays
         // for this request once the body is corrected (until the challenge
         // expires): say so, and release the replay key so it can.
-        // Bounded here as well as inside tempoPushSender: an injected reader
-        // gets the same ceiling, and a read past it names nobody.
-        const readPushSender = async () => {
-          if (typeof pushSender !== "function") return null;
-          let timer = null;
-          try {
-            const bound = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PUSH_SENDER_WAIT_MS); timer.unref?.(); });
-            return lcAddress(await Promise.race([Promise.resolve().then(() => pushSender(auth)), bound]));
-          } catch { return null; } finally { if (timer) clearTimeout(timer); }
-        };
+        const readPushSender = () => readPushSenderBounded(pushSender, auth);
         const pushHash = pushHashOf(auth);
         req.mppTempoPushHash = pushHash;
         const pushAmountUsd = Number(binding.amountAtomic) / 10 ** envDecimals();
-        if (typeof preValidate === "function") {
-          let bad = null;
+        // A sync window's refusal (the call needs Prefer: respond-async) is
+        // deferred to here for a push credential, ahead of the body check:
+        // answered the same way, the transfer unclaimed and booked as owed
+        // until the credential comes back with the header.
+        let bad = syncWindowRefusalOf(req);
+        if (!bad && typeof preValidate === "function") {
           try { bad = preValidate(req); } catch { bad = null; }
-          if (bad && bad.status >= 400 && bad.status < 500) {
-            releaseReplay();
-            // Until it is claimed we hold the buyer's money for nothing, and
-            // they may never come back: book it as owed now. A later claim
-            // that is served voids the row (see src/tempo-push-debts.js).
-            let owed = false;
-            if (typeof onPushInputRefused === "function") {
-              const payer = await readPushSender();
-              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
-            }
-            logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
-            res.setHeader("Cache-Control", "no-store");
-            return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again with a corrected body and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
+          if (!(bad && bad.status >= 400 && bad.status < 500)) bad = null;
+        }
+        if (bad) {
+          releaseReplay();
+          // Until it is claimed we hold the buyer's money for nothing, and
+          // they may never come back: book it as owed now. A later claim
+          // that is served voids the row (see src/tempo-push-debts.js).
+          let owed = false;
+          if (typeof onPushInputRefused === "function") {
+            const payer = await readPushSender();
+            try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
           }
+          logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
+          res.setHeader("Cache-Control", "no-store");
+          return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
         }
         // A transfer whose debt is already being refunded (or was) no longer
         // pays for a request: claiming it now would serve AND refund it.

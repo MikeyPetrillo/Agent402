@@ -53,9 +53,11 @@ import { recordWish } from "./wish.js";
 import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
+import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -154,8 +156,9 @@ const PAID_LOOPBACK_TIMEOUT_MS = Math.max(1_000, MCP_REQ_DEADLINE_MS - 2_500);
 export const PAID_CUTOFF_TEXT = "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Check any payment by its settlement transaction, free, at GET /api/refunds/lookup?tx=<hash>: it answers whether a refund is recorded and, once sent, our refund transaction. Do not retry blindly: a retry is a new paid call.";
 export const UNPAID_CUTOFF_TEXT = "No payment was presented, so there was nothing to charge.";
 /** The clause every connector "not charged" line carries: a Tempo push
- *  transfer is final before the call and a failure on it is booked as owed. */
-export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
+ *  transfer is final before the call and a failure on it is booked as owed.
+ *  Shared with the HTTP sync windows (src/tempo-push-debts.js). */
+export { PUSH_EXCEPTION };
 // The RFC 9457 members of a 402 problem document, and nothing else. A paywall
 // 402 body also carries the full PaymentRequired offer (it mirrors the
 // PAYMENT-REQUIRED header, src/payment-required-body.js); the error data, the
@@ -1135,7 +1138,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 tagline: p.tagline,
               })),
             },
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
@@ -1272,7 +1275,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               // was told not to expect - the same defect this tool's `reports`
               // line was fixed for, one field away. test-price-prose pins the
               // retired figures by name, so do not quote them back in here.
-              prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}${premiumClause() ? `; ${premiumClause()}, listed under payment.premiumUsdByNetwork on ${baseUrl}/api/pricing` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
+              prices: `most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}${premiumClause() ? `; ${premiumClause()}, listed under payment.premiumUsdByNetwork on ${baseUrl}/api/pricing` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
               retries: "an Idempotency-Key header (or the x402 payment-identifier extension) replays a served paid call instead of charging again; a request re-sent with the same signed EVM payment and no key is answered from its first answer too (X-Replayed-Answer: 1), except on identity-bound routes, routes with a lasting effect and streamed calls",
               // The Circle Gateway batched option, read from the live offer
@@ -1501,7 +1504,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (body.method === "tasks/cancel") {
       // Cooperative and eventually consistent: we abort the live run, which
       // makes the paid request a non-200 and CANCELS settlement.
-      try { await tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error cancelling task"); }
+      try { await tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error canceling task"); }
       return okResult(taskAck());
     }
     // tasks/update: this connector never elicits, so it never surfaces

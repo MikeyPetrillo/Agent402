@@ -31,6 +31,15 @@ Payments and refunds:
   dispute is won, which also re-enables a key the dispute disabled.
 - The unpaid-quote limiters and the gateway cache count a payment header only
   when it decodes to a payment on a chain this server sells on.
+- agent402-client 0.8.20 pays the Circle Gateway batched accept on Arc and
+  Base with the gateway option (an EIP-712 signer whose address holds a USDC
+  deposit in Circle Gateway): the authorization is signed under the Gateway
+  domain the accept carries, the caps hold before the signature, a pending
+  settlement is resent with the same header, and a 402 with no batched accept
+  falls back to the payment fetch. Off by default. A refusal for a short
+  Gateway balance says to deposit, not to fund the wallet, and reads no wallet
+  balance. The mechanism is on the wiki's Circle Gateway page and in the x402
+  guide.
 
 LLM gateway:
 - A reasoning or thinking budget is fitted under the output cap the price
@@ -68,12 +77,26 @@ Surfaces:
   on /api/pricing, in /llms.txt, in the openapi guidance and on the
   connector's payment.info, beside the per-chain floors.
 - Algorand mainnet is offered under its 32-character CAIP-2 id; a payment
-  naming the older full-hash id still settles. agent402-client 0.8.19,
+  naming the older full-hash id still settles. agent402-client 0.8.20,
   agent402-mcp 0.13.22 and agent402-openclaw 0.5.7 read both spellings; the
-  earlier client matches only the old id.
+  earlier client matches only the old id. agent402-mcp 0.13.22,
+  elizaos-plugin-agent402 0.2.9 and agent402-agentkit 0.1.9 describe a
+  credits key as sold or already issued, and the mcp package shows a buy link
+  only while the service's /api/pricing says credits are on sale.
 - /health answers cross-origin requests, and a cdnOrigin word on
   /api/gateway-status reports whether a CDN-range peer reached the origin
   without its edge secret.
+- /.well-known/x402 states under payment.dataHandling that payment
+  annotations are not read as readsAnnotationFields, which replaces
+  readsPaymentMetadata; the privacy page names readsOnly and
+  readsAnnotationFields.
+- The router's dispatch legend on /api/index carries settlementNetting (on or
+  off) and its self-funded reason says it is read only while netting is on; a
+  seller's historyLegend says a crawl outcome counts the routes found, from
+  the manifest or from an OpenAPI, agents.json or llms.txt read.
+- The home page labels a seller whose name reads as a page title by its host.
+- The privacy page carries a rights section for readers in the EU and the UK,
+  and its backups wording names the state database.
 
 Operations:
 - The operator view of a public surface reads X-Operator-Token only; an

@@ -14,6 +14,9 @@ const proc = spawn("node", ["src/server.js"], {
   cwd: ROOT,
   env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
+    // The seller index is not under test: a crawl filling it while the offline
+    // cases run would change what route() ranks by the time they finish.
+    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     POW_DIFFICULTY: "12", PORT: String(PORT), FREE_MODE: "" },
   stdio: "ignore",
 });
@@ -1145,6 +1148,221 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     foreignLocation = true;
     e = null; try { await c.call("slow", { prompt: "w" }); } catch (x) { e = x; }
     ok(e instanceof AsyncJobPendingError && /another origin/.test(e.message), "a job link on another origin is never followed");
+  } finally { srv.close(); }
+}
+
+// Offline: the Circle Gateway batched option. A real loopback seller offers a
+// plain Base accept and a batched one (extra.name GatewayWalletBatched) on the
+// same 402, verifies a batched payment's signature under the Gateway domain
+// (viem), and can answer a refusal or settlement-pending. Without the option
+// the plain accept is paid (through a real @x402/fetch); with it the batched
+// one is signed by the gateway signer, under the Gateway domain and not the
+// asset's, and sent on the plain fetch; the caps hold before anything is
+// signed; a 402 with no batched accept this signer may pay falls back.
+{
+  const { createServer } = await import("node:http");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { verifyTypedData } = await import("viem");
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { GATEWAY_KIND_NAME, GATEWAY_MAX_TIMEOUT_SECONDS, GatewayPendingError, SpendingLimitError, gatewayAcceptOf, signGatewayPayment } = await import("./index.js");
+  const account = privateKeyToAccount("0x" + "44".repeat(32));
+  let signs = 0;
+  const signer = { address: account.address, signTypedData: (...a) => { signs++; return account.signTypedData(...a); } };
+  const GW_WALLET = "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee";
+  const ARC_USDC = "0x3600000000000000000000000000000000000000";
+  const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+  const TYPES = { TransferWithAuthorization: [
+    { name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+  ] };
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const unb64 = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+  const plainAccept = { scheme: "exact", network: "eip155:8453", amount: "5000", asset: BASE_USDC, payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const batchedAccept = { scheme: "exact", network: "eip155:8453", amount: "5000", asset: BASE_USDC, payTo: PAY_TO, maxTimeoutSeconds: 604900, extra: { name: GATEWAY_KIND_NAME, version: "1", verifyingContract: GW_WALLET } };
+  const arcBatched = { ...batchedAccept, network: "eip155:5042", asset: ARC_USDC };
+  const domainOf = (network) => ({ name: GATEWAY_KIND_NAME, version: "1", chainId: Number(network.split(":")[1]), verifyingContract: GW_WALLET });
+  const bigMsg = (a) => ({ ...a, value: BigInt(a.value), validAfter: BigInt(a.validAfter), validBefore: BigInt(a.validBefore) });
+  const st = { mode: "ok", offer: "both", paid: [], pendingLeft: 0 };
+  let port = 0;
+  const srv = createServer(async (req, res) => {
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (req.url === "/api/pricing") return send(200, { endpoints: [{ slug: "thing", method: "GET", path: "/api/thing", computePayable: false, price: "$0.005" }] });
+    if (!req.url.startsWith("/api/thing")) return send(404, {});
+    const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : [plainAccept, arcBatched];
+    const offer = { x402Version: 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
+    const header = req.headers["payment-signature"];
+    if (!header) return send(402, {}, { "payment-required": b64(offer) });
+    let p = null; try { p = unb64(header); } catch { p = null; }
+    st.paid.push(p);
+    if (p?.accepted?.extra?.name !== GATEWAY_KIND_NAME) return send(200, { paid: "plain", accepted: p?.accepted?.extra?.name || null });
+    const a = p.payload.authorization;
+    let valid = false;
+    try { valid = await verifyTypedData({ address: a.from, domain: domainOf(p.accepted.network), types: TYPES, primaryType: "TransferWithAuthorization", message: bigMsg(a), signature: p.payload.signature }); } catch { valid = false; }
+    if (!valid) return send(402, { reason: "invalid-signature", hint: "the signature does not verify under the Gateway domain" }, { "payment-required": b64(offer) });
+    if (st.mode === "short") return send(402, { reason: "insufficient-funds", retry: "fund-gateway-deposit", hint: "the signer's Circle Gateway balance holds less than this call costs" }, { "payment-required": b64(offer), "retry-after": "60" });
+    // Another refusal whose prose happens to say "balance": the machine fields name the reason.
+    if (st.mode === "nonce") return send(402, { reason: "nonce-used", retry: "new-payment", hint: "this authorization's nonce was already used; the signer's Gateway balance is untouched" }, { "payment-required": b64(offer) });
+    // A seller with no machine fields: only its prose says the balance is short.
+    if (st.mode === "prose") return send(402, { hint: "insufficient Gateway balance for this call" }, { "payment-required": b64(offer) });
+    if (st.mode === "pending" && st.pendingLeft-- > 0) return send(402, { reason: "settlement-pending", retry: "same-payment", retryAfterSeconds: 1, hint: "not confirmed yet" }, { "retry-after": "1" });
+    return send(200, { paid: "gateway", payer: a.from, nonce: a.nonce });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  port = srv.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const plainFetch = () => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    return wrapFetchWithPayment(fetch, xc);
+  };
+  const mk = (opts = {}) => {
+    const c = new Agent402({ baseUrl: base, cache: false, tlsDistrust: false, fetchImpl: fetch, ...opts });
+    c._sleep = async (ms) => { sleeps.push(ms); };
+    return c;
+  };
+  const sleeps = [];
+  const lastPaid = () => st.paid[st.paid.length - 1];
+  try {
+    // The pure helpers.
+    ok(gatewayAcceptOf([plainAccept, batchedAccept]) === batchedAccept, "gatewayAcceptOf picks the batched accept beside the plain one");
+    ok(gatewayAcceptOf([plainAccept]) === null && gatewayAcceptOf([batchedAccept], ["arc"]) === null && gatewayAcceptOf([plainAccept, arcBatched], ["arc"]) === arcBatched, "gatewayAcceptOf answers null with no batched accept, or none on the wanted chains, and the chain asked for otherwise");
+    ok(gatewayAcceptOf([{ ...batchedAccept, asset: "0x000000000000000000000000000000000000bEEF" }]) === null, "a batched accept in an asset the known-asset table cannot price is never a candidate");
+    ok(GATEWAY_MAX_TIMEOUT_SECONDS === 7 * 24 * 3600 + 3600 && gatewayAcceptOf([{ ...batchedAccept, maxTimeoutSeconds: GATEWAY_MAX_TIMEOUT_SECONDS }]) !== null && gatewayAcceptOf([{ ...batchedAccept, maxTimeoutSeconds: GATEWAY_MAX_TIMEOUT_SECONDS + 1 }]) === null && gatewayAcceptOf([{ ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }]) === null, "a batched accept whose validity window is past seven days and an hour is never a candidate (a year is refused; the ceiling itself is admitted)");
+    let longSign = null; try { await signGatewayPayment({ ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }, { signer: account }); } catch (e) { longSign = e; }
+    ok(longSign instanceof TypeError, "signGatewayPayment refuses an oversized validity window before signing");
+    {
+      const t0 = Math.floor(Date.now() / 1000);
+      const { payload, header } = await signGatewayPayment(batchedAccept, { signer: account, resource: { url: `${base}/api/thing` } });
+      const a = payload.payload.authorization;
+      ok(payload.x402Version === 2 && payload.accepted === batchedAccept && payload.resource?.url === `${base}/api/thing`, "signGatewayPayment builds an x402 v2 payload echoing the accept and the resource");
+      ok(a.from === account.address && a.to === PAY_TO && a.value === "5000" && a.validAfter === "0" && /^0x[0-9a-f]{64}$/.test(a.nonce), "the authorization is from the signer to the payTo for the amount, valid from the start, with a fresh 32-byte nonce");
+      ok(Math.abs(Number(a.validBefore) - (t0 + 604900)) <= 5, `validBefore is now plus the accept's maxTimeoutSeconds (${Number(a.validBefore) - t0})`);
+      const underGateway = await verifyTypedData({ address: account.address, domain: domainOf("eip155:8453"), types: TYPES, primaryType: "TransferWithAuthorization", message: bigMsg(a), signature: payload.payload.signature });
+      const underUsdc = await verifyTypedData({ address: account.address, domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: BASE_USDC }, types: TYPES, primaryType: "TransferWithAuthorization", message: bigMsg(a), signature: payload.payload.signature });
+      ok(underGateway && !underUsdc, "the signature verifies under the GatewayWalletBatched domain (verifyingContract from the accept) and not under the asset's USDC domain");
+      ok(JSON.stringify(unb64(header)) === JSON.stringify(payload), "the header is the base64 of that payload");
+    }
+    let bad = null; try { new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer: { address: "nope" } } }); } catch (e) { bad = e; }
+    ok(bad instanceof TypeError, "a gateway option without an EIP-712 signer is refused at construction");
+
+    // Off by default: the payment fetch pays the plain accept.
+    {
+      const c = mk({ fetch: plainFetch() });
+      const out = await c.call("thing", { q: 1 });
+      ok(out.paid === "plain" && lastPaid()?.accepted?.extra?.name === "USD Coin" && signs === 0, `without the option the plain accept is paid and the gateway signer signs nothing (${out.paid}, ${lastPaid()?.accepted?.extra?.name})`);
+    }
+    // With the option: the batched accept, signed under the Gateway domain.
+    {
+      st.paid.length = 0;
+      const c = mk({ gateway: { signer } });
+      const t0 = Math.floor(Date.now() / 1000);
+      const out = await c.call("thing", { q: 1 });
+      const p = lastPaid();
+      ok(out.paid === "gateway" && out.payer === account.address && signs === 1 && st.paid.length === 1, `with the option the batched accept is signed once and the seller verified it under the Gateway domain (${out.paid})`);
+      ok(JSON.stringify(p.accepted) === JSON.stringify(batchedAccept) && p.resource?.url === `${base}/api/thing`, "the payload echoes the batched accept and the 402's resource");
+      ok(p.payload.authorization.to === PAY_TO && p.payload.authorization.value === "5000" && Math.abs(Number(p.payload.authorization.validBefore) - (t0 + 604900)) <= 5, "the authorization pays the accept's payTo exactly its amount inside its validity window");
+      ok(c.spendingSummary().dailyUsd === 0.005 && c.spendingSummary().calls === 1, `the paid amount is recorded as spend (${c.spendingSummary().dailyUsd})`);
+      const again = mk({ gateway: { signer }, fetch: plainFetch() });
+      const out2 = await again.call("thing", { q: 2 });
+      ok(out2.paid === "gateway", "with both a payment fetch and the option, the batched accept is paid where it is offered");
+    }
+    // The caps hold before the signature: nothing is signed, nothing is sent.
+    {
+      const before = { signs, sent: st.paid.length };
+      const c = mk({ gateway: { signer }, maxPerCallUsd: 0.001 });
+      let e = null; try { await c.call("thing", { q: 3 }); } catch (err) { e = err; }
+      ok(e instanceof SpendingLimitError && e.limit === "maxPerCallUsd" && e.priceUsd === 0.005, `an over-cap batched price is refused with SpendingLimitError (${e?.name}: ${e?.message?.slice(0, 80)})`);
+      ok(signs === before.signs && st.paid.length === before.sent && c.spendingSummary().dailyUsd === 0, "the refusal signed nothing, sent no payment and reserved nothing");
+      const d = mk({ gateway: { signer }, dailyLimitUsd: 0.007 });
+      await d.call("thing", { q: 4 });
+      e = null; try { await d.call("thing", { q: 5 }); } catch (err) { e = err; }
+      ok(e instanceof SpendingLimitError && e.limit === "dailyLimitUsd" && d.spendingSummary().dailyUsd === 0.005, "the rolling daily cap counts settled batched payments and refuses the one that would cross it");
+      // The 402 asks more than the catalog lists and the cap sits between: the
+      // cap is checked against the accept's amount, never the catalog's figure.
+      st.offer = "dear";
+      const dear = mk({ gateway: { signer }, maxPerCallUsd: 0.01 });
+      const before2 = { signs, sent: st.paid.length };
+      e = null; try { await dear.call("thing", { q: 18 }); } catch (err) { e = err; }
+      ok(e instanceof SpendingLimitError && e.limit === "maxPerCallUsd" && e.priceUsd === 0.02 && e.listPriceUsd === 0.005 && /quoted \$0\.02; the catalog lists \$0\.005/.test(e.message), `a batched accept quoting more than the catalog price is held to the cap at the quoted amount (${e?.message?.slice(0, 110)})`);
+      ok(signs === before2.signs && st.paid.length === before2.sent, "and nothing was signed or sent");
+      st.offer = "both";
+    }
+    // No batched accept this signer may pay: the plain paths, as without the option.
+    {
+      st.offer = "plain";
+      const before = signs;
+      const c = mk({ gateway: { signer }, fetch: plainFetch() });
+      const out = await c.call("thing", { q: 6 });
+      ok(out.paid === "plain" && signs === before, "a 402 with no batched accept falls back to the payment fetch and the gateway signer signs nothing");
+      const alone = mk({ gateway: { signer } });
+      let e = null; try { await alone.call("thing", { q: 7 }); } catch (err) { e = err; }
+      ok(e && e.status === 402 && e.paid === false && /no Circle Gateway batched accept/.test(e.message), `with no other way to pay, the refusal says the seller offers no batched accept (${e?.message?.slice(0, 90)})`);
+      st.offer = "both";
+      const arcOnly = mk({ gateway: { signer, networks: ["arc"] }, fetch: plainFetch() });
+      const out2 = await arcOnly.call("thing", { q: 8 });
+      ok(out2.paid === "plain" && signs === before, "a batched accept on a chain outside gateway.networks is not signed; the plain accept is paid");
+      st.offer = "arc";
+      const out3 = await arcOnly.call("thing", { q: 9 });
+      ok(out3.paid === "gateway" && lastPaid().accepted.network === "eip155:5042" && signs === before + 1, "a batched accept on the wanted chain is signed with that chain's id in the domain");
+      // A seller asking for a year-long validity window: refused unsigned, the plain accept paid.
+      st.offer = "long";
+      const longSeller = mk({ gateway: { signer }, fetch: plainFetch() });
+      const out4 = await longSeller.call("thing", { q: 13 });
+      ok(out4.paid === "plain" && signs === before + 1, "a batched accept with an oversized validity window is never signed; the plain accept is paid");
+      const longAlone = mk({ gateway: { signer } });
+      let e2 = null; try { await longAlone.call("thing", { q: 14 }); } catch (err) { e2 = err; }
+      ok(e2 && e2.status === 402 && signs === before + 1 && /no Circle Gateway batched accept/.test(e2.message), "with no other way to pay, an oversized window is refused without a signature");
+      st.offer = "both";
+    }
+    // A signer that throws: nothing was sent, so the reservation is released.
+    {
+      const broken = { address: account.address, signTypedData: async () => { throw new Error("hardware wallet locked"); } };
+      const sent = st.paid.length;
+      const c = mk({ gateway: { signer: broken }, dailyLimitUsd: 1 });
+      let e = null; try { await c.call("thing", { q: 15 }); } catch (err) { e = err; }
+      ok(e && /hardware wallet locked/.test(e.message) && st.paid.length === sent, "a signer that throws fails the call before any payment is sent");
+      ok(c.spendingSummary().dailyUsd === 0 && c._spend.log.length === 0, "and its reservation is released (nothing left the process)");
+    }
+    // The seller refuses the batched payment: the message carries its words and what to do.
+    {
+      st.mode = "short";
+      const c = mk({ gateway: { signer } });
+      let e = null; try { await c.call("thing", { q: 10 }); } catch (err) { e = err; }
+      ok(e && e.status === 402 && e.paid === false && /Circle Gateway balance holds less/.test(e.message) && /deposit through Circle's GatewayWallet contract/.test(e.message) && e.message.includes(account.address), `a refusal for a short Gateway balance relays the seller's hint and says to deposit first (${e?.message?.slice(0, 120)})`);
+      ok(/stays valid until its validBefore/.test(e.message) && /counts against this client's spending caps/.test(e.message), "and says the sent authorization stays valid and counts against the caps");
+      ok(c.spendingSummary().dailyUsd === 0.005 && c.spendingSummary().calls === 1, `a refused batched authorization was sent, so it stays counted against the caps (${c.spendingSummary().dailyUsd})`);
+      const capped = mk({ gateway: { signer }, dailyLimitUsd: 0.009 });
+      let e3 = null; try { await capped.call("thing", { q: 16 }); } catch (err) { e3 = err; }
+      let e4 = null; try { await capped.call("thing", { q: 17 }); } catch (err) { e4 = err; }
+      ok(e3?.status === 402 && e4 instanceof SpendingLimitError && e4.limit === "dailyLimitUsd", "a second call after a refusal is held to the daily cap net of the refused authorization");
+      // The deposit advice keys on the seller's machine fields, not on the
+      // word "balance" in its prose: another reason whose hint mentions the
+      // balance gets none, and a body with no fields falls back to the prose.
+      st.mode = "nonce";
+      let e5 = null; try { await mk({ gateway: { signer } }).call("thing", { q: 18 }); } catch (err) { e5 = err; }
+      ok(e5?.status === 402 && /nonce was already used/.test(e5.message) && !/deposit through/.test(e5.message), `a refusal whose hint merely mentions the balance, with another reason, gets no deposit advice (${e5?.message?.slice(0, 140)})`);
+      st.mode = "prose";
+      let e6 = null; try { await mk({ gateway: { signer } }).call("thing", { q: 19 }); } catch (err) { e6 = err; }
+      ok(e6?.status === 402 && /deposit through Circle's GatewayWallet contract/.test(e6.message), "a seller that sends no reason or retry field is read by its prose");
+      st.mode = "ok";
+    }
+    // settlement-pending: the same header is resent after Retry-After, never a new signature.
+    {
+      st.mode = "pending"; st.pendingLeft = 1; st.paid.length = 0; sleeps.length = 0;
+      const before = signs;
+      const c = mk({ gateway: { signer } });
+      const out = await c.call("thing", { q: 11 });
+      ok(out.paid === "gateway" && st.paid.length === 2 && st.paid[0].payload.authorization.nonce === st.paid[1].payload.authorization.nonce && signs === before + 1, "a pending answer is followed by a resend of the same signed payment (one signature, one nonce)");
+      ok(JSON.stringify(sleeps) === "[1000]" && c.spendingSummary().dailyUsd === 0.005, `the resend waits the seller's Retry-After and the call counts once (${sleeps.join(",")})`);
+      st.pendingLeft = 99; st.paid.length = 0;
+      let e = null; try { await c.call("thing", { q: 12 }); } catch (err) { e = err; }
+      ok(e instanceof GatewayPendingError && e.paymentHeader && unb64(e.paymentHeader).payload.authorization.nonce === st.paid[0].payload.authorization.nonce && st.paid.length === 4 && st.paid.every((p) => p.payload.authorization.nonce === st.paid[0].payload.authorization.nonce), `still pending after the resends: GatewayPendingError carries the header that was sent (${st.paid.length} sends, ${e?.name})`);
+      ok(e.status === 402 && e.paid === null && c.spendingSummary().dailyUsd === 0.01, "the unconfirmed payment counts against the caps (Gateway may settle it)");
+      st.mode = "ok";
+    }
   } finally { srv.close(); }
 }
 

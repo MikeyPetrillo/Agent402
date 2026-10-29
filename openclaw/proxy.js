@@ -6,7 +6,7 @@
 //              SDK pay from a wallet too (ANTHROPIC_BASE_URL=http://127.0.0.1:<port>).
 //
 // Two ways to pay, chosen at start:
-//   creditsKey  - a prepaid card-credits key (a402_...) sent as a Bearer; the
+//   creditsKey  - a prepaid credits key (a402_...) sent as a Bearer; the
 //                 gateway authorizes against the balance before the handler and
 //                 debits only on a final 200. No wallet, no chain.
 //   payFetch    - an x402-paying fetch (e.g. @x402/fetch wrapped around a

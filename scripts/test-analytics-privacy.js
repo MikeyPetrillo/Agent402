@@ -147,6 +147,9 @@ const scriptSrcs = (w) => [...w.document.querySelectorAll("script[src]")].map((s
   }
   ok(/Global Privacy Control signal, the cookie stays off, you are not asked, and the page counter does not load/.test(text), "/privacy states the GPC behavior");
   ok(/"analytics choices" at the foot of the page/.test(text) && /Wherever you are/.test(text), "/privacy says where to change the choice");
+  // The rights section names the consent basis; the loader keys the wait on
+  // the browser's time zone, so the section says so beside it.
+  ok(/consent, for the analytics cookie[^.]*\.[^.]*European time zone, the cookie waits for your choice/.test(text), "/privacy's rights section says the cookie waits for a choice where the browser reports a European time zone");
   ok(/not directed at children/.test(text) && /under 13/.test(text) && /18 and older/.test(text), "/privacy has a children statement matching /terms");
 }
 

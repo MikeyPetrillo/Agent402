@@ -76,7 +76,7 @@ async function discoveryFetch(fetchImpl, label, url, init) {
  * @param {number} [opts.dailyLimitUsd]    ceiling on rolling-24h paid spend (USD)
  * @param {number} [opts.maxPerHostUsd]    ceiling on rolling-24h paid spend to one seller host (USD)
  * @param {string[]} [opts.payees]         only pay these payTo addresses (lowercased EVM); anything else is refused before signing
- * @param {string} [opts.creditsKey]       prepaid card-credits key (a402_...); pays wallet-only tools on Agent402's own services without a wallet
+ * @param {string} [opts.creditsKey]       prepaid credits key (a402_...); pays wallet-only tools on Agent402's own services without a wallet
  */
 export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = globalThis.fetch, zod, maxPerCallUsd = 1, dailyLimitUsd = null, maxPerHostUsd = null, payees = null, creditsKey = null } = {}) {
   const z = zod || (await loadZod());
@@ -159,7 +159,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
         baseUrl: base,
         tools: endpoints.length,
         freeTier: endpoints.filter((e) => e.computePayable).length,
-        pay: "x402 (USDC on Base and other chains) from this wallet, or proof-of-work for free-tier tools; prepaid card credits also accepted",
+        pay: "x402 (USDC on Base and other chains) from this wallet, or proof-of-work for free-tier tools; a prepaid credits key, where sold or already issued, also pays on Agent402's own services",
         discover: `${base}/api/find?q=<task>`,
         docs: `${base}/llms.txt`,
       });

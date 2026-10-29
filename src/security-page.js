@@ -58,7 +58,7 @@ const SECTIONS = [
   {
     h: "Availability",
     p: [
-      `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every on-chain payment rail daily. Nightly backups of the state database and the data volume go to separate object storage and are deleted after ${backupKeepDays()} days.`,
+      `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every on-chain payment rail daily. Nightly backups of the state database go to separate object storage and are deleted after ${backupKeepDays()} days.`,
     ],
     links: [["/status", "Status"]],
   },

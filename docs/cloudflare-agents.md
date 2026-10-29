@@ -107,11 +107,14 @@ await this.addMcpServer("agent402", "https://agent402.tools/mcp");
 
 The MCP surface handles discovery and invocation - `catalog.call` solves
 proof-of-work automatically for free-tier tools. Wallet-only tools (search,
-browser, PDF, memory) are payable on the connector over MPP: the call answers
-JSON-RPC error -32042 carrying the challenges, and an MCP client wrapped with
-`mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or natively on Tempo) and
-retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
-npm package with a wallet key (or a prepaid card-credits key).
+browser, PDF, memory) are payable on the connector over MPP: the connector
+answers with an `isError` tool result whose text names every way to pay and
+whose `_meta["org.paymentauth/payment-required"]` carries the challenges (a
+presented credential that is refused answers JSON-RPC `-32043`, and a call on
+the tasks path answers `-32042`, both with `data.challenges`), and an MCP
+client wrapped with `mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or
+natively on Tempo) and retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
+npm package with a wallet key (or a prepaid credits key, where sold or already issued).
 
 ---
 
@@ -139,7 +142,7 @@ for the npm package and deploy templates.
 | Any paid tool | the tool's `path` from `/api/pricing` | x402 or MPP (USDC) |
 | x402 manifest | `GET /.well-known/x402` | None |
 
-Prices: most tools $0.001–$0.02 per call; the routing tiers top out at $3.30,
+Prices: most tools $0.001 to $0.02 per call; the routing tiers top out at $3.30,
 multi-tool skill packs run $0.003 to $0.101, and the report products (research,
 dossier, fund, SEC filing, domain audit, token risk, recall, insider) run
 $0.60 to $2.00 over x402 or MPP, or $2 to $5 by card at

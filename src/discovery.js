@@ -197,7 +197,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // the Solana transaction's signers, the Tempo credential source and the
       // facilitator receipt's payer were all read too.
       dataHandling: {
-        readsPaymentMetadata: false,
+        // The optional annotation fields (description, reason) are not read;
+        // every field that IS read is named in readsOnly.
+        readsAnnotationFields: false,
         retainsPaymentMetadata: false,
         readsOnly: [
           "authorization.from (signed EVM payer address, public on-chain): the identity of wallet-scoped routes and the payer recorded for a sale",
