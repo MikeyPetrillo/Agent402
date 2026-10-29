@@ -1,4 +1,4 @@
-import { RAILS, RAILS_AMP, RAILS_OS } from "./rails.js";
+import { RAILS_AMP, RAILS_OS } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
@@ -9,10 +9,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // every request inside it).
 export const renderPathStore = new AsyncLocalStorage();
 // Machine Ledger design system — shared chrome for the Agent402 marketing site.
-// Exports the status line, nav, footers (full + compact), design-token CSS,
-// and a ledgerShell() wrapper that composes a full HTML page.
+// Exports the nav, a compact footer, design-token CSS, and a ledgerShell()
+// wrapper that composes a full HTML page.
 //
-// Pages import ledgerShell() and one of the footer functions, then pass their
+// Pages import ledgerShell() and ledgerFooterCompact(), then pass their
 // body HTML to get a complete document with SEO metadata and shared chrome.
 
 export const esc = (s) =>
@@ -453,9 +453,6 @@ a { color: inherit; }
   /* A closing call-to-action panel keeps a phone-sized inset, so its heading and buttons get the width. */
   .ml-cta-panel { padding: 32px 20px !important; }
   .ml-4col > div { padding: 12px !important; }
-  .ml-status-in { padding: 8px 16px !important; }
-  .ml-status-ticker { display: none !important; }
-  .ml-status-left { flex: 1 1 auto; min-width: 0; }
   .ml-nav-in  { padding: 12px 16px !important; gap: 10px !important; }
   .ml-nav-links {
     gap: 12px !important;
@@ -591,26 +588,6 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 .mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
-
-// ---------------------------------------------------------------------------
-// Status line (top of every page)
-// ---------------------------------------------------------------------------
-
-// Status band content, Aug 2026 revamp: the old right-hand rails ticker
-// repeated the chain list a third time above the fold (nav dropdown + footer
-// already carry it) — replaced with tool/rail/fee headline figures instead.
-// "500+ tools" stays evergreen per this repo's own convention (never an exact
-// catalog count on served-page copy - the design mockup said "531", which
-// would just go stale); "12 rails" is RAILS.length, always live-accurate
-// since RAILS is this repo's single source of truth for chain count.
-function statusLine() {
-  return `<div style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.02em;border-bottom:1px solid var(--panel-rule);">
-  <div class="ml-status-in" style="max-width:1180px;margin:0 auto;padding:8px 30px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
-    <span class="ml-status-left" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">HTTP/1.1 <span style="color:var(--accent-lit);font-weight:700;">402</span> PAYMENT REQUIRED · <a href="/agentic-finance" style="color:var(--on-panel-dim);text-decoration:none;">Agentic Finance (AIFI)</a> · <span style="color:var(--on-panel-dim);">x402 + MPP dual-stack</span></span>
-    <span class="ml-status-ticker" style="color:var(--on-panel-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">500+ tools · ${RAILS.length} rails · <span style="color:var(--accent-lit);">0%</span> seller fee</span>
-  </div>
-</div>`;
-}
 
 // ---------------------------------------------------------------------------
 // Nav (sticky, every page)
@@ -982,10 +959,6 @@ function nav(activePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Footer - full 5-column (home page)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Footer - compact single-row (sub-pages)
 // ---------------------------------------------------------------------------
 
@@ -1023,34 +996,11 @@ export function ledgerFooterCompact() {
 }
 
 // ---------------------------------------------------------------------------
-// Settlement tape - scrolling marquee of recent paid calls
-// ---------------------------------------------------------------------------
-
-function agoStr(iso) {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${s | 0}s`;
-  if (s < 3600) return `${(s / 60) | 0}m`;
-  if (s < 86400) return `${(s / 3600) | 0}h`;
-  return `${(s / 86400) | 0}d`;
-}
-
-// The scrolling "●●● TAPE" band of recent calls was REMOVED 2026-07-25. It was
-// the homepage's only live-proof element and it argued against the page: on a
-// site headlined "where agents pay agents", the tape showed 23 of 25 calls on
-// the free proof-of-work rail, one of them our own heartbeat probe, across just
-// five trivial tools (base64, hash, unit-convert, timezone-convert). Real
-// revenue at the same moment — transcribe, search, the skill packs — never
-// appeared, because the feed was ordered by recency and the cheap free calls
-// dominate by volume. A proof band that quietly contradicts the headline is
-// worse than none. The cumulative "N calls settled to date" counter in the hero
-// stays; it is a real number that does not misrepresent the mix.
-
-// ---------------------------------------------------------------------------
 // Full HTML document shell
 // ---------------------------------------------------------------------------
 
 /**
- * Wraps page content in a complete HTML document with status line, nav,
+ * Wraps page content in a complete HTML document with nav,
  * SEO metadata, design-token CSS, and optional page-specific CSS.
  *
  * @param {object} opts
