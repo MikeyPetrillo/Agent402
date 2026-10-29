@@ -4530,8 +4530,11 @@ jobs:
       - name: Browser pool tools (page-speed fixture + html-frames sandbox)
         run: node scripts/test-page-speed-frames.js
 
-      - name: Browser contexts block service workers and WebSockets (real Chromium)
+      - name: Browser contexts block service workers, WebSockets, redirect hops and popups to private hosts (real Chromium)
         run: node scripts/test-render-isolation.js
+
+      - name: Chromium and the media binaries get an allowlisted environment, never a secret (real Chromium)
+        run: node scripts/test-child-env.js
 
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js

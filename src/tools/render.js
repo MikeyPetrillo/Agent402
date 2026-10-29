@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { assertPublicUrl, hostIsPublic } from "./fetch-guard.js";
+import { childEnv } from "./child-env.js";
 import { htmlToArticle } from "./extract.js";
 import { partialFields } from "../partial-answer.js";
 import { buildOpportunities } from "./page-speed-opportunities.js";
@@ -156,7 +157,8 @@ async function getBrowser() {
           // relying on the app-layer route guard for literal-IP metadata reach.
           launchArgs.push('--proxy-bypass-list=<-loopback>');
         }
-        const browser = await chromium.launch({ args: launchArgs });
+        // The browser gets an allowlisted environment, never the server's secrets.
+        const browser = await chromium.launch({ args: launchArgs, env: childEnv() });
         // Self-heal: if Chromium dies (OOM, crash), the next call relaunches
         // instead of serving errors until the process restarts.
         browser.on("disconnected", () => {
