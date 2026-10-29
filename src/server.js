@@ -2886,8 +2886,8 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
   try { res.json(await _freeAlerts.signup({ email: b.email, kind: b.kind, target: b.target, source: b.source })); }
   catch (e) {
-    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-    console.warn("[free-alerts] signup failed:", String(e?.message || e).slice(0, 160));
+    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+    console.warn("[free-alerts] signup failed:", redactSecrets(String(e?.message || e)).slice(0, 160));
     res.status(500).json({ error: "Could not sign you up. Please try again." });
   }
 });
@@ -3016,7 +3016,7 @@ const _manageTokenOk = (reportId, k) => {
 if (_subs) {
   app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
     try { res.json(await _subs.handleWebhook(req.body, req.headers["stripe-signature"])); }
-    catch (e) { res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) }); }
+    catch (e) { res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
 }
 
@@ -4144,7 +4144,7 @@ app.get("/api/revenue/daily", async (req, res) => {
     const body = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
     res.set("Cache-Control", "public, max-age=300").json(body);
   } catch (e) {
-    res.status(500).json({ error: "daily series failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "daily series failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Daily served-call counts by settlement method — the non-revenue companion to
@@ -4167,7 +4167,7 @@ app.get("/api/calls/daily", (req, res) => {
       days: getDailyCalls(),
     });
   } catch (e) {
-    res.status(500).json({ error: "daily calls failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "daily calls failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Daily Tempo settlements — the second non-on-chain-scan companion to
@@ -4191,7 +4191,7 @@ app.get("/__operator/decide-stats.json", async (req, res) => {
     const isOurs = (r) => r.synthetic === true || isOwnWallet(String(r.payer || "").replace(/^tempo:/, ""));
     res.json({ enabled: true, ...aggregateDecideStats(rows, { now, isOurs }) });
   } catch (e) {
-    res.status(500).json({ error: "decide stats failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "decide stats failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Decide usage for the /revenue monitor: per slug (decide, decide-execute),
@@ -4205,7 +4205,7 @@ app.get("/api/revenue/decide", (_req, res) => {
       note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, catalog sweepers included (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day; sweeps says how many external settlements came from such wallets). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
-    res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "decide revenue failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 app.get("/api/revenue/tempo-daily", (req, res) => {
@@ -4218,7 +4218,7 @@ app.get("/api/revenue/tempo-daily", (req, res) => {
     }
     res.set("Cache-Control", "public, max-age=60").json(tempoDailyBody());
   } catch (e) {
-    res.status(500).json({ error: "tempo daily revenue failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "tempo daily revenue failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Machine-readable MPP-wire settlements (behind the /revenue "MPP transactions"
@@ -4234,7 +4234,7 @@ app.get("/api/revenue/mpp", (req, res) => {
       .set("Vary", "X-Operator-Token")
       .json(authed ? mppSales({ detailed: true }) : memoSurface("revenue:mpp", 60_000, () => mppSales({ detailed: false })));
   } catch (e) {
-    res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "mpp settlements failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 app.get("/revenue", async (req, res) => {
@@ -4258,7 +4258,7 @@ app.get("/revenue", async (req, res) => {
       const tempo = tempoDailyBody();
       range = revenuePageRange(req.query, { firstDay: revenueSeriesFirstDay(daily), totalsFor: (w) => revenueWindowTotals(daily, tempo, w, ledgerBuyerConcentrationIn(daily[REVENUE_DAY_COUNTS], w)) });
     } catch (e) {
-      console.warn(`[revenue] range figures unavailable: ${String(e?.message || e).slice(0, 120)}`);
+      console.warn(`[revenue] range figures unavailable: ${redactSecrets(String(e?.message || e)).slice(0, 120)}`);
     }
     res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range, hashPriceUsd: TOOL_PRICES.hash }));
   } catch (e) {
@@ -4422,8 +4422,8 @@ if (_credits) {
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json({ url: (await _credits.createCheckout(req.body?.pack)).url }); }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[credits] createCheckout failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[credits] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
   });
@@ -4431,7 +4431,7 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
     try { res.json(await _credits.claim(String(req.query.session || ""))); }
-    catch (e) { console.warn("[credits] claim failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
+    catch (e) { console.warn("[credits] claim failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
   });
   app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -4487,7 +4487,7 @@ if (humanCheckoutEnabled()) {
       onDelivered: ({ sessionId, email, product, kind, label, input }) => { _followups.markRepeat(email); _followups.enqueue({ sessionId, email, product, kind, label, input }); },
       onFailed: ({ email, label, refunded }) => { _followups.sendFailed({ email, label, refunded }).catch(() => {}); },
     });
-  } catch (e) { console.warn("[human-checkout] init failed:", String(e?.message || e).slice(0, 200)); _humanCheckout = null; }
+  } catch (e) { console.warn("[human-checkout] init failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); _humanCheckout = null; }
   if (_humanCheckout) {
     // Abandoned claims from a previous process (deploy mid-generation) are
     // re-driven shortly after boot - the buyer may have closed the tab.
@@ -4509,8 +4509,8 @@ if (humanCheckoutEnabled()) {
         try { capturePostHogHumanFunnel({ step: "checkout_refused", product, reason: e?.statusCode && e.statusCode < 500 ? String(e.message).slice(0, 80) : "server" }); } catch { /* telemetry never breaks the request */ }
         // Our own 4xx messages are safe to show; a Stripe/SDK error is logged
         // and answered generically (its text can echo key mode/request detail).
-        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-        console.warn("[human-checkout] createSession failed:", String(e?.message || e).slice(0, 200));
+        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        console.warn("[human-checkout] createSession failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
       }
     });
@@ -4535,7 +4535,7 @@ if (humanCheckoutEnabled()) {
       try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
       catch (e) {
         // The detail (a database or driver message) is for the operator log only.
-        console.warn("[human-checkout] report read failed:", String(e?.message || e).slice(0, 200));
+        console.warn("[human-checkout] report read failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         res.status(500).set("Cache-Control", "no-store").json({ status: "error", error: "The report could not be read right now. Please retry in a moment." });
       }
     });
@@ -4567,8 +4567,8 @@ if (_subs) {
       res.json({ url });
     }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[monitors] createCheckout failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[monitors] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
   });
@@ -4580,7 +4580,7 @@ if (_subs) {
       // Do NOT mint a billing portal on the auto-poll (a portal can view invoices
       // + payment method and cancel). The manage link mints it on explicit click.
       res.json({ status: r.status, label: r.label, target: r.target });
-    } catch (e) { console.warn("[monitors] confirm failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
+    } catch (e) { console.warn("[monitors] confirm failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
   });
   // Explicit manage/cancel: mint the Stripe Customer Portal at click time, then
   // redirect. (The session id is the buyer's bearer for this purchase.)
@@ -4659,8 +4659,8 @@ if (_mppSubs) {
         // is in WWW-Authenticate and GET /api/mpp/monitors explains the rest.
         return res.status(402).set("WWW-Authenticate", offer.header).json({});
       } catch (e) {
-        if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-        console.warn("[mpp-subs] mintOffer failed:", String(e?.message || e).slice(0, 200));
+        if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        console.warn("[mpp-subs] mintOffer failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         return res.status(500).json({ error: "Could not start a subscription right now." });
       }
     }
@@ -4676,8 +4676,8 @@ if (_mppSubs) {
         const kind = e.binding ? "invalid-challenge" : "verification-failed";
         return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${String(e.message).slice(0, 200)}`));
       }
-      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[mpp-subs] activation failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[mpp-subs] activation failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       return res.status(500).json({ error: "Could not complete the subscription right now." });
     }
   });
@@ -4706,7 +4706,7 @@ if (_mppSubs) {
     // belongs, driven by the scheduler on its own clock.
     if (req.query.refresh && _mppSubs.isCanarySub(subId)) {
       try { await _mppSubs.refreshStatus(subId); }
-      catch (e) { console.warn("[mpp-subs] canary refresh failed:", String(e?.message || e).slice(0, 200)); }
+      catch (e) { console.warn("[mpp-subs] canary refresh failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); }
     }
     const reports = _monitors ? (_monitors.status().subs.find((r) => r.subId === subId) || null) : null;
     res.json({ ..._mppSubs.publicView(_mppSubs.get(subId) || rec), lastReportId: reports?.lastReportId || null, reportUrl: reports?.lastReportId ? `${BASE_URL}/m/${reports.lastReportId}` : null });
@@ -4718,8 +4718,8 @@ if (_mppSubs) {
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), mppManageTokenOf(req))); }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[mpp-subs] cancel failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[mpp-subs] cancel failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not cancel right now." });
     }
   });
@@ -4806,7 +4806,7 @@ app.get("/api/sales", async (_req, res) => {
   } catch (err) {
     // Public route: a SQLite failure message names the ledger's absolute
     // path — log it, answer generically (leak audit 2026-08-18).
-    console.error(`[sales] summary failed: ${String(err?.message || err).slice(0, 300)}`);
+    console.error(`[sales] summary failed: ${redactSecrets(String(err?.message || err)).slice(0, 300)}`);
     res.status(500).json({ error: "sales summary unavailable" });
   }
 });
@@ -5040,7 +5040,7 @@ app.get("/api/x402-economy", async (_req, res) => {
   try {
     res.set("Cache-Control", "public, max-age=300").json(await x402EconomySnapshot());
   } catch (e) {
-    res.status(500).json({ error: "economy snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "economy snapshot failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // The standalone Observatory page folded into the marketplace's "The economy,
@@ -5770,7 +5770,7 @@ app.post("/__operator/stall-profile", async (req, res) => {
     const out = await profileOnce({ seconds: req.query.seconds });
     res.set("Cache-Control", "no-store").status(out.busy ? 409 : 200).json(out);
   } catch (e) {
-    res.status(500).json({ error: "profile failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "profile failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Unified tool index for the decide service (src/decide/index-export.js):
@@ -5828,7 +5828,7 @@ app.get("/__operator/search", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").type("html").send(operatorSearchPage(BASE_URL, r)),
-    (e) => res.status(500).type("html").send(`<p>${String(e.message).slice(0, 200).replace(/[<>&]/g, "")}</p>`)
+    (e) => res.status(500).type("html").send(`<p>${redactSecrets(String(e.message)).slice(0, 200).replace(/[<>&]/g, "")}</p>`)
   );
 });
 app.post("/__operator/search/run", (req, res) => {
@@ -7101,7 +7101,7 @@ app.post("/api/decide/feedback", express.json({ limit: "4kb" }), (req, res) => {
     _decideFeedback ||= makeFeedbackHandler({ ledger: decideLedger() });
     res.json(_decideFeedback(req.body));
   } catch (e) {
-    res.status(e.statusCode && e.statusCode < 500 ? e.statusCode : 500).json({ error: e.statusCode && e.statusCode < 500 ? e.message : "feedback failed" });
+    res.status(e.statusCode && e.statusCode < 500 ? e.statusCode : 500).json({ error: e.statusCode && e.statusCode < 500 ? redactSecrets(e.message) : "feedback failed" });
   }
 });
 app.post("/api/wish", (req, res) => {
@@ -8401,7 +8401,7 @@ app.get("/api/route/external-debug", async (req, res) => {
   if (!task) return res.status(400).json({ error: "Missing q/task" });
   const cap = Number(req.query.cap) > 0 ? Number(req.query.cap) : EXEC_TIERS[0].underlyingMaxUsd;
   try { res.json(await diagnoseExternalSeller(String(task), { cap })); }
-  catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 200) }); }
+  catch (e) { res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // x402 Leaderboard — public on-chain ranking of sellers in the Coinbase CDP
 // Bazaar (plus our own crawl) by settled USDC volume on Base, served as the
@@ -11299,7 +11299,7 @@ for (const tool of ALL_KIT) {
       // the hang-up recorder). The body goes to a closed socket.
       if (clientGoneCtl?.signal.aborted || isClientGoneAbort(err)) { status = 499; if (!isClientGoneAbort(err)) err = clientGoneError(); }
       if (isClientGoneAbort(err)) {
-        if (!res.headersSent) { try { res.status(499).json({ error: err.message, tool: tool.slug, charged: false }); } catch { /* socket already gone */ } }
+        if (!res.headersSent) { try { res.status(499).json({ error: redactSecrets(err?.message), tool: tool.slug, charged: false }); } catch { /* socket already gone */ } }
         return;
       }
       if (res.headersSent) { try { res.end(); } catch { /* stream already gone */ } return; }

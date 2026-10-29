@@ -12,8 +12,8 @@
 //      its input. The 400 body and every server log line carry neither value.
 //      A bespoke route (/api/dns, sendToolError) whose refusal text is a
 //      configured value answers and logs it scrubbed, and so does an operator
-//      route (/__operator/well-known). The discovery, wish, memory and every
-//      /__operator catch are read from source.
+//      route (/__operator/well-known). The discovery, wish and memory catches,
+//      and every route block in server.js, are read from source.
 //
 //   node scripts/test-tool-error-redaction.js
 import { spawn } from "node:child_process";
@@ -82,19 +82,25 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(wish), "/api/wish answers the scrubbed message");
   const mem = server.slice(server.indexOf("const memHandler = "), server.indexOf("const memHandler = ") + 2500);
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
-  // Every error text an /__operator route answers runs through redactSecrets:
-  // inside each operator route block, no error field is built from a raw
-  // message.
-  const RAW_ERR = /error: (?:err\??\.message|e\??\.message|String\((?:e|err)\??\.message(?: \|\| (?:e|err))?\))/;
+  // No route block answers or logs a thrown message raw: inside every app
+  // route (literal paths and the catalog binder's app[method](path, ...)), a
+  // line that builds a json/send answer, an error/detail/message field or a
+  // console line from e.message or err.message wraps it in redactSecrets.
+  // ALLOW lists lines whose message is proven constant (none today).
+  const ALLOW = [];
+  const ANSWER = /json\(|send\(|\b(?:error|detail|message):|console\.(?:log|warn|error)\(/;
+  const RAW = /(?<!redactSecrets\()(?<!redactSecrets\(String\()\b(?:e|err)\??\.message\b/;
   const lines = server.split("\n");
-  let route = null; const raw = []; let opRoutes = 0;
+  let route = null; const raw = []; let routes = 0, opRoutes = 0;
   for (const [i, line] of lines.entries()) {
-    const m = /^\s*app\.(?:get|post|put|delete|all)\(\s*"([^"]+)"/.exec(line);
-    if (m) { route = m[1]; if (route.startsWith("/__operator")) opRoutes++; }
-    else if (/^(?:function|async function|const|let|export) /.test(line)) route = null;
-    if (route?.startsWith("/__operator") && RAW_ERR.test(line)) raw.push(`${i + 1} ${route}`);
+    const m = /^\s*app\.(?:get|post|put|delete|all|use)\(\s*"([^"]+)"|^\s*app\[/.exec(line);
+    if (m) { route = m[1] || "catalog binder"; routes++; if (route.startsWith("/__operator")) opRoutes++; }
+    else if (/^(?:function|async function|const|let|export|for) /.test(line)) route = null;
+    if (!route || /^\s*\/\//.test(line) || !ANSWER.test(line) || !RAW.test(line)) continue;
+    if (ALLOW.some((a) => line.includes(a))) continue;
+    raw.push(`${i + 1} ${route}`);
   }
-  ok(opRoutes > 40 && raw.length === 0, `every /__operator route answers a scrubbed error (${opRoutes} routes${raw.length ? `; raw at ${raw.join(", ")}` : ""})`);
+  ok(opRoutes > 40 && routes > 200 && raw.length === 0, `no route answers or logs a raw thrown message (${routes} route blocks, ${opRoutes} operator${raw.length ? `; raw at ${raw.join(", ")}` : ""})`);
 }
 
 // --- 2. the caller path: route binder answer and log ---------------------------
