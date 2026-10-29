@@ -86,6 +86,16 @@ Surfaces:
 - /health answers cross-origin requests, and a cdnOrigin word on
   /api/gateway-status reports whether a CDN-range peer reached the origin
   without its edge secret.
+- /.well-known/x402 states under payment.dataHandling that payment
+  annotations are not read as readsAnnotationFields, which replaces
+  readsPaymentMetadata; the privacy page names both fields.
+- The router's dispatch legend on /api/index carries settlementNetting (on or
+  off) and its self-funded reason says it is read only while netting is on; a
+  seller's historyLegend says a crawl outcome counts the routes found, from
+  the manifest or from an OpenAPI, agents.json or llms.txt read.
+- The home page labels a seller whose name reads as a page title by its host.
+- The privacy page carries a rights section for readers in the EU and the UK,
+  and its backups wording names the state database.
 
 Operations:
 - The operator view of a public surface reads X-Operator-Token only; an
