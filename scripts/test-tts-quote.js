@@ -6,7 +6,7 @@
 // What it pins (offline, no upstream):
 //   - the anchors: 2,000 chars is the anchor price exactly on both tiers, and
 //     the HD tier is twice the standard tier at both anchors;
-//   - quotes at 1, 100, 2,000 and 5,000 chars; every quote at every length is
+//   - quotes at 1, 100, 1,000 and 2,000 chars (the cap); every quote at every length is
 //     a whole $0.001, at or above floor + rate x chars and less than $0.001
 //     above it; the floor holds at tiny input; quotes never fall with length;
 //   - the quote function reads the object the handler serves (handlerInputOf:
@@ -34,7 +34,7 @@ const text = (n) => "x".repeat(n);
 ok(TTS_QUOTE_ANCHOR_CHARS === 2000, "the anchor length is 2,000 characters");
 ok(ttsQuoteUsd("tts", 2000) === 0.12 && ttsQuoteUsd("tts-hd", 2000) === 0.24, "2,000 characters quotes exactly $0.120 on tts and $0.240 on tts-hd");
 ok(TTS_QUOTE["tts-hd"].floorMilli === 2 * TTS_QUOTE.tts.floorMilli && TTS_QUOTE["tts-hd"].anchorMilli === 2 * TTS_QUOTE.tts.anchorMilli, "tts-hd is twice tts at both anchors");
-const expected = { tts: { 1: 0.006, 100: 0.011, 2000: 0.12, 5000: 0.293 }, "tts-hd": { 1: 0.011, 100: 0.022, 2000: 0.24, 5000: 0.585 } };
+const expected = { tts: { 1: 0.006, 100: 0.011, 1000: 0.063, 2000: 0.12 }, "tts-hd": { 1: 0.011, 100: 0.022, 1000: 0.125, 2000: 0.24 } };
 for (const [slug, points] of Object.entries(expected)) {
   for (const [n, usd] of Object.entries(points)) ok(ttsQuoteUsd(slug, Number(n)) === usd, `${slug}: ${n} chars quotes $${usd.toFixed(3)} (got ${ttsQuoteUsd(slug, Number(n))})`);
 }
@@ -43,7 +43,8 @@ for (const [slug, points] of Object.entries(expected)) {
 for (const slug of ["tts", "tts-hd"]) {
   const { floorMilli, anchorMilli } = TTS_QUOTE[slug];
   const cap = TTS_TIERS[slug].maxChars;
-  ok(cap === 5000, `${slug}: the cap is 5,000 characters`);
+  ok(cap === 2000 && bySlug[slug].quoteMaxUsd === { tts: 0.12, "tts-hd": 0.24 }[slug], `${slug}: the cap is 2,000 characters, so the ceiling is the anchor price`);
+  ok(ttsQuoteUsd(slug, 5000) === ttsQuoteUsd(slug, 2000), `${slug}: 5,000 characters quotes no more than the cap`);
   let bad = null, prev = 0;
   for (let n = 0; n <= cap && !bad; n++) {
     const q = ttsQuoteUsd(slug, n);

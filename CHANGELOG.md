@@ -111,8 +111,8 @@ Speech:
 - /api/tts and /api/tts-hd are quoted per request from the length of the
   text: $0.005 plus $0.0575 per 1,000 characters on tts and $0.010 plus $0.115
   per 1,000 characters on tts-hd, rounded up to the next $0.001, so 2,000
-  characters costs what the flat price did ($0.120 and $0.240). The cap rises
-  to 5,000 characters on both. The 402, Tempo, card and credits all read the
+  characters costs what the flat price did ($0.120 and $0.240). The cap stays
+  2,000 characters on both. The 402, Tempo, card and credits all read the
   quote; /api/pricing (quoteRange, quoteFormula), /openapi.json, the tool pages
   and /llms.txt publish the range and the formula. /api/dub keeps its
   2,000-character cap and its price; /api/tts-lite stays flat.

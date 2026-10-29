@@ -63,7 +63,7 @@ const header = (r) => JSON.parse(Buffer.from(r.headers["X-Dub-Translation"], "ba
   const standard = priceOf(translateDef) + ttsOf("standard").quote(atCap);
   const hd = priceOf(translateDef) + ttsOf("hd").quote(atCap);
   ok(Math.abs(dubPriceUsd("standard") - standard) < 1e-9 && Math.abs(dubPriceUsd("hd") - hd) < 1e-9, `the tier sums read the two tool definitions (${TRANSLATE_SLUG} + ${DUB_TIERS.standard}, ${TRANSLATE_SLUG} + ${DUB_TIERS.hd}, each speech tier quoted at ${DUB_MAX_CHARS} chars)`);
-  ok(DUB_MAX_CHARS <= TTS_TIERS[DUB_TIERS.standard].maxChars && DUB_MAX_CHARS <= TTS_TIERS[DUB_TIERS.hd].maxChars, "the dub cap is within both speech tiers' caps");
+  ok(DUB_MAX_CHARS === TTS_TIERS[DUB_TIERS.standard].maxChars && DUB_MAX_CHARS === TTS_TIERS[DUB_TIERS.hd].maxChars, "the dub cap equals both speech tiers' caps");
   ok(priceOf(dub) === dubPriceUsd("standard"), "the catalog price is the standard sum");
   ok(dub.quote({}) === dubPriceUsd("standard") && dub.quote({ tier: "standard" }) === dubPriceUsd("standard"), "the quote for a body without a tier, or tier standard, is the standard sum");
   ok(dub.quote({ tier: "hd" }) === dubPriceUsd("hd") && dub.quote({ tier: " HD " }) === dubPriceUsd("hd"), "the quote for tier hd is the hd sum");

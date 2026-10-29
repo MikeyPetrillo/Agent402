@@ -3,8 +3,8 @@
 //
 // Tiers (prices live on each tool below):
 //   tts-lite: Kokoro-82M via OpenRouter (800 chars, flat) [OPENROUTER_API_KEY]
-//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (5000 chars, quoted)
-//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (5000 chars, quoted)
+//   tts:      ElevenLabs Eleven v4 Turbo via OpenRouter (2000 chars, quoted)
+//   tts-hd:   ElevenLabs Eleven v4 via OpenRouter (2000 chars, quoted)
 //
 // PER-REQUEST QUOTE: the two ElevenLabs tiers bill upstream per input
 // character, so each is priced from the text it is sent: a floor plus a
@@ -14,8 +14,8 @@
 // function for the 402 and the paid retry (src/payments.js acceptsForItem),
 // and the Tempo, card and credits gates price through the same quote
 // (server.js quotedPriceUsd); per-chain floors and premiums sit on top. The
-// cap is the smallest request limit across each tier's ElevenLabs links (5,000
-// on Eleven v3), so the quote is bounded by quoteMaxUsd. The margin bound at
+// cap is 2,000 characters on both tiers, within every ElevenLabs link's
+// request limit, so the quote is bounded by quoteMaxUsd. The margin bound at
 // every length is pinned in scripts/test-tts-quote.js against the private rows.
 //
 // ELEVENLABS (2026-10-07): the two premium tiers moved from OpenAI speech to
@@ -82,9 +82,9 @@ const TIERS = {
   // `chain`: ElevenLabs models at the SAME per-char rate, tried in order after
   // a server error or a connection that never opened (both unbilled). A 429
   // or a refusal stops the walk and opens the breaker. Same 21 voices on every link.
-  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 5000,
+  tts:        { model: "elevenlabs/eleven-v4-turbo", provider: "elevenlabs", maxChars: 2000,
                 chain: ["elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-turbo-v2.5", "elevenlabs/eleven-flash-v2.5"] },
-  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 5000,
+  "tts-hd":   { model: "elevenlabs/eleven-v4",       provider: "elevenlabs", maxChars: 2000,
                 chain: ["elevenlabs/eleven-v4", "elevenlabs/eleven-v3", "elevenlabs/eleven-multilingual-v2"] },
 };
 export const TTS_TIERS = TIERS;

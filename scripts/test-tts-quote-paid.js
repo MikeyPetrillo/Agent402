@@ -132,7 +132,7 @@ try {
 
   // 1. the 402 asks the quote for the text, per chain
   for (const [slug, path] of [["tts", "/api/tts"], ["tts-hd", "/api/tts-hd"]]) {
-    for (const n of [1, 100, 2000, 5000]) {
+    for (const n of [1, 100, 1000, 2000]) {
       const q = await quoteOf(path, { text: text(n) });
       const usd = ttsQuoteUsd(slug, n);
       ok(q.status === 402 && q.byNet[BASE_NET]?.amount === micro(usd), `${slug} ${n} chars: the Base accept asks the quote $${usd} (${q.byNet[BASE_NET]?.amount})`);
@@ -174,10 +174,10 @@ try {
   };
   const c1 = await credit(100);
   ok(c1.status === 200 && Math.abs(c1.balance - (5 - ttsQuoteUsd("tts-hd", 100))) < 1e-9, `credits: the hold for 100 chars on tts-hd is the quote $${ttsQuoteUsd("tts-hd", 100)} (balance ${c1.balance}${c1.error ? `, ${c1.error}` : ""})`);
-  const c2 = await credit(5000);
-  ok(c2.status === 200 && Math.abs(c2.balance - (5 - ttsQuoteUsd("tts-hd", 100) - ttsQuoteUsd("tts-hd", 5000))) < 1e-9, `credits: the hold for 5,000 chars is the quote $${ttsQuoteUsd("tts-hd", 5000)} (balance ${c2.balance})`);
+  const c2 = await credit(2000);
+  ok(c2.status === 200 && Math.abs(c2.balance - (5 - ttsQuoteUsd("tts-hd", 100) - ttsQuoteUsd("tts-hd", 2000))) < 1e-9, `credits: the hold for 2,000 chars (the cap) is the quote $${ttsQuoteUsd("tts-hd", 2000)} (balance ${c2.balance})`);
   const booked = await waitFor(() => { const rows = creditSales(); return rows.length >= 2 ? rows : null; });
-  ok(booked && Math.abs(booked[0].price_usd - ttsQuoteUsd("tts-hd", 100)) < 1e-9 && Math.abs(booked[1].price_usd - ttsQuoteUsd("tts-hd", 5000)) < 1e-9, `credits: each sale is booked at its quote (${(booked || []).map((r) => r.price_usd).join(", ")})`);
+  ok(booked && Math.abs(booked[0].price_usd - ttsQuoteUsd("tts-hd", 100)) < 1e-9 && Math.abs(booked[1].price_usd - ttsQuoteUsd("tts-hd", 2000)) < 1e-9, `credits: each sale is booked at its quote (${(booked || []).map((r) => r.price_usd).join(", ")})`);
 
   // 6. the surfaces publish the range and the formula
   for (const [slug, path] of [["tts", "/api/tts"], ["tts-hd", "/api/tts-hd"]]) {
@@ -187,7 +187,7 @@ try {
   }
   const openapi = await (await fetch(`${B}/openapi.json`)).json();
   const op = openapi?.paths?.["/api/tts"]?.post;
-  ok(op?.["x-payment-info"]?.price?.mode === "dynamic" && op["x-payment-info"].price.max === "0.293" && op["x-payment-info"].quoteFormula === ttsQuoteFormula("tts") && op.description.includes(ttsQuoteFormula("tts")), "/openapi.json: a dynamic price with the range and the formula");
+  ok(op?.["x-payment-info"]?.price?.mode === "dynamic" && op["x-payment-info"].price.max === "0.12" && op["x-payment-info"].quoteFormula === ttsQuoteFormula("tts") && op.description.includes(ttsQuoteFormula("tts")), "/openapi.json: a dynamic price with the range and the formula");
   const page = await (await fetch(`${B}/tools/tts-hd`)).text();
   ok(page.includes(ttsQuoteFormula("tts-hd").replace(/&/g, "&amp;")), "the tool page states the formula");
   const llmsFull = await (await fetch(`${B}/llms-full.txt`)).text();

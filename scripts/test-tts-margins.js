@@ -42,7 +42,7 @@ for (const slug of quoted) {
     ok(worst <= 1 + 1e-12, `${slug}: ${model} stays within ${SPEECH_MARGIN * 100}% of the quote at every length to ${tier.maxChars} chars`);
   }
   // The cap bounds the quote: the dearest call is the ceiling the surfaces publish.
-  ok(bySlug[slug].quoteMaxUsd === ttsQuoteUsd(slug, tier.maxChars) && tier.maxChars <= 10_000, `${slug}: the quote is bounded (cap ${tier.maxChars} chars, ceiling quoteMaxUsd)`);
+  ok(bySlug[slug].quoteMaxUsd === ttsQuoteUsd(slug, tier.maxChars) && tier.maxChars === 2_000, `${slug}: the quote is bounded (cap ${tier.maxChars} chars, ceiling quoteMaxUsd)`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
