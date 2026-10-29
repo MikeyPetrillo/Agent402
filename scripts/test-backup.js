@@ -11,7 +11,8 @@
 //   - not-configured mode: zero network calls, plan still readable
 //   - SigV4: requests carry a well-formed AWS4-HMAC-SHA256 authorization
 //
-//   - the alarm word (backupAlarmStatus): off / ok / failed / stale
+//   - the alarm word (backupAlarmStatus): off / ok / failed / stale / unencrypted;
+//     a set but malformed encryption key refuses the run (nothing in plain)
 //   - the status read back at boot, also with STATE_DATABASE_URL set (the
 //     suite runs in both modes; with it set it uses its own schema)
 //   - bucket pushback: a 503 SlowDown is retried with backoff and the run
@@ -207,6 +208,35 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   ok(clean.ok === true && clean.retries === 0, "a clean run after pushback needs no retries");
 }
 
+// --- encryption key: set but malformed refuses the run; unset in production pages ---
+{
+  const good = process.env.BACKUP_ENCRYPTION_KEY;
+  process.env.BACKUP_ENCRYPTION_KEY = "not-a-32-byte-key";
+  const putsBefore = requests.filter((r) => r.method === "PUT").length;
+  const requestsBefore = requests.length;
+  const bad = await runBackup({ log: () => {} });
+  ok(bad.ok === false && /BACKUP_ENCRYPTION_KEY/.test(String(bad.error)), `a set but malformed key refuses the run and names the variable (${String(bad.error).slice(0, 70)})`);
+  ok(requests.length === requestsBefore && requests.filter((r) => r.method === "PUT").length === putsBefore, "...and makes no bucket request, so nothing goes up in plain");
+  ok(backupStatus().lastResult === "failed" && /BACKUP_ENCRYPTION_KEY/.test(String(backupStatus().lastError)) && backupStatus().encryptionKey === "invalid", "...the status records failed with the reason and names the key state");
+  ok(backupAlarmStatus() === "failed", `...and the alarm word is failed (${backupAlarmStatus()})`);
+  process.env.BACKUP_ENCRYPTION_KEY = good;
+  const clean = await runBackup({ log: () => {} });
+  ok(clean.ok === true && backupAlarmStatus() === "ok", "a valid key again runs clean and reads ok");
+  // A stored ok run does not hide a key that stopped parsing since.
+  process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(20);
+  ok(backupAlarmStatus() === "failed", `a malformed key reads failed before the next run (${backupAlarmStatus()})`);
+  delete process.env.BACKUP_ENCRYPTION_KEY;
+  const prevEnv = process.env.NODE_ENV;
+  delete process.env.NODE_ENV;
+  ok(backupAlarmStatus() === "ok", "no key outside production: ok (a local or test run)");
+  process.env.NODE_ENV = "production";
+  ok(backupAlarmStatus() === "unencrypted", `no key in production: the alarm word is unencrypted (${backupAlarmStatus()})`);
+  ok(backupAlarmStatus(Date.now() + 27 * 3600_000) === "stale", "...a stale run still reads stale first");
+  if (prevEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = prevEnv;
+  process.env.BACKUP_ENCRYPTION_KEY = good;
+  ok(backupAlarmStatus() === "ok", "the key back: ok");
+}
+
 // --- budget: tiny run cap holds bulk but the refund ledger still ships -----
 {
   for (const k of [...objects.keys()]) if (k.startsWith("backups/")) objects.delete(k);
@@ -311,8 +341,8 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
   const leg = hb.slice(hb.indexOf("Offsite backup check"), hb.indexOf("Offsite backup check") + 3000);
   ok(/\.backup\.status/.test(leg), "the heartbeat reads backup.status");
-  ok(/held\|failed\|stale\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
-  ok(/held\|failed\|stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale and closes it on ok");
+  ok(/held\|failed\|stale\|unencrypted\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
+  ok(/held\|failed\|stale\|unencrypted\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale/unencrypted and closes it on ok");
 }
 
 db.close();

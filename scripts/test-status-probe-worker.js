@@ -882,10 +882,10 @@ for (const [name, over, detail] of failCases) {
     }
   });
 
-  await acheck("offsite backup: held, failed and stale page, ok clears, off and unknown do neither; body echoes only known words", async () => {
+  await acheck("offsite backup: held, failed, stale and unencrypted page, ok clears, off and unknown do neither; body echoes only known words", async () => {
     const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Offsite backup is not current";
-    for (const w of ["held", "failed", "stale"]) assert.equal(judge({ gateway: { backup: { status: w } } })[T], "bad", w);
+    for (const w of ["held", "failed", "stale", "unencrypted"]) assert.equal(judge({ gateway: { backup: { status: w } } })[T], "bad", w);
     assert.equal(judge({ gateway: { backup: { status: "ok" } } })[T], "good");
     assert.equal(judge({ gateway: { backup: { status: "off" } } })[T], "quiet");
     assert.equal(judge({ gateway: { backup: { status: "unknown" } } })[T], "quiet");

@@ -75,8 +75,10 @@ function clampInt(v, dflt, lo, hi) {
 // the bucket's own encryption is one layer under someone else's control.
 // BACKUP_ENCRYPTION_KEY = 32 bytes as 64 hex chars or base64; without it the
 // run still uploads (a plaintext backup beats none) but reports
-// `encrypted:false` and the boot log says so. Format: "A402ENC1" + 12-byte
-// IV + ciphertext + 16-byte GCM tag. Decrypt: scripts/backup-restore.js.
+// `encrypted:false`, the boot log says so and, in production, the alarm word
+// is unencrypted. A key that is set but does not parse refuses the run (failed):
+// it was meant to encrypt, so nothing goes up in plain. Format: "A402ENC1" +
+// 12-byte IV + ciphertext + 16-byte GCM tag. Decrypt: scripts/backup-restore.js.
 const ENC_MAGIC = Buffer.from("A402ENC1");
 export function parseEncKey(raw) {
   const v = String(raw || "").trim();
@@ -84,6 +86,12 @@ export function parseEncKey(raw) {
   const buf = /^[0-9a-f]{64}$/i.test(v) ? Buffer.from(v, "hex") : Buffer.from(v, "base64");
   return buf.length === 32 ? buf : null;
 }
+/** "set" | "unset" | "invalid" (set, but not a 32-byte key). */
+export function encKeyState(raw = process.env.BACKUP_ENCRYPTION_KEY) {
+  if (!String(raw || "").trim()) return "unset";
+  return parseEncKey(raw) ? "set" : "invalid";
+}
+const ENC_KEY_INVALID = "BACKUP_ENCRYPTION_KEY is set but is not a 32-byte key (64 hex chars or base64): refusing to upload unencrypted";
 export function encryptBackupBuffer(plain, key) {
   const iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", key, iv);
@@ -403,20 +411,26 @@ function saveStatus() {
   if (statusUnread()) { statusDirty = true; return; } // saved once the stored status is read
   void statusStore().save(status); // best-effort; a failed save is re-sent by the document
 }
-export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...status, configured: backupConfigured() }; };
+export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...status, configured: backupConfigured(), encryptionKey: encKeyState() }; };
 
 // The backup alarm as one word, never a number (/api/gateway-status; the
-// heartbeat pages on held / failed / stale):
+// heartbeat pages on held / failed / stale / unencrypted):
 //   off     BACKUP_S3_* not configured
 //   failed  the last run threw (nothing or only part went up)
 //   held    the last run left a state table without an offsite copy
 //   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
 //           window plus slack), including none at all since configured
+//   unencrypted  BACKUP_ENCRYPTION_KEY unset in production (NODE_ENV): the
+//           runs succeed but every object goes up as plain gzip
 //   ok      the last run succeeded and is recent
 //   unknown the stored status has not been read yet (database unreachable)
 //           and this process has not run a backup: no page either way
+// A key that is set but does not parse reads failed at once: every run
+// refuses it, so the word does not wait for the next nightly run to say so.
 export function backupAlarmStatus(now = Date.now()) {
   if (!backupConfigured()) return "off";
+  const keyState = encKeyState();
+  if (keyState === "invalid") return "failed";
   loadStatus();
   refreshStatus(now);
   if (statusUnread() && !status.lastAttempt) return "unknown";
@@ -425,6 +439,7 @@ export function backupAlarmStatus(now = Date.now()) {
   const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;
   const last = Date.parse(status.lastSuccess || "");
   if (!Number.isFinite(last) || now - last > staleMs) return "stale";
+  if (keyState === "unset" && process.env.NODE_ENV === "production") return "unencrypted";
   return "ok";
 }
 
@@ -441,6 +456,7 @@ export async function runBackup({ log = console.log } = {}) {
   const day = status.lastAttempt.slice(0, 10);
   const tmp = mkdtempSync(join(tmpdir(), "a402-backup-"));
   try {
+    if (encKeyState() === "invalid") throw new Error(ENC_KEY_INVALID);
     // Bill guard BEFORE any upload: if the bucket already holds more than
     // the cap, something is wrong (retention broken, foreign writes) — stop
     // and surface rather than keep paying.
@@ -789,6 +805,6 @@ export function startBackupScheduler({ log = console.log } = {}) {
   scheduledTick = () => { refreshStatus(); return nightly().catch(() => {}); };
   const timer = setInterval(scheduledTick, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
-  log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
+  log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : encKeyState() === "invalid" ? `ERROR: ${ENC_KEY_INVALID}` : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;
 }
