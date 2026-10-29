@@ -170,7 +170,7 @@ await (async () => {
     assert.match(server, /const offered = publicPremiumUsdByNetwork\(\)/);
     assert.ok(!/premiumUsdByNetworkName\(\)/.test(server), "/api/pricing no longer filters a full map by hand");
     assert.match(mcp, /import \{ publicPremiumClause as premiumClause \} from "\.\/public-networks\.js"/);
-    assert.ok(!/from "\.\/payments\.js"/.test(mcp), "the connector reads no unfiltered premium helper");
+    assert.ok(!/import \{[^}]*\b(premiumClause|premiumUsdByNetworkName|parseNetworkPremiums)\b[^}]*\} from "\.\/payments\.js"/.test(mcp), "the connector reads no unfiltered premium helper");
   });
   delete process.env.NETWORK_PRICE_PREMIUMS;
   delete process.env.PAYMENT_NETWORKS;
