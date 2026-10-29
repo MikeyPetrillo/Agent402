@@ -43,6 +43,13 @@ export function planSweep({ balanceAtomic, floatAtomic, unitAtomic, maxCalls }) 
   return { excess, wanted: Number(wanted), buys: Number(buys), capped: wanted > cap, plannedAtomic: buys * unitAtomic };
 }
 
+/** Whether one more buy at `nextAtomic` keeps the settled total within the
+ *  planned sweep. A price that rose after sizing would otherwise take the
+ *  burner below its float. */
+export function fitsPlan({ settledAtomic, nextAtomic, plannedAtomic }) {
+  return settledAtomic + nextAtomic <= plannedAtomic;
+}
+
 /** Base units -> a USD string with `dp` places (USDC, 6 decimals). */
 export function usd(atomic, dp = 4) {
   return (Number(atomic) / 10 ** USDC_DECIMALS).toFixed(dp);
@@ -112,9 +119,10 @@ async function main() {
 
   // A buy is settled only on a final status below 400: the server cancels
   // settlement for any handler error and answers 402 when settlement fails.
-  async function payOnBase(i) {
+  async function payOnBase(i, settledSoFar) {
     const q = i === 0 ? first : await quote(denomInit(i));
     if (!q.accept) return { settled: false, reason: q.reason };
+    if (!fitsPlan({ settledAtomic: settledSoFar, nextAtomic: BigInt(q.accept.amount), plannedAtomic: plan.plannedAtomic })) return { settled: false, stop: true, reason: `price now $${usd(BigInt(q.accept.amount), 6)}; one more buy passes the planned sweep` };
     const payload = await client.createPaymentPayload({ ...q.pr, accepts: [q.accept] });
     const payHeaders = httpc.encodePaymentSignatureHeader(payload);
     const init = denomInit(i);
@@ -125,8 +133,9 @@ async function main() {
   let settled = 0, settledAtomic = 0n, fails = 0;
   for (let i = 0; i < plan.buys; i++) {
     let r;
-    try { r = await payOnBase(i); }
+    try { r = await payOnBase(i, settledAtomic); }
     catch (e) { r = { settled: false, reason: String(e.message).slice(0, 60) }; }
+    if (r.stop) { console.log(`\nstopping: ${r.reason}`); break; }
     if (r.settled) { settled++; settledAtomic += r.atomic; fails = 0; process.stdout.write(`.`); }
     else if (++fails >= 3) { console.log(`\nstopping: ${r.reason || "settlement failed"} (balance may be at float, or facilitator unavailable)`); break; }
   }

@@ -2,7 +2,7 @@
 // per-buy amount comes from the tool's live 402, the number of buys from the
 // excess over the float, and a run MAX_CALLS cuts short says so. Importing the
 // script runs nothing (its main is guarded); no key, no network, no spend.
-import { planSweep, baseUsdcAccept, usd } from "./sweep-burner.js";
+import { planSweep, baseUsdcAccept, usd, fitsPlan } from "./sweep-burner.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -35,6 +35,14 @@ let threw = false;
 try { planSweep({ balanceAtomic: u(10), floatAtomic: u(5), unitAtomic: 0n, maxCalls: 200 }); } catch { threw = true; }
 ok(threw, "a zero per-buy amount is refused, never a divide by zero");
 ok(usd(7_474_000n, 6) === "7.474000" && usd(37000n, 6) === "0.037000", "USDC base units print as dollars");
+
+{
+  // A price that rises after sizing stops the sweep before it passes the plan.
+  const plan = planSweep({ balanceAtomic: u(12.5), floatAtomic: u(5), unitAtomic: 37000n, maxCalls: 500 });
+  ok(fitsPlan({ settledAtomic: plan.plannedAtomic - 37000n, nextAtomic: 37000n, plannedAtomic: plan.plannedAtomic }), "the last buy at the sized price fits the plan");
+  ok(!fitsPlan({ settledAtomic: plan.plannedAtomic - 37000n, nextAtomic: 50000n, plannedAtomic: plan.plannedAtomic }), "a buy at a higher price past the plan is refused");
+  ok(!fitsPlan({ settledAtomic: plan.plannedAtomic, nextAtomic: 1n, plannedAtomic: plan.plannedAtomic }), "nothing more once the plan is settled");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
