@@ -38,6 +38,7 @@
 // this instance's closure.
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { EVM_RPCS } from "./evm-rpcs.js";
+import { ADDR, TX, UUID, UINT, B32, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
 import { SettleError, VerifyError } from "@x402/core/types";
 import {
   verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature,
@@ -62,12 +63,6 @@ const SETTLE_TIMEOUT_MS = 30_000;
 const PENDING_POLL_MS = 1_000;
 const PENDING_BUDGET_MS = 20_000;
 
-const ADDR = /^0x[0-9a-fA-F]{40}$/;
-const TX = /^0x[0-9a-fA-F]{64}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UINT = /^[0-9]{1,78}$/;
-const B32 = /^0x[0-9a-fA-F]{64}$/;
-const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
 
 /** The first machine reason in a Circle ErrorResponse ({code, message, errors:[{reason}]}),
  *  or a status-derived code. The message field is never read. */
@@ -117,8 +112,6 @@ async function readJsonCapped(res, op) {
   }
 }
 
-const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-const lc = (s) => String(s || "").toLowerCase();
 
 /** The EIP-3009 typed data a buyer signs for an Arc USDC exact payment. */
 function arcTypedData(auth) {

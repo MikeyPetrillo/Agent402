@@ -4,6 +4,7 @@
 // self-heal (scripts/lib/rail-recovered.js, which runs without the package
 // install), so "Circle lists Arc" means the same thing to the boot check and
 // to the healer that restarts production on it.
+import { ADDR, REASON, isObj, lc } from "./circle-shapes.js";
 
 export const ARC_CAIP2 = "eip155:5042";
 export const ARC_CHAIN_ID = 5042;
@@ -17,11 +18,6 @@ export const ARC_USDC = Object.freeze({
 });
 export const CIRCLE_FACILITATOR_BASE = "https://api.circle.com/v1/facilitator/x402";
 export const CIRCLE_LABEL = "Circle (Arc)";
-
-const ADDR = /^0x[0-9a-fA-F]{40}$/;
-const REASON = /^[a-z0-9_]{1,64}$/;
-const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-const lc = (s) => String(s || "").toLowerCase();
 
 /** A reason code we are willing to repeat: lower snake case, bounded. Anything
  *  else (prose, markup, an echoed header) becomes a fixed placeholder. */

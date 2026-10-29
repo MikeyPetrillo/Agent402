@@ -40,11 +40,8 @@
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady } from "./state-db.js";
 import { recordRefundOwed, refundByEvidenceFresh } from "./refund-ledger.js";
+import { UUID, ADDR, TX, B32 } from "./circle-shapes.js";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ADDR = /^0x[0-9a-fA-F]{40}$/;
-const TX = /^0x[0-9a-fA-F]{64}$/;
-const B32 = /^0x[0-9a-fA-F]{64}$/;
 const KEY_RE = /^eip155:[0-9]{1,12}\|0x[0-9a-f]{40}\|0x[0-9a-f]{64}$/;
 
 export const MAX_ENTRIES = 2000;

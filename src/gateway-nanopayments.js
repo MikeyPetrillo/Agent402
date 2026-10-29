@@ -63,6 +63,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
+import { ADDR, TX as TX_HASH, UUID, UINT, B32, REASON, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
 import { randomUUID } from "node:crypto";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { GATEWAY_KIND_NAME, GATEWAY_PENDING_BOOKED, GATEWAY_WIRE, SETTLEMENT_FAILED_REASON, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment } from "./gateway-wire.js";
@@ -103,17 +104,7 @@ export const CDN_PENDING_RESERVE_MS = 5_000;
 export const ACCEPTED_TRANSFER_STATUSES = Object.freeze(["received", "batched", "confirmed", "completed"]);
 const TRANSFER_STATUSES = new Set([...ACCEPTED_TRANSFER_STATUSES, "failed"]);
 
-const ADDR = /^0x[0-9a-fA-F]{40}$/;
-const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UINT = /^[0-9]{1,78}$/;
-const B32 = /^0x[0-9a-fA-F]{64}$/;
-const REASON = /^[a-z0-9_]{1,64}$/;
 const VERSION = /^[0-9]{1,4}$/;
-const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
-
-const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-const lc = (s) => String(s || "").toLowerCase();
 
 /** A Gateway transfer id in the one form it is stored and looked up in
  *  (lower case, trimmed): Gateway's ids are case-insensitive UUIDs. */
