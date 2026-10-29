@@ -289,5 +289,18 @@ const P = 3960 + (process.pid % 20);
   await wait(200);
 }
 
+// --- 7. A network that carries a settlement premium is refused ---------------
+// The metered settlement charges usage under the quote, which would drop the
+// chain's premium, so upto is refused there exactly as on a floored chain.
+{
+  const { up, status, accepts, log } = await acceptsFor(
+    { X402_UPTO_NETWORKS: BASE_CAIP2, NETWORK_PRICE_PREMIUMS: `${BASE_CAIP2}=0.001` }, P + 7, P + 47, [kind("exact"), kind("upto")]);
+  ok(up && status === 402, "server booted with upto opted in on a premium network");
+  const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
+  ok(!schemes.includes("upto"), `upto is REFUSED on a network with a settlement premium (got ${schemes.join(",")})`);
+  ok(schemes.includes("exact"), "exact is still offered there");
+  ok(/REFUSING eip155:8453, it carries a settlement premium/.test(log), "and the refusal is logged");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
