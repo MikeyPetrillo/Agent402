@@ -1901,6 +1901,8 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
+      - name: OCR language data for the OCR suites (pinned, hash-checked; the server never downloads it)
+        run: node scripts/fetch-tessdata.js tessdata eng spa fra deu
       - name: Offline suites (11 scripts, one process each)
         run: |
           set -euo pipefail
@@ -1937,6 +1939,8 @@ jobs:
           t node scripts/test-self-listing-exclusion.js
           # OCR crash containment (A402-10 malformed image returns clean error, no uncaughtException — tesseract worker)
           t node scripts/test-ocr-crash.js
+          # OCR language workers stay under their cap, evicted ones are terminated, data is read only from the local directory
+          t node scripts/test-ocr-workers.js
           # Secretless worker isolation (F02/F04/F06 — worker auth/dispatch, client round-trip, secret-guard refuses to boot with a payment secret — offline)
           t node scripts/test-worker-isolation.js
           # Render-worker wake retries (connection refused / edge 502 while the worker starts are retried in the deadline; a worker answer is final - offline)
@@ -4124,6 +4128,8 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: ffmpeg for the three media tools in the example sweep (ubuntu-latest ships none; they answered 503 "not installed" once that stopped being a silent 422)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+      - name: OCR language data for image-ocr in the example sweep (pinned, hash-checked; the server never downloads it)
+        run: node scripts/fetch-tessdata.js tessdata eng
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
