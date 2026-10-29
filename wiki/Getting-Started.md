@@ -45,11 +45,11 @@ To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new walle
 |---|---|
 | A Claude user | Paste `https://agent402.tools/mcp` into Settings → Connectors - see [[MCP Connector]] |
 | A Cursor, VS Code, Windsurf, Cline, Codex or Gemini CLI user | Each host's config block is in the [agent-hosts guide](https://agent402.tools/guides/agent-hosts) - see also [[MCP Connector]] |
-| An MCP-based agent | `npx -y agent402-mcp@0.13.20` with optional `AGENT_KEY` - see [[MCP Connector]] |
+| An MCP-based agent | `npx -y agent402-mcp@0.13.21` with optional `AGENT_KEY` - see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages - see [[Adapters]] |
 | Calling over HTTP with a wallet | One x402-wrapped fetch - see [[Paying with x402]] |
 | Wallet-less / sandboxed | Proof-of-work on 150+ pure-CPU tools - see [[Paying with Compute]] |
-| Have a card, no wallet | Buy a finished report by card at [`/reports`](https://agent402.tools/reports). Prepaid credits are not on sale at the moment; a key already issued still pays any paid route except the wallet-identity-bound ones with `Authorization: Bearer a402_…`, and `agent402-mcp` and `agent402-client` take the same key - see [[Reports and Monitors|Reports-and-Monitors]] |
+| Have a card, no wallet | Buy a finished report by card at [`/reports`](https://agent402.tools/reports). A prepaid credits key ([`/credits`](https://agent402.tools/credits) says whether packs are on sale) pays Agent402's own paid routes with `Authorization: Bearer a402_…`, except the wallet-identity-bound ones and the routes that buy from an outside seller, and `agent402-mcp` and `agent402-client` take the same key - see [[Reports and Monitors|Reports-and-Monitors]] |
 | A person who wants one finished report | Buy it by card at [`/reports`](https://agent402.tools/reports), or a monthly monitor at [`/monitors`](https://agent402.tools/monitors) - see [[Reports and Monitors|Reports-and-Monitors]] |
 
 ## What things cost

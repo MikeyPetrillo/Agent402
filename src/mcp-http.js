@@ -54,6 +54,7 @@ import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -1160,7 +1161,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "payment.info") {
           return mcpJsonResult({
             connector: "hosted free tier - no wallet is held on this connector (authless)",
-            credits: { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success", balance: `${baseUrl}/api/credits/balance` },
+            credits: { onSale: creditsSalesEnabled(), how: `${creditsSalesEnabled() ? `packs are sold by card at ${baseUrl}/credits` : "new credits are not on sale; a key already issued keeps working"}: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones and the routes that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success`, balance: `${baseUrl}/api/credits/balance` },
             // DERIVED, never typed. This block quoted the pre-2026-08-23 ladder
             // for three weeks - every figure understated 1.7x to 3.4x - and an
             // agent budgeting from a machine surface under-budgets, pays, and

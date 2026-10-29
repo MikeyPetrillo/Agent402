@@ -9,7 +9,7 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.21
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call.
@@ -19,7 +19,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.20"],
+      "args": ["-y", "agent402-mcp@0.13.21"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -30,7 +30,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.20
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $4 by default; there is no session budget unless you set `AGENT402_BUDGET`.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.20`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.21`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -43,12 +43,12 @@ Every variable the server reads (all optional):
 | --- | --- | --- |
 | `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or another EVM chain the server offers), or USDG on Robinhood Chain. |
 | `SOLANA_AGENT_KEY` | _(unset)_ | Base58 secret key (or JSON byte array) of a Solana wallet funded with USDC on Solana. |
-| `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`) already issued (new credits are not on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. |
+| `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`; [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. Credits pay Agent402's own services only: `router.execute`, `seller-payability`, `decide.execute` and the flight tools buy from outside sellers and need a wallet key, and memory and usage need a wallet identity. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `4` | Refuse any single call priced above this many USD (e.g. `0.05`); `off` disables it. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. Applies to the wallet and the credits path. |
-| `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet or credits key is set. |
+| `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet key is set; a credits key does not pay `router.execute`, which buys from outside sellers and takes a wallet payment. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
 | `AGENT402_ASYNC_TIMEOUT_MS` | `900000` | How long to poll a job before answering with its link (`structuredContent.jobUrl`) to collect later. |
@@ -78,7 +78,7 @@ tighter ceiling.
 
 **Chains.** With a funded wallet, `AGENT_KEY` pays USDC on any EVM chain the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc) or USDG on Robinhood Chain. `SOLANA_AGENT_KEY` pays USDC on Solana. The service also settles on Stellar and Algorand, which this package does not sign. Restrict or order chains with `AGENT402_NETWORKS`.
 
-**Credits key.** A prepaid credits key already issued (`AGENT402_CREDITS_KEY`) pays from its balance. New credits are not on sale.
+**Credits key.** A prepaid credits key (`AGENT402_CREDITS_KEY`) pays per successful call on Agent402's own services; the routes that buy from outside sellers (`router.execute`, `seller-payability`, `decide.execute`, the flight tools) need a wallet key. [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale.
 
 **Error codes.** `-32042` payment required (the challenges are in the error data). `-32043` a presented credential was refused.
 

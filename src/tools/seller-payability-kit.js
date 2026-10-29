@@ -371,6 +371,9 @@ export function buildSellerPayabilityTool({
     // Pays the seller from our own Base wallet inside the handler, before the
     // buyer's payment settles. Read by spendsBeforeSettlement.
     spendsOwnWallet: true,
+    // Buys from an outside seller with our wallet: sold for a wallet payment only,
+    // never for prepaid credits or a card (src/third-party-routes.js).
+    paysThirdPartySeller: true,
     price: "$0.10",
     description:
       "Buy one call from an x402 seller endpoint right now and report exactly what happened: the unpaid call's status, the 402 decoded (accepts, chains, payTo, asset, price), whether the accept's EIP-712 domain name matches the token it names (the defect that silently makes a whole catalog unpayable), whether a stock client's signed payment was accepted, the settlement receipt and transaction, a slice of the response body, and the time each leg took. Ends in plain-English flags, never a score. This is the live counterpart to seller-dossier, which reports what we already know: this one spends real USDC from our own wallet to find out. Point it at your own endpoint before you launch, or at a seller you are about to route money to. Up to $0.02 of the seller's price per check.",

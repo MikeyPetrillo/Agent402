@@ -26,7 +26,7 @@ import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cade
 
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
 import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
@@ -180,7 +180,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         // exception is real (prepaid card credits and card-paid reports are held
         // balances; see /security). Same rule as `deterministic` and
         // `testedBeforeEveryDeploy`, pinned by test-copy-absolutes.
-        nonCustodial: `on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits (${creditsSalesEnabled() ? "sold at /credits" : "not on sale; issued keys still spend"}) are the one balance held; card reports and monitors are ordinary card charges; see /security.`,
+        nonCustodial: `on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits (${creditsSalesEnabled() ? "sold at /credits" : "not on sale; issued keys still spend"}) are the one prepaid balance, a prepayment for our own services; card reports and monitors are ordinary card charges; see /security.`,
         ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
       },
       proofOfWork: {
@@ -431,7 +431,7 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
         verify: `${baseUrl}/openapi.json`,
       },
       {
-        claim: "Non-custodial on the payment rails: an agent signs with its own key and settlement goes wallet to wallet, so no customer key or crypto balance is ever held. One card path is NOT non-custodial and is named as such: a prepaid credits balance (credits are no longer sold; issued keys still spend) is money we hold until spent. A card report is charged at checkout and refunded to the card automatically if generation fails.",
+        claim: `Non-custodial on the payment rails: an agent signs with its own key and settlement goes wallet to wallet, so no customer key or crypto balance is ever held. One card path is NOT non-custodial and is named as such: ${creditsPrepaymentPhrase()}. A card report is charged at checkout and refunded to the card automatically if generation fails.`,
         verify: `${baseUrl}/llms.txt`,
       },
       {

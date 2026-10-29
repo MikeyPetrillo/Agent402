@@ -624,6 +624,8 @@ import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, econom
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
+import { paysThirdParty } from "./third-party-routes.js";
+import { ncTaxReport, NC_TAXABLE_SLUGS, monthBounds } from "./nc-sales-tax.js";
 import { evidenceWatchList, LOW_VOLUME_USD } from "./evidence-watch.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
@@ -641,7 +643,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3677,6 +3679,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // threshold and the counts for the operator; never an address (those are
     // on /__operator/outbound-destinations.json).
     outboundDestinations: await outboundDestinationStore().status({ full }).catch(() => ({ status: "unknown" })),
+    // A credits purchase refused by the daily limit whose card refund failed
+    // (src/credits.js): owed until refunded by hand and marked on
+    // POST /__operator/credits/refusal-refunded. A word only; the session ids
+    // are on /__operator/credits.json.
+    creditsRefunds: _credits ? await _credits.refusalsToRefund().then((l) => ({ status: l.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
@@ -4347,12 +4354,23 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
     const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
+    if (!b && /^Bearer a402_/.test(auth)) _credits.noteBadKey(req.ip);
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-    res.set("Cache-Control", "no-store").json(await _credits.status());
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund() });
+  });
+  // After refunding a refused purchase by hand in Stripe: clears it from
+  // creditsRefunds. Body { session: "cs_..." }.
+  app.post("/__operator/credits/refusal-refunded", express.json(), async (req, res) => {
+    if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+    const s = String(req.body?.session || "");
+    if (!/^cs_[A-Za-z0-9_]+$/.test(s)) return res.status(400).json({ error: "session must be a Checkout session id (cs_...)" });
+    if (!(await _credits.refusalsToRefund()).includes(s)) return res.status(404).json({ error: "that session is not awaiting a refund" });
+    await _credits.markRefusalRefunded(s);
+    res.json({ ok: true, session: s });
   });
   app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -4806,6 +4824,47 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
     listed: listed.length,
     rows: listed,
   });
+});
+// North Carolina sales tax on card-funded sales of digital audio and video,
+// by month and billing ZIP, for filing (src/nc-sales-tax.js). Built from the
+// sales ledger; ?month=YYYY-MM (default: this month and last).
+app.get("/__operator/nc-sales-tax.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0, 7);
+  const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+  const months = /^\d{4}-\d{2}$/.test(String(req.query.month || "")) ? [String(req.query.month)] : [lastMonth, thisMonth];
+  try {
+    const [since] = monthBounds(months[0]);
+    const [, until] = monthBounds(months[months.length - 1]);
+    const rows = externalSalesForSlugs(Object.keys(NC_TAXABLE_SLUGS), since, until);
+    const keyIds = [...new Set(rows.filter((r) => !r.tx && r.payer).map((r) => r.payer))];
+    const keyBilling = _credits ? await _credits.billingByKeyId(keyIds) : new Map();
+    const stripeClient = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+    const paymentBilling = new Map();
+    const report = await ncTaxReport(rows, {
+      billingForKey: (id) => keyBilling.get(id) || null,
+      billingForPayment: async (pi) => {
+        if (paymentBilling.has(pi)) return paymentBilling.get(pi);
+        let b = null;
+        try {
+          const p = stripeClient ? await stripeClient.paymentIntents.retrieve(pi, { expand: ["latest_charge"] }) : null;
+          const a = p?.latest_charge?.billing_details?.address;
+          if (a?.country) b = { country: String(a.country).toUpperCase(), state: a.state ? String(a.state).toUpperCase() : null, postal: a.postal_code || null };
+        } catch { /* counted as without an address */ }
+        paymentBilling.set(pi, b);
+        return b;
+      },
+    });
+    res.set("Cache-Control", "no-store").json({
+      note: "gross receipts are tax-included: card-funded sales (credits keys and per-call card payments) of the taxable routes, billed to a North Carolina address. Tax in a tax-included amount = gross x r / (1 + r) at the combined state and county rate r for each billing ZIP's county. Wallet payments carry no address and are not included.",
+      taxableRoutes: NC_TAXABLE_SLUGS,
+      months: report.months,
+      cardFundedSalesWithoutAddress: report.cardFundedSalesWithoutAddress,
+    });
+  } catch (e) {
+    res.status(503).json({ error: String(e?.message || e).slice(0, 200) });
+  }
 });
 app.get("/__operator/seller-verification.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -9178,13 +9237,13 @@ app.get("/api/pricing", (_req, res) => {
       // Follows the CREDITS_SALES gate: while sales are off the checkout
       // answers 503, so this block must not advertise packs or a checkout an
       // agent would be refused. Existing keys still spend, so it says how.
-      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
         // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
         // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
         checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
         balance: `${BASE_URL}/api/credits/balance` }
-        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),
@@ -9582,7 +9641,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     },
   });
   if (stripeGate) {
@@ -9598,7 +9657,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = quotedPriceUsd(def, req);
-      return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def) } : null;
+      return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     }));
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }

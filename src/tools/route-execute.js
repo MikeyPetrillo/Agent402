@@ -226,6 +226,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     // handler, i.e. before the buyer's own payment settles. Read by
     // spendsBeforeSettlement (composite-spend-guard.js).
     spendsOwnWallet: true,
+    // Buys from an outside seller with our wallet: sold for a wallet payment only,
+    // never for prepaid credits or a card (src/third-party-routes.js).
+    paysThirdPartySeller: true,
     // Chooses among shortlisted tools with a judgment model (src/tool-judge.js)
     // when one is configured; the tool page says so (src/pages.js).
     judgedChoice: true,

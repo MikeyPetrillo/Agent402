@@ -4,6 +4,36 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## Unreleased
+
+### 2026-10-28 (credits)
+- Prepaid credits are a prepayment for Agent402's own services, for business
+  and developer use: not cash, not transferable, never expiring, with no fees.
+  The terms and privacy policy (both dated 2026-10-28) say so, and the
+  checkout shows the rules.
+- Routes that buy from an outside seller with our wallet (the router's execute
+  tiers, seller-payability, decide-execute and the flight routes) take a
+  wallet payment over x402 or MPP on a chain; prepaid credits and per-call
+  card payments are refused on them with reason third-party-purchase.
+- One buyer may buy at most $1,000 of credits in any 24 hours, matched by
+  email or card; a purchase past that is refunded in full and issues no key,
+  decided one buyer at a time across servers.
+- A decision paid with prepaid credits or a card earns no execution credit, so
+  card-funded value never pays decide-execute.
+- An unspent credits balance under $10 is refunded on request, and a refunded
+  or disputed purchase disables only the key it issued.
+- Unknown or malformed credits keys are counted per client and shown to the
+  operator; a valid key is never refused because of them.
+- Credits checkout asks for a billing address, offers a business tax ID field
+  and requires the business-use and terms answers, which the key keeps. A
+  buyer billed in the EU or the UK enters a VAT number, or the purchase is
+  refunded and issues no key. Prices are the same everywhere and include North
+  Carolina sales tax on generated speech, audio and video for a buyer billed
+  in North Carolina by card, which each of those tools' pages states.
+- agent402-mcp 0.13.21 lists router.execute only with a wallet key;
+  agent402-client 0.8.18, agent402-openclaw 0.5.6, elizaos-plugin-agent402
+  0.2.8 and agent402-agentkit 0.1.8 carry the updated credits wording.
+
 ## v2.8.1 - 2026-10-28
 
 ### 2026-10-28

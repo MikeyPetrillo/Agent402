@@ -100,7 +100,7 @@ async function main() {
           out(`  key:     ${WALLET_KEY_FILE()} (0600; back it up, it is the only copy)`);
           out(`fund it with USDC on Base (any amount; a call costs from $0.001), then every call is paid from it over x402.`);
           out(`optional: \`agent402-openclaw permit2-approve\` once (needs a little ETH on Base for gas) to pay actual usage instead of the per-request quote.`);
-          out(`holding a credits key already issued? rerun with --credits-key a402_... instead`);
+          out(`holding a credits key? rerun with --credits-key a402_... instead`);
         } else {
           out(`no payment method yet: install viem + @x402/fetch + @x402/evm and rerun to generate a wallet, set AGENT402_WALLET_KEY, or rerun with --credits-key a402_... if you hold a credits key`);
         }

@@ -144,6 +144,9 @@ export function checkStripeCredentialBinding(authorizationHeader, { secretKey, r
   const priceUsd = Number(item?.priceUsd);
   if (!(priceUsd >= STRIPE_MIN_USD)) return bad(`route price ${priceUsd} is below the $${STRIPE_MIN_USD} card minimum - stripe/charge is not offered here`);
   if (item.identityBound) return bad("this route is wallet-identity bound; Stripe credentials carry no verified wallet payer - pay it over an x402 rail");
+  // A route that pays an outside seller from our wallet is sold for a wallet
+  // payment only (src/third-party-routes.js), never for a card.
+  if (item.paysThirdParty) return bad("this route buys from an outside seller with our wallet and is sold for a wallet payment only (x402, or MPP on a chain) - not by card");
   const expected = usdToCents(priceUsd);
   let amount;
   try { amount = parseInt(String(r.amount), 10); } catch { return bad("challenge amount is not an integer cents string"); }
@@ -251,7 +254,7 @@ export function createStripeChallengeAppender({ realm, secretKey, priceFor } = {
         if (res.statusCode === 402) {
           const item = typeof priceFor === "function" ? priceFor(req.method, req.path, req) : null;
           const priceUsd = Number(item?.priceUsd);
-          if (item && !item.identityBound && priceUsd >= STRIPE_MIN_USD) {
+          if (item && !item.identityBound && !item.paysThirdParty && priceUsd >= STRIPE_MIN_USD) {
             const header = mintStripeChallenge({ priceUsd, realm, secretKey });
             if (header) {
               const existing = res.getHeader("WWW-Authenticate");

@@ -862,7 +862,7 @@ export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
   const holes = list.map(() => "?").join(",");
   try {
     return db.prepare(
-      `SELECT ts, slug, price_usd AS priceUsd, network, payer, tx
+      `SELECT ts, slug, price_usd AS priceUsd, network, payer, tx, rail
          FROM sales
         WHERE internal = 0 AND ts >= ? AND ts < ? AND slug IN (${holes})
         ORDER BY ts ASC`

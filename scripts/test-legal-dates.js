@@ -10,8 +10,8 @@ import { createHash } from "node:crypto";
 // paragraph shown only while a switch is on (the Circle Gateway batched
 // option) moves the sha, not the date, until that switch ships on.
 const PINS = {
-  "src/terms.js": { date: "2026-10-20", sha: "f0c08df2d75a682d" },
-  "src/privacy.js": { date: "2026-10-27", sha: "ef329a4ed9d57d4b" },
+  "src/terms.js": { date: "2026-10-28", sha: "c52d8be41b220b05" },
+  "src/privacy.js": { date: "2026-10-28", sha: "f9f05987456e916d" },
 };
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };

@@ -160,6 +160,10 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
   await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
   try {
+    // A credits key does not pay the router (it buys from outside sellers), so
+    // credits mode does not list router.execute.
+    const credNames = (await jobClient.listTools()).tools.map((t) => t.name);
+    if (credNames.includes("router.execute")) fail(`credits mode lists router.execute, which credits do not pay (got: ${credNames.join(", ")})`);
     const notes = [];
     const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
     const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, CallToolResultSchema, { onprogress: (p) => notes.push(p), timeout: 30_000 });

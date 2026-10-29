@@ -28,7 +28,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
       : `curl -X ${ex.method} -H "Authorization: Bearer a402_…" -H "content-type: application/json" \\\n  -d '${JSON.stringify(ex.input)}' ${baseUrl}${ex.path}`)
     : "";
   // Sales are off by default (see the gate in server.js): selling a prepaid
-  // balance means holding someone's money against future redemption. When off,
+  // balance means holding a prepayment against future service. When off,
   // the page must not advertise a purchase it will refuse - a buy button that
   // 503s is its own deceptive-practice problem - so it states the position and
   // points at the two ways to pay that are open.
@@ -54,7 +54,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
     <div class="eyebrow">Prepaid credits · ${salesEnabled ? "every tool · no wallet" : "for existing keys"}</div>
     <h1>${salesEnabled ? "One card, <em>every tool.</em>" : "Prepaid credits, <em>for keys already issued.</em>"}</h1>
     <p class="lede">${salesEnabled
-      ? "Buy credits once, get a key, and spend it across the pay-per-call tools and reports - per request, at list price, debited only when a call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key. <b>No account, no subscription, no wallet.</b> The card-native twin of paying per call in USDC - and no signature per call either, which is the part that matters once an agent is making thousands of them: paying exact over x402 signs an authorization and waits for a settlement every single request, where this is one header."
+      ? "Buy credits once, get a key, and spend it across the pay-per-call tools and reports - per request, at list price, debited only when a call succeeds. For business and developer use; credits are spent only on Agent402's own services, so wallet-scoped routes (memory, usage) and the router's routes that buy from an outside seller need a wallet and refuse a key. <b>No account, no subscription, no wallet.</b> The card-native twin of paying per call in USDC - and no signature per call either, which is the part that matters once an agent is making thousands of them: paying exact over x402 signs an authorization and waits for a settlement every single request, where this is one header."
       : "This page is for holders of a key already issued. Send the key as a Bearer token on a paid route: it is debited per request at list price, only when the call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key."}</p>
     <div class="trust"><span><span class="dot"></span> Debited only on a successful call</span><span><span class="dot"></span> Never expires</span>${salesEnabled ? '<span><span class="dot"></span> Secured by Stripe</span>' : ""}</div>
   </section>
@@ -65,7 +65,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   <section>
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);margin-bottom:12px;">How it works</div>
-      <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># any paid tool, any language - just the header</span>
+      <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># a paid tool, any language - just the header</span>
 ${ex ? `${esc(exCall)}
 <span style="color:var(--accent-lit);">HTTP/2 200</span>  X-Credits-Balance: ${esc(ex.after)}   <span style="color:var(--on-panel-faint);"># 20.000 before, less one $${esc(String(ex.price))} call</span>
 ` : ""}

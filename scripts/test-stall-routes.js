@@ -261,10 +261,22 @@ const mp = await import("../src/market-page.js");
     // The page's own work per step, timed step by step: no step is more than
     // a fraction of the whole page (the loop-lag figure above also carries
     // the garbage collector's tasks, which run between turns either way).
+    // A collector pause that lands inside a step is the runtime's, not the
+    // step's work, so it is subtracted the same way blockOf does.
     const steps = mp._marketPageAllStepsForTest("https://agent402.tools", opts);
-    let longest = 0, count = 0, r;
-    do { const t = performance.now(); r = steps.next(); longest = Math.max(longest, performance.now() - t); count++; } while (!r.done);
-    ok(r.value === whole && count > 20 && heldUnder(longest, STEP_BOUND_MS), `...in ${count} steps, the longest ${longest.toFixed(1)} ms (${STEP.note})`);
+    const windows = [];
+    let count = 0, r;
+    gcPauses.length = 0;
+    do { const t = performance.now(); r = steps.next(); windows.push([t, performance.now()]); count++; } while (!r.done);
+    await new Promise((res) => setTimeout(res, 50));
+    let longest = 0, longestRaw = 0, longestGc = 0;
+    for (const [a0, b0] of windows) {
+      let inGc = 0;
+      for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b0, e0) - Math.max(a0, s0));
+      if (b0 - a0 > longestRaw) { longestRaw = b0 - a0; longestGc = inGc; }
+      longest = Math.max(longest, b0 - a0 - inGc);
+    }
+    ok(r.value === whole && count > 20 && heldUnder(longest, STEP_BOUND_MS), `...in ${count} steps, the longest ${longest.toFixed(1)} ms of work (${STEP.note}; longest raw step ${longestRaw.toFixed(1)} ms, ${longestGc.toFixed(1)} ms of it the collector)`);
   }
   ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
 }

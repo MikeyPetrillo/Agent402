@@ -288,7 +288,7 @@ export const callAction = {
       const msg = errorText(e);
       const code = e?.name === "SpendingLimitError" || /exceeds maxPerCallUsd|dailyLimitUsd|maxPerHostUsd/.test(msg) ? "spend_limit"
         : /wallet-only|402|refused by credits/.test(msg) ? "payment_required" : "upstream_error";
-      const hint = code === "payment_required" ? " Set AGENT402_WALLET_KEY (or AGENT402_CREDITS_KEY for a credits key already issued) to pay for this tool." : "";
+      const hint = code === "payment_required" ? " Set AGENT402_WALLET_KEY (or AGENT402_CREDITS_KEY for a prepaid credits key) to pay for this tool." : "";
       return reply(callback, failure(code, `Agent402 \`${slug}\` failed: ${msg}${hint}`, { slug, params, resolvedVia: via }));
     }
     const data = out && typeof out === "object" ? out : { result: out };
@@ -325,7 +325,7 @@ export const aboutAction = {
       const endpoints = p.endpoints || [];
       const data = {
         name: "Agent402", baseUrl, tools: endpoints.length, freeTier: endpoints.filter((e) => e.computePayable).length,
-        pay: "a prepaid credits key already issued (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
+        pay: "a prepaid credits key for Agent402's own services (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
         discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/#why`,
       };
       return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid by card credits or USDC over x402. Docs: ${data.docs}`, data });
@@ -349,13 +349,13 @@ export const agent402Provider = {
 
 export const agent402Plugin = {
   name: "agent402",
-  description: "Find and call Agent402's pay-per-call web tools (search, render, PDFs, market and SEC data), paid by a prepaid credits key already issued or USDC over x402; free tier via proof-of-work.",
+  description: "Find and call Agent402's pay-per-call web tools (search, render, PDFs, market and SEC data), paid by a prepaid credits key or USDC over x402; free tier via proof-of-work.",
   actions: [findAction, callAction, aboutAction],
   providers: [agent402Provider],
   init: async (config, runtime) => {
     const hasKey = Boolean(setting(runtime, "AGENT402_CREDITS_KEY") || config?.AGENT402_CREDITS_KEY);
     const hasWallet = /^0x[0-9a-fA-F]{64}$/.test(setting(runtime, "AGENT402_WALLET_KEY") || config?.AGENT402_WALLET_KEY || "");
-    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (set a wallet key to pay per call; a credits key already issued still works)");
+    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (set a wallet key or a prepaid credits key to pay per call)");
   },
 };
 

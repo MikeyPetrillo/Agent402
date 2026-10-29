@@ -492,7 +492,7 @@ export function mcpJsonResult(obj) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor / Smithery notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
-export const AGENT402_MCP_VERSION = "0.13.20";
+export const AGENT402_MCP_VERSION = "0.13.21";
 
 /** A listed MCP tool description, at most `max` characters. Hosts truncate or
  *  skip long descriptions, so the listing keeps the first whole sentences; the
@@ -524,12 +524,12 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp@0.13.20"],
+          args: ["-y", "agent402-mcp@0.13.21"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },
     },
-    npm: "npx -y agent402-mcp@0.13.20",
+    npm: "npx -y agent402-mcp@0.13.21",
     smithery: `Paste ${hosted} into the add-server form at https://smithery.ai/new. Submission is external; Agent402 does not auto-publish.`,
     maintainer: "Havok Holdings LLC",
   };

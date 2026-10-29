@@ -1,6 +1,6 @@
 # Decide
 
-> **Payment wires:** the two paid Decide routes accept **x402** and **MPP** on the same 402, and prepaid card credits keys already issued; `/api/decide/feedback` is free. See [[Paying with x402]] and [[Paying with MPP]].
+> **Payment wires:** the two paid Decide routes accept **x402** and **MPP** on the same 402. `POST /api/decide` also takes a prepaid credits key; `POST /api/decide/execute` buys outside steps from their sellers with our wallet, so it takes a wallet payment only (x402, or MPP on a chain), never a credits key or a card. `/api/decide/feedback` is free. See [[Paying with x402]] and [[Paying with MPP]].
 
 Describe a job in plain language and get back a call-ready plan: which tools, in what order, with fallbacks and parameters that validate against each tool's schema. The plan covers this catalog and outside x402 sellers that answered a live 402 in the last 7 days. Run the plan yourself, or send it back to Agent402 to run it, and the decision fee returns as credit.
 

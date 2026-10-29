@@ -9,6 +9,7 @@ import { backupKeepDays } from "./backup.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
@@ -44,7 +45,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-27.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-28.</p>
 </section>
 
 <section>
@@ -125,7 +126,7 @@ so every claim below is verifiable in code.</p>
   performed by the payment facilitators (Coinbase CDP and per-chain facilitators, or Tempo's relay) and
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
   and for refunding a call that was charged but failed.</li>
-  <li><b>Card purchases (reports and monitors).</b> Card details are entered on Stripe's
+  <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's
   hosted checkout and processed by <a href="https://stripe.com/privacy" rel="noopener">Stripe</a>; we never see card
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment
   status. A delivered report is private to its link unless you choose "Make public" on it, which gives it a second, unguessable address that anyone can read and search engines may index (you can make it private again any time, and the report never contains your name or email). We use the email to deliver what you bought and, after a one-off report, for at most two follow-up emails about that purchase (the monitor for the same subject two days later, other reports a week later), each carrying a link that stops them; if a report fails we email you about the refund. The report link, monitor reports and alerts are
@@ -133,8 +134,12 @@ so every claim below is verifiable in code.</p>
   email address with your payment; the report record on our server holds the session id, your input and the
   finished report, not the email. The email is kept in the follow-up and monitor records described here,
   and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
-  repeated failures for one buyer stop further charges. Prepaid credits are not currently sold; for a key that already exists
-  we keep a hash of the key (never the key), its balance and the calls it paid for. For a monitor
+  repeated failures for one buyer stop further charges. Prepaid credits ${creditsSalesEnabled() ? "are sold by card at /credits" : "are not currently sold"}; for each key
+  we keep a hash of the key (never the key), its balance and the calls it paid for, and from its purchase the email, the
+  billing country, state and postal code, any business tax ID you enter, your answers to the checkout's business-use and
+  terms questions, and Stripe's fingerprint of the card (a token, never the card number). We use the billing address to
+  apply sales tax, the tax ID to sell to a business in the EU or the UK, and the email and card fingerprint to enforce the
+  daily purchase limit. For a monitor
   we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
   and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
@@ -206,6 +211,9 @@ exactly like the HTTP API.</p>
 expire with their window (one hour, or 24 hours for the free trial's daily allowance). Memory-tool data
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
 finished report) are kept while the report link or subscription is live and for accounting afterwards.
+A prepaid credits key's record (the purchase details listed above and the calls it paid for) is kept for
+the life of the key and three years after its last use, the period sales tax records must be kept, and is
+deleted on request after that; within that period a deletion request removes what tax records do not need.
 Free-alert records keep your email until you unsubscribe, when the address is
 removed; an unconfirmed signup is deleted after three days. Follow-up email records delete the address
 as soon as the last follow-up is sent, when you stop them or buy again, or after ${MAX_SEND_FAILURES} failed deliveries

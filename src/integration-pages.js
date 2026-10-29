@@ -438,13 +438,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.13.20",
+    install: "npx -y agent402-mcp@0.13.21",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.20"],
+      "args": ["-y", "agent402-mcp@0.13.21"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -457,7 +457,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.20
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.21
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [

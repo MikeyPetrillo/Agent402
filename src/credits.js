@@ -39,9 +39,12 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdir
 import { join, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
-import { creditsTopupFields } from "./credits-sales.js";
+import { creditsTopupFields, creditsDailyMaxCents, TERMS_VERSION } from "./credits-sales.js";
+import { limiterKey } from "./rate-limit.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { getSharedRedisClient } from "./shared-limit.js";
+import { sharedLimitsEnabled } from "./shared-limits.js";
 import { retryingLoad } from "./store-retry.js";
 
 // A hold whose buyer left before the first byte is decided when the response
@@ -55,6 +58,30 @@ export const CREDIT_PACKS = {
   "credits-100": { label: "Pro", cents: 10000 },
 };
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
+// PURCHASE LIMIT. One buyer (matched by email or card fingerprint) may buy at most creditsDailyMaxCents() (src/credits-sales.js) of
+// credits in any 24 hours. A purchase that would pass it is refunded in full
+// and no key is issued; its session is recorded as refused so a later claim
+// answers the same.
+export { creditsDailyMaxCents };
+// A refused session's index entry: "<kind>:pending" while its refund is
+// being made, then "<kind>:refunded" or "<kind>:failed" (a refund to make by
+// hand, raised as creditsRefunds on /api/gateway-status). Kinds: "refused"
+// (the daily purchase limit) and "refused-taxid" (an EU or UK billing address
+// with no business tax ID).
+const REFUSAL_KINDS = { limit: "refused", taxId: "refused-taxid" };
+const isRefused = (v) => typeof v === "string" && v.startsWith("refused");
+// "<kind>:pending@<ms>" carries when the refusal began, so a refund stuck
+// there (a crash between refusing and refunding) is owed after STUCK_MS.
+const refusalOutcome = (v) => (isRefused(v) ? String(v).slice(String(v).lastIndexOf(":") + 1).replace(/@\d+$/, "") : null);
+const pendingSince = (v) => { const m = /:pending@(\d+)$/.exec(String(v)); return m ? Number(m[1]) : 0; };
+const STUCK_MS = 5 * 60_000;
+const refusalRefunded = (v) => { const o = refusalOutcome(v); return o === "refunded" ? true : o === "failed" ? false : null; };
+// EU member states and the United Kingdom: VAT is due on digital services to
+// a consumer there from the first sale, so a buyer billed there gives a
+// business tax ID (CREDITS_EU_UK_REQUIRE_TAX_ID=off lifts this).
+const EU_UK = new Set(["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "GB"]);
+const euUkTaxIdRequired = () => !/^(0|false|off|no)$/i.test(String(process.env.CREDITS_EU_UK_REQUIRE_TAX_ID || "").trim());
+const DAY_MS = 86_400_000;
 const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
 const MICRO = 1_000_000;
 // A file written this much later than the newest row was written by a build
@@ -278,9 +305,20 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     }
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "Prepaid credits for pay-per-call tools. Spent per request at list price; never expire." } } }],
-      metadata: { credits_pack: packKey },
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; not cash, not transferable, not a gift card." } } }],
+      // A billing address sources sales tax (src/nc-sales-tax.js); a business
+      // may add its tax ID; the buyer confirms business or developer use and
+      // accepts the terms, both required and kept on the key's record. Tax is
+      // included in the price and accounted at use, so Stripe adds none here.
+      billing_address_collection: "required",
+      tax_id_collection: { enabled: true },
+      custom_fields: [
+        { key: "use", label: { type: "custom", custom: "Use" }, type: "dropdown", optional: false, dropdown: { options: [{ label: "Business or developer use", value: "business" }] } },
+        { key: "terms", label: { type: "custom", custom: "Terms of Service" }, type: "dropdown", optional: false, dropdown: { options: [{ label: "I agree to the Terms of Service", value: "agreed" }] } },
+      ],
+      // The buyer sees the terms and the credit rules on the pay button's page.
+      custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire, and are not refundable except as the terms describe. Prices include North Carolina sales tax where it applies.` } },
+      metadata: { credits_pack: packKey, terms: TERMS_VERSION },
       success_url: `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/credits?canceled=1`,
       payment_intent_data: { description: `Agent402 credits ${p.label}` },
@@ -290,6 +328,132 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
 
   // The answer for a session somebody already claimed: the key is never re-shown.
   const claimedAnswer = (rec) => ({ status: "claimed", keyId: rec?.keyId || null, balanceUsd: rec ? microToUsd(rec.balanceMicro) : null });
+  // refunded: true (done), false (failed; we refund it by hand) or null (in progress).
+  const overLimitAnswer = (refunded) => ({ status: "over_limit", refunded, limitUsd: creditsDailyMaxCents() / 100 });
+  const taxIdAnswer = (refunded) => ({ status: "tax_id_required", refunded });
+  const refusedAnswer = (v) => (String(v).startsWith(REFUSAL_KINDS.taxId) ? taxIdAnswer(refusalRefunded(v)) : overLimitAnswer(refusalRefunded(v)));
+  // Who bought: lowercased email and the card's fingerprint, whichever the
+  // session carries. A read that fails leaves a field null; the other still
+  // matches.
+  async function buyerOf(session, paymentIntent) {
+    const email = String(session.customer_details?.email || session.customer_email || "").trim().toLowerCase() || null;
+    let cardFingerprint = null;
+    if (paymentIntent && stripe.paymentIntents?.retrieve) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(paymentIntent, { expand: ["latest_charge"] });
+        cardFingerprint = pi?.latest_charge?.payment_method_details?.card?.fingerprint || null;
+      } catch { /* the email still matches */ }
+    }
+    return { email, cardFingerprint };
+  }
+  // Credits this buyer was issued in the 24 hours before `at`, in cents.
+  // A key minted for `sessionId` itself never counts against that session.
+  async function boughtInDayCents(buyer, at, sessionId = null) {
+    let micro = 0;
+    for (const { rec } of await allKeys()) {
+      if (!rec || !(Date.parse(rec.createdAt) > at - DAY_MS)) continue;
+      if (sessionId && Array.isArray(rec.sessions) && rec.sessions.includes(sessionId)) continue;
+      const same = (buyer.email && rec.email && String(rec.email).toLowerCase() === buyer.email)
+        || (buyer.cardFingerprint && rec.cardFingerprint === buyer.cardFingerprint);
+      if (same) micro += Number(rec.loadedMicro) || 0;
+    }
+    return Math.round(micro / 10_000);
+  }
+  // Record a session as refused, claim-once like a minted one. True only when
+  // THIS call wrote the entry: only that call refunds.
+  async function refuseSession(sessionId, prefix) {
+    const pending = `${prefix}:pending@${now()}`;
+    if (usePg) return !!(await claimSessionPg(sessionId, pending));
+    const idx = sessionsIdx();
+    if (idx[sessionId]) return false;
+    idx[sessionId] = pending; writeJsonAtomic(SESSIONS, idx);
+    return true;
+  }
+  // The refund outcome ("refunded" or "failed") on a refused session, keeping its kind.
+  async function setRefusal(sessionId, outcome) {
+    if (usePg) {
+      await stateQuery(
+        `UPDATE ${RT()} SET body = body || jsonb_build_object($2::text, regexp_replace(body->>$2::text, ':[a-z]+(@[0-9]+)?$', ':' || $3::text)), updated_at = now() WHERE collection = $1 AND id = '_sessions' AND body->>$2::text LIKE 'refused%'`,
+        [COLL, sessionId, outcome]);
+      return;
+    }
+    const idx = sessionsIdx();
+    if (isRefused(idx[sessionId])) { idx[sessionId] = idx[sessionId].replace(/:[a-z]+(@\d+)?$/, `:${outcome}`); writeJsonAtomic(SESSIONS, idx); }
+  }
+  /** Refused sessions whose refund failed, or never finished (pending past
+   *  STUCK_MS): refund each by hand, then mark it. */
+  async function refusalsToRefund() {
+    if (usePg) await readyP();
+    const idx = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+    const t = now();
+    return Object.entries(idx).filter(([, v]) => refusalOutcome(v) === "failed" || (refusalOutcome(v) === "pending" && t - pendingSince(v) > STUCK_MS)).map(([sessionId]) => sessionId);
+  }
+  /** After a by-hand refund of a refused session. */
+  async function markRefusalRefunded(sessionId) { await setRefusal(String(sessionId), "refunded"); }
+  // Refuse a paid session (claim-once) and refund it; only the call that
+  // recorded the refusal refunds. Answers what the buyer is told.
+  async function refuseAndRefund(sessionId, paymentIntent, prefix, why) {
+    if (!(await refuseSession(sessionId, prefix))) {
+      const theirs = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+      return isRefused(theirs[sessionId]) ? refusedAnswer(theirs[sessionId]) : claimedAnswer(theirs[sessionId] ? await readRec(theirs[sessionId]) : null);
+    }
+    let refunded = false;
+    try { if (paymentIntent) { await stripe.refunds.create({ payment_intent: paymentIntent, metadata: { credits_refused: why } }); refunded = true; } } catch (e) { log(`[credits] ${why} refund FAILED for session ${sessionId}: ${String(e?.message || e).slice(0, 160)} - refund it by hand, then mark it (creditsRefunds on /api/gateway-status)`); }
+    await setRefusal(sessionId, refunded ? "refunded" : "failed").catch((e) => log(`[credits] could not record the refund outcome for session ${sessionId} (${String(e?.message || e).slice(0, 80)}); it is listed as owed after ${STUCK_MS / 60_000} minutes`));
+    log(`[credits] session ${sessionId} refused (${why}); ${refunded ? "refunded" : "NOT refunded"}, no key issued`);
+    return refusedAnswer(`${prefix}:${refunded ? "refunded" : "failed"}`);
+  }
+  // One buyer's purchases are decided one at a time, so two claims cannot
+  // both pass the daily limit on the same total: in this process by a chain
+  // per buyer key, and across servers by a short Redis lock per email and per
+  // card (SET NX PX, released by token, expiring after BUYER_LOCK_MS so a
+  // crashed holder frees it). No database connection is held while a claim
+  // runs, and the card refund happens outside any transaction. Without the
+  // shared store the in-process chain still serializes this server.
+  const BUYER_LOCK_MS = 30_000;
+  const buyerChains = new Map();
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function sharedBuyerLock(keys) {
+    if (!keys.length || !sharedLimitsEnabled()) return null;
+    let c;
+    try { c = await getSharedRedisClient(); } catch { c = null; }
+    if (!c) return null;
+    const token = randomBytes(12).toString("hex");
+    const held = [];
+    const deadline = now() + BUYER_LOCK_MS + 5_000;
+    try {
+      for (const k of keys) {
+        const name = `a402:credits-buyer:${k}`;
+        for (;;) {
+          if ((await c.set(name, token, { NX: true, PX: BUYER_LOCK_MS })) === "OK") { held.push(name); break; }
+          if (now() > deadline) throw new Error("buyer lock wait exceeded");
+          await sleepMs(50);
+        }
+      }
+    } catch (e) {
+      await releaseShared(c, held, token);
+      log(`[credits] buyer lock unavailable (${String(e?.message || e).slice(0, 80)}); deciding on this server's order`);
+      return null;
+    }
+    return { c, held, token };
+  }
+  async function releaseShared(c, held, token) {
+    for (const name of held) {
+      try { await c.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", { keys: [name], arguments: [token] }); } catch { /* it expires */ }
+    }
+  }
+  async function withBuyerLock(buyer, fn) {
+    const keys = [buyer.email && `e:${buyer.email}`, buyer.cardFingerprint && `c:${buyer.cardFingerprint}`].filter(Boolean).sort();
+    const run = async () => {
+      const lock = await sharedBuyerLock(keys);
+      try { return await fn(); } finally { if (lock) await releaseShared(lock.c, lock.held, lock.token); }
+    };
+    const k0 = keys[0] || "anon";
+    const prev = buyerChains.get(k0) || Promise.resolve();
+    const next = prev.catch(() => {}).then(run);
+    buyerChains.set(k0, next);
+    try { return await next; } finally { if (buyerChains.get(k0) === next) buyerChains.delete(k0); }
+  }
   // Claim-once on the database: the index row gains this session only when it
   // does not carry it yet (one conditional statement). Resolves the index
   // body when this call claimed it, null when another one did.
@@ -309,6 +473,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return { status: "invalid" };
     if (usePg) await readyP();
     const idx = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+    if (isRefused(idx[sessionId])) return refusedAnswer(idx[sessionId]);
     if (idx[sessionId]) return claimedAnswer(await readRec(idx[sessionId]));
     let session;
     try { session = await stripe.checkout.sessions.retrieve(sessionId); } catch { return { status: "not_found" }; }
@@ -316,16 +481,38 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const packKey = session.metadata?.credits_pack;
     const p = Object.hasOwn(CREDIT_PACKS, String(packKey)) ? CREDIT_PACKS[packKey] : null;
     if (!p) return { status: "invalid" };
-    // Re-check the index right before minting (two tabs claiming at once).
-    const again = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
-    if (again[sessionId]) return claimedAnswer(await readRec(again[sessionId]));
-    const key = `a402_${randomBytes(24).toString("base64url")}`;
-    const hash = hashKey(key);
-    const keyId = hash.slice(0, 12);
     const email = session.customer_details?.email || session.customer_email || null;
     const loadedMicro = p.cents * 10_000;
     const paymentIntent = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null;
-    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    const buyer = await buyerOf(session, paymentIntent);
+    return withBuyerLock(buyer, () => issue({ session, sessionId, packKey, p, email, loadedMicro, paymentIntent, buyer }));
+  }
+
+  // Decide and issue one paid session, holding the buyer's lock.
+  async function issue({ session, sessionId, packKey, p, email, loadedMicro, paymentIntent, buyer }) {
+    // Re-check the index right before minting (two tabs, or the webhook and
+    // the thanks page, claiming at once).
+    const again = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+    if (isRefused(again[sessionId])) return refusedAnswer(again[sessionId]);
+    if (again[sessionId]) return claimedAnswer(await readRec(again[sessionId]));
+    // An EU or UK billing address needs a business tax ID (VAT is reverse
+    // charged to a business; a consumer sale there is not offered).
+    const country = String(session.customer_details?.address?.country || "").toUpperCase();
+    const hasTaxId = Array.isArray(session.customer_details?.tax_ids) && session.customer_details.tax_ids.some((t) => t?.value && (t.type === "eu_vat" || t.type === "gb_vat"));
+    if (euUkTaxIdRequired() && EU_UK.has(country) && !hasTaxId) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.taxId, "eu_uk_tax_id_required");
+    // The daily purchase limit, checked before anything is issued.
+    if ((await boughtInDayCents(buyer, now(), sessionId)) + p.cents > creditsDailyMaxCents()) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.limit, "daily_purchase_limit");
+    const key = `a402_${randomBytes(24).toString("base64url")}`;
+    const hash = hashKey(key);
+    const keyId = hash.slice(0, 12);
+    // Where the buyer is billed (sales tax sourcing) and any business tax ID given.
+    const addr = session.customer_details?.address || {};
+    const billing = addr.country ? { country: String(addr.country).toUpperCase(), state: addr.state ? String(addr.state).toUpperCase() : null, postal: addr.postal_code ? String(addr.postal_code) : null } : null;
+    const taxIds = Array.isArray(session.customer_details?.tax_ids) ? session.customer_details.tax_ids.map((t) => ({ type: String(t?.type || ""), value: String(t?.value || "") })).filter((t) => t.value) : [];
+    // The buyer's answers to the required checkout fields (business use, terms).
+    const fields = Object.fromEntries((Array.isArray(session.custom_fields) ? session.custom_fields : []).map((f) => [String(f?.key || ""), String(f?.dropdown?.value || "")]));
+    const consent = { use: fields.use || null, terms: fields.terms === "agreed" ? session.metadata?.terms || null : null };
+    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
       // another container won in between leaves an orphan row, removed here.
@@ -334,6 +521,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       if (!index) {
         await pgDel(recId(hash)).catch(() => {});
         const theirs = (await pgGet("_sessions")) || {};
+        if (isRefused(theirs[sessionId])) return refusedAnswer(theirs[sessionId]);
         return claimedAnswer(theirs[sessionId] ? await pgGet(recId(theirs[sessionId])) : null);
       }
       through(recPath(hash), rec);
@@ -506,6 +694,29 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     })();
   }
 
+  // GUESSING WATCH. A key is 24 random bytes, so it cannot be guessed, and a
+  // key works only when its hash is a stored record, so it cannot be made up.
+  // Refusing a client after failed keys would also refuse a paying customer
+  // behind the same address and protect nothing, so failures are counted, not
+  // refused: per client (req.ip, an IPv6 address by its /64), a client that
+  // sends CREDITS_BAD_KEY_MAX (default 20) unknown or malformed keys within
+  // CREDITS_BAD_KEY_WINDOW_MS (default 10 minutes) is logged once and counted
+  // on the operator credits view. Per process; the map is bounded.
+  const badKeys = new Map(); // client -> { n, until }
+  const badKeyMax = () => { const n = Number(process.env.CREDITS_BAD_KEY_MAX); return Number.isFinite(n) && n > 0 ? n : 20; };
+  const badKeyWindowMs = () => { const n = Number(process.env.CREDITS_BAD_KEY_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
+  const badKeyStats = { failures: 0, clientsOverThreshold: 0 };
+  function noteBadKey(client, at = now()) {
+    const k = limiterKey(String(client || "?"));
+    badKeyStats.failures++;
+    let e = badKeys.get(k);
+    if (!e || e.until <= at) { e = { n: 0, until: at + badKeyWindowMs() }; }
+    e.n++;
+    badKeys.delete(k); badKeys.set(k, e);
+    while (badKeys.size > 5000) badKeys.delete(badKeys.keys().next().value);
+    if (e.n === badKeyMax()) { badKeyStats.clientsOverThreshold++; log(`[credits] a client sent ${e.n} unknown or malformed keys within the window`); }
+  }
+
   // Express gate: mount BEFORE the x402 paywall. `priceFor(method, path)` ->
   // { priceUsd } for catalog routes, null otherwise. A Bearer a402_ key on a
   // priced route either authorizes (req.creditsSettling = true, debit on 200)
@@ -529,11 +740,20 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         res.status(402).json({ error: "This route is wallet-identity bound (the payment IS the identity); prepaid credits carry no verified wallet. Pay it over an x402 rail.", reason: "identity-bound" });
         return { done: true };
       }
+      // Credits are spent only on Agent402's own services: a route that buys
+      // from an outside seller with our wallet is sold for a wallet payment
+      // only (src/third-party-routes.js).
+      if (item.paysThirdParty) {
+        res.setHeader("X-Credits-Error", "third-party-purchase");
+        res.status(402).json({ error: "Prepaid credits are spent only on Agent402's own services. This route buys from an outside seller with our wallet and is sold for a wallet payment only (x402, or MPP on a chain).", reason: "third-party-purchase" });
+        return { done: true };
+      }
       return { key, item };
     };
     // After the hold: the refusal, or the settle-on-finish wiring.
     const arm = (req, res, next, a, item) => {
       if (!a.ok) {
+        if (a.reason === "unknown" || a.reason === "malformed") noteBadKey(req.ip);
         res.setHeader("X-Credits-Error", a.reason);
         return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...creditsTopupFields(baseUrl) });
       }
@@ -660,9 +880,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     return usePg ? rec.then((r) => (r ? r.keyId : null)) : rec ? rec.keyId : null;
   }
   /** USD balance for a key id (the caller never needs the key itself). */
+  /** keyId -> billing address, for the keys asked (one read of the store). */
+  async function billingByKeyId(keyIds) {
+    const want = new Set(keyIds || []);
+    const out = new Map();
+    for (const { rec } of await allKeys()) if (rec && want.has(rec.keyId)) out.set(rec.keyId, rec.billing || null);
+    return out;
+  }
   function balanceById(keyId) {
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

@@ -29,7 +29,7 @@ const REALM = "agent402.tools";
 const PROFILE = process.env.STRIPE_PROFILE_ID;
 // The gate/binding default to the Stripe-derived signing secret; mirror it.
 const SECRET = createHmac("sha256", process.env.STRIPE_SECRET_KEY).update("mpp-challenge-signing").digest("base64");
-const priceFor = (m, p) => p === "/paid" ? { priceUsd: 0.50, identityBound: false } : p === "/premium" ? { priceUsd: 5.00, identityBound: false } : p === "/id" ? { priceUsd: 1.00, identityBound: true } : p === "/cheap" ? { priceUsd: 0.001, identityBound: false } : null;
+const priceFor = (m, p) => p === "/paid" ? { priceUsd: 0.50, identityBound: false } : p === "/premium" ? { priceUsd: 5.00, identityBound: false } : p === "/id" ? { priceUsd: 1.00, identityBound: true } : p === "/cheap" ? { priceUsd: 0.001, identityBound: false } : p === "/third" ? { priceUsd: 0.50, identityBound: false, paysThirdParty: true } : null;
 
 // A stripe method purely for building test challenges (no API call in mint).
 const testMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"), networkId: PROFILE, paymentMethodTypes: ["card"], livemode: false });
@@ -54,6 +54,7 @@ ok(/HMAC-verify/.test(checkStripeCredentialBinding(credFor({ secretKey: "wrongse
 ok(/networkId/.test(checkStripeCredentialBinding(credFor({ networkId: "profile_test_other" }), { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/paid" }).reason), "binding: a challenge for a different Stripe profile is refused");
 ok(/below this route's price/.test(checkStripeCredentialBinding(credFor({ priceUsd: 0.50 }), { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/premium" }).reason), "binding: a $0.50 challenge does not buy the $5.00 route");
 ok(/identity bound/.test(checkStripeCredentialBinding(credFor({ priceUsd: 1.00 }), { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/id" }).reason), "binding: an identity-bound route refuses stripe credentials");
+ok(/wallet payment only/.test(checkStripeCredentialBinding(credFor(), { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/third" }).reason || ""), "binding: a route that buys from an outside seller refuses a card");
 ok(/card minimum/.test(checkStripeCredentialBinding(credFor(), { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/cheap" }).reason), "binding: a sub-$0.50 route is not stripe-offered");
 
 // ---- gate end to end (injected validate/settle) ----

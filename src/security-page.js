@@ -4,6 +4,7 @@
 // surface that can be checked; nothing aspirational. Keep it in step with
 // SECURITY.md and the Security-Model wiki page (test-static-pages renders it,
 // test-surface-copy keeps the house style).
+import { creditsPrepaymentPhrase } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
@@ -28,7 +29,7 @@ const SECTIONS = [
   {
     h: "Key handling",
     p: [
-      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to public addresses we publish (the treasury, and for the router tiers our spending wallets), and no customer key ever reaches the server. One card path is not, and we say so rather than let the word cover it: a prepaid credits balance is money we hold until it is spent (credits are no longer sold; keys already issued keep spending). A card report is an ordinary card charge: taken at checkout, and refunded to the card automatically if the report fails to generate. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
+      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to public addresses we publish (the treasury, and for the router tiers our spending wallets), and no customer key ever reaches the server. One card path is not, and we say so rather than let the word cover it: ${creditsPrepaymentPhrase()}. A card report is an ordinary card charge: taken at checkout, and refunded to the card automatically if the report fails to generate. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
     ],
     links: [["/transparency", "Disclosures"]],
   },
