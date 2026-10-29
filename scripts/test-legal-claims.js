@@ -34,6 +34,25 @@ ok(Number.isInteger(days) && days > 0, `backup retention reads from backup.js ($
 ok(privacy.includes(`deleted after ${days} days`), "/privacy states the backup retention the code runs");
 ok(security.includes(`deleted after ${days} days`), "/security states the backup retention the code runs");
 ok(!/go offsite nightly with bounded retention/.test(security), "/security no longer gives an unbounded backup claim");
+// The service runs with no data volume: the backup is the state database.
+ok(!/data volume/.test(privacy) && !/data volume/.test(security), "neither page names a data volume the service no longer has");
+ok(/Nightly backups of the state database go to separate object storage/.test(security) && /the state database, including the email, memory and ledger records/.test(privacy), "both pages name the state database as what is backed up");
+
+// EU and UK rights: the controller is the entity /company names, the rights
+// are listed, the mailbox is the one the page already uses, and the place of
+// processing is stated.
+{
+  const { companyPage } = await import("../src/company.js");
+  const legalName = (companyPage("https://agent402.tools").match(/"legalName":"([^"]+)"/) || [])[1];
+  const rights = privacy.slice(privacy.indexOf("Your rights (EU and UK)"), privacy.indexOf("Children"));
+  ok(legalName && rights.includes(`${legalName} , doing business as Havok Holdings LLC`), `the controller is the legal entity /company names (${legalName})`);
+  for (const r of ["access", "corrected or erased", "portable form", "object to processing", "withdraw consent", "supervisory authority"]) ok(rights.includes(r), `/privacy lists the right to ${r}`);
+  for (const basis of ["contract", "legitimate interest", "consent"]) ok(rights.includes(basis), `/privacy names the ${basis} legal basis`);
+  ok(/email mike@agent402\.tools/.test(rights) && /processed and stored there/.test(rights) && /United States/.test(rights), "/privacy says how to exercise a right and where data is processed");
+}
+
+// Google Analytics is described once, in the sentence that carries its details.
+ok((privacy.match(/Pages (?:also )?run[^.]*Google Analytics/g) || []).length === 1, "/privacy introduces Google Analytics in one sentence, not two");
 
 // Idempotency: the payment-identifier is read and the cache lives IDEM_TTL_MS.
 const mins = Math.round(IDEM_TTL_MS / 60000);

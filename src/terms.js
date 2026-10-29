@@ -97,7 +97,7 @@ requires it. To report abuse, infringement, or illegal content involving this se
 reading the discovery documents those services publish for that purpose - <code>/.well-known/x402</code>,
 <code>/openapi.json</code>, <code>/llms.txt</code> - and the HTTP 402 challenge a paid route returns to an
 unpaid request. We do not authenticate, submit forms, or read anything behind a paywall. Our crawler
-identifies itself by name and honours <code>robots.txt</code>. See <a href="/crawler">/crawler</a> for the
+identifies itself by name and honors <code>robots.txt</code>. See <a href="/crawler">/crawler</a> for the
 User-Agent, the cadence, and how to have a service removed - by email or by disallowing the User-Agent,
 with no reason required either way.</p>
 <p>What the index reports about a service is what that service advertises about itself, plus our own
