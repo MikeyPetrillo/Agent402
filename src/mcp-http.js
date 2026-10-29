@@ -55,6 +55,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } fr
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { premiumClause } from "./payments.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import {
@@ -1228,7 +1229,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               // was told not to expect - the same defect this tool's `reports`
               // line was fixed for, one field away. test-price-prose pins the
               // retired figures by name, so do not quote them back in here.
-              prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
+              prices: `most tools $0.001–$0.02 per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}${premiumClause() ? `; ${premiumClause()}, listed under payment.premiumUsdByNetwork on ${baseUrl}/api/pricing` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
               llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
               retries: "an Idempotency-Key header (or the x402 payment-identifier extension) replays a served paid call instead of charging again; a request re-sent with the same signed EVM payment and no key is answered from its first answer too (X-Replayed-Answer: 1), except on identity-bound routes, routes with a lasting effect and streamed calls",
               // The Circle Gateway batched option, read from the live offer

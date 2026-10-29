@@ -14,6 +14,7 @@ import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { premiumUsdByNetworkName } from "./payments.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
@@ -833,6 +834,9 @@ export function openapiSpec(baseUrl, catalog) {
         // range, never the catalog floor as if it were the price.
         const range = tool.quoteRange || null;
         const fmtUsd = (n) => String(Number(n.toFixed(6)));
+        // A chain's settlement premium, added to the amounts below when the
+        // buyer settles there (the same map the 402 prices through).
+        const premium = premiumUsdByNetworkName();
         // The route's MPP offers, computed once above from the 402's own predicates.
         const mpp = mppOffers;
         const firstOf = (m) => mpp.find((o) => o.method === m);
@@ -851,6 +855,7 @@ export function openapiSpec(baseUrl, catalog) {
           price: range
             ? { mode: "dynamic", currency: "USD", min: fmtUsd(range.minUsd), max: fmtUsd(range.maxUsd) }
             : { mode: "fixed", currency: "USD", amount: String(tool.price ?? "").replace(/[^0-9.]/g, "") || "0" },
+          ...(Object.keys(premium).length ? { premiumUsdByNetwork: premium } : {}),
           offers: mpp.map((o) => ({
             intent: o.intent,
             method: o.method,
@@ -1018,7 +1023,7 @@ export function openapiSpec(baseUrl, catalog) {
         // not pay-per-call. No credits sentence: credit sales are off by
         // default (CREDITS_SALES), so "buy at /credits" is not an instruction
         // an agent can follow.
-        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free; many tools also accept free proof-of-work (GET /api/pow). Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).",
+        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free (its payment.premiumUsdByNetwork names a chain's settlement premium, added to every price quoted on that chain, and payment.minPriceUsdByNetwork a chain's floor; an operation's x-payment-info carries the premium too); many tools also accept free proof-of-work (GET /api/pow). Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).",
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which

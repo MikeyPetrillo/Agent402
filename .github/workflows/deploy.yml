@@ -2672,6 +2672,9 @@ jobs:
           #  (verified first-party against prod, 2026-08-29). Boots the real server against a
           #  local /supported stub; no payment is made."
           t node scripts/test-bazaar-contracts.js
+          # Every accept of every 402 asks list plus the chain's premium, raised to its
+          # floor, as /api/pricing publishes them (three rails, a stub facilitator).
+          t node scripts/test-accept-prices.js
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
         env:

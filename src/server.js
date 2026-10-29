@@ -412,7 +412,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, premiumUsdByNetworkName, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
@@ -9326,6 +9326,11 @@ app.get("/api/pricing", (_req, res) => {
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
       ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // The settlement premium a chain adds to every price quoted on it (the
+      // same map the accepts builder prices through, src/payments.js), for the
+      // offered chains that carry one: a client capping a call at the list
+      // price is refused there otherwise.
+      ...(() => { const p = premiumUsdByNetworkName(); const offered = Object.fromEntries(publicNetworks().filter((n) => p[n] > 0).map((n) => [n, p[n]])); return Object.keys(offered).length ? { premiumUsdByNetwork: offered } : {}; })(),
       // The accept kinds each network's 402 carries, read from the live offer
       // (exact everywhere; upto where it is on; the Circle Gateway batched
       // kind where that option is on). Absent before the paywall is built.
