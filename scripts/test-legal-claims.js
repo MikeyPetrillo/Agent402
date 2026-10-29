@@ -57,6 +57,12 @@ ok((privacy.match(/Pages (?:also )?run[^.]*Google Analytics/g) || []).length ===
 // Idempotency: the payment-identifier is read and the cache lives IDEM_TTL_MS.
 const mins = Math.round(IDEM_TTL_MS / 60000);
 ok(privacy.includes(`up to ${mins} minutes`) && /payment-identifier/.test(privacy), `/privacy names the payment-identifier and its ${mins}-minute cache`);
+// The manifest key the page names is the one discovery.js publishes.
+{
+  const { serviceManifest } = await import("../src/discovery.js");
+  const dh = serviceManifest({ baseUrl: "https://agent402.tools", network: "base", networks: ["base"], wallet: "0x0000000000000000000000000000000000000001", catalog: {}, toolCount: 0, powSlugs: new Set(), powDifficulty: 20, prices: {} })?.payment?.dataHandling || {};
+  ok(dh.readsAnnotationFields === false && Array.isArray(dh.readsOnly) && /readsAnnotationFields: false/.test(privacy) && /readsOnly/.test(privacy), "/privacy names the manifest's readsOnly list and readsAnnotationFields flag");
+}
 ok(!/reads only the cryptographically-signed payer/i.test(privacy) && !/never parsed, logged, or retained/.test(privacy), "/privacy does not claim only the payer address is read");
 ok(/payload\?\.extensions\?\.\["payment-identifier"\]/.test(src("src/payer.js")), "control: payer.js still reads the payment-identifier the page discloses");
 

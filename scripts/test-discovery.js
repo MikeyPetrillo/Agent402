@@ -43,8 +43,8 @@ ok(m.payment.x402.payTo === WALLET, "payTo is the wallet");
 ok(m.payment.x402.priceRange === "$0.001–$0.005", `price range derived (got ${m.payment.x402.priceRange})`);
 ok(m.payment.proofOfWork.difficultyBits === 20, "pow difficulty");
 ok(m.payment.proofOfWork.eligibleTools === 1, "pow eligible count");
-ok(m.payment.dataHandling?.readsPaymentMetadata === false && m.payment.dataHandling?.retainsPaymentMetadata === false,
-  "dataHandling attests payment-metadata minimisation");
+ok(m.payment.dataHandling?.readsAnnotationFields === false && m.payment.dataHandling?.retainsPaymentMetadata === false && !("readsPaymentMetadata" in m.payment.dataHandling),
+  "dataHandling says the annotation fields are not read, beside the list of fields that are");
 // The fields read off a payment are named in full. The list once named only
 // authorization.from while the server also reads the payment-identifier
 // extension, the Solana transaction's signers, the Tempo credential source and
