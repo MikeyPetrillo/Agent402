@@ -137,6 +137,16 @@ function settledPriceUsd(def, req, res) {
 function paidUsdOf(def, req, res, caip2) {
   return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: meteredUsdOf(req, res), paymentHeader: paymentHeaderOf(req) });
 }
+// The catalog def of a flat chat tier's metered twin (metered-lead.js
+// meteredTwinSlug), or null. The slug index is built once, on first use after
+// the catalog is assembled.
+let catalogDefBySlug = null;
+function meteredTwinDefOf(slug) {
+  const twin = meteredTwinSlug(slug);
+  if (!twin) return null;
+  if (!catalogDefBySlug) catalogDefBySlug = new Map(Object.values(CATALOG).map((d) => [d.slug, d]));
+  return catalogDefBySlug.get(twin) || null;
+}
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
 // 2026-08-26); the stripe/charge challenge on a quoted route
@@ -10019,10 +10029,12 @@ if (FREE_MODE) {
       // A flat chat tier's unpaid 402 names its metered twin on the same wire
       // (additive `meteredTwin`; x402 clients read `accepts`): the same models,
       // priced from this body instead of one flat price per call. Only on a
-      // first-contact quote: a refused payment keeps its own explanation.
-      const twin = meteredTwinSlug(def.slug);
-      const twinDef = twin ? Object.values(CATALOG).find((d) => d.slug === twin) : null;
-      if (twinDef && !req.header("x-payment") && !req.header("payment-signature")) {
+      // first-contact quote: a refused payment (an x402 header, or an
+      // Authorization credential such as a Tempo credential or a credits key)
+      // keeps its own explanation.
+      const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      const twinDef = firstContact ? meteredTwinDefOf(def.slug) : null;
+      if (twinDef) {
         const origJson = res.json.bind(res);
         res.json = (body) => {
           if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.meteredTwin) {

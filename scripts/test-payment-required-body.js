@@ -419,6 +419,14 @@ try {
     const r = await fetch(`${B}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": b64({ x402Version: 2, accepted: { scheme: "lightning", network: "eip155:8453" }, payload: {} }) }, body: JSON.stringify({ ...chat, model: "openai/gpt-4o-mini" }) });
     const b = JSON.parse(await r.text());
     ok(r.status === 402 && !("meteredTwin" in b), `B4b a refused payment on a flat tier carries no meteredTwin (${r.status})`);
+    // An Authorization credential (an MPP/Tempo credential, a credits key)
+    // refused on a flat tier keeps its own explanation too.
+    for (const [label, authorization] of [["an MPP/Tempo credential", "Payment !!!not-base64url!!!"], ["a credits key", `Bearer a402_${"0".repeat(32)}`]]) {
+      const ra = await fetch(`${B}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ ...chat, model: "openai/gpt-4o-mini" }) });
+      const ta = await ra.text();
+      let ba = {}; try { ba = JSON.parse(ta); } catch { /* not JSON */ }
+      ok(ra.status === 402 && !("meteredTwin" in ba), `B4b ${label} refused on a flat tier carries no meteredTwin (${ra.status})`);
+    }
   }
 
   // B5 a gate refusal before any facilitator: the sample /x402-test prints
