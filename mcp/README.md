@@ -74,13 +74,13 @@ tighter ceiling.
 
 ## Advanced
 
-**Hosted connector (no install).** Add `https://agent402.tools/mcp` as a remote MCP server (for example claude.ai → Settings → Connectors → Add custom connector). Pure-CPU tools run free there, rate-limited. Paid tools are payable on the connector over [MPP](https://agent402.tools/what-is-mpp): a paid call answers JSON-RPC error `-32042` with the payment challenges, and `-32043` if a credential you presented was refused. An MCP client wrapped with `mppx`'s `McpClient.wrap()` pays and retries on its own, with the receipt in `_meta`. This package runs locally for no rate limit, or to pay over x402.
+**Hosted connector (no install).** Add `https://agent402.tools/mcp` as a remote MCP server (for example claude.ai → Settings → Connectors → Add custom connector). Pure-CPU tools run free there, rate-limited. Paid tools are payable on the connector over [MPP](https://agent402.tools/what-is-mpp): the connector answers with an `isError` tool result whose text names every way to pay and whose `_meta["org.paymentauth/payment-required"]` carries the challenges. A presented credential that is refused answers JSON-RPC `-32043`, and a call on the tasks path answers `-32042`, both with `data.challenges`. An MCP client wrapped with `mppx`'s `McpClient.wrap()` pays and retries on its own, with the receipt in `_meta`. This package runs locally for no rate limit, or to pay over x402.
 
 **Chains.** With a funded wallet, `AGENT_KEY` pays USDC on any EVM chain the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc) or USDG on Robinhood Chain. `SOLANA_AGENT_KEY` pays USDC on Solana. The service also settles on Stellar and Algorand, which this package does not sign. Restrict or order chains with `AGENT402_NETWORKS`.
 
 **Credits key.** A prepaid credits key (`AGENT402_CREDITS_KEY`) pays per successful call on Agent402's own services; the routes that buy from outside sellers (`router.execute`, `seller-payability`, `decide.execute`, the flight tools) need a wallet key. [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale.
 
-**Error codes.** `-32042` payment required (the challenges are in the error data). `-32043` a presented credential was refused.
+**Error codes.** A first ask is a tool result, not an error (challenges in `_meta["org.paymentauth/payment-required"]`). `-32042` payment required on the tasks path (the challenges are in the error data). `-32043` a presented credential was refused.
 
 ## How it works
 
