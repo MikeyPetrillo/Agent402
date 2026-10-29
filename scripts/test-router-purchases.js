@@ -156,10 +156,10 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
 {
   const sql = merchantsQuery("2026-01-01 00:00:00");
   const listed = [...OUR_EVM_WALLETS].every((w) => sql.includes(`'${w}'`));
-  ok(listed && /lower\(toString\(parameters\['from'\]\)\) NOT IN \(/.test(sql) && OUR_EVM_WALLETS.size > 0, `every one of our ${OUR_EVM_WALLETS.size} EVM wallets is excluded from the merchant payments and payers`);
+  ok(listed && /\(lower\(toString\(parameters\['from'\]\)\) IN \([^)]*\)\) = 0/.test(sql) && OUR_EVM_WALLETS.size > 0, `every one of our ${OUR_EVM_WALLETS.size} EVM wallets is excluded from the merchant payments and payers`);
   const custom = merchantsQuery("2026-01-01 00:00:00", { ourWallets: new Set(["0x" + "12".repeat(20)]) });
   ok(custom.includes(`'0x${"12".repeat(20)}'`) && !custom.includes([...OUR_EVM_WALLETS][0]), "the exclusion list is the wallet set given");
-  ok(!/'[^']*'[^,)]*'/.test(custom.split("NOT IN (")[1].split(")")[0]), "the list is quoted hex only");
+  ok(!/'[^']*'[^,)]*'/.test(custom.split("IN (").pop().split(")")[0]), "the list is quoted hex only");
   const econ = readFileSync(new URL("src/x402-economy.js", ROOT), "utf8");
   ok(/const merchRes = await settle\(runSql\(merchantsQuery\(utcStamp\(7 \* DAY_MS\)\)\)\)/.test(econ), "the snapshot builder runs this query for topMerchants (the router's chain join reads them)");
   const server = readFileSync(new URL("src/server.js", ROOT), "utf8");
