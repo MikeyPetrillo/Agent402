@@ -411,7 +411,7 @@ function makeDossierHandlerInner(tierSlug) {
     const excerptSrc = excerpts.filing ? numbered.find((s) => s.url === excerpts.filing.url) : null;
     const excerptBlock = excerpts.excerpts.length
       ? `Verbatim text from ${excerptSrc ? `source [${excerptSrc.n}]` : "the filing"} (${excerpts.filing.form} filed ${excerpts.filing.filingDate || "?"}). These are the filing's OWN words - cite ${excerptSrc ? `[${excerptSrc.n}]` : "the filing"} for anything taken from them.\n` +
-        excerpts.excerpts.map((x, i) => `(${i + 1}) [${x.term}] "${x.text}"`).join("\n")
+        quotedMaterial("FILING EXCERPTS", excerpts.excerpts.map((x, i) => `(${i + 1}) [${x.term}] "${x.text}"`).join("\n"))
       : `(no filing text available${excerpts.note ? `: ${excerpts.note}` : ""} - the material below does NOT include the filing's own explanations, so where a figure is not explained here, say the material does not explain it; do not call it undisclosed or unexplained by the company)`;
 
     // 5) SYNTHESIZE - grounding-strict cited dossier.
