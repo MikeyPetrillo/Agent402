@@ -5,21 +5,22 @@
 // Honest scoping: dex-quote is a SPOT quote at the current tick — no multi-
 // tick swap simulation. Deeper sims are a future kit. We name it accordingly.
 //
-// All 4 tools are wallet-only: 3 share the Alchemy quota with chain-kit,
-// dex-top-pools shares DeFiLlama's per-IP limit.
+// All 4 tools are wallet-only: 3 read through chain-kit's RPC transport
+// (Alchemy first when the key is set, then keyless public nodes), so they
+// share its quota; dex-top-pools shares DeFiLlama's per-IP limit.
 //
 // Covered by scripts/test-dex-kit.js (offline) and the daily paid-canary
 // (which probes Alchemy end-to-end via gas-snapshot).
 
-import { redactSecrets } from "./redact.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { pickNetwork as pickChainNetwork, publicJsonRpc } from "./chain-kit.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so dex-pool's two rounds of parallel reads still
 // answer inside it; a read that outlives its cap is a 503 naming the upstream
 // and the step, never a 504. The yields document answered in 0.5 to 0.7 s when
-// measured (2026-10-14); the node reads are normally well under a second.
-const RPC_READ_MS = 10_000;
+// measured (2026-10-14); the node reads (chain-kit's transport, its own
+// per-endpoint cap) are normally well under a second.
 const LLAMA_READ_MS = 10_000;
 
 // Uniswap V3 deployments. Ethereum/Polygon/Arbitrum/Optimism share the
@@ -31,14 +32,6 @@ const V3_FACTORY = {
   arbitrum: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
   optimism: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
   base:     "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-};
-
-const NETWORKS = {
-  ethereum: { subdomain: "eth-mainnet", chainId: 1 },
-  base:     { subdomain: "base-mainnet", chainId: 8453 },
-  polygon:  { subdomain: "polygon-mainnet", chainId: 137 },
-  arbitrum: { subdomain: "arb-mainnet", chainId: 42161 },
-  optimism: { subdomain: "opt-mainnet", chainId: 10 },
 };
 
 const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
@@ -62,17 +55,9 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-function requireKey() {
-  const key = process.env.ALCHEMY_API_KEY;
-  if (!key) throw bad("Chain tools are not configured on this deployment", 503);
-  return key;
-}
-
 function pickNetwork(value, dflt = "base") {
-  const n = typeof value === "string" ? value.toLowerCase().trim() : dflt;
-  const def = NETWORKS[n];
-  if (!def) throw bad(`Unsupported network "${value}" - supported: ${Object.keys(NETWORKS).join(", ")}`);
-  return { name: n, ...def, factory: V3_FACTORY[n] };
+  const network = pickChainNetwork(value, dflt);
+  return { ...network, factory: V3_FACTORY[network.name] };
 }
 
 function takeAddress(raw, field = "address") {
@@ -116,33 +101,8 @@ function decodeInt(slot) {
 function decodeAddr(slot) { return "0x" + slot.slice(-40); }
 
 // --- RPC plumbing ---------------------------------------------------------
-async function alchemyFetch(url, opts = {}, step = "data") {
-  const ctx = { label: "Chain", step, timeoutMs: RPC_READ_MS, tag: "[dex]" };
-  const res = await upstreamFetch(url, {
-    ...opts,
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
-  }, ctx);
-  if (res.status === 429) throw bad("Chain rate limit reached upstream - retry shortly", 503);
-  if (!res.ok) throw bad(`Chain upstream error (HTTP ${res.status})`, 502);
-  try { return await bodyUnderDeadline(res.json(), ctx); }
-  catch (err) { if (err?.statusCode) throw err; throw bad("Chain upstream returned non-JSON", 502); }
-}
-
-async function jsonRpc(network, method, params) {
-  const key = requireKey();
-  const url = `https://${network.subdomain}.g.alchemy.com/v2/${key}`;
-  const data = await alchemyFetch(url, {
-    method: "POST",
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  }, method);
-  // Upstream-derived text — the Alchemy key rides the request URL, so redact
-  // before echoing (the route binder returns err.message verbatim to buyers).
-  if (data.error) throw bad(`Chain RPC error: ${redactSecrets(String(data.error.message || "unknown")).slice(0, 300)}`, 502);
-  return data.result;
-}
-
 async function ethCall(network, to, data) {
-  return jsonRpc(network, "eth_call", [{ to, data }, "latest"]);
+  return publicJsonRpc(network, "eth_call", [{ to, data }, "latest"]);
 }
 
 // --- V3 math --------------------------------------------------------------
@@ -484,7 +444,7 @@ export const DEX_TOOLS = [
 // Exported for unit-testing the pure math without standing up RPC.
 export const __test = {
   priceFromSqrt, spotQuote, slots, decodeUint, decodeInt, decodeAddr,
-  pad32, encAddr, encUint, pickNetwork, pickFee, takeAddress, NETWORKS, V3_FACTORY, ZERO_ADDR,
+  pad32, encAddr, encUint, pickNetwork, pickFee, takeAddress, V3_FACTORY, ZERO_ADDR,
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).

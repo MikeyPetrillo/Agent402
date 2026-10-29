@@ -161,7 +161,7 @@ const KITS = [
   // [module, export, slug, input, label regex, step regex]
   ["price-feed-kit.js", "PRICE_FEED_TOOLS", "price-coingecko", { ids: ["bitcoin", "ethereum"] }, /^Price feed$/, /^simple price$/],
   ["dex-kit.js", "DEX_TOOLS", "dex-top-pools", { chain: "Base", project: "uniswap-v3", limit: 5 }, /^DeFiLlama$/, /^pools$/],
-  ["dex-kit.js", "DEX_TOOLS", "dex-pool", { poolAddress: "0xd0b53d9277642d899df5c87a3966a349a798f224", network: "base" }, /^Chain$/, /^eth_call$/],
+  ["dex-kit.js", "DEX_TOOLS", "dex-pool", { poolAddress: "0xd0b53d9277642d899df5c87a3966a349a798f224", network: "base" }, /^Chain RPC$/, /^eth_call$/],
   ["chain-kit.js", "CHAIN_TOOLS", "wallet-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" }, /^Chain$/, /^eth_getBalance$/],
   ["chain-kit.js", "CHAIN_TOOLS", "block-number", { network: "base" }, /^Chain RPC$/, /^eth_blockNumber$/],
   ["alchemy-data-kit.js", "ALCHEMY_DATA_TOOLS", "tx-receipt", { hash: "0x214b3526ee64f7eabfc94ea536b8680bd95a2da634ebf5149aea189d311be56b", network: "ethereum" }, /^Chain data$/, /^batch of 2 calls$/],
