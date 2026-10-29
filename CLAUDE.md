@@ -329,15 +329,27 @@ heartbeat page on it under one issue that closes when nothing is owed.
   query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
-- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and never read by `toolFailures`) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
+  connector's loopback, a client package by its User-Agent product token, or HTTP) in the
+  ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
+  (`COHORT_TOOLS_PER_DAY`) or per-hour call (`COHORT_CALLS_PER_HOUR`, default 300) threshold.
+- **Live view:** `services/live` deploys from this repository with every merge. The page reads
+  one event stream and, with nothing on it after 8 s (a proxy holding it), polls `/api/poll`
+  for the same numbered batches (`LIVE_POLL_KEEP_BATCHES`, default 300; a whole-hour answer at
+  most `LIVE_POLL_HELLO_PER_MIN`, default 30, times a minute per address). Tests:
+  `services/live/test.js`, `test-guard.js`.
 - **Large bodies:** `src/large-body-gate.js` sits before the parsers of the routes that take more
   than the global 100 KB body: it refuses a Content-Encoding (415), answers an unpaid oversized
   body whose price does not read it without reading it, rate-limits the unpaid ones that are
   parsed, and reserves each parse against one in-flight budget (`LARGE_BODY_INFLIGHT_MAX_MB`,
-  default 256; 503 with Retry-After when spent).
+  default 256; 503 with Retry-After when spent), of which one client address holds at most a
+  quarter (never less than two of the largest route's bodies). A slow body is bounded by the
+  server's `HTTP_REQUEST_TIMEOUT_MS`.
 - **Media and documents:** the OCR language data is baked into the image at build
   (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
-  directory), so `image-ocr` never fetches a model at request time. PDF transforms
+  directory), so `image-ocr` never fetches a model at request time; an engine that does not
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
   (422). ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
