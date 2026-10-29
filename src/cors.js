@@ -80,6 +80,9 @@ export const CORS_EXPOSE_HEADERS = [
   "X-Async-Recommended",
   "Location",
   "Preference-Applied",
+  // A retired route's 410: its retirement date (src/retired-tools.js); its
+  // successor rides the Link header above.
+  "Sunset",
 ];
 
 /**

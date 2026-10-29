@@ -3,7 +3,7 @@ import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted inter
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
+import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -6380,6 +6380,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
     if (gone) {
       const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
       const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}` } : null;
+      res.set(retirementHeaders(gone.retiredAt, replacement?.url));
       return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json` });
     }
     // Indexes that read the documented template call it with the placeholder
@@ -8965,6 +8966,7 @@ const retiredConvertGone = (req, res) => {
   // Residual demand we can't serve is the product signal worth an event.
   // Fire-and-forget, rate-capped in posthog.js; env-gated no-op like every capture.
   capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert" });
+  res.set(retirementHeaders(RETIRED_CONVERTERS_AT, `${BASE_URL}/api/unit-convert`));
   res.status(410).json({
     error: "This pairwise conversion endpoint is retired. Use POST /api/unit-convert with { value, from, to } - the same unit ids and the same math, one route for every pair. Discovery: GET /api/find?q=unit+convert.",
     replacement: {
@@ -11388,6 +11390,7 @@ app.use((req, res) => {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
         try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+        res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
           hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}`,
