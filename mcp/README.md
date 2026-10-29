@@ -66,7 +66,7 @@ $4 per-call cap and no session budget). Set `AGENT402_BUDGET` to cap the session
 `payment.info` reports the caps, what's been spent, and what remains. With no wallet key and no credits key,
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
-you intend to spend. Most tools cost $0.001–$0.02. The routing tiers top out
+you intend to spend. Most tools cost $0.001 to $0.02. The routing tiers top out
 at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so the default per-call cap of $4 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a

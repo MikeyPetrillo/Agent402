@@ -295,12 +295,27 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ];
   // A markdown surface cannot derive, so a pack range it does quote must equal
   // the derived one; a range that drifts again is reported here, not by a buyer.
+  // The same for the "most tools" per-call band: a band typed beside "most"
+  // (a dash, two hyphens or "to" between the bounds) must be the constant's
+  // text, so the wiki, the docs and the package READMEs move with it. A
+  // category's own range in a catalog table is a different claim and is not
+  // read.
+  const { TYPICAL_PRICE_RANGE } = await import("../src/typical-price-range.js");
+  const MOST_BAND = /\bmost\b[^.\n|]{0,40}?(\$\d+(?:\.\d+)?\s*(?:–|-{1,2}|to)\s*\$\d+(?:\.\d+)?)/gi;
+  const mostBands = (text) => [...text.matchAll(MOST_BAND)].map((m) => m[1]);
+  ok(mostBands("Most tools are $0.001–$0.02; most single tools cost $0.001--$0.02 (most $0.001 to $0.02; media higher) | `memory-*` | $0.001–$0.003 |").join() === "$0.001–$0.02,$0.001--$0.02,$0.001 to $0.02", "control: the three ways to type the band beside \"most\" are read, a table's own range is not");
+  let mostQuoted = 0;
   for (const f of files.filter((x) => x.endsWith(".md"))) {
     const text = (() => { try { return rf(join(root, f), "utf8"); } catch { return ""; } })();
     for (const m of text.matchAll(/skill packs run (\$[0-9.]+ to \$[0-9.]+)/g)) {
       ok(m[1] === PACK_PRICE_RANGE.text, `${f} quotes the pack range ${m[1]}, and PACK_PRICE_RANGE is ${PACK_PRICE_RANGE.text}`);
     }
+    for (const band of mostBands(text)) {
+      mostQuoted++;
+      ok(band === TYPICAL_PRICE_RANGE.text, `${f} quotes the "most tools" band as ${band}, and TYPICAL_PRICE_RANGE is ${TYPICAL_PRICE_RANGE.text}`);
+    }
   }
+  ok(mostQuoted >= 5, `${mostQuoted} markdown surfaces quote the "most tools" band - if this hits zero the check above is vacuous`);
   // Control first: the sweep must report a planted figure through this path.
   const scan = (entries) => {
     const hits = [];
