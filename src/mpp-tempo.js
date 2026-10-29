@@ -1279,7 +1279,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  free handler executions before Tempo's relay rejects the (N-1) duplicate
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
-export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
+export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null, pushRowOf = null } = {}) {
   if (!tempoConfigured()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
@@ -1320,10 +1320,11 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // priced above the challenge, free) names a transfer that already
         // paid a challenge this server verified as its own: "not charged"
         // would be false. The relay is asked whether the transfer pays that
-        // challenge; confirmed, it is booked as owed, unclaimed, until the
-        // same credential is claimed on a route that offers Tempo (which
-        // voids the row, src/tempo-push-debts.js). The relay saying no, or
-        // nothing to confirm, is the plain refusal: nothing is booked.
+        // challenge; confirmed, it is booked as owed (src/tempo-push-debts.js)
+        // and the credential is consumed, so the refund run repays it. The
+        // relay saying no, nothing to confirm, a credential that already paid
+        // a served call or is mid-claim elsewhere, or a transfer the ledger
+        // already holds: the plain refusal, nothing booked.
         const pushHash = binding.routeRefusal === true ? pushHashOf(auth) : null;
         if (pushHash) return void refuseConfirmedPush(pushHash, b).catch(() => next());
         logTempoRefusal(req, { cls: b.cls, amountAtomic: amountOfCredential(auth), timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}` });
@@ -1333,22 +1334,47 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     }
     async function refuseConfirmedPush(pushHash, b) {
       const amount = amountOfCredential(auth);
+      const replayKey = replayGuard ? tempoReplayKey(auth) : null;
+      const releaseKey = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
+      const consumeKey = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
+      const plain = (why, timings = {}, requestId = null) => {
+        logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { ...timings, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, ${why}, nothing booked`, requestId });
+        markMppProblem(req, res, mppProblem(b.kind, b.detail, { hint: b.hint, details: { reason: b.cls, charged: false } }));
+        return next();
+      };
+      // The credential's identity is claimed FIRST, as the paid path does:
+      // one that paid a served call (consumed) or is mid-claim on another
+      // request (in flight) is never booked as owed for a call it paid.
+      if (replayGuard && replayKey) {
+        const verdict = await replayGuard.begin(replayKey);
+        if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
+      }
+      // A transfer the ledger already holds: an owed row stands as it is; a
+      // void (claimed and served), sending or paid row leaves nothing to book.
+      let existing = null;
+      if (typeof pushRowOf === "function") { try { existing = (await pushRowOf(pushHash)) || null; } catch { existing = null; } }
+      if (existing && existing.status !== "owed") { releaseKey(); return plain(`transfer ${existing.status === "void" ? "already claimed and served" : `already ${existing.status}`}`); }
       const t0 = Date.now();
       let v = null;
       try { v = await validate(auth); } catch (e) { v = { ok: false, cls: "unknown", error: e?.message || String(e) }; }
       const tValidated = Date.now();
-      let owed = false;
-      if (v?.ok && typeof onPushInputRefused === "function") {
+      if (!v?.ok) { releaseKey(); return plain(`transfer not confirmed by the relay (${v?.cls || "unknown"})`, { validate: tValidated - t0 }, v?.requestId); }
+      let owed = !!existing;
+      if (!existing && typeof onPushInputRefused === "function") {
         const payer = await readPushSenderBounded(pushSender, auth);
         const amountUsd = /^\d+$/.test(amount) ? Number(amount) / 10 ** envDecimals() : NaN;
         try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: amount, amountUsd, status: 402 })) === true; } catch { owed = false; }
       }
-      logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, transfer ${v?.ok ? `confirmed and not claimed (${owed ? "booked as owed until claimed" : "no debt booked"})` : `not confirmed by the relay (${v?.cls || "unknown"}), nothing booked`}`, requestId: v?.requestId });
+      // Booked as owed: the credential is consumed, as a finalize refusal
+      // consumes it, so the transfer is repaid and never also served. Not
+      // booked: released, so it still pays on a route that offers Tempo.
+      if (owed) consumeKey(); else releaseKey();
+      logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, transfer confirmed and not claimed (${owed ? `booked as owed${existing ? " already" : ""}, credential consumed` : "no debt booked"})`, requestId: v?.requestId });
       const expires = (() => { try { return Credential.deserialize(auth)?.challenge?.expires || null; } catch { return null; } })();
-      const detail = v?.ok
-        ? `${b.detail} The transfer you sent has not been claimed${owed ? " and is recorded as owed to the sender" : ""}; until the challenge expires${expires ? ` (${expires})` : ""} the same credential pays for a request on a route that offers Tempo.`
-        : b.detail;
-      markMppProblem(req, res, mppProblem(b.kind, detail, { hint: b.hint, details: { reason: b.cls, charged: false, ...(v?.ok ? { transferClaimed: false, ...(owed ? { refundOwed: true } : {}) } : {}) } }));
+      const detail = `${b.detail} The transfer you sent has not been claimed${owed
+        ? " and is recorded as owed to the sender, to be refunded; it pays for no further request."
+        : `; until the challenge expires${expires ? ` (${expires})` : ""} the same credential pays for a request on a route that offers Tempo.`}`;
+      markMppProblem(req, res, mppProblem(b.kind, detail, { hint: b.hint, details: { reason: b.cls, charged: false, transferClaimed: false, ...(owed ? { refundOwed: true } : {}) } }));
       return next();
     }
 

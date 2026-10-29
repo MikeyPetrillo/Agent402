@@ -9715,6 +9715,9 @@ if (!FREE_MODE) {
     // The mirror is enough here: the decision that keeps a push from being
     // both served and refunded is the claim hold below, not this read.
     pushClaimAllowed: (hash) => !["sending", "paid"].includes(refundByEvidence(hash)?.status),
+    // The row a push transfer already holds, read before a route refusal
+    // books one (createTempoGate refuseConfirmedPush).
+    pushRowOf: (hash) => refundByEvidence(hash) || null,
   });
   if (tempoGate) {
     app.use(tempoGate);
