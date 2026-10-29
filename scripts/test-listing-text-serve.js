@@ -9,6 +9,8 @@
 // the MCP sellers.list tool (both wires).
 //
 // Run: node scripts/test-listing-text-serve.js
+// sellers.list is mounted only with the router shown (as CI runs it).
+process.env.AGENT402_SHOW_ROUTER ??= "1";
 import { readFileSync } from "node:fs";
 import express from "express";
 import {
