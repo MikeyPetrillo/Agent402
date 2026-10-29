@@ -399,5 +399,9 @@ export function sanitizeReportProse(prose, sources = []) {
       if (s.slice(Math.max(0, at - 2), at) === "](" || /\w$/.test(s.slice(0, at))) return url;
       const u = url.replace(/[.,;:!?]+$/, "");
       return allowed(u) ? url : `${hostOf(u) || ""}${url.slice(u.length)}`;
-    });
+    })
+    // What the passes above could not remove ("<script x< y" never closes)
+    // still cannot open a tag or a comment: a "<" before a letter, "!", "/"
+    // or "?" gets a space after it.
+    .replace(/<(?=[a-zA-Z!/?])/g, "< ");
 }
