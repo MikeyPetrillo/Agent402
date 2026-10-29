@@ -29,10 +29,11 @@ Whether it is on right now is machine-readable: `/api/pricing`
    the validity window the accept's `maxTimeoutSeconds` sets. The payment goes
    in the `PAYMENT-SIGNATURE` header as an x402 v2 payload whose `accepted` is
    that accept. EOA signatures only on this option.
-3. **Settle off chain.** The server runs the call, then Circle Gateway verifies
-   the signature against the deposit and locks the amount; the seller's answer
-   carries a receipt naming Gateway's transfer id instead of a chain hash. A
-   failed call (4xx or 5xx) is never settled.
+3. **Settle off chain.** Circle Gateway verifies the signature against the
+   deposit before the call runs; after a successful answer the server settles
+   it and Gateway locks the amount. The seller's answer carries a receipt
+   naming Gateway's transfer id instead of a chain hash. A failed call (4xx or
+   5xx) is never settled.
 4. **Batched on chain.** Gateway lands settled payments on chain in batches
    later; the seller withdraws its Gateway balance separately. On
    [/revenue](https://agent402.tools/revenue) these sales are counted from the
