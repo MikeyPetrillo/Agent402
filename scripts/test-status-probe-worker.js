@@ -806,6 +806,7 @@ for (const [name, over, detail] of failCases) {
     assert.match(owedBody, /refundsOwed\.status=owed\./);
     assert.match(owedBody, /actions\/workflows\/refund\.yml/);
     assert.match(owedBody, /dry run first, then live/);
+    assert.match(owedBody, /human-checkout\.json/, "an owed card refund is read on the report store's operator list");
     assert.doesNotMatch(owedBody, /0x[0-9a-fA-F]{40}|\$\d/);
   });
 

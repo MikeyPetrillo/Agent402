@@ -3323,6 +3323,8 @@ jobs:
           t node scripts/test-upstream-hard-caps.js
           # /api/gateway-status is public: verdicts only, never limits or balances
           t node scripts/test-gateway-status-privacy.js
+          # An owed card report refund reads on the refundsOwed word (a server boot on the file backends)
+          t node scripts/test-refund-owed-card.js
           # Redis persistence as one word (INFO persistence parse, the monitor, the journal gate on a stub client, the heartbeat and Worker legs - offline)
           t node scripts/test-redis-persistence.js
           # SQL execution-certificate firewall (risk catalogue, false-positive guards, cert binding — offline)

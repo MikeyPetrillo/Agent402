@@ -498,7 +498,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       const w = b.refundsOwed?.status === "stuck" ? "stuck" : b.refundsOwed?.status === "aging" ? "aging" : "owed";
       return `/api/gateway-status reports refundsOwed.status=${w}.
 
-- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note. A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.
 - aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
 - stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
 

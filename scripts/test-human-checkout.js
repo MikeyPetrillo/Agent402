@@ -175,6 +175,37 @@ if (!hadLegacy) {
   ok(true, "legacy import skipped: a real legacy store exists on this machine (not touched)");
 }
 
+// --- the Stripe webhook fulfills a paid report session: a buyer who closed the
+// tab before the success redirect still gets one generation and one delivery,
+// and a later /r/ visit polls that job instead of starting a second one.
+{
+  const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
+  sessions.cs_hook = { id: "cs_hook", mode: "payment", payment_status: "paid", payment_intent: "pi_hook", customer_details: { email: "hook@example.com" }, metadata: { product: "dossier", input: "NVDA" } };
+  const hookStripe = { ...stripe, webhooks: { constructEvent: (body, sig, secret) => { if (sig !== "goodsig" || secret !== "whsec_test") throw new Error("bad signature"); return JSON.parse(body.toString()); } } };
+  const subsStore = join("/tmp", `test-human-checkout-subs-${process.pid}.json`);
+  // The same hook expression server.js wires: a credits pack claims, a report fulfills.
+  const credits = { claim: async () => { throw new Error("not a credits session"); } };
+  const subs = createStripeSubscriptions({ stripe: hookStripe, baseUrl: "https://agent402.tools", storePath: subsStore,
+    onPaymentSession: (session) => (session?.metadata?.credits_pack && credits ? credits.claim(session.id) : session?.metadata?.product && hc ? hc.fulfill(session.id) : null) });
+  const prevSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+  const before = genCalls, salesBefore = sales.length;
+  const ev = JSON.stringify({ id: "evt_hook", type: "checkout.session.completed", data: { object: { id: "cs_hook", mode: "payment", payment_status: "paid", metadata: { product: "dossier", input: "NVDA" } } } });
+  const ack = await subs.handleWebhook(Buffer.from(ev), "goodsig");
+  const fromHook = await settle("cs_hook");
+  ok(ack.received === true && fromHook?.status === "done" && genCalls === before + 1 && sales.length === salesBefore + 1 && sales[salesBefore].paymentIntent === "pi_hook",
+    "checkout.session.completed for a report session with no /r/ visit generates and delivers it once");
+  const later = await hc.fulfill("cs_hook");
+  ok(later.status === "done" && genCalls === before + 1 && sales.length === salesBefore + 1, "a later /r/ visit is answered from the record: no second generation, no second sale");
+  await subs.handleWebhook(Buffer.from(ev.replace("evt_hook", "evt_hook2")), "goodsig");
+  ok(genCalls === before + 1 && sales.length === salesBefore + 1, "a redelivered webhook generates nothing more");
+  if (prevSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevSecret;
+  try { rmSync(subsStore); } catch { /* ignore */ }
+  const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/onPaymentSession: \(session\) => \([\s\S]{0,200}session\?\.metadata\?\.product && _humanCheckout \? _humanCheckout\.fulfill\(session\.id\)/.test(serverSrc),
+    "server.js wires the webhook's payment-session hook to the report store's fulfill");
+}
+
 // --- failure breaker: after three failed reports from one address, the next paid session is refunded with NO generation attempt
 {
   refundFail = false;

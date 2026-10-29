@@ -90,7 +90,7 @@ import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerSt
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
-import { applyMeteredSettlement } from "./gateway-meter.js";
+import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -123,11 +123,13 @@ function quotedPriceUsd(def, req) {
   } catch { return flat; }
 }
 // The USD a metered call was actually settled/held at, for the books: the upto
-// meter's override (settled actual x markup), else the per-request quote, else
-// the catalog price. Flat tiers fall through to the catalog price unchanged.
+// meter's override (settled actual x markup; a credits stream's amount rides
+// on the request instead, gateway-meter.js meteredUsdOf), else the
+// per-request quote, else the catalog price. Flat tiers fall through to the
+// catalog price unchanged.
 function settledPriceUsd(def, req, res) {
   const flat = Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
-  const metered = Number(res?.getHeader?.("X-Metered-Usd"));
+  const metered = meteredUsdOf(req, res);
   if (Number.isFinite(metered) && metered > 0) return metered;
   if (priceFnOf(def) && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   return flat;
@@ -137,7 +139,7 @@ function settledPriceUsd(def, req, res) {
 // the buyer signed on an EVM rail (src/paid-price.js). Books and debts read
 // this, so a chain priced above the list records what moved.
 function paidUsdOf(def, req, res, caip2) {
-  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: res?.getHeader?.("X-Metered-Usd"), paymentHeader: paymentHeaderOf(req) });
+  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: meteredUsdOf(req, res), paymentHeader: paymentHeaderOf(req) });
 }
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
@@ -2880,6 +2882,7 @@ app.post("/__operator/alerts/run", async (req, res) => {
 const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
 
 let _subs = null;
+let _humanCheckout = null; // wired below (card report checkout); read by the webhook hook and the status word
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
     stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
@@ -2888,10 +2891,17 @@ try {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
     },
-    // Credit-pack sessions: mint + email the key from the webhook too (claim is
-    // idempotent; the thanks page then shows "claimed"). _credits is wired below.
-    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id) : null),
-    onChargeReversed: (paymentIntent, type) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded") : null),
+    // One-shot payment sessions are fulfilled from the webhook too, so a buyer
+    // whose success redirect never loaded still gets what they paid for:
+    // credit packs mint + email the key (claim is idempotent; the thanks page
+    // then shows "claimed"); card reports start their generation (fulfill is
+    // claim-guarded, so a later /r/ visit polls the same job). _credits and
+    // _humanCheckout are wired below.
+    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id)
+      : session?.metadata?.product && _humanCheckout ? _humanCheckout.fulfill(session.id) : null),
+    // A refunded or disputed pack payment: the refunded amount leaves the key's
+    // balance; the key is disabled once the payment is fully reversed.
+    onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -3664,12 +3674,25 @@ app.get("/api/gateway-status", async (req, res) => {
     // Money we owe a buyer (src/refund-ledger.js): "owed" once any buyer's
     // debt has stood past REFUND_OWED_NOTICE_MINUTES (default 15), "aging"
     // when one has waited past REFUND_OWED_ALARM_HOURS, "stuck" when a row
-    // sits mid-send.
+    // sits mid-send. A card report refund the store could not issue
+    // (src/human-checkout.js owedRefunds, listed on
+    // /__operator/human-checkout.json) is owed too, on the same notice and
+    // aging; "unknown" when that list cannot be read.
     // One word publicly, so the status Worker can page; counts for the operator.
-    refundsOwed: (() => {
+    refundsOwed: await (async () => {
       const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
-      const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48, noticeMinutes: Number.isFinite(notice) && notice >= 0 ? notice : 15 });
-      return full ? r : { status: r.status };
+      const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
+      const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
+      const r = refundAlarmStatus({ owedHours, noticeMinutes });
+      const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
+      const ages = (card || []).map((x) => Date.now() - Date.parse(x.at)).filter((a) => Number.isFinite(a));
+      const cardOwed = ages.filter((a) => a >= noticeMinutes * 60_000).length;
+      const cardAging = ages.filter((a) => a >= owedHours * 3600_000).length;
+      const status = r.status === "stuck" ? "stuck"
+        : r.status === "aging" || cardAging ? "aging"
+          : r.status === "owed" || cardOwed ? "owed"
+            : card === null ? "unknown" : r.status;
+      return full ? { ...r, status, cardOwedCount: card === null ? null : cardOwed, cardAgingCount: card === null ? null : cardAging } : { status };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a
@@ -4389,7 +4412,6 @@ if (!humanCheckoutEnabled()) {
   app.post("/api/subscribe", (_req, res) => res.status(503).json({ error: "Subscriptions are not configured on this server." }));
 }
 if (humanCheckoutEnabled()) {
-  let _humanCheckout;
   try {
     _humanCheckout = createHumanCheckout({
       stripe: new Stripe(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
@@ -9422,6 +9444,10 @@ const asyncJobs = createAsyncJobs({
   port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
+  // A job's debt books what the buyer paid: the gated price (list or the
+  // request's quote) on the chain the receipt names, or the meter's amount.
+  quoteOf: quotedPriceUsd,
+  paidOf: ({ basePriceUsd, receipt, meteredUsd, req }) => paidPriceUsd({ basePriceUsd, caip2: receipt?.network ?? null, meteredUsd, paymentHeader: paymentHeaderOf(req) }),
 });
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).

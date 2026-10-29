@@ -28,7 +28,7 @@
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { upstreamCosts, upstreamCostsLoaded, rowRateAt } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
-import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
+import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel, recordStreamedUsage } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
 import { createHash, createHmac } from "node:crypto";
 // Static import (not agent-kit's lazy pattern): validateRequest must stay
@@ -2523,7 +2523,14 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     // that into a 502 before any byte is sent, which the callers' chain walk
     // catches (`!res.headersSent`) and which cancels settlement end to end.
     // Comment-only prelude is bounded so a comment flood cannot buffer forever.
-    const scrub = createSseUsageScrubber({ onUsage });
+    // Billing fields are stripped in flight (see createSseUsageScrubber); the
+    // cost the usage frame carried is metered onto the request for a gate
+    // that debits on finish (a credits hold, src/gateway-meter.js), and
+    // handed to the caller's telemetry.
+    const scrub = createSseUsageScrubber({ onUsage: (usage, rawCost, frame) => {
+      if (typeof rawCost === "number") recordStreamedUsage({ req: res.req, upstreamUsd: rawCost });
+      onUsage?.(usage, rawCost, frame);
+    } });
     let pending = "";
     const commit = () => {
       res.writeHead(200, {

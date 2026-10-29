@@ -242,6 +242,43 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   gateM({ method: "POST", path: "/v1/metered/chat/completions", headers: { authorization: `Bearer ${KEY}` }, body: {} }, r3, () => {});
   r3.setHeader("X-Metered-Usd", "9.5"); r3.statusCode = 200; r3.emit("finish");
   ok(Math.abs(cr.balance(KEY).balanceUsd - (b3 - 0.001)) < 1e-9, "gate (metered): a reported amount above the hold can never take more than the hold");
+  // STREAMED: the usage frame arrives after the 200 went out, so no header can
+  // carry the amount; the stream writer records it on the request and the
+  // gate debits that on finish (hold = quote, debit = usage). A stub upstream
+  // stream drives the real writer (src/tools/llm-gateway-kit.js).
+  {
+    const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
+    const { meteredUsd } = await import("../src/gateway-meter.js");
+    setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
+    const prevMeter = process.env.GATEWAY_METERED_BILLING, prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.GATEWAY_METERED_BILLING = "on"; process.env.OPENROUTER_API_KEY = "test-key";
+    const { streamOpenRouterTo } = await import("../src/tools/llm-gateway-kit.js");
+    const COST = 0.01, QUOTE = 0.05; // a quote the rail can settle under (the floor is tested in test-gateway-meter.js)
+    const gateS = cr.gate((m, p) => (p === "/v1/metered/stream" ? { priceUsd: QUOTE, slug: "v1-chat-metered" } : priceFor(m, p)));
+    const expected = meteredUsd({ upstreamUsd: COST, ceilingUsd: QUOTE });
+    ok(expected > 0 && expected < QUOTE, `the stub cost meters under the quote (${expected})`);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, body: (async function* () {
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`);
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1, cost: COST } })}\n\n`);
+      yield Buffer.from("data: [DONE]\n\n");
+    })() });
+    const r4 = fakeRes(); r4.getHeader = (k) => r4.headers[k];
+    r4.writeHead = (code) => { r4.statusCode = code; r4.headersSent = true; }; r4.write = () => true; r4.on = r4.addListener;
+    const req4 = { method: "POST", path: "/v1/metered/stream", headers: { authorization: `Bearer ${KEY}` }, body: { stream: true } };
+    r4.req = req4;
+    const b4 = cr.balance(KEY).balanceUsd, held4 = cr.balance(KEY).heldUsd;
+    gateS(req4, r4, () => {});
+    ok(Math.abs(cr.balance(KEY).balanceUsd - (b4 - QUOTE)) < 1e-9 && req4.creditsPriceUsd === QUOTE, "gate (streamed): the quote is held at authorize");
+    await streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, r4, { timeoutMs: 2000 });
+    globalThis.fetch = realFetch;
+    ok(Math.abs(req4.__meteredUsageUsd - expected) < 1e-9 && r4.headers["X-Metered-Usd"] === undefined, "the stream writer records the metered usage on the request (no header after the 200)");
+    r4.statusCode = 200; r4.emit("finish");
+    ok(Math.abs(cr.balance(KEY).balanceUsd - (b4 - expected)) < 1e-9 && Math.abs(cr.balance(KEY).heldUsd - held4) < 1e-9, `gate (streamed): the debit is the metered usage, the rest of the hold is returned (balance ${cr.balance(KEY).balanceUsd})`);
+    ok(Math.abs(debits[debits.length - 1].priceUsd - expected) < 1e-9, "gate (streamed): the accounting hook books the metered amount");
+    if (prevMeter === undefined) delete process.env.GATEWAY_METERED_BILLING; else process.env.GATEWAY_METERED_BILLING = prevMeter;
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey;
+  }
 }
 // ---- keys cannot be guessed or made up, and guessing is bounded ----
 {
@@ -270,9 +307,10 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const ls = {};
   const refunds = [];
   const fp = {}; // payment intent -> card fingerprint
+  const refundedCents = {}; // payment intent -> what Stripe has refunded of it
   const lstripe = {
     checkout: { sessions: { retrieve: async (id) => { if (!ls[id]) throw new Error("no"); return ls[id]; } } },
-    paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { payment_method_details: { card: { fingerprint: fp[id] || null } } } }) },
+    paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { amount_refunded: refundedCents[id] || 0, payment_method_details: { card: { fingerprint: fp[id] || null } } } }) },
     refunds: { create: async (a) => { refunds.push(a); return { id: "re_" + refunds.length }; } },
   };
   let t = Date.parse("2026-10-28T12:00:00Z");
@@ -291,6 +329,30 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   ok((await buy("cs_l4", { email: "other@x.com", card: "fp_a" })).status === "over_limit", "limit: the same card under another email is the same buyer");
   ok((await buy("cs_l5", { email: "A@X.com", card: "fp_z" })).status === "over_limit", "limit: the same email in another case, with another card, is the same buyer");
   ok((await buy("cs_l6", { email: "b@x.com", card: "fp_b" })).status === "minted", "limit: a different buyer is unaffected");
+  // ---- a payment Stripe refunded before the claim, and refunds after it ----
+  {
+    const refundsBefore = refunds.length;
+    refundedCents.pi_cs_rf1 = CREDIT_PACKS["credits-100"].cents;
+    const r1 = await buy("cs_rf1", { email: "rf@x.com", card: "fp_rf" });
+    ok(r1.status === "refunded" && !r1.key && !r1.keyId, "a pack refunded in full before its claim mints no key and answers refunded");
+    ok((await lc.claim("cs_rf1")).status === "refunded" && refunds.length === refundsBefore && !(await lc.refusalsToRefund()).includes("cs_rf1"), "claiming it again answers the same; nothing is refunded twice and nothing is owed");
+    refundedCents.pi_cs_rf2 = 2500;
+    const r2 = await buy("cs_rf2", { email: "rf@x.com", card: "fp_rf" });
+    ok(r2.status === "minted" && r2.balanceUsd === 75, `a pack partly refunded before its claim is minted net of the refund (${r2.balanceUsd})`);
+    // charge.refunded carries the charge's running refunded total: a partial
+    // refund lowers the balance and keeps the key; a full one disables it.
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 5000, fullyRefunded: false }) === r2.keyId && lc.balance(r2.key).balanceUsd === 50,
+      `a partial refund after minting takes only the new part off the balance (${lc.balance(r2.key).balanceUsd})`);
+    const held = lc.authorize(r2.key, 0.001);
+    ok(held.ok, "...and leaves the key usable");
+    lc.release(held.hash, held.heldMicro);
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 5000, fullyRefunded: false }) === r2.keyId && lc.balance(r2.key).balanceUsd === 50,
+      "the same refund delivered again takes nothing more");
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r2.keyId && lc.authorize(r2.key, 0.001).reason === "disabled" && lc.balance(r2.key).balanceUsd === 0,
+      "a full refund takes the rest and disables the key");
+    const r3 = await buy("cs_rf3", { email: "rf2@x.com", card: "fp_rf2" });
+    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "disabled", "a dispute disables the key outright");
+  }
   ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
   t += 86_400_001;
   ok((await buy("cs_l8")).status === "minted", "limit: after 24 hours the same buyer can buy again");

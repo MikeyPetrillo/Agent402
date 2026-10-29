@@ -24,6 +24,7 @@
       return;
     }
     if (s.status === "tax_id_required") { app.innerHTML = '<div class="status"><h2>A business tax ID is needed</h2><p>Credits billed to an address in the EU or the UK are sold to businesses with a VAT number. ' + (s.refunded ? 'This purchase was refunded in full to your card and no key was issued.' : 'This purchase was not issued a key and will be refunded to your card.') + ' Buy again and enter your VAT number at checkout, or pay per call with a wallet.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
+    if (s.status === "refunded") { app.innerHTML = '<div class="status"><h2>Payment refunded</h2><p>This payment was refunded to your card before a key was claimed, so no key was issued.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
     if (s.status === "over_limit") { app.innerHTML = '<div class="status"><h2>Daily purchase limit reached</h2><p>Credits are limited to  app.innerHTML = '<div class="status"><h2>Payment not completed</h2><p><a href="/credits">Start over</a></p></div>'; return; }
     app.innerHTML = '<div class="status"><h2>Purchase not found</h2><p><a href="/credits">Back to credits</a></p></div>';
   }
