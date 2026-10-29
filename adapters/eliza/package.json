@@ -43,9 +43,9 @@
     "agent402-client": "^0.8.21"
   },
   "peerDependencies": {
-    "@x402/evm": ">=2.0.0",
-    "@x402/fetch": ">=2.0.0",
-    "viem": ">=2.0.0"
+    "@x402/evm": ">=2.0.0 <3",
+    "@x402/fetch": ">=2.0.0 <3",
+    "viem": ">=2.0.0 <3"
   },
   "peerDependenciesMeta": {
     "@x402/evm": {

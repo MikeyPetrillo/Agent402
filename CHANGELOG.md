@@ -55,7 +55,10 @@ Packages:
 - agent402-mcp 0.13.24 pins viem, @solana/kit and @modelcontextprotocol/sdk
   to exact versions, so an install resolves the signing libraries it was
   tested with. agent402-tollbooth 0.10.8 accepts the x402 packages from 2.0.0
-  up to, not including, 3.
+  up to, not including, 3. agent402-openclaw 0.5.8, agent402-agentkit 0.1.10
+  and elizaos-plugin-agent402 0.2.10 cap each optional peer below its next
+  major (the x402 packages and viem below 3, @coinbase/agentkit below 1, zod
+  below 5).
 
 Operations:
 - Each sale records the path it arrived on: the hosted connector's loopback,
