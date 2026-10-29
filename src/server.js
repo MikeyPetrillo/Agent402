@@ -2880,6 +2880,7 @@ app.post("/__operator/alerts/run", async (req, res) => {
 const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
 
 let _subs = null;
+let _humanCheckout = null; // wired below (card report checkout); read by the webhook hook and the status word
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
     stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
@@ -2888,9 +2889,14 @@ try {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
     },
-    // Credit-pack sessions: mint + email the key from the webhook too (claim is
-    // idempotent; the thanks page then shows "claimed"). _credits is wired below.
-    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id) : null),
+    // One-shot payment sessions are fulfilled from the webhook too, so a buyer
+    // whose success redirect never loaded still gets what they paid for:
+    // credit packs mint + email the key (claim is idempotent; the thanks page
+    // then shows "claimed"); card reports start their generation (fulfill is
+    // claim-guarded, so a later /r/ visit polls the same job). _credits and
+    // _humanCheckout are wired below.
+    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id)
+      : session?.metadata?.product && _humanCheckout ? _humanCheckout.fulfill(session.id) : null),
     onChargeReversed: (paymentIntent, type) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded") : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
@@ -4389,7 +4395,6 @@ if (!humanCheckoutEnabled()) {
   app.post("/api/subscribe", (_req, res) => res.status(503).json({ error: "Subscriptions are not configured on this server." }));
 }
 if (humanCheckoutEnabled()) {
-  let _humanCheckout;
   try {
     _humanCheckout = createHumanCheckout({
       stripe: new Stripe(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
