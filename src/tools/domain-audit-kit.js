@@ -12,7 +12,7 @@
 // OPENROUTER_API_KEY for the synthesis (503 without it).
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
 import { stepProgress } from "../job-progress.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -321,9 +321,10 @@ export async function probeDomain(domain, { pro = false } = {}) {
   return { domain, emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, tlsScore, composite, grade, assessed, gradeCaveat, signals, fingerprint };
 }
 
+// `deps.probeDomain` is the test seam for the live probes.
 function makeDomainAuditHandlerInner(tierSlug) {
   const t = DOMAIN_AUDIT_TIERS[tierSlug];
-  return async (input, req) => {
+  return async (input, req, deps = {}) => {
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"domain": "example.com"}');
     const domain = normDomain(input);
     const user = safeUser(req);
@@ -332,7 +333,7 @@ function makeDomainAuditHandlerInner(tierSlug) {
     const steps = stepProgress(2, req);
     steps.next("probing the domain");
     // 1) LIVE PROBES + GRADE (shared with the monitor scheduler's free re-probe).
-    const { emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, composite, grade, assessed, gradeCaveat } = await probeDomain(domain, { pro: t.pro });
+    const { emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, composite, grade, assessed, gradeCaveat } = await (deps.probeDomain || probeDomain)(domain, { pro: t.pro });
 
     // 2) GROUNDING BLOCKS (the probe results are the only source of truth).
     const emailBlock = email
@@ -403,7 +404,9 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    // The audited domain is the one source a link may name.
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), [{ url: `https://${domain}/` }, { url: `https://www.${domain}/` }]);
     if (!prose) throw bad("Domain audit synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
@@ -484,8 +487,8 @@ export const DOMAIN_AUDIT_TOOLS = [
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 export function makeDomainAuditHandler(tierSlug) {
   const run = makeDomainAuditHandlerInner(tierSlug);
-  return async (input, req) => {
-    try { return await run(input, req); }
+  return async (input, req, deps) => {
+    try { return await run(input, req, deps); }
     catch (e) { try { recordCompositeUsage({ slug: tierSlug, upstreamUsd: 0, ok: false, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) }); } catch { /* never mask the real error */ } throw e; }
   };
 }

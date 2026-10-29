@@ -2501,6 +2501,8 @@ jobs:
           t node scripts/test-report-model-note.js
           # Every number a report kit writes is traced to its synthesis material (offline)
           t node scripts/test-report-grounding.js
+          # Every report kit serves model prose with no foreign link, image or active tag (offline)
+          t node scripts/test-report-prose-filter.js
           # /llms.txt MPP/x402 dual-header reading note (issue #794 guidance, offline)
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"

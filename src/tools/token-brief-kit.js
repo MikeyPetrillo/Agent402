@@ -33,7 +33,7 @@
 // probeDomain / probeRecalls.
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
@@ -370,7 +370,8 @@ ${riskBlock}`;
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Token brief synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);

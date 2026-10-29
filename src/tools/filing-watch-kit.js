@@ -25,7 +25,7 @@
 //     `next` that were not in `prev` - the body of the alert email.
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany } from "./edgar-kit.js";
 // The submissions read itself is the helper ticker-pack already ships (one
@@ -748,7 +748,8 @@ ${docBlocks || "(no primary document was read for this window)"}`;
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Filing report synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);

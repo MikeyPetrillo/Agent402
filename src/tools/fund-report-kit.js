@@ -120,9 +120,11 @@ function diff13f(latestAgg, priorAgg) {
 }
 const pct = (part, whole) => (whole > 0 ? `${((part / whole) * 100).toFixed(1)}%` : "?");
 
+// `deps` is the test seam for the EDGAR reads (resolveManager, get13fHoldings).
 function makeFundHandlerInner(tierSlug) {
   const t = FUND_TIERS[tierSlug];
-  return async (input, req) => {
+  return async (input, req, deps = {}) => {
+    const read13f = deps.get13fHoldings || get13fHoldings;
     // Job progress (src/job-progress.js): a no-op outside an async job or task.
     const steps = stepProgress(3, req);
     steps.next("reading 13F filings");
@@ -136,14 +138,14 @@ function makeFundHandlerInner(tierSlug) {
     const user = safeUser(req);
 
     // 1) RESOLVE the manager, then pull the two most recent 13F-HR filings.
-    const resolved = await resolveManager({ cik: cikIn || undefined, ticker: tickerIn || undefined, name: manager || undefined });
+    const resolved = await (deps.resolveManager || resolveManager)({ cik: cikIn || undefined, ticker: tickerIn || undefined, name: manager || undefined });
     // The prior quarter is retried once; a read that still fails is a 502 (not
     // charged), because "no prior quarter exists" was being written into the
     // report for a timeout on an 11 MB table. get13fHoldings returns null ONLY
     // when the manager genuinely has no earlier 13F-HR.
     const [latest, priorR] = await Promise.all([
-      get13fHoldings({ cik: resolved.cik, index: 0 }),
-      settle(get13fHoldings({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS).then(async (r) => (r.ok ? r : settle(get13fHoldings({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS))),
+      read13f({ cik: resolved.cik, index: 0 }),
+      settle(read13f({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS).then(async (r) => (r.ok ? r : settle(read13f({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS))),
     ]);
     if (!latest || !latest.holdings || !latest.holdings.length) throw bad(`No 13F-HR holdings found for "${manager || resolved.cik}" - confirm this is an institutional manager (>$100M AUM). Not charged.`, 422);
     if (!priorR.ok) throw bad(`The prior-quarter 13F-HR for "${manager || resolved.cik}" exists but could not be read from SEC EDGAR (${String(priorR.error).slice(0, 120)}). Not charged - please retry.`, 502);
@@ -317,8 +319,8 @@ export const FUND_TOOLS = [
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 export function makeFundHandler(tierSlug) {
   const run = makeFundHandlerInner(tierSlug);
-  return async (input, req) => {
-    try { return await run(input, req); }
+  return async (input, req, deps) => {
+    try { return await run(input, req, deps); }
     catch (e) { try { recordCompositeUsage({ slug: tierSlug, upstreamUsd: 0, ok: false, priceUsd: priceUsdOf(FUND_TIERS[tierSlug]) }); } catch { /* never mask the real error */ } throw e; }
   };
 }
