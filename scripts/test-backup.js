@@ -274,6 +274,34 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   ok(![...objects.keys()].some((k) => k.includes("backup-status.json")), "neither the status file nor its write-through mark was uploaded");
 }
 
+// Two containers inside the nightly hour: the second (or a restart) reads the
+// stored status under the lease and skips a day its sibling already took, so
+// the nightly backup runs once across replicas. A stored attempt from an
+// earlier day still runs.
+{
+  process.env.BACKUP_S3_ENDPOINT = `http://127.0.0.1:${PORT}`;
+  process.env.BACKUP_UTC_HOUR = String(new Date().getUTCHours());
+  const sibling = await import("../src/backup.js?restart=2");
+  sibling.startBackupScheduler({ log: () => {} });
+  await sibling.backupStatusLoaded();
+  const before = requests.length;
+  const r = await sibling.backupNightlyTick();
+  ok(requests.length === before && r?.skipped === "already attempted today", `a container whose stored status records an attempt today runs no second backup in the nightly hour (${JSON.stringify(r)}, ${requests.length - before} requests)`);
+  const { readFileSync } = await import("node:fs");
+  const statusFile = join(dataDir, "backup-status.json");
+  const stored = JSON.parse(readFileSync(statusFile, "utf8"));
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+  writeFileSync(statusFile, JSON.stringify({ ...stored, lastAttempt: yesterday, lastSuccess: yesterday }));
+  const next = await import("../src/backup.js?restart=3");
+  next.startBackupScheduler({ log: () => {} });
+  await next.backupStatusLoaded();
+  const beforeNext = requests.length;
+  await next.backupNightlyTick();
+  ok(requests.length > beforeNext, `a stored attempt from an earlier day still runs tonight's backup (${requests.length - beforeNext} requests)`);
+  delete process.env.BACKUP_UTC_HOUR;
+  delete process.env.BACKUP_S3_ENDPOINT;
+}
+
 // The alarm leg: the gateway status publishes the word, the heartbeat pages
 // on held / failed / stale after a second reading and closes on ok.
 {
