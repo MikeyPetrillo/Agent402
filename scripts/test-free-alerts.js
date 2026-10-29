@@ -37,6 +37,17 @@ ok(t.checked === 0 && probeCalls === 0 && mail.length === 1, "an unconfirmed ale
 await ok_throws(() => fa.signup({ email: "not-an-email", kind: "insider", target: "NVDA" }), 400, "bad email -> 400");
 await ok_throws(() => fa.signup({ email: "a@b.co", kind: "insider", target: "not a ticker!" }), 400, "validator's buyerSafe message -> 400");
 await ok_throws(() => fa.signup({ email: "a@b.co", kind: "nope", target: "NVDA" }), 400, "unknown kind -> 400");
+// A recall target is printed in the confirmation subject: one shaped like a
+// host name is refused before anything is stored or mailed.
+{
+  const before = mail.length;
+  for (const t of ["click.evil.example", "Recall at www.example.org", "(evil.co)"]) await ok_throws(() => fa.signup({ email: "r@b.co", kind: "recall", target: t }), 400, `recall target "${t}" reads as a host name -> 400`);
+  ok(mail.length === before && !Object.values(fa._store().alerts).some((a) => a.kind === "recall"), "a refused recall target stores nothing and sends nothing");
+  const fine = await fa.signup({ email: "r@b.co", kind: "recall", target: "Dr. Pepper" });
+  ok(fine.ok && fine.status === "pending" && mail.length === before + 1, "a product name with an abbreviation is still accepted");
+  delete fa._store().alerts[Object.keys(fa._store().alerts).find((k) => fa._store().alerts[k].kind === "recall")];
+  mail.length = before;
+}
 const dupSoon = await fa.signup({ email: "person@example.com", kind: "insider", target: "NVDA" });
 ok(dupSoon.ok && dupSoon.status === "pending" && mail.length === 1 && Object.keys(fa._store().alerts).length === 1, "an immediate repeat signup creates no second record and sends nothing (10-minute resend cooldown)");
 clock += 11 * 60_000;

@@ -24,7 +24,7 @@
   // identical by scripts/test-ga-snippet.js): a 404 or error page rendered at a
   // bearer path carries its own canonical, so the server may stamp the island
   // there; the browser's own path decides.
-  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/.test(location.pathname)) return;
+  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/.test(location.pathname)) return;
 
   var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* private mode */ } } };
   var q = new URLSearchParams(location.search);

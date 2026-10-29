@@ -1,5 +1,6 @@
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
+import { inputDepthRefusal } from "./handler-input.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
 // checkout module imports this one.
@@ -1365,6 +1366,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // run to completion, but the transport is closed and the slot is only
           // released after this promise settles (see the POST /mcp handler).
           if (signal?.aborted) throw Object.assign(new Error("request aborted"), { statusCode: 499 });
+          const tooDeep = inputDepthRefusal(params);
+          if (tooDeep) throw Object.assign(new Error(tooDeep), { statusCode: 400 });
           result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip, signal });
         } catch (handlerErr) {
           // statusCode lets the analytics dispatcher split 4xx (bad input) from

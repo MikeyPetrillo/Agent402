@@ -143,6 +143,9 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
       try { canon = String(await validate(raw)); }
       catch (e) { if (e?.buyerSafe) throw bad(String(e.message).slice(0, 160), e.statusCode || 400); throw bad("We could not validate that target. Check it and try again."); }
     }
+    // The target is printed in the confirmation subject; a recall target that
+    // reads as a host name is refused rather than mailed.
+    if (kind === "recall" && hostnameShapedToken(canon)) throw bad("Enter a drug, food, brand or device name, not a web address.");
     if (PG && !(await refresh())) throw bad("Alerts are unavailable right now. Please try again in a few minutes.", 503);
     sweep();
     const mine = Object.values(store.alerts).filter((a) => a.email === em && (a.status === "active" || a.status === "pending"));
@@ -419,4 +422,12 @@ export function alertFormHtml({ kind, target, source = "" } = {}) {
 }
 
 /** Which alert kind a report kind maps to (the sample and delivery pages). */
+/** True when some whitespace-separated token of `text` is shaped like a host
+ *  name (dot-separated labels ending in a 2+ letter label), which a mail
+ *  client would turn into a link in a subject line. A recall target names a
+ *  product, never a web address. */
+export function hostnameShapedToken(text) {
+  return String(text ?? "").split(/\s+/).some((tok) => /^[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*\.\p{L}{2,}\.?$/u.test(tok.replace(/^[(,'&]+|[),'&]+$/g, "")));
+}
+
 export const ALERT_KIND_FOR_REPORT_KIND = Object.freeze({ insider: "insider", dossier: "filing", filing: "filing", ticker: "insider", fund: "fund", domain: "domain", recall: "recall" });

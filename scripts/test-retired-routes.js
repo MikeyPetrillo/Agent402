@@ -114,6 +114,13 @@ try {
   ok(pack.status === 410 && pb.slug === "market-open" && /Skill pack market-open was retired/.test(pb.hint), `a retired skill pack is 410 (got ${pack.status})`);
   const unknown = await fetch(`${base}/api/nope-nope`);
   ok(unknown.status === 404 && (await unknown.json()).error === "not-found", "a guessed slug that was never a tool is still 404");
+  // Routing is case-insensitive, so is the machine-surface test: an uppercase
+  // /V1 or /API miss is the same JSON 404, never the HTML shell.
+  for (const p of ["/V1/nothing-here", "/API/NOPE-NOPE", "/Mcp/x"]) {
+    const r = await fetch(`${base}${p}`);
+    const ct = r.headers.get("content-type") || "";
+    ok(r.status === 404 && /application\/json/.test(ct) && (await r.json()).error === "not-found", `${p} is a JSON 404 (${r.status}, ${ct})`);
+  }
   const liveRoute = await fetch(`${base}/api/crypto-options-chain`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   ok(liveRoute.status !== 410 && liveRoute.status !== 404, `the replacement itself is served (got ${liveRoute.status})`);
   // Every route ever published is live, key-gated, or retired - and every

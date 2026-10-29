@@ -40,8 +40,12 @@ function bad(message, statusCode = 400) {
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
 const BARE_URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,24})\b/;
-const HOST_RE = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
+// Address and host patterns use the protocol's own length bounds (64-char
+// local part, 63-char labels, 127 labels), so no start position scans past
+// them; hostsInText also reads a bounded prefix of its text.
+const EMAIL_RE = /[A-Za-z0-9._%+-]{1,64}@((?:[A-Za-z0-9-]{1,63}\.){1,126}[A-Za-z]{2,24})\b/;
+const HOST_RE = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,126}[a-z]{2,24})\b/gi;
+const MAX_HOST_SCAN_CHARS = 4000;
 // The last label of a file name reads like a top-level domain; these are not hosts.
 const FILE_EXT = new Set(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "gz", "tar", "png", "jpg", "jpeg", "gif", "svg", "webp", "txt", "csv", "json", "xml", "html", "htm", "js", "css", "exe", "dmg", "pkg", "mp3", "mp4", "mov", "wav", "ics", "eml", "msg"]);
 const TAG_RUN = /[\u{E0020}-\u{E007E}]{4,}/gu;
@@ -75,7 +79,7 @@ function sameHost(a, b) {
 /** Host names written in free text (anchor text, a subject), file names excluded. */
 function hostsInText(text) {
   const out = [];
-  for (const m of String(text ?? "").matchAll(HOST_RE)) {
+  for (const m of String(text ?? "").slice(0, MAX_HOST_SCAN_CHARS).matchAll(HOST_RE)) {
     const host = m[1].toLowerCase();
     const tld = host.slice(host.lastIndexOf(".") + 1);
     if (FILE_EXT.has(tld)) continue;

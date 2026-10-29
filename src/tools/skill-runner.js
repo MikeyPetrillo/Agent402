@@ -128,46 +128,57 @@ export { PACK_PRICES };
 // NaN with a 400); the agent learns which field the parser missed.
 // ──────────────────────────────────────────────────────────────────────────
 
+// Free-text inputs are read from their first MAX_SCENARIO_CHARS characters,
+// every digit run in the patterns below is bounded, and a year count above
+// MAX_SCENARIO_YEARS reads as unparsed (NaN), since the year count sizes the
+// cashflow arrays the chain builds.
+const MAX_SCENARIO_CHARS = 500;
+const MAX_SCENARIO_YEARS = 100;
+const _scenario = (s) => String(s ?? "").slice(0, MAX_SCENARIO_CHARS);
+const _years = (n) => (Number.isFinite(n) && n > MAX_SCENARIO_YEARS ? NaN : n);
+const DOLLARS_RE = /\$\s*(\d[\d,]{0,24}(?:\.\d{1,10})?)/;
+const YEARS_RE = /(?<![\d.])(\d{1,15}(?:\.\d{1,10})?)\s*y(?:ea)?r/i;
+
 function _firstNumber(re, s) {
-  const m = String(s ?? "").match(re);
+  const m = _scenario(s).match(re);
   return m ? Number(m[1].replace(/,/g, "")) : NaN;
 }
 
 // "$300,000 at 6.5% for 30 years" → { principal, annualRate, termYears }
 function parseLoanString(s) {
   return {
-    principal: _firstNumber(/\$\s*([\d,]+(?:\.\d+)?)/, s),
-    annualRate: _firstNumber(/(\d+(?:\.\d+)?)\s*%/, s) / 100,
-    termYears: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+    principal: _firstNumber(DOLLARS_RE, s),
+    annualRate: _firstNumber(/(?<![\d.])(\d{1,15}(?:\.\d{1,10})?)\s*%/, s) / 100,
+    termYears: _years(_firstNumber(YEARS_RE, s)),
   };
 }
 
 // "$500,000 ... returning $150,000/year for 5 years" → { upfront, annualReturn, years }
 function parseProjectString(s) {
-  const dollars = [...String(s ?? "").matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)]
+  const dollars = [..._scenario(s).matchAll(new RegExp(DOLLARS_RE.source, "g"))]
     .map((m) => Number(m[1].replace(/,/g, "")));
   return {
     upfront: dollars[0] ?? NaN,
     annualReturn: dollars[1] ?? NaN,
-    years: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+    years: _years(_firstNumber(YEARS_RE, s)),
   };
 }
 
 // "35 years old with $100,000 saved, contributing $1,500/month, retiring at 65"
 // → { currentAge, savings, monthlyContrib, retireAge, yearsToRetirement }
 function parseRetirementScenario(s) {
-  const str = String(s ?? "");
-  const dollars = [...str.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)]
+  const str = _scenario(s);
+  const dollars = [...str.matchAll(new RegExp(DOLLARS_RE.source, "g"))]
     .map((m) => Number(m[1].replace(/,/g, "")));
-  const currentAge = _firstNumber(/(\d+)\s*y(?:ea)?rs?\s*old/i, str);
-  const retireAge  = _firstNumber(/retir\w*\s+at\s+(\d+)/i, str);
+  const currentAge = _firstNumber(/(?<![\d.])(\d{1,3})\s*y(?:ea)?rs?\s*old/i, str);
+  const retireAge  = _firstNumber(/retir\w{0,20}\s+at\s+(\d{1,3})(?!\d)/i, str);
   return {
     currentAge,
     savings: dollars[0] ?? NaN,
     monthlyContrib: dollars[1] ?? NaN,
     retireAge,
     yearsToRetirement: Number.isFinite(retireAge) && Number.isFinite(currentAge)
-      ? retireAge - currentAge
+      ? _years(retireAge - currentAge)
       : NaN,
   };
 }
@@ -175,8 +186,8 @@ function parseRetirementScenario(s) {
 // "save $1,000,000 for retirement in 30 years" → { target, years }
 function parseGoalString(s) {
   return {
-    target: _firstNumber(/\$\s*([\d,]+(?:\.\d+)?)/, s),
-    years: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+    target: _firstNumber(DOLLARS_RE, s),
+    years: _years(_firstNumber(YEARS_RE, s)),
   };
 }
 

@@ -28,5 +28,20 @@ ok(/var uri = first \? imageDataUri\(first\) : "";/.test(block) && /'<img src="'
 ok(!/first\.b64/.test(block), "the preview never concatenates the raw payload");
 ok(/\(Number\(f\.width\) \|\| 0\) \+ "x" \+ \(Number\(f\.height\) \|\| 0\)/.test(block), "the size label is numbers only");
 
+// Links in a report body: anchors only for a cited source's host, and plain
+// text whenever there is no allowlist (no sources, or none set yet).
+{
+  const a = src.indexOf("  var allowedHosts = null;"), b = src.indexOf("  // A markdown pipe table");
+  ok(a > 0 && b > a, "report-view.js keeps the link allowlist and inline renderer together");
+  const f = new Function(src.slice(a, b) + "; return { setAllowedHosts, inline };")();
+  const text = "see https://elsewhere.example/x and [click](https://elsewhere.example/y)";
+  ok(!/<a /.test(f.inline(text)), "before any allowlist is set, no link becomes an anchor");
+  f.setAllowedHosts(null);
+  ok(!/<a /.test(f.inline(text)) && /https:\/\/elsewhere\.example\/x/.test(f.inline(text)), "a report with no sources renders links as plain text");
+  f.setAllowedHosts([{ url: "https://cited.example/a" }]);
+  const out = f.inline("see https://cited.example/x and https://elsewhere.example/y");
+  ok(/<a href="https:\/\/cited\.example\/x"/.test(out) && !/<a href="https:\/\/elsewhere/.test(out), "a cited host links; any other host stays text");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

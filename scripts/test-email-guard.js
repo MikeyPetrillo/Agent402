@@ -322,5 +322,21 @@ ok(/no score and no verdict/.test(tool.description), "copy says there is no scor
   ok(readableBase64(Buffer.from("see https://example.com now").toString("base64")) !== null && readableBase64("QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ==") === null && readableBase64(Buffer.from([1, 2, 3, 250, 251, 252, 253, 254, 255, 0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]).toString("base64")) === null, "readableBase64 accepts text with a URL, rejects a single word and binary");
 }
 
+// ----------------------------------------------------------------------------
+// Long header text stays linear
+// ----------------------------------------------------------------------------
+{
+  await run({ raw: "From: warm <a@example.com>\r\nSubject: warm\r\n\r\nwarm up the lazy imports" });
+  const timed = async (label, input) => { const t = Date.now(); await run(input); const ms = Date.now() - t; ok(ms < 150, `${label} (${ms}ms)`); };
+  await timed("a 20,000-character display name in raw mode is read in bounded time", { raw: `From: ${"a".repeat(20000)} <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
+  await timed("a 20,000-space run before the address is read in bounded time", { raw: `From: a${" ".repeat(20000)}! <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
+  await timed("a display name of 20,000 dotted labels is read in bounded time", { raw: `From: a@${"a.".repeat(10000)}- <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
+  const t0 = Date.now(); const sp = parseMailbox(`a${" ".repeat(50000)}! <a@example.com>`); const ms0 = Date.now() - t0;
+  ok(ms0 < 50 && sp.address === "a@example.com", `parseMailbox finds the address after a long whitespace run (${ms0}ms)`);
+  ok(parseMailbox(`${"N".repeat(5000)} <a@example.com>`).displayName.length === 1000, "the display name is read up to 1000 characters");
+  const longName = await run({ raw: `From: "${"x".repeat(1200)} billing@pay.example" <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
+  ok(Array.isArray(longName.findings), "a long display name still answers");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

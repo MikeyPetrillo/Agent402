@@ -1007,13 +1007,17 @@ const textTools = [
       // Letters NFKD cannot decompose (ß, æ, ø, œ, đ, ł, þ, ð) were DROPPED, so
       // "Straße" slugged to "stra-e" (corpus, 2026-09-06). Transliterate first.
       const TRANSLIT = { "ß": "ss", "æ": "ae", "Æ": "AE", "ø": "o", "Ø": "O", "œ": "oe", "Œ": "OE", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "TH", "ð": "d", "Ð": "D" };
-      const slug = text
+      let slug = text
         .replace(/[ßæÆøØœŒđĐłŁþÞðÐ]/g, (c) => TRANSLIT[c])
         .normalize("NFKD")
         .replace(/[̀-ͯ]/g, "")
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, sep)
-        .replace(new RegExp(`^\\${sep}+|\\${sep}+$`, "g"), "");
+        .replace(/[^a-z0-9]+/g, sep);
+      // Trim the separator by character, never by splicing it into a regex.
+      let a = 0, b = slug.length;
+      while (a < b && slug[a] === sep) a++;
+      while (b > a && slug[b - 1] === sep) b--;
+      slug = slug.slice(a, b);
       return { slug };
     },
   },
@@ -1455,7 +1459,9 @@ const timeTools = [
       else if (typeof v === "string") {
         // `ms` must precede `m` - JS alternation is first-match-wins, so listing
         // `m` first made `ms` dead code (parsing "500ms" as 500 minutes).
-        const matches = [...v.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*(ms|w|d|h|m|s)/g)];
+        // Digit runs are bounded and must start at a digit boundary, so a long
+        // run of digits is not rescanned from every start position.
+        const matches = [...v.toLowerCase().matchAll(/(?<![\d.])(\d{1,15}(?:\.\d{1,15})?)\s*(ms|w|d|h|m|s)/g)];
         if (!matches.length) throw bad(`Cannot parse duration: ${v}`);
         const mult = { w: 604800, d: 86400, h: 3600, m: 60, s: 1, ms: 0.001 };
         seconds = matches.reduce((acc, m) => acc + Number(m[1]) * mult[m[2]], 0);
@@ -1964,7 +1970,7 @@ export function parseRobots(text) {
         groups.push(current);
       }
       current.agents.push(value.toLowerCase());
-    } else if ((key === "allow" || key === "disallow") && current) {
+    } else if ((key === "allow" || key === "disallow") && current && current.rules.length < ROBOTS_MAX_RULES_PER_GROUP) {
       current.rules.push({ allow: key === "allow", path: value });
     }
   }
@@ -1977,28 +1983,47 @@ export function robotsAllows(groups, ua, path) {
     groups.find((g) => g.agents.some((a) => a !== "*" && uaLower.includes(a))) ??
     groups.find((g) => g.agents.includes("*"));
   if (!group) return { allowed: true, matchedRule: null };
+  const target = String(path).slice(0, ROBOTS_MAX_PATH_CHARS);
   let best = null;
   for (const rule of group.rules) {
     if (!rule.path) continue;
-    // rule.path comes from the TARGET SITE'S OWN robots.txt (attacker-controlled
-    // if the caller points us at a site they host) and every `*` becomes a `.*`
-    // in the compiled regex, while `path` is the caller's own request path — so
-    // a rule with a chain of wildcards (e.g. `/a*a*a*a*a*a*a*a*!`) against a
-    // long, deliberately non-matching path is catastrophic backtracking with
-    // BOTH sides attacker-controlled in one request. Measured live: 5 chained
-    // wildcards ~20ms, 7 ~1.6s, 8+ effectively hangs — exponential, not linear.
-    // Node is single-threaded and every tool shares this event loop (the same
-    // reason src/tools/safe-regex.js and the sandboxed `regex` tool exist), so
-    // an unbounded hang here freezes the whole server for every buyer. Real
-    // robots.txt rules essentially never need more than one or two wildcards;
-    // capping well under where the blowup becomes measurable costs nothing
-    // legitimate and removes the exponential shape entirely.
+    // rule.path comes from the target site's own robots.txt and `path` from the
+    // caller, so both sides are outside input. Matching is robotsRuleMatches
+    // (segment scan, no regex); a rule with more than three wildcards stays
+    // skipped, as before, and rule and path lengths are bounded.
     if ((rule.path.match(/\*/g) || []).length > 3) continue;
-    const pattern = rule.path.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    const re = new RegExp("^" + pattern.replace(/\\\$$/, "$"));
-    if (re.test(path) && (!best || rule.path.length > best.path.length)) best = rule;
+    if (rule.path.length > ROBOTS_MAX_RULE_CHARS) continue;
+    if (robotsRuleMatches(rule.path, target) && (!best || rule.path.length > best.path.length)) best = rule;
   }
   return { allowed: best ? best.allow : true, matchedRule: best ? `${best.allow ? "Allow" : "Disallow"}: ${best.path}` : null };
+}
+
+// Rule and path bounds for robotsAllows/parseRobots; both sides come from
+// outside (the site's robots.txt and the caller's path).
+const ROBOTS_MAX_RULES_PER_GROUP = 2000;
+const ROBOTS_MAX_RULE_CHARS = 2048;
+const ROBOTS_MAX_PATH_CHARS = 8192;
+
+// A robots rule is a prefix match where `*` matches any run of characters and
+// a trailing `$` anchors the end. Split on `*` and place each literal segment
+// at its leftmost position after the previous one (leftmost placement is
+// always safe for `*`-only globs), so the work is one indexOf scan per segment
+// with no backtracking across segments.
+export function robotsRuleMatches(rulePath, path) {
+  const anchored = rulePath.endsWith("$");
+  const segs = (anchored ? rulePath.slice(0, -1) : rulePath).split("*");
+  const first = segs[0];
+  if (!path.startsWith(first)) return false;
+  if (segs.length === 1) return anchored ? path.length === first.length : true;
+  let pos = first.length;
+  const last = segs[segs.length - 1];
+  for (let i = 1; i < segs.length - 1; i++) {
+    const at = path.indexOf(segs[i], pos);
+    if (at < 0) return false;
+    pos = at + segs[i].length;
+  }
+  if (anchored) return path.length - last.length >= pos && path.endsWith(last);
+  return path.indexOf(last, pos) >= 0;
 }
 
 // ── RDAP bootstrap (IANA) ────────────────────────────────────────────────────

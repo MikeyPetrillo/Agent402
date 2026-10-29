@@ -13,6 +13,7 @@
 // partial instead of reading an empty part as a clean one.
 
 export const MAX_RAW_BYTES = 1024 * 1024;
+export const MAX_DISPLAY_NAME_CHARS = 1000;
 const MAX_DEPTH = 8;
 const MAX_PARTS = 64;
 const MAX_HEADER_LINES = 500;
@@ -229,7 +230,10 @@ export function parseMailbox(raw) {
   const first = s.split(",")[0].trim();
   let displayName = null;
   let address = null;
-  const m = first.match(/^(.*?)\s*<([^<>]*)>\s*$/s);
+  // Name <addr>: the last <...> at the end of the mailbox, found by index
+  // rather than a lazy regex that rescans whitespace runs.
+  const lt = first.endsWith(">") ? first.lastIndexOf("<") : -1;
+  const m = lt >= 0 && !first.slice(lt + 1, -1).includes(">") ? [null, first.slice(0, lt), first.slice(lt + 1, -1)] : null;
   if (m) {
     displayName = m[1].trim().replace(/^"(.*)"$/s, "$1").trim() || null;
     address = m[2].trim();
@@ -238,6 +242,8 @@ export function parseMailbox(raw) {
     address = a ? a[0] : null;
     if (a && first.replace(a[0], "").trim()) displayName = first.replace(a[0], "").replace(/^"(.*)"$/s, "$1").trim() || null;
   }
+  // The display name is evidence text, read only up to MAX_DISPLAY_NAME_CHARS.
+  if (displayName && displayName.length > MAX_DISPLAY_NAME_CHARS) displayName = displayName.slice(0, MAX_DISPLAY_NAME_CHARS);
   const at = address ? address.lastIndexOf("@") : -1;
   const domain = at > 0 ? address.slice(at + 1).toLowerCase().replace(/[.\s]+$/, "") : null;
   return { raw: s, displayName, address: address ? address.toLowerCase() : null, domain };

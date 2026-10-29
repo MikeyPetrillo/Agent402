@@ -2,6 +2,7 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
+import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
@@ -356,7 +357,7 @@ import { securityPage } from "./security-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
-import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
+import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
 import { refundLookup } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
@@ -2774,7 +2775,7 @@ const _monitorTargetValidators = {
   },
   // The alert path puts the target in an email SUBJECT sent to any address, so it is tighter than the
   // paid tool's query (no slashes, no plus signs, letters/digits first): a drug, food, brand or device name.
-  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation)."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
+  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q) || hostnameShapedToken(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation), not a web address."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   ipo: (t) => normIpoKeyword(t) || "all",
   research: (t) => { const q = String(t ?? "").trim().replace(/\s+/g, " "); if (q.length < 12 || q.length > 300) { const e = new Error("Enter a research question of 12 to 300 characters."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   filing: (t) => { const k = String(t).trim().toUpperCase(); if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(k)) { const e = new Error(`"${t}" is not a valid US ticker`); e.statusCode = 400; e.buyerSafe = true; throw e; } return k; },
@@ -3020,7 +3021,7 @@ if (_subs) {
   });
 }
 
-app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (req, res) => {
+app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: false }), async (req, res) => {
   // Mounted ahead of the security headers, so it sets its own: the browser
   // never sniffs a relayed body into another type.
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3217,6 +3218,28 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   sharedSettled: redisSharedSettled(),
 }) : null;
 if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
+// Every route below that takes more than the global 100 KB first passes the
+// large-body gate (src/large-body-gate.js): no Content-Encoding, no body over
+// 100 KB read for an unpaid call whose price does not depend on it, a
+// per-client bound on the unpaid ones that are read, and one in-flight byte
+// budget for every parse. The parsers run with inflate off and skip a body
+// the gate left unread.
+const MB = 1024 * 1024;
+const LARGE_BODY_ROUTES = [
+  ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
+  ["/v1/judge/vision", 23 * MB], ["/v1/judge/locate", 6 * MB], ["/v1/judge/long", 2 * MB],
+  ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
+];
+const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
+app.use(createLargeBodyGate({
+  routes: LARGE_BODY_ROUTES,
+  isPaid: (req) => looksLikePayment(req.headers),
+  bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`])),
+  freeMode: FREE_MODE,
+  unpaidLimiter: largeBodyUnpaidLimiter,
+  clientKey: clientIp,
+  maxInflightBytes: largeBodyInflightMaxBytes(),
+}));
 // The metered tier prices every request from its body, so a big body is a big
 // quote, never an unpriced cost - it can take real agent-host turns. A Claude
 // Code turn is ~110 KB (system prompt + 22 tool schemas, measured 2026-08-27)
@@ -3230,22 +3253,31 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // unparsed stream. 26 MB matches the tool's own 25 MB file cap plus the
 // multipart envelope; anything larger is refused by the parser, not by us
 // reading it into memory twice.
-app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], express.raw({ type: "multipart/form-data", limit: "26mb" }));
+app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "26mb", inflate: false })));
 app.use("/v1/metered", express.json({ limit: "1mb" }));
 // The Jev preview routes carry images (base64 in JSON) or a long document, so
 // they take a larger body than the global 100 kb. Each limit is the route's own
 // cap plus the JSON envelope; the handler checks every image and byte again.
-app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
-app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
-app.use("/v1/judge/long", express.json({ limit: "2mb" }));
+app.use("/v1/judge/vision", unlessBodyUnread(express.json({ limit: "23mb", inflate: false })));
+app.use("/v1/judge/locate", unlessBodyUnread(express.json({ limit: "6mb", inflate: false })));
+app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // html-frames carries a whole HTML document (512 KB cap, checked by the
 // handler) and, for a frame check, up to 8 MB of baseline PNG as base64
 // (the handler's cap); the limit leaves room for the JSON escaping.
-app.use("/api/html-frames", express.json({ limit: "12mb" }));
+app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
-app.use("/v1/images/edits", express.json({ limit: "34mb" }));
-app.use("/v1/images/edits", express.raw({ type: "multipart/form-data", limit: "7mb" }));
+app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
+app.use("/v1/images/edits", unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "7mb", inflate: false })));
+// The seller sweep posts its observations here (up to 8 MB). The operator
+// check runs before a byte of the body is read, and ahead of the global
+// parser, which would otherwise refuse the body at 100 KB.
+const sellerVerificationJson = express.json({ limit: "8mb", inflate: false });
+app.use("/__operator/seller-verification", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  return sellerVerificationJson(req, res, next);
+});
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
@@ -3297,7 +3329,7 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
     : res.status(429).json({ error: "Too many requests", detail: "The transaction surfaces are cached 30-300s; poll no faster than that.", retryAfterSeconds: 60 });
 });
 
-app.use(express.json({ limit: "100kb" }));
+app.use(unlessBodyUnread(express.json({ limit: "100kb" })));
 // Decide execute is quoted from the decision and the caller's credit, read
 // synchronously from the ledger's mirror when the 402 is priced. Before any
 // gate runs, both are read fresh from the database, so a plan made or a
@@ -3489,7 +3521,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorElevated(req)) {
+  if (!operatorView(req, res)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3622,7 +3654,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorElevated(req);
+  const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
@@ -4892,7 +4924,7 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
 // the WORKFLOW never touches the bucket - its own credentials are a funded
 // spending key, and widening that job's reach to our dataset storage would buy
 // nothing. Same split as POST /api/status/probe.
-app.post("/__operator/seller-verification", express.json({ limit: "8mb" }), async (req, res) => {
+app.post("/__operator/seller-verification", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   try {
     const out = await recordSellerVerification(req.body);
@@ -5457,6 +5489,15 @@ function operatorAuthed(req, { headerOnly = false } = {}) {
 // session cookie is scoped to /__operator and never arrives here. The
 // operator routes keep the Bearer form for curl.
 function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
+// A public surface whose answer differs for the operator: keyed on the
+// operator header in every answer, and never stored by a shared cache when
+// elevated. Returns operatorElevated(req); call it once per request.
+function operatorView(req, res) {
+  const elevated = operatorElevated(req);
+  res.vary("X-Operator-Token");
+  if (elevated) res.set("Cache-Control", "private, no-store");
+  return elevated;
+}
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -8003,8 +8044,10 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
-  res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
+  const elevated = operatorView(req, res);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), elevated ? 1000 : 200);
+  if (!elevated) res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+  res.json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
   const lb = mppLeaderboardSnapshot();
@@ -8104,9 +8147,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorElevated(req)) {
-    return res.set("Cache-Control", "no-store").json(snap);
-  }
+  if (operatorView(req, res)) return res.json(snap);
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
   // `perPage` is honoured as an alias for `limit` because two consumers in a row
   // guessed that name - our own scripts/seller-sweep.mjs and an outside seller's
@@ -8441,7 +8482,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorElevated(req) ? 500 : 50;
+  const topCeiling = operatorView(req, res) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -9214,7 +9255,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorElevated(req)));
+  res.json(redactAnalytics(data, operatorView(req, res)));
 });
 
 let __analyticsSlugSet = null;
@@ -9229,7 +9270,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorElevated(req)) return res.redirect(302, "/status");
+  if (!operatorView(req, res)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9237,7 +9278,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
+  res.type("html").send(analyticsPage(redactAnalytics(data, true), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.
@@ -10846,7 +10887,9 @@ function sendToolError(res, err, slug) {
 // sends the self-explaining 400 and returns null.
 function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
-  const input = handlerInputOf(req, def);
+  let input;
+  try { input = handlerInputOf(req, def); }
+  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
   const refused = shapeRefusal(input, def);
   if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
   if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }
@@ -11425,8 +11468,14 @@ app.use((req, res, next) => {
 // error handler uses for /api + /__operator. Registered after every route
 // and before the error handler. Status stays 404 so route-existence probes
 // (test-mcp-self-consistency's live GET oracle) are unaffected.
+// A machine surface by path, read case-insensitively (routing is, so /V1/x
+// reaches the same 404 as /v1/x and gets the same JSON answer).
+function isMachinePath(path) {
+  const p = String(path || "").toLowerCase();
+  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator");
+}
 app.use((req, res) => {
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // An unknown /api path is almost always a retired tool or a guessed slug
     // (four indexers probed soundex, string-similarity, uuid-v5 and ~25 old
@@ -11489,7 +11538,7 @@ app.use((err, req, res, _next) => {
   if (status === 400 && err?.type === "entity.parse.failed" && req.path.startsWith("/mcp")) {
     return res.status(400).json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null });
   }
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
     // it five times in 30 minutes, 2026-08-28): say where big bodies go.

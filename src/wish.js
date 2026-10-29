@@ -268,10 +268,6 @@ export async function annotateServedAsync(clusters, scoreFn, minScore, { sliceMs
   return clusters;
 }
 
-const esc = (s) => String(s ?? "")
-  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
 function normalize(s) {
   return String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
 }
@@ -676,8 +672,8 @@ export function recordWish({ need, context, source, ip } = {}) {
  * Aggregate view for /api/wishes: normalized text, count, per-source
  * breakdown, first/last seen, and whether the threshold-crossing log already
  * fired. Deliberately excludes raw `context` - that field is free text
- * supplied by callers and never belongs on a public surface. `text` is
- * esc()'d in case this ever gets rendered on an HTML surface later.
+ * supplied by callers and never belongs on a public surface. `text` is the
+ * raw normalized text; an HTML surface escapes it where it renders it.
  */
 /**
  * Wish aggregate. Two modes:
@@ -730,7 +726,9 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
     .sort((a, b) => b[1].lastSeen - a[1].lastSeen || b[1].count - a[1].count)
     .slice(0, cap)
     .map(([key, c]) => ({
-      text: esc(key),
+      // Raw text: every reader escapes for its own medium (the operator
+      // board at render, the issue bridge in a code fence, JSON as JSON).
+      text: key,
       count: c.count,
       sources: { api: c.sources.api || 0, mcp: c.sources.mcp || 0, "find-miss": c.sources["find-miss"] || 0 },
       // Distinct day-scoped caller hashes seen (never addresses). Legacy
