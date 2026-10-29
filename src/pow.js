@@ -354,8 +354,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // but the rate limits are shared per-IP. PoW would let one client exhaust the
   // shared quota for every other caller.
   "price-coingecko", "defi-tvl",
-  // Dex-kit: 3 Alchemy-backed (dex-pair, dex-pool, dex-quote share the same
-  // compute-unit quota as chain-kit) and 1 DeFiLlama-backed (dex-top-pools
+  // Dex-kit: 3 on-chain RPC readers (dex-pair, dex-pool, dex-quote read
+  // through chain-kit's transport and share its quota) and 1 DeFiLlama-backed (dex-top-pools
   // shares the per-IP quota with defi-tvl). All wallet-only for the same
   // reasons as their underlying upstreams.
   "dex-pair", "dex-pool", "dex-quote", "dex-top-pools",

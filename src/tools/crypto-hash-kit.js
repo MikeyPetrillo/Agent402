@@ -1,4 +1,4 @@
-// Crypto-hash kit — multi-digest checksumming (MD5, SHA-1, SHA-256, SHA-512,
+// Crypto-hash kit: multi-digest checksumming (MD5, SHA-1, SHA-256, SHA-512,
 // CRC32) for payload and file integrity workflows.
 //
 // Built entirely on node:crypto (stdlib, no new deps). All pure CPU, no

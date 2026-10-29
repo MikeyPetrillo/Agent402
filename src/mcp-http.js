@@ -245,10 +245,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const gatewayTierUsd = [...packPriceIndex.entries()].filter(([slug]) => /^v1-(chat|embeddings)/.test(slug) && !/metered/.test(slug)).map(([, n]) => n).filter((n) => n > 0);
   const gatewayRange = gatewayTierUsd.length ? `${fmtUsd(Math.min(...gatewayTierUsd))}–${fmtUsd(Math.max(...gatewayTierUsd))}` : null;
   const gatewayFlat = [["chat nano", priceText("v1-chat-nano")], ["auto (eval-ranked model routing)", priceText("v1-chat-auto")], ["embeddings", priceText("v1-embeddings")]].filter(([, p]) => p).map(([k, p]) => `${k} ${p}`).join(", ");
-  // Chains the agent402-mcp npm server names as AGENT402_NETWORKS presets
-  // (mcp/networks.js NETWORK_CAIP2, pinned by test-legal-claims.js); every
-  // other EVM rail is reachable by its CAIP-2 id. Arc is named by its CAIP-2
-  // id, which every published version of the package passes through.
+  // Chains the agent402-mcp npm server resolves by name in AGENT402_NETWORKS
+  // (mcp/networks.js, every rail since 0.13.25, pinned by test-legal-claims.js);
+  // a CAIP-2 id works on every published version. Arc is shown by its CAIP-2
+  // id so the setup line works on versions before 0.13.25 too.
   const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", robinhood: "Robinhood Chain", arc: "Arc" };
   const SETUP_NAMED = ["Base", "Polygon", "Arbitrum", "Robinhood Chain", "Arc"];
   const presetOf = (name) => Object.keys(NPM_EVM_PRESETS).find((k) => NPM_EVM_PRESETS[k] === name);

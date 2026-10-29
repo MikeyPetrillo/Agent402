@@ -63,7 +63,7 @@ try {
     ok(typeof body.checks[key] === "boolean", `body.checks.${key} is boolean (got ${typeof body.checks[key]})`);
   }
 
-  // Required flags — every key in the `flags` object of
+  // Required flags, every key in the `flags` object of
   // server.js's /health handler. A future env
   // refactor that quietly drops one (the yahoo-relay flap pattern) will fail
   // this exact list. Add new flags here when they're added to the server.

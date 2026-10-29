@@ -1,4 +1,4 @@
-// Date-time kit — timezone conversion and date formatting:
+// Date-time kit: timezone conversion and date formatting:
 //   timezone-convert  convert a datetime between IANA timezones
 //   date-format       parse and reformat dates (ISO, Unix, RFC 2822, relative)
 // All pure CPU, no dependencies, no network → proof-of-work eligible (free tier).

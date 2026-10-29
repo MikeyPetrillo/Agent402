@@ -120,7 +120,7 @@ export { PACK_PRICES };
 // Parsers for natural-language pack args.
 //
 // The loan-comparison pack accepts a free-form string like "$300,000 at 6.5%
-// for 30 years" from the prompt — the underlying finance-math tools take
+// for 30 years" from the prompt, the underlying finance-math tools take
 // structured numeric inputs. parseLoanString pulls dollars/percent/years out
 // of the string with regex. Any field they can't extract returns NaN and surfaces as
 // a clean per-step partial-failure in the envelope (the tool will reject
@@ -2236,7 +2236,7 @@ export function modelBackedPackSlugs(packs, isModelBacked) {
   return (packs || []).filter((p) => (p.toolSlugs || []).some((s) => isModelBacked(s))).map((p) => `skill-${p.slug}`);
 }
 
-// Test surface — used by scripts/test-skill-pack-steps.js.
+// Test surface, used by scripts/test-skill-pack-steps.js.
 export const __test = {
   runPack,
   lookupHandler,

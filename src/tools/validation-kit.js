@@ -1,5 +1,5 @@
-// Validation kit — CSV linting. A pure-CPU format validator agents reach
-// for when sanitising input.
+// Validation kit: CSV linting. A pure-CPU format validator agents reach
+// for when sanitizing input.
 // No network, no npm deps — proof-of-work eligible (free tier).
 
 function bad(message) {

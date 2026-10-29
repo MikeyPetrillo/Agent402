@@ -1,4 +1,4 @@
-// Text-analysis kit — readability scores. Pure-CPU, no network, no LLM — proof-of-work eligible.
+// Text-analysis kit: readability scores. Pure-CPU, no network, no LLM, proof-of-work eligible.
 // Covered by scripts/test-text-analysis-kit.js.
 
 function bad(message, statusCode = 400) {

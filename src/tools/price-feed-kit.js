@@ -1,4 +1,4 @@
-// Price-feed kit — two deterministic gateway tools that surface public price
+// Price-feed kit: two deterministic gateway tools that surface public price
 // + TVL data feeds without requiring a key in our deployment:
 //
 //   • price-coingecko — CoinGecko public simple/price (keyless free tier)
@@ -91,7 +91,7 @@ async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {
 // the ledger's history (retirement rule, CLAUDE.md).
 export const PRICE_FEED_TOOLS = [
   // ===========================================================================
-  // price-coingecko — spot price by CoinGecko coin id.
+  // price-coingecko, spot price by CoinGecko coin id.
   // ===========================================================================
   {
     route: "POST /api/price-coingecko",
