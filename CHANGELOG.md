@@ -33,12 +33,12 @@ Speech:
   2,000 characters costs what the flat price did. The cap stays 2,000
   characters on both. The 402, Tempo and credits all read the quote;
   /api/pricing (quoteRange, quoteFormula), /openapi.json, the tool pages and
-  /llms.txt publish the range and the formula. /api/dub keeps its
+  /llms-full.txt publish the range and the formula. /api/dub keeps its
   2,000-character cap and its price; /api/tts-lite stays flat.
 - /api/tts and /api/tts-hd are called directly: route-execute refuses routes
   quoted per request, so the 402 carries the real price.
-- Catalog lines in /llms.txt and /llms-full.txt read "from" the floor on every
-  route quoted per request.
+- Catalog lines in /llms-full.txt read "from" the floor on every route quoted
+  per request.
 
 Packages:
 - agent402-client 0.8.21 takes a userAgent option (a calling package's own
@@ -81,7 +81,9 @@ Limits:
   a large upload while this host's in-flight upload budget, or one address's
   share of it, is full answers 503 with Retry-After; repeated unpaid large bodies from one address to a
   quoted route answer 429; a PDF whose streams decode past the processing
-  limits answers 422. None of these is charged.
+  limits answers 422, and a PDF call while the PDF workers and their queue
+  are full answers 503 with Retry-After; base58 text is capped at 4,096
+  characters (400 past it). None of these is charged.
 
 Live view:
 - Where a network holds the event stream back, the page switches to short
