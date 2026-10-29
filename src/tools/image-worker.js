@@ -23,6 +23,14 @@ loadJimp().catch(() => { /* the first job's decode reports the failure */ });
 
 parentPort.on("message", async (job) => {
   try {
+    if (job.op === "barcode") {
+      // Barcode decode returns JSON, not an encoded image. Imported here, not at
+      // the top, so the resize/convert path never evaluates the barcode kit.
+      const { decodeBarcodeBuffer } = await import("./barcode-kit.js");
+      const result = await decodeBarcodeBuffer(Buffer.from(job.buffer.buffer, job.buffer.byteOffset, job.buffer.byteLength));
+      parentPort.postMessage({ id: job.id, result });
+      return;
+    }
     const { __binary, contentType } = await runImageOp({
       op: job.op,
       // Structured clone delivers a Uint8Array view; Jimp and the byte-level
