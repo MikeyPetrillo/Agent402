@@ -4720,6 +4720,8 @@ jobs:
           t node scripts/test-direct-transfer-seller.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
           t node scripts/test-sor-payto-binding.js
+          # The router's own purchases are never a seller's proof: merchant SQL excludes our wallets, Bazaar figures reduced by the purchase record, Solana credit rule, payers 0 refuses (offline)
+          t node scripts/test-router-purchases.js
           # Operator-listed shared payTo wallets credit nobody: the rule, the persisted store, and the lever on a booted free server across a restart
           t node scripts/test-shared-paytos.js
           # Self-funded payers are not settlement evidence: ordered funding read, refunds kept, circular wallets' Bazaar figures ignored, end-to-end scan against a stub Bazaar + RPC (offline)

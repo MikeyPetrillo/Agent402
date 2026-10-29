@@ -623,6 +623,7 @@ import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamC
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
+import { routerPurchasesSnapshot } from "./router-purchases.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { paysThirdParty } from "./third-party-routes.js";
 import { ncTaxReport, NC_TAXABLE_SLUGS, monthBounds } from "./nc-sales-tax.js";
@@ -1406,6 +1407,9 @@ function buildEvidenceBindingByOrigin({ chainProven }) {
     // chain-join figures count the same payments and are disregarded (at any
     // other wallet they are reduced by what its own scan netted).
     circularWallets: getLeaderboardCircularWallets().wallets,
+    // The router's own purchases at each origin's wallet come off its Bazaar
+    // figures: what we paid a seller is never that seller's proof.
+    routerPurchases: routerPurchasesSnapshot(),
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
   });

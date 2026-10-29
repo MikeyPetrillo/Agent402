@@ -28,6 +28,7 @@ import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
+import { recordRouterPurchase } from "../router-purchases.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -216,7 +217,7 @@ export function externalChainsFor(payNet, supported, { tempoFromBase = process.e
 }
 const EXTERNAL_CHAIN_CAIP2 = Object.fromEntries(Object.entries(EXTERNAL_CHAIN_BY_NETWORK).map(([k, v]) => [v, k]));
 
-export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus }) {
+export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
   const UNDERLYING_MAX_USD = tier.underlyingMaxUsd;
   const routeSuffix = tier.slug.replace("route-execute", "");
@@ -634,6 +635,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // it would let two cheap misses starve a legitimate retry. `committed`
             // is payX402's own stamp for "the authorization left".
             const spentMaybe = e?.committed === true;
+            // A payment that left is the router's purchase whatever the seller
+            // answered: recorded against the seller's wallet so its
+            // third-party counts are reduced by it (src/router-purchases.js).
+            if (spentMaybe) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
             // A paid request that got no answer is never followed by another
             // seller in the same request, even once the chain shows it unused.
             // "No answer" is the outcome a caller's own params can produce (a
@@ -688,6 +693,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // paid (no quote, no receipt): nothing left the wallet, so nothing is
           // booked against it.
           const servedUnpaid = !paid.quote && !paid.receipt;
+          // The router's own purchase, recorded against the wallet it paid so
+          // the seller's third-party counts are reduced by it.
+          if (!servedUnpaid) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
           const underlyingUsd = servedUnpaid ? 0 : (paid.quote ? paid.quote.usd : extUsd);
           // Now the real figure is known, so the ceiling stops counting the
           // worst case against this payer.
