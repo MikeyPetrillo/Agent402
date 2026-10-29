@@ -32,6 +32,7 @@ const ENTRIES = [
       "Surfaces: the privacy page carries a rights section for readers in the EU and the UK, and its backups wording names the state database.",
       "Operations: the operator view of a public surface reads X-Operator-Token only; an Authorization header there is a buyer's credential. An operator session is known on every operator route across containers.",
       "Operations: the nightly backup runs once a night across replicas; deploy and probe steps that run package code see no job secret; @hono/node-server 2.1.3 in the root and mcp overrides; the agentkit-live lockfile installs again.",
+      "Speech: /api/tts and /api/tts-hd are quoted per request from the length of the text, a floor plus a per-character rate rounded up to the next $0.001, so 2,000 characters costs what the flat price did; the cap rises to 5,000 characters on both. The 402, Tempo, card and credits all read the quote, and /api/pricing, /openapi.json, the tool pages and /llms.txt publish the range and the formula. /api/dub keeps its cap and price; /api/tts-lite stays flat.",
     ],
   },
   {

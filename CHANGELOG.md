@@ -107,6 +107,18 @@ Operations:
 - @hono/node-server 2.1.3 in the root and mcp overrides; the agentkit-live
   lockfile installs again.
 
+Speech:
+- /api/tts and /api/tts-hd are quoted per request from the length of the
+  text: $0.005 plus $0.0575 per 1,000 characters on tts and $0.010 plus $0.115
+  per 1,000 characters on tts-hd, rounded up to the next $0.001, so 2,000
+  characters costs what the flat price did ($0.120 and $0.240). The cap rises
+  to 5,000 characters on both. The 402, Tempo, card and credits all read the
+  quote; /api/pricing (quoteRange, quoteFormula), /openapi.json, the tool pages
+  and /llms.txt publish the range and the formula. /api/dub keeps its
+  2,000-character cap and its price; /api/tts-lite stays flat.
+- Catalog lines in /llms.txt and /llms-full.txt read "from" the floor on every
+  route quoted per request.
+
 ### 2026-10-28 (credits)
 - Prepaid credits are a prepayment for Agent402's own services, for business
   and developer use: not cash, not transferable, never expiring, with no fees.

@@ -12,8 +12,10 @@ Three tiers of text-to-speech, paywalled via x402. Send text, get back base64-en
 | Endpoint | Price | Model | Quality | Formats | Text cap |
 |---|---|---|---|---|---|
 | `POST /api/tts-lite` | $0.005 | `hexgrad/kokoro-82m` | Synthetic-sounding, the cheapest | mp3, pcm | 800 chars |
-| `POST /api/tts` | $0.12 | `elevenlabs/eleven-v4-turbo` | Natural, low latency | all six | 2,000 chars |
-| `POST /api/tts-hd` | $0.24 | `elevenlabs/eleven-v4` | Most expressive; reads audio tags such as `[whispering]` | all six | 2,000 chars |
+| `POST /api/tts` | from $0.005, by length | `elevenlabs/eleven-v4-turbo` | Natural, low latency | all six | 5,000 chars |
+| `POST /api/tts-hd` | from $0.010, by length | `elevenlabs/eleven-v4` | Most expressive; reads audio tags such as `[whispering]` | all six | 5,000 chars |
+
+**Pricing by length.** `tts` and `tts-hd` are quoted per request from the text: `tts` is $0.005 plus $0.0575 per 1,000 characters, `tts-hd` is $0.010 plus $0.115 per 1,000 characters, each rounded up to the next $0.001. 2,000 characters costs $0.120 on `tts` and $0.240 on `tts-hd`; 5,000 characters costs $0.293 and $0.585. The 402 for a request carries its quote, and `/api/pricing` lists each tier's range and formula (`quoteRange`, `quoteFormula`). `tts-lite` is flat.
 
 Each ElevenLabs tier tries same-rate ElevenLabs models in turn if the first is unavailable (`tts`: Eleven v4 Turbo, Turbo v2.5, Flash v2.5; `tts-hd`: Eleven v4, v3, Multilingual v2). If ElevenLabs is busy, throttling or returning errors, the call is served by a backup speech model on the same wire instead of failing: `mistralai/voxtral-mini-tts-2603` first (nine of the ten names get their own voice; coral and sage share one), then Grok voice (five voices, so the ten names share them), then MAI-Voice-2 (one English voice). Every backup serves all six formats; a voice named directly keeps its character on the backup. A call that timed out or came back empty is not retried, since it may already have been generated; it fails uncharged. `/api/gateway-status` reports `speechUpstream` as `ok`, `cooling` or `probing`. The `model` field in the answer always names the one that spoke.
 
