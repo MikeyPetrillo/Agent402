@@ -5719,6 +5719,8 @@ jobs:
       # can differ). If Solana is offered, scan its payTo for USDC received —
       # the Base-only revenue check below can't see Solana settlements.
       - name: Multi-chain payment surface (health flags, live 402 accepts, Solana revenue)
+        env:
+          RAILWAY_API_TOKEN: ""
         run: |
           PROD=https://agent402.tools
           echo "=== production /health — env-gated feature flags live right now ==="
@@ -5810,6 +5812,8 @@ jobs:
 
 
       - name: Revenue + real-usage check (stats vs on-chain receipts)
+        env:
+          RAILWAY_API_TOKEN: ""
         run: |
           echo "=== production /api/stats (calls served, split by settlement) ==="
           STATS=$(curl -s https://agent402.tools/api/stats)
@@ -5940,6 +5944,8 @@ jobs:
       # rollout" from "suffixes have landed for a week and the dashboard
       # still counts zero" (a Base-side bug report with tx-hash evidence).
       - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
+        env:
+          RAILWAY_API_TOKEN: ""
         run: SPAN_BLOCKS=350000 MAX_TXS=80 node scripts/check-builder-attribution.js || true
 
   deploy:
@@ -6197,11 +6203,25 @@ jobs:
       # proceed with a warning); the in-server SIGTERM drain plus the Railway
       # grace set below still protect whatever is in flight. Runs BEFORE the
       # variable upsert because that upsert can itself trigger a redeploy.
+      # Package code runs with no job-level secret in its environment (the
+      # same rule as the install steps): the step shadows every one with "".
       - name: Quiet gate - wait for a lull in outside traffic and a clear ledger word
         env:
           TARGET_URL: https://${{ env.CUSTOM_DOMAIN || steps.domain.outputs.domain }}
           QUIET_GATE: ${{ vars.QUIET_GATE }}
           MAX_WAIT_SECS: ${{ vars.QUIET_GATE_MAX_WAIT || '1200' }}
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          BACKUP_S3_KEY_ID: ""
+          BACKUP_S3_SECRET: ""
+          WALLET_ADDRESS: ""
         run: node scripts/deploy-quiet-gate.js
 
       - name: Set environment variables (triggers deploy)
@@ -6440,6 +6460,18 @@ jobs:
       - name: Ping IndexNow (instant Bing/Copilot/DDG re-indexing — best-effort, never fails the deploy)
         env:
           INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          BACKUP_S3_KEY_ID: ""
+          BACKUP_S3_SECRET: ""
+          WALLET_ADDRESS: ""
         run: |
           if [ -z "$INDEXNOW_KEY" ]; then echo "INDEXNOW_KEY secret not set — skipping"; exit 0; fi
           node scripts/indexnow-submit.js --state .indexnow-state.json || echo "IndexNow ping failed (non-fatal — the sitemap remains the source of truth)"
@@ -6498,6 +6530,19 @@ jobs:
         # the MCP poll retry through any residual rollout lag, and
         # demo-payment.js takes the proof-of-work path (no wallet, no funds)
         # because the deploy job sets no AGENT_KEY.
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          BACKUP_S3_KEY_ID: ""
+          BACKUP_S3_SECRET: ""
+          WALLET_ADDRESS: ""
         run: |
           PROD=https://agent402.tools
           # The deploy job and this test job run concurrently, so production may
@@ -6603,11 +6648,22 @@ jobs:
       # commit would leave the worker behind (worker-deploy-paths.js --base).
       # The CLI is a pinned release binary checked
       # against its published sha256 (no package install, no lifecycle scripts).
-      - name: Redeploy the render worker when its code changed
+      - name: Decide whether the render worker's code changed
+        id: worker-diff
         env:
           GH_TOKEN: ${{ github.token }}
-          RAILWAY_CLI_VERSION: "5.63.1"
-          RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          BACKUP_S3_KEY_ID: ""
+          BACKUP_S3_SECRET: ""
+          WALLET_ADDRESS: ""
         run: |
           set -euo pipefail
           RUN=yes
@@ -6627,7 +6683,15 @@ jobs:
           else
             echo "no successful deploy run to diff from - redeploying agent402-worker (fail-open)"
           fi
-          [ "$RUN" = "yes" ] || exit 0
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy the render worker when its code changed
+        if: steps.worker-diff.outputs.run == 'yes'
+        env:
+          RAILWAY_CLI_VERSION: "5.63.1"
+          RAILWAY_CLI_SHA256: cbb559de44cd304cf9d6598a4ea77575035a0e6e3215370bb3b105b8f48235cc
+        run: |
+          set -euo pipefail
           CLI_DIR=$(mktemp -d)
           curl -fsSL --max-time 120 -o "$CLI_DIR/cli.tgz" "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           echo "$RAILWAY_CLI_SHA256  $CLI_DIR/cli.tgz" | sha256sum -c -
