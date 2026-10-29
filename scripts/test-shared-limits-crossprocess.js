@@ -57,7 +57,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   const [ua, ub, ur] = await Promise.all([up(pa), up(pb), up(pr)]);
   ok(ua && ub && ur, "three servers booted on free ports against one Redis");
   if (!(ua && ub && ur)) { console.error(A.log.slice(-800), Bs.log.slice(-800), R.log.slice(-800)); done(1); }
-  const status = async (port, auth = false) => (await fetch(`http://127.0.0.1:${port}/api/gateway-status`, auth ? { headers: { authorization: `Bearer ${TOKEN}` } } : {})).json();
+  const status = async (port, auth = false) => (await fetch(`http://127.0.0.1:${port}/api/gateway-status`, auth ? { headers: { "x-operator-token": TOKEN } } : {})).json();
   const sa = await status(pa), sb = await status(pb);
   ok(sa.sharedLimits?.status === "on" && sb.sharedLimits?.status === "on", `both servers publish sharedLimits.status on (${sa.sharedLimits?.status}, ${sb.sharedLimits?.status})`);
   ok(Object.keys(sa.sharedLimits).join() === "status", "the public field is the word alone");
@@ -75,6 +75,12 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
     ok(login.status === 200 && /^a402_op=[0-9a-f]{64}$/.test(cookie), `login on A sets a session cookie (${login.status})`);
     ok((await page(pa, cookie)) === 200, "the cookie authenticates the dashboard on A");
     ok((await page(pb, cookie)) === 200, "the same cookie authenticates the dashboard on B, which never saw the login");
+    // The session sync runs ahead of every operator route, the ones registered
+    // early in the file included: B knows the cookie on them too.
+    for (const p of ["/__operator/followups.json", "/__operator/tool-failures.json", "/__operator/sales.json"]) {
+      const r = await fetch(`http://127.0.0.1:${pb}${p}`, { headers: { cookie }, redirect: "manual" });
+      ok(r.status === 200, `the cookie minted on A opens ${p} on B (${r.status})`);
+    }
     ok((await page(pb, "a402_op=" + "ab".repeat(32))) === 404, "control: a well-formed session id minted nowhere is refused on B");
     ok((await page(pr, cookie)) === 404, "a container running a rotated operator token refuses the session though it is in the shared store");
     const out = await fetch(`http://127.0.0.1:${pa}/__operator/logout`, { method: "POST", headers: { cookie }, redirect: "manual" });

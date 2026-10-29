@@ -2787,6 +2787,22 @@ app.get("/followups/stop", async (req, res) => {
   res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
 });
 app.post("/followups/stop", async (req, res) => { const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+// Every /__operator answer: no-store (operator pages carry lead PII, revenue
+// figures and session state; no browser-history cache, shared proxy or CDN may
+// retain them), and the browser session read from the shared store (a cookie
+// minted on another container) before any gate looks at it. Registered ONCE,
+// ahead of the first operator route in this file: a route registered before
+// this middleware would answer 404 to a session the other container minted,
+// and each such refusal counts as a wrong credential. The names it reads
+// (OP_SESSION_SHARED, syncOperatorSession) are defined with the operator auth
+// below; the callback runs at request time, after they init.
+app.use("/__operator", (req, res, next) => {
+  res.set("Cache-Control", "no-store, private");
+  res.set("Pragma", "no-cache");
+  res.set("Vary", "Cookie, Authorization");
+  if (!OP_SESSION_SHARED) return next();
+  syncOperatorSession(req).then(() => next(), () => next());
+});
 app.get("/__operator/followups.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_followups.stats());
@@ -3428,7 +3444,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorAuthed(req)) {
+  if (!operatorElevated(req)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3561,7 +3577,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorAuthed(req);
+  const full = operatorElevated(req);
   // The wrong-credential count every replica contributed to, when shared.
   await refreshOperatorAuthShared();
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
@@ -4146,9 +4162,9 @@ app.get("/api/revenue/mpp", (req, res) => {
   try {
     // Itemized rows (tool + price per settlement) are operator-only; everyone
     // else gets the adoption aggregate plus the tx hashes that prove it.
-    const authed = operatorAuthed(req);
+    const authed = operatorElevated(req);
     res.set("Cache-Control", authed ? "no-store, private" : "public, max-age=60")
-      .set("Vary", "Cookie, Authorization")
+      .set("Vary", "X-Operator-Token")
       .json(authed ? mppSales({ detailed: true }) : memoSurface("revenue:mpp", 60_000, () => mppSales({ detailed: false })));
   } catch (e) {
     res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
@@ -5140,14 +5156,16 @@ if (STATUS_PROBE_TOKEN) {
 function statusProbeAuthed(req) {
   // The narrow credential first, so an observer carrying only it never touches
   // the operator limiter or the guessing counter.
-  const presented = getOperatorToken(req);
+  // Both routes are public, so the credential is read from X-Operator-Token
+  // only (see operatorElevated).
+  const presented = getOperatorToken(req, { headerOnly: true });
   // An IP whose operator budget is spent gets no comparison at all, of either
   // token (a refused probe is a gap on /status, never a recorded outage).
   if (presented && operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return false;
   if (presented && statusProbeTokenOk(presented)) return true;
   // Otherwise the operator token still works, and a WRONG credential is
   // rate-limited and counted exactly as it was before.
-  return operatorAuthed(req);
+  return operatorElevated(req);
 }
 // The one other thing STATUS_PROBE_TOKEN does: on GET /api/pow/challenge for
 // PROBE_POW_SLUG it gets the status Worker a low-difficulty challenge it can
@@ -5173,11 +5191,19 @@ function statusProbeChallengeAuthed(req) {
   }
   return false;
 }
-const getOperatorToken = (req) => {
-  const auth = req.headers["authorization"];
-  if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+// A Bearer in the credits-key shape (src/credits.js KEY_RE) is a buyer's
+// credential, never an operator token: a credits client attaches it to every
+// request, and reading it here would count each read as a wrong operator
+// credential. An MPP credential uses the `Payment` scheme and is never read.
+// `headerOnly`: X-Operator-Token alone, for the public surfaces that carry an
+// operator branch (see operatorElevated).
+const CREDITS_KEY_PREFIX = "a402_";
+const getOperatorToken = (req, { headerOnly = false } = {}) => {
   const hdr = req.headers["x-operator-token"];
-  if (typeof hdr === "string") return hdr;
+  if (typeof hdr === "string" && hdr) return hdr;
+  if (headerOnly) return "";
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Bearer ") && !auth.slice(7).startsWith(CREDITS_KEY_PREFIX)) return auth.slice(7);
   return "";
 };
 // Opaque, revocable, expiring operator sessions (security audit R-12). The
@@ -5327,19 +5353,28 @@ export function operatorAuthStatus(full = false) {
     ? { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok", failures1h: n, threshold: OPERATOR_AUTH_FAIL_ALERT }
     : { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok" };
 }
-function operatorAuthed(req) {
-  const presented = Boolean(getOperatorToken(req)) || Boolean(readCookie(req, OPERATOR_COOKIE));
+function operatorAuthed(req, { headerOnly = false } = {}) {
+  const token = getOperatorToken(req, { headerOnly });
+  const presented = Boolean(token) || Boolean(readCookie(req, OPERATOR_COOKIE));
   if (!presented) return false;  // anonymous: nothing to brute-force, nothing to count
   const ip = operatorAttemptIp(req);
   // Budget already spent: refuse without looking at the credential at all.
   if (operatorAttemptLimiter.peek(ip).limited) return false;
-  if (operatorTokenOk(getOperatorToken(req))) return true;         // header token
+  if (operatorTokenOk(token)) return true;         // header token
   if (operatorSessionValid(readCookie(req, OPERATOR_COOKIE))) return true; // browser session
   // Only a WRONG credential consumes budget.
   operatorAttemptLimiter.check(ip);
   noteOperatorAuthFailure();
   return false;
 }
+// The operator branch of a PUBLIC surface (/health, /api/gateway-status,
+// /api/index, the leaderboards, /api/analytics, /api/revenue): read from
+// X-Operator-Token only. On these routes an Authorization header is a buyer's
+// credential (a credits key, an MPP credential, a key for another service a
+// client attaches everywhere), so it is neither compared nor counted; the
+// session cookie is scoped to /__operator and never arrives here. The
+// operator routes keep the Bearer form for curl.
+function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -5354,17 +5389,9 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // Secure on HTTPS, and an 8h absolute expiry.
 // F20: operator pages carry lead PII, revenue figures, and session state.
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
-// them. Registered before the routes so it runs on every /__operator response
-// (login form, dashboard, stats, wishes, logout).
-app.use("/__operator", (req, res, next) => {
-  res.set("Cache-Control", "no-store, private");
-  res.set("Pragma", "no-cache");
-  res.set("Vary", "Cookie, Authorization");
-  // A browser session minted on another container: read it from the shared
-  // store before the gate below looks at the cookie.
-  if (!OP_SESSION_SHARED) return next();
-  syncOperatorSession(req).then(() => next(), () => next());
-});
+// them. The middleware that sets this and syncs the session cookie is
+// registered once, ahead of the FIRST operator route (see the
+// /__operator app.use above the followups route), not here.
 app.get("/__operator/login", (_req, res) => {
   res.type("html").send(operatorLoginPage(BASE_URL));
 });
@@ -7886,7 +7913,7 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorAuthed(req) ? 1000 : 200);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
   res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
@@ -7987,7 +8014,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorAuthed(req)) {
+  if (operatorElevated(req)) {
     return res.set("Cache-Control", "no-store").json(snap);
   }
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
@@ -8324,7 +8351,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorAuthed(req) ? 500 : 50;
+  const topCeiling = operatorElevated(req) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -9096,7 +9123,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorAuthed(req)));
+  res.json(redactAnalytics(data, operatorElevated(req)));
 });
 
 let __analyticsSlugSet = null;
@@ -9111,7 +9138,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorAuthed(req)) return res.redirect(302, "/status");
+  if (!operatorElevated(req)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9119,7 +9146,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorAuthed(req)), {
+  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.

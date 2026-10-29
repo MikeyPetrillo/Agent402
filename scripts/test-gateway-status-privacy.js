@@ -37,7 +37,7 @@ for (let i = 0; i < 120; i++) {
 
 const pub = await fetch(`${base}/api/gateway-status`);
 const pubBody = await pub.json();
-const opRes = await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+const opRes = await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } });
 const opBody = await opRes.json();
 
 // --- the ledgers' local dead-letter: one word publicly, counts for the operator ---

@@ -754,7 +754,7 @@ jobs:
         env:
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          GW=$(curl -s --max-time 15 -H "X-Operator-Token: $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
           WORD=$(printf '%s' "$GW" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|aging|stuck|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "refunds owed: $WORD"
@@ -788,7 +788,7 @@ jobs:
         env:
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          GW=$(curl -s --max-time 15 -H "X-Operator-Token: $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
           WORD=$(printf '%s' "$GW" | jq -r '.creditsRefunds.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "credits refunds: $WORD"
