@@ -1335,8 +1335,11 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     async function refuseConfirmedPush(pushHash, b) {
       const amount = amountOfCredential(auth);
       const replayKey = replayGuard ? tempoReplayKey(auth) : null;
-      const releaseKey = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
-      const consumeKey = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
+      // Each outcome below ends the claim once; a throw before one does
+      // releases it, so the credential is never left claimed.
+      let ended = false;
+      const releaseKey = () => { if (ended) return; ended = true; if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
+      const consumeKey = () => { if (ended) return; ended = true; if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
       const plain = (why, timings = {}, requestId = null) => {
         logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { ...timings, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, ${why}, nothing booked`, requestId });
         markMppProblem(req, res, mppProblem(b.kind, b.detail, { hint: b.hint, details: { reason: b.cls, charged: false } }));
@@ -1349,33 +1352,38 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         const verdict = await replayGuard.begin(replayKey);
         if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
       }
-      // A transfer the ledger already holds: an owed row stands as it is; a
-      // void (claimed and served), sending or paid row leaves nothing to book.
-      let existing = null;
-      if (typeof pushRowOf === "function") { try { existing = (await pushRowOf(pushHash)) || null; } catch { existing = null; } }
-      if (existing && existing.status !== "owed") { releaseKey(); return plain(`transfer ${existing.status === "void" ? "already claimed and served" : `already ${existing.status}`}`); }
-      const t0 = Date.now();
-      let v = null;
-      try { v = await validate(auth); } catch (e) { v = { ok: false, cls: "unknown", error: e?.message || String(e) }; }
-      const tValidated = Date.now();
-      if (!v?.ok) { releaseKey(); return plain(`transfer not confirmed by the relay (${v?.cls || "unknown"})`, { validate: tValidated - t0 }, v?.requestId); }
-      let owed = !!existing;
-      if (!existing && typeof onPushInputRefused === "function") {
-        const payer = await readPushSenderBounded(pushSender, auth);
-        const amountUsd = /^\d+$/.test(amount) ? Number(amount) / 10 ** envDecimals() : NaN;
-        try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: amount, amountUsd, status: 402 })) === true; } catch { owed = false; }
+      try {
+        // A transfer the ledger already holds: an owed row stands as it is; a
+        // void (claimed and served), sending or paid row leaves nothing to book.
+        let existing = null;
+        if (typeof pushRowOf === "function") { try { existing = (await pushRowOf(pushHash)) || null; } catch { existing = null; } }
+        if (existing && existing.status !== "owed") { releaseKey(); return plain(`transfer ${existing.status === "void" ? "already claimed and served" : `already ${existing.status}`}`); }
+        const t0 = Date.now();
+        let v = null;
+        try { v = await validate(auth); } catch (e) { v = { ok: false, cls: "unknown", error: e?.message || String(e) }; }
+        const tValidated = Date.now();
+        if (!v?.ok) { releaseKey(); return plain(`transfer not confirmed by the relay (${v?.cls || "unknown"})`, { validate: tValidated - t0 }, v?.requestId); }
+        let owed = !!existing;
+        if (!existing && typeof onPushInputRefused === "function") {
+          const payer = await readPushSenderBounded(pushSender, auth);
+          const amountUsd = /^\d+$/.test(amount) ? Number(amount) / 10 ** envDecimals() : NaN;
+          try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: amount, amountUsd, status: 402 })) === true; } catch { owed = false; }
+        }
+        // Booked as owed: the credential is consumed, as a finalize refusal
+        // consumes it, so the transfer is repaid and never also served. Not
+        // booked: released, so it still pays on a route that offers Tempo.
+        if (owed) consumeKey(); else releaseKey();
+        logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, transfer confirmed and not claimed (${owed ? `booked as owed${existing ? " already" : ""}, credential consumed` : "no debt booked"})`, requestId: v?.requestId });
+        const expires = (() => { try { return Credential.deserialize(auth)?.challenge?.expires || null; } catch { return null; } })();
+        const detail = `${b.detail} The transfer you sent has not been claimed${owed
+          ? " and is recorded as owed to the sender, to be refunded; it pays for no further request."
+          : `; until the challenge expires${expires ? ` (${expires})` : ""} the same credential pays for a request on a route that offers Tempo.`}`;
+        markMppProblem(req, res, mppProblem(b.kind, detail, { hint: b.hint, details: { reason: b.cls, charged: false, transferClaimed: false, ...(owed ? { refundOwed: true } : {}) } }));
+        return next();
+      } catch (e) {
+        releaseKey();
+        throw e;
       }
-      // Booked as owed: the credential is consumed, as a finalize refusal
-      // consumes it, so the transfer is repaid and never also served. Not
-      // booked: released, so it still pays on a route that offers Tempo.
-      if (owed) consumeKey(); else releaseKey();
-      logTempoRefusal(req, { cls: b.cls, amountAtomic: amount, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, transfer confirmed and not claimed (${owed ? `booked as owed${existing ? " already" : ""}, credential consumed` : "no debt booked"})`, requestId: v?.requestId });
-      const expires = (() => { try { return Credential.deserialize(auth)?.challenge?.expires || null; } catch { return null; } })();
-      const detail = `${b.detail} The transfer you sent has not been claimed${owed
-        ? " and is recorded as owed to the sender, to be refunded; it pays for no further request."
-        : `; until the challenge expires${expires ? ` (${expires})` : ""} the same credential pays for a request on a route that offers Tempo.`}`;
-      markMppProblem(req, res, mppProblem(b.kind, detail, { hint: b.hint, details: { reason: b.cls, charged: false, transferClaimed: false, ...(owed ? { refundOwed: true } : {}) } }));
-      return next();
     }
 
     // The request's own input is checked BEFORE the relay round trip. A paid
