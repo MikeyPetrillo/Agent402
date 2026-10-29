@@ -27,7 +27,7 @@ ok(!md.includes("—"), "no em dashes (house style)");
 ok(md.includes("500+"), "evergreen '500+' claim in prose");
 ok(md.includes("Call any of 2 tools ("), "exact tool count is derived from the catalog, not hand-typed");
 ok(md.includes("curl -fsSL https://agent402.tools/SKILL.md"), "tells a summarizing fetcher how to read it verbatim");
-ok(md.includes("npx -y agent402-mcp@0.13.21") && md.includes("npm install agent402-client"), "names both packages");
+ok(md.includes("npx -y agent402-mcp@0.13.22") && md.includes("npm install agent402-client"), "names both packages");
 ok(md.includes("X-Pow-Solution: <token>:<nonce>") && /hash the `challenge`, submit the `token`/i.test(md), "PoW instructions carry the two-field trap");
 ok(/Idempotency-Key/.test(md), "retry guidance names Idempotency-Key");
 ok(!/(sk-|0x[0-9a-f]{40,})/i.test(md.replace(/0x\.\.\./g, "")), "no key-shaped strings");
