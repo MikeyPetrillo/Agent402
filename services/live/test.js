@@ -91,7 +91,7 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
 
 // --- HTTP surface, booted offline
 {
-  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1"; process.env.LIVE_POLL_KEEP_BATCHES = "2"; process.env.GA_MEASUREMENT_ID = "G-TEST12345";
+  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1"; process.env.LIVE_POLL_KEEP_BATCHES = "2"; process.env.LIVE_POLL_HELLO_PER_MIN = "14"; process.env.GA_MEASUREMENT_ID = "G-TEST12345";
   const { server, onEvents } = await import("./server.js");
   await new Promise((r) => server.listening ? r() : server.once("listening", r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -167,6 +167,18 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
     ok((await poll(gap.d.cursor)).d.hello !== true && (await poll(`${other}.${n}`)).d.hello === true, "poll: another process's cursor gets the hour (restart or replica), a current one does not");
     for (const bad of ["x", "", `${bootId}.99999999`, `${bootId}.-1`, "<script>"]) ok((await poll(bad)).d.hello === true, `poll: cursor ${JSON.stringify(bad)} gets the hour`);
     ok((await fetch(base + "/api/poll", { method: "POST" })).status === 405, "poll: read-only");
+    {
+      // One address gets the whole hour a bounded number of times a minute;
+      // a cursor poll is never refused, and another address is unaffected.
+      const xff = (ip) => ({ headers: { "x-forwarded-for": ip } });
+      const codes = [];
+      for (let i = 0; i < 16; i++) codes.push((await fetch(base + "/api/poll", xff("203.0.113.9"))).status);
+      ok(codes.slice(0, 14).every((c) => c === 200) && codes.slice(14).every((c) => c === 429), `poll: the 15th full-hour poll in a minute from one address is refused (${codes.join(",")})`);
+      const cur = (await (await fetch(base + "/api/poll", xff("203.0.113.10"))).json()).cursor;
+      ok((await fetch(base + `/api/poll?after=${cur}`, xff("203.0.113.9"))).status === 200, "poll: a cursor poll from that address still answers");
+      const a1 = await (await fetch(base + "/api/poll", xff("203.0.113.11"))).arrayBuffer(), a2 = await (await fetch(base + "/api/poll", xff("203.0.113.12"))).arrayBuffer();
+      ok(Buffer.from(a1).equals(Buffer.from(a2)), "poll: back-to-back full-hour answers are the same cached body");
+    }
     const app = await (await fetch(base + "/app.js")).text();
     ok(/STREAM_WAIT_MS = 8000/.test(app) && /if \(!heard\) \{ es\.close\(\); poll\(""\); \}/.test(app) && /fetch\(`\/api\/poll\?after=/.test(app), "page: with no opening hour on the stream in 8 s, it closes the stream and polls");
     ok(/!seenIds\.has\(p\.id\)/.test(app), "page: a payment seen twice is taken once");

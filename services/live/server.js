@@ -156,25 +156,42 @@ const keepAlive = setInterval(() => { for (const c of clients) c.write(": ping\n
 keepAlive.unref?.();
 
 // A poll answers from these copies when they are under a few seconds old, so
-// many polling pages cost one build of the hour and the stats.
+// many polling pages cost one build of the hour and the stats. The hour is
+// kept serialized and gzipped, and one address gets it at most
+// POLL_HELLO_PER_MIN times a minute (a page asks once, on its first poll).
 const POLL_CACHE_MS = 3000;
+const POLL_HELLO_PER_MIN = Number(process.env.LIVE_POLL_HELLO_PER_MIN || 30);
 let helloCache = null, statsCache = null;
+const helloHits = new Map();
 function cachedStats() {
   if (!statsCache || Date.now() - statsCache.at > POLL_CACHE_MS) statsCache = { at: Date.now(), stats: statsNow() };
   return statsCache.stats;
 }
-export function pollAnswer(cursor) {
+function helloAllowed(ip) {
+  const now = Date.now(), h = helloHits.get(ip);
+  if (!h || now - h.at >= 60_000) {
+    if (helloHits.size > 10_000) for (const [k, v] of helloHits) if (now - v.at >= 60_000) helloHits.delete(k);
+    helloHits.set(ip, { at: now, n: 1 }); return true;
+  }
+  return ++h.n <= POLL_HELLO_PER_MIN;
+}
+// The answer to a poll: { body, gzip } buffers, or null when this address has
+// asked for the whole hour too often.
+export function pollAnswer(cursor, ip = "") {
   const m = /^([0-9a-f]{8})\.(\d{1,12})$/.exec(String(cursor || ""));
   const after = m && m[1] === BOOT ? Number(m[2]) : -1;
   const oldest = batches.length ? batches[0].seq - 1 : seq;
-  const next = `${BOOT}.${seq}`;
   if (after >= oldest && after <= seq) {
-    return { cursor: next, payments: batches.filter((b) => b.seq > after).flatMap((b) => b.payments), stats: cachedStats() };
+    const body = Buffer.from(JSON.stringify({ cursor: `${BOOT}.${seq}`, payments: batches.filter((b) => b.seq > after).flatMap((b) => b.payments), stats: cachedStats() }));
+    return { body, gzip: () => gzipSync(body) };
   }
+  if (!helloAllowed(ip)) return null;
   if (!helloCache || helloCache.seq !== seq || Date.now() - helloCache.at > POLL_CACHE_MS) {
-    helloCache = { at: Date.now(), seq, payments: store.recent(4000).map(toPublic) };
+    const body = Buffer.from(JSON.stringify({ cursor: `${BOOT}.${seq}`, hello: true, now: Date.now(), payments: store.recent(4000).map(toPublic), stats: cachedStats() }));
+    helloCache = { at: Date.now(), seq, body, gz: null };
   }
-  return { cursor: `${BOOT}.${helloCache.seq}`, hello: true, now: Date.now(), payments: helloCache.payments, stats: cachedStats() };
+  const c = helloCache;
+  return { body: c.body, gzip: () => (c.gz ??= gzipSync(c.body)) };
 }
 
 function statsNow() {
@@ -234,10 +251,11 @@ const server = http.createServer(async (req, res) => {
     return res.end(gz ? gzipSync(body) : body);
   }
   if (path === "/api/poll") {
-    const body = Buffer.from(JSON.stringify(pollAnswer(url.searchParams.get("after"))));
+    const a = pollAnswer(url.searchParams.get("after"), clientIp(req));
+    if (!a) { res.writeHead(429, { "retry-after": "60", "content-type": "text/plain", "cache-control": "no-store" }); return res.end("too many full-hour polls from this address"); }
     const gz = wantsGzip(req);
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", vary: "accept-encoding", ...(gz ? { "content-encoding": "gzip" } : {}) });
-    return res.end(req.method === "HEAD" ? undefined : gz ? gzipSync(body) : body);
+    return res.end(req.method === "HEAD" ? undefined : gz ? a.gzip() : a.body);
   }
   if (path === "/events") {
     if (clients.size >= MAX_CLIENTS) { res.writeHead(503, { "retry-after": "30" }); return res.end(); }
