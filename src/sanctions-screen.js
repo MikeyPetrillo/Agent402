@@ -36,16 +36,14 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { parseSdnXml, sdnEvmAddresses, loadSdnList, sdnListUrl, SDN_LIST_DEFAULT_URL } from "./ofac-sdn.js";
+import { parseSdnXml, sdnEvmAddresses, loadSdnList } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
 
-export const SANCTIONS_LIST_DEFAULT_URL = SDN_LIST_DEFAULT_URL;
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
 const envMs = (k, d, min = 1) => { const n = Number(process.env[k]); return Number.isFinite(n) && n >= min ? n : d; };
 export function sanctionsListRefreshMs() { return envMs("SANCTIONS_LIST_REFRESH_MS", 6 * 3600_000, 1000); }
 function retryMs() { return envMs("SANCTIONS_LIST_RETRY_MS", 5 * 60_000, 1000); }
-export function sanctionsListUrl() { return sdnListUrl(); }
 
 /** Every EVM-format Digital Currency Address in an SDN.XML export, read
  *  through the shared parser (src/ofac-sdn.js).

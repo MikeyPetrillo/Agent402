@@ -545,7 +545,6 @@ export function startSolanaLeaderboard({ listPayTos, rpc, creditFromTx, prime, w
   kick2 = setTimeout(run, delayMs + 12 * 60_000); kick2.unref?.();
   timer = setInterval(run, REFRESH_MS); timer.unref?.();
 }
-export function stopSolanaLeaderboard() { for (const t of [timer, kick, kick2]) if (t) clearTimeout(t), clearInterval(t); timer = kick = kick2 = null; }
 
 // Operator heap read (/__operator/heap.json `stores`).
 registerMemoryStore("solana-leaderboard.current", () => current, { note: "Solana leaderboard" });

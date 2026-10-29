@@ -77,9 +77,6 @@ const HOUR_MS = 3_600_000;
 export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone", "shed"];
 export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
 export const WORDS = ["ok", "degraded", "failing"];
-export const FUNDS_WORDS = ["ok", "low", "refused", "demoted"];
-export const ANSWER_WORDS = ["ok", "degraded"];
-export const BUYER_REFUSAL_WORDS = ["ok", "refusing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
 // Rails whose outcomes count on the free lane: no payment was taken, so a free
 // caller's 5xx is shown, and pages only when nearly every free call to a tool

@@ -75,18 +75,6 @@ export function toolList(catalog) {
   });
 }
 
-function exampleCall(baseUrl, tool) {
-  const { method, path, discovery } = tool;
-  if (method === "GET") {
-    const qs = new URLSearchParams(
-      Object.entries(discovery?.input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])
-    ).toString();
-    return `curl -i "${baseUrl}${path}${qs ? `?${qs}` : ""}"`;
-  }
-  return `curl -i -X ${method} ${baseUrl}${path} \\
-  -H "Content-Type: application/json" \\
-  -d '${JSON.stringify(discovery?.input ?? {})}'`;
-}
 
 function payExample(baseUrl, tool) {
   const { method, path, discovery } = tool;

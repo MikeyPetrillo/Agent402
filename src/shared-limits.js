@@ -431,7 +431,6 @@ export function startSharedLimitsProbe() {
   }, PROBE_FIRST_MS());
   probeTimer.unref?.();
 }
-export function stopSharedLimitsProbe() { if (probeTimer) { clearTimeout(probeTimer); clearInterval(probeTimer); probeTimer = null; } }
 
 /** Test seam: the counts behind the word. */
 export function _sharedLimitsState() { return { ...state }; }

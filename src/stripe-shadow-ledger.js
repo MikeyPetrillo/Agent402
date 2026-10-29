@@ -662,7 +662,3 @@ export function startShadowLedger() {
 export function shadowLedgerReport(opts) {
   try { return instance().report(opts); } catch { return { enabled: false, reason: "report failed" }; }
 }
-/** The report read fresh from the store (a promise; on the SQLite file it is the same read). */
-export async function shadowLedgerReportAsync(opts) {
-  try { return await instance().reportAsync(opts); } catch { return { enabled: false, reason: "report failed" }; }
-}

@@ -27,7 +27,6 @@ export function registerSqliteStore(name, getDb, { note = "" } = {}) {
   stores.set(String(name), { kind: "sqlite", read: typeof getDb === "function" ? getDb : () => getDb, note: String(note || "") });
 }
 
-export function memoryStoreNames() { return [...stores.keys()]; }
 export function _resetMemoryStoresForTest() { stores.clear(); }
 
 const SAMPLE = 48;          // members sized per top-level collection

@@ -49,7 +49,6 @@ export function relayerSettings(env = process.env) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const GWEI = 1_000_000_000n;
 
 // One submission at a time per relayer address in this process; the lease
 // serializes the replicas. withLease answers "held" while another container

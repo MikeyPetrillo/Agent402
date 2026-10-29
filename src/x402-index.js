@@ -25,7 +25,7 @@
 //     are consistent whether a buyer searches local-only or cross-seller.
 import { resolveLocalRefs } from "./openapi-deref.js";
 import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, mergeProbeExamples, ProbeExampleMemo, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gzip, gunzip } from "node:zlib";
@@ -187,11 +187,6 @@ export async function refreshIndexSideStores() {
 export async function __sideStoresSettledForTest() { await Promise.all([...sideChains.values()].map((p) => p.catch(() => {}))); }
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
-// F23: seller-manifest homepages are external, attacker-controlled URLs. esc()
-// escapes HTML but does NOT constrain the scheme, so a `javascript:`/`data:`
-// homepage would become a clickable link if the legacy indexPage renderer is
-// ever re-enabled. Only http(s) becomes a link; anything else renders inert.
-const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
@@ -201,8 +196,8 @@ import { deliveryProjection } from "./response-observation.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { walkBazaarPages, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
-import { RAILS, railKey } from "./rails.js";
-import { CHAIN_PAGES, marketSellers } from "./market-page.js";
+import { RAILS } from "./rails.js";
+import { CHAIN_PAGES } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
@@ -217,24 +212,6 @@ import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
 
 import { REPO_URL } from "./repo-link.js";
-// RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
-// (see ledger-home.js) so /index's own row derives the same way: page
-// availability from CHAIN_PAGES, live seller counts from marketSellers() run
-// against the snapshot this page already renders from — no new plumbing.
-const CHAIN_PAGE_BY_CAIP2 = new Map(Object.entries(CHAIN_PAGES).map(([key, cfg]) => [cfg.caip2, key]));
-
-// ?network=<key> matchers for the Sellers table filter chips — one per
-// mainnet rail in rails.js, same "EVM = exact CAIP-2, else = namespace
-// prefix excluding testnets" rule market-page.js's CHAIN_PAGES.isNetwork
-// uses for stellar/algorand (solana gets the same treatment for consistency
-// even though it has no market page yet). Keyed by railKey() so a future
-// rail lights up a chip here with zero new code.
-const NETWORK_MATCHERS = new Map(RAILS.map((r) => {
-  const matches = r.chainId
-    ? (n) => n === r.caip2
-    : (n) => typeof n === "string" && n.startsWith(r.caip2.split(":")[0]) && !n.includes("test");
-  return [railKey(r), { label: r.name.replace(/ Chain$/, ""), matches }];
-}));
 
 const LOCAL_SELLER = "self";
 // Unsubstituted OpenAPI path templates: "/stock/{symbol}", "/v1/x/{arg}".
@@ -287,12 +264,6 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
   const landed = redirectedTo ? canonicalHostOf(String(redirectedTo)) : null;
   return !!(landed && (landed === SELF_HOST || landed === base));
 }
-// /index used to render every crawled seller server-side (~1,477 rows → a
-// 475KB response with no compression). Cap the default render to the top N
-// by whatever metric the page is currently sorted on; ?all=1 opts back into
-// the full table. The local seller is exempt from the cap — it's always the
-// one row a self-hoster actually cares about finding.
-const INDEX_ROW_CAP = 100;
 // One full re-probe of every known origin per cycle, so this constant is the
 // single biggest lever on our outbound footprint - it multiplies the seed
 // count, not adds to it. Measured 2026-08-23 over 25 live seller origins: a
@@ -10129,13 +10100,10 @@ export async function reconcileListings() {
   const r = await reconcileListingsLeased();
   return typeof r === "number" ? r : null;
 }
-/** Operator detail for the database-backed directory (null when off). */
-export function listingsStoreStatus() { return listingsOn() ? listings.status() : null; }
 /** Test hooks. */
 export function _listingsStoreForTest() { return listings; }
 export function _setWarmLoaderForTest(loader) { warmLoader = loader; }
 export function _listingRowsForOriginForTest(origin) { return listingRowsForOrigin(origin); }
-export function _resetListingsStoreForTest() { listings = null; listingsSelf = ""; if (listingsFlushTimer) clearTimeout(listingsFlushTimer); listingsFlushTimer = null; if (listingsReconcileTimer) clearTimeout(listingsReconcileTimer); listingsReconcileTimer = null; }
 /** How many times the in-memory flattened directory was built (the store keeps it at zero). */
 export function _flatBuildsForTest() { return flatBuilds; }
 

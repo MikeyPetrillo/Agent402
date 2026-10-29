@@ -72,15 +72,3 @@ export function metaTitle(text, max = META_TITLE_MAX) {
   if (clampedTitles.size < CLAMPED_TITLES_MAX && !clampedTitles.has(s)) clampedTitles.set(s, out);
   return out;
 }
-
-/** For the few pages that hand-write their own <head> instead of using a
- *  shell: apply the same trims to a finished HTML string. Touches only the
- *  <title> and the description metas; everything else is byte-identical. */
-export function applyMetaTrims(html) {
-  return String(html)
-    .replace(/<title>([\s\S]*?)<\/title>/i, (m, t) => `<title>${metaTitle(t)}</title>`)
-    .replace(/(<meta (?:name="description"|property="og:description"|name="twitter:description") content=")([^"]*)(")/gi,
-      (m, a, d, b) => `${a}${metaDescription(d.replace(/&quot;/g, '"')).replace(/"/g, "&quot;")}${b}`)
-    .replace(/(<meta (?:property="og:title"|name="twitter:title") content=")([^"]*)(")/gi,
-      (m, a, t, b) => `${a}${metaTitle(t.replace(/&quot;/g, '"')).replace(/"/g, "&quot;")}${b}`);
-}

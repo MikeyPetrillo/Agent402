@@ -342,12 +342,6 @@ export const LEADERBOARD_CHAIN = "base";
 // by the server from the same configured set the router reads.
 const SPEND_CHAIN_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
 export const spendChainName = (c) => SPEND_CHAIN_NAMES[c] || CHAIN_PAGES[c]?.chainName || String(c);
-/** A seller name with a trailing parenthetical (an ENS name) sets the
- * parenthetical on its own smaller line, so the name never splits mid-label. */
-function sellerNameHtml(name) {
-  const m = String(name || "").match(/^(.+?) \(([^()]+)\)$/);
-  return m ? `${esc(m[1])}<span style="display:block;font-weight:400;font-size:var(--fs-sm);color:var(--muted);">${esc(m[2])}</span>` : esc(name);
-}
 
 export function routerChainsProse(routerChains) {
   const list = (Array.isArray(routerChains) && routerChains.length ? routerChains : ["base"]).map(spendChainName);
@@ -1109,7 +1103,7 @@ function economyStripHtml(economySnap) {
 // Default render caps the roster at the top ALL_ROW_CAP rows (the roster is
 // sorted local-first then by settled calls, so the cap keeps the sellers worth
 // reading); ?all=1 opts back into the full 700+-row table. Same speed
-// rationale + honest-disclosure pattern as x402-index.js's INDEX_ROW_CAP.
+// rationale + honest-disclosure pattern as the other capped seller tables.
 const ALL_ROW_CAP = 100;
 
 // The all-chains page walks every seller several times (the leaderboard join,
