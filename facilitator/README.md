@@ -65,8 +65,13 @@ FACILITATOR_STELLAR_SECRET=S... npm start
 - `FACILITATOR_ALLOW_OPEN`: optional. `1` opts in to an intentionally open
   mainnet facilitator (no token, no payTo allowlist), which otherwise refuses
   to start. Leave it unset otherwise.
-- `FACILITATOR_LOW_BALANCE_XLM`: optional, default `5`. Threshold for the
+- `FACILITATOR_LOW_BALANCE_XLM`: optional, default `1`. Threshold for the
   `low` flag on `GET /health`.
+- `FACILITATOR_INCLUSION_FEE_STROOPS`: optional, a whole number of stroops.
+  The inclusion-fee bid on each settlement transaction, so a settlement still
+  lands on a busy ledger (Stellar charges the clearing price, not the bid).
+  Unset uses the built-in default in `fee-bid.js`; `off` or `0` keeps the
+  network minimum, and the server logs a startup warning.
 - `FACILITATOR_SETTLE_TIMEOUT_MS` / `FACILITATOR_VERIFY_TIMEOUT_MS` /
   `FACILITATOR_HEALTH_TIMEOUT_MS`: optional, default `25000` / `30000` /
   `10000`. Bounds how long a single `/settle`, `/verify`, or `/health` call

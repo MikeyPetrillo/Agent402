@@ -432,7 +432,7 @@ export const ALARMS = [
 - in_doubt: a post may not have reached X, and its one retry has been used (or its window closed, or the process died mid-post). Read /__operator/tweet-queue.json for the ids and hours, check the account on X, and if a post did not land re-queue its text under a new id. Removing the old id from TWEET_QUEUE clears this.
 - refused: X answered 401/402/403 (credentials or the API balance). The queue pauses and retries; items older than the catch-up window are dropped.
 - no_credentials: one of X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET is missing on Railway.
-- halted: TWEET_QUEUE is not a JSON array, the state file on /data cannot be read, or the service has no /data volume. Nothing posts until it is fixed.
+- halted: TWEET_QUEUE is not a JSON array, the queue's state (a database document, or a file without a database) cannot be read, or no state store is configured. Nothing posts until it is fixed.
 
 The server log carries a [tweet-queue] line for every outcome (ids and status codes, never text). TWEET_QUEUE_POSTING=off stops posting and closes this issue. Auto-closes when the word is ok.`;
     },
