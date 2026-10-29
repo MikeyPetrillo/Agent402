@@ -13,17 +13,46 @@ import { embedText } from "../../src/decide/tool-rows.js";
 
 const RRF_K = 60;
 
+// Fields whose few distinct values repeat across ~200k rows. Each parsed row
+// carries its own copy of every such string; the index keeps one, so the
+// stored row reads the same and holds less. The table is cleared when it
+// fills, which only ends sharing for values seen after that.
+const SHARED_FIELDS = ["seller", "sellerName", "category", "method", "inputSchemaState"];
+const SHARED_LISTS = ["networks", "rails"];
+const SHARED_MAX = 65_536;
+
 export class ToolIndex {
   constructor() {
     this.rows = new Map();
     this.vectors = new VectorStore();
     this.lexical = new LexicalIndex();
+    this.strings = new Map();
+  }
+
+  shared(v) {
+    if (typeof v !== "string") return v;
+    const hit = this.strings.get(v);
+    if (hit !== undefined) return hit;
+    if (this.strings.size >= SHARED_MAX) this.strings.clear();
+    this.strings.set(v, v);
+    return v;
+  }
+
+  /** Point a row's repeated strings at one copy each (equal values, in place). */
+  shareStrings(row) {
+    if (Object.isFrozen(row)) return;
+    for (const k of SHARED_FIELDS) if (typeof row[k] === "string") row[k] = this.shared(row[k]);
+    for (const k of SHARED_LISTS) {
+      const xs = row[k];
+      if (Array.isArray(xs) && !Object.isFrozen(xs)) for (let i = 0; i < xs.length; i++) xs[i] = this.shared(xs[i]);
+    }
   }
 
   get size() { return this.rows.size; }
 
   upsert(row) {
     const prev = this.rows.get(row.id);
+    this.shareStrings(row);
     this.rows.set(row.id, row);
     if (!prev || prev.contentHash !== row.contentHash) {
       this.lexical.set(row.id, embedText(row));

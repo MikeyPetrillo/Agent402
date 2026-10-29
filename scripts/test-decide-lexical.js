@@ -148,7 +148,7 @@ const newIdx = new ToolIndex();
 const refIdx = new ToolIndex();
 refIdx.lexical = new RefLexicalIndex();
 const both = (fn) => { fn(refIdx); fn(newIdx); };
-const live = new Map(); // i -> version
+const live = new Map(); // i -> { id, version, json }
 const withVectors = ROWS <= 20_000;
 
 function upsert(i, version) {
@@ -157,7 +157,7 @@ function upsert(i, version) {
   // Each index keeps its own copy, as each process would.
   both((idx) => idx.upsert(JSON.parse(JSON.stringify(row))));
   if (withVectors && i % 23 === 0) { const v = vecFor(i * 31 + version); both((idx) => idx.setVector(row.id, v)); }
-  live.set(i, { id: row.id, version });
+  live.set(i, { id: row.id, version, json: JSON.stringify(row) });
 }
 const delRow = (i) => { const e = live.get(i); if (!e) return; both((idx) => idx.delete(e.id)); live.delete(i); };
 
@@ -236,6 +236,7 @@ both((idx) => idx.lexical.delete("solo-a"));
 runQueries("churn", QUERIES - 4 * per);
 
 ok(refIdx.size === newIdx.size && newIdx.size === live.size, `both indexes hold the same ${live.size} rows after the mutation sequence`);
+ok([...live.values()].every((e) => JSON.stringify(newIdx.rows.get(e.id)) === e.json), "every stored row reads exactly as the row it was given (shared strings change no value)");
 ok(newIdx.lexical.compactions > 0, `the sequence reached the index's compaction (${newIdx.lexical.compactions} runs)`);
 ok(mismatches === 0, `${queries} queries through LexicalIndex.search (full depth) and ToolIndex.search: ${mismatches} mismatches${mismatches ? " " + JSON.stringify(firstMismatch).slice(0, 1500) : ""}`);
 
