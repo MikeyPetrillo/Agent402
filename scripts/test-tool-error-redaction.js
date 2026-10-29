@@ -11,8 +11,9 @@
 //      database URL configured, and a tool (regex) whose error message quotes
 //      its input. The 400 body and every server log line carry neither value.
 //      A bespoke route (/api/dns, sendToolError) whose refusal text is a
-//      configured value answers and logs it scrubbed. The discovery, wish and
-//      memory catches are read from source.
+//      configured value answers and logs it scrubbed, and so does an operator
+//      route (/__operator/well-known). The discovery, wish, memory and every
+//      /__operator catch are read from source.
 //
 //   node scripts/test-tool-error-redaction.js
 import { spawn } from "node:child_process";
@@ -34,6 +35,10 @@ const REDIS_URL = `redis://default:${REDIS_PASS}@redis.internal.test:6379`;
 const FEED_KEY = ["feed", "Canary", "Key77"].join("");
 // /api/dns refuses a malformed name with exactly this text (src/tools/dns-name-filter.js).
 const ECHO_VALUE = "Invalid domain name";
+// /__operator/well-known refuses an unknown content type with exactly this text
+// (src/well-known-store.js); the operator token is built at runtime.
+const OP_ECHO_VALUE = 'contentType must be "application/json" or "text/plain"';
+const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
 
 // --- 1. redactSecrets in process ---------------------------------------------
 {
@@ -77,6 +82,19 @@ const ECHO_VALUE = "Invalid domain name";
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(wish), "/api/wish answers the scrubbed message");
   const mem = server.slice(server.indexOf("const memHandler = "), server.indexOf("const memHandler = ") + 2500);
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
+  // Every error text an /__operator route answers runs through redactSecrets:
+  // inside each operator route block, no error field is built from a raw
+  // message.
+  const RAW_ERR = /error: (?:err\??\.message|e\??\.message|String\((?:e|err)\??\.message(?: \|\| (?:e|err))?\))/;
+  const lines = server.split("\n");
+  let route = null; const raw = []; let opRoutes = 0;
+  for (const [i, line] of lines.entries()) {
+    const m = /^\s*app\.(?:get|post|put|delete|all)\(\s*"([^"]+)"/.exec(line);
+    if (m) { route = m[1]; if (route.startsWith("/__operator")) opRoutes++; }
+    else if (/^(?:function|async function|const|let|export) /.test(line)) route = null;
+    if (route?.startsWith("/__operator") && RAW_ERR.test(line)) raw.push(`${i + 1} ${route}`);
+  }
+  ok(opRoutes > 40 && raw.length === 0, `every /__operator route answers a scrubbed error (${opRoutes} routes${raw.length ? `; raw at ${raw.join(", ")}` : ""})`);
 }
 
 // --- 2. the caller path: route binder answer and log ---------------------------
@@ -99,6 +117,8 @@ const child = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     // A configured value that a bespoke route's own refusal carries verbatim:
     // the sendToolError answer must scrub it like any secret.
     PROBE_ECHO_SECRET: ECHO_VALUE,
+    PROBE_OPERATOR_ECHO_SECRET: OP_ECHO_VALUE,
+    AGENT402_OPERATOR_TOKEN: OP_TOKEN,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -133,6 +153,14 @@ try {
   ok(dns.status === 400 && /"error":"\[redacted\]"/.test(dnsBody) && !dnsBody.includes(ECHO_VALUE), `a bespoke route's error answer (sendToolError) is scrubbed (${dns.status} ${dnsBody.slice(0, 80)})`);
   await new Promise((r) => setTimeout(r, 300));
   ok(!log.split("\n").some((l) => l.includes("[tool-error]") && l.includes("slug=dns") && l.includes(ECHO_VALUE)), "...and its [tool-error] line too");
+  // An operator route's error answer (operator-only, still never a secret).
+  const op = await fetch(`http://127.0.0.1:${port}/__operator/well-known`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-operator-token": OP_TOKEN },
+    body: JSON.stringify({ path: "probe-verification/x", body: "x", contentType: "text/html" }),
+  });
+  const opBody = await op.text();
+  ok(op.status === 400 && opBody.includes("[redacted]") && !opBody.includes(OP_ECHO_VALUE), `an operator route's error answer is scrubbed (${op.status} ${opBody.slice(0, 80)})`);
   const errLine = log.split("\n").find((l) => l.includes("[tool-error]") && l.includes("slug=regex")) || "";
   ok(errLine.length > 0, "the error is logged under [tool-error]");
   ok(!log.includes(SECRET), "no log line carries the configured secret");

@@ -4765,7 +4765,7 @@ app.get("/__operator/monitors.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // The wallet-billed subscribers carry billing state the scheduler never sees
   // (paid period, charge failures, next retry), so they get their own block.
-  const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: String(e?.message || e).slice(0, 200) })) : { enabled: false };
+  const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: redactSecrets(String(e?.message || e)).slice(0, 200) })) : { enabled: false };
   // Card subscriptions a dispute holds out of fulfillment: Stripe may still
   // bill one whose dispute ended, so the operator sees each with its outcome.
   const disputed = _subs ? _subs.listDisputed() : [];
@@ -4778,7 +4778,7 @@ app.post("/__operator/mpp-subscriptions/sweep-canaries", async (req, res) => {
   if (!_mppSubs) return res.status(503).json({ error: "MPP subscriptions not enabled" });
   const olderThanMs = Number(req.query.olderThanMs) > 0 ? Number(req.query.olderThanMs) : undefined;
   try { res.set("Cache-Control", "no-store").json(await _mppSubs.sweepStaleCanaries(olderThanMs ? { olderThanMs } : {})); }
-  catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 200) }); }
+  catch (e) { res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // Manual tick (all due subs, or ?sub=<id> with force): paid re-runs + email, so
 // it takes the heavy-route limiter like the other upstream-reaching operator
@@ -4790,7 +4790,7 @@ app.post("/__operator/monitors/run", (req, res) => {
   const subId = req.query.sub ? String(req.query.sub) : null;
   _monitors.tick({ force: !!subId || req.query.force === "1", subId }).then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) })
   );
 });
 // Sales ledger — AGGREGATE beacon: totals, the recording window, and counts.
@@ -4825,7 +4825,7 @@ app.get("/__operator/settlement-reconciliation.json", (req, res) => {
     const days = Math.min(Math.max(parseInt(req.query?.days, 10) || 7, 1), 60);
     res.json(reconcileSettlements({ days }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 app.get("/__operator/sales.json", (req, res) => {
@@ -4842,7 +4842,7 @@ app.get("/__operator/sales.json", (req, res) => {
     try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
     res.json({ ...salesSummary({ detailed: true }), mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -4855,7 +4855,7 @@ app.get("/__operator/cohorts.json", (req, res) => {
   try {
     res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -4867,7 +4867,7 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
   try {
     res.json(mppAgentsWeekly({ weeks: Number(req.query.weeks) || 12 }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -4898,7 +4898,7 @@ app.post("/__operator/seller-verification", express.json({ limit: "8mb" }), asyn
     const out = await recordSellerVerification(req.body);
     res.set("Cache-Control", "no-store").json(out);
   } catch (e) {
-    res.status(e?.statusCode || 500).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(e?.statusCode || 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 // Settlement evidence that clears the router floor but looks staged
@@ -4961,7 +4961,7 @@ app.get("/__operator/nc-sales-tax.json", async (req, res) => {
       cardFundedSalesWithoutAddress: report.cardFundedSalesWithoutAddress,
     });
   } catch (e) {
-    res.status(503).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 app.get("/__operator/seller-verification.json", (req, res) => {
@@ -5030,7 +5030,7 @@ app.get("/__operator/margin.json", (req, res) => {
       ],
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -5589,7 +5589,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
     }
     res.json({ ok: true, asOf: new Date().toISOString(), ...gap });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
+    res.status(500).json({ ok: false, error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 app.get("/__operator/wishes.json", async (req, res) => {
@@ -5812,7 +5812,7 @@ app.get("/__operator/facilitators.json", async (req, res) => {
     for (const f of facilitators) for (const n of (f.networks || [])) if (!firstFor[n]) firstFor[n] = f.label;
     res.json({ generatedAt: new Date().toISOString(), facilitators, firstTriedFor: firstFor });
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 // Search-engine data (GSC + Bing). Operator only; no-op without credentials.
@@ -5821,7 +5821,7 @@ app.get("/__operator/search.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").json(r),
-    (e) => res.status(500).json({ error: String(e.message).slice(0, 200) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) })
   );
 });
 app.get("/__operator/search", (req, res) => {
@@ -5834,18 +5834,18 @@ app.get("/__operator/search", (req, res) => {
 app.post("/__operator/search/run", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
-  searchData.runOnce().then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.runOnce().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/inspect", express.json({ limit: "32kb" }), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
-  searchData.inspectUrls(urls).then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.inspectUrls(urls).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/sitemaps/submit", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
-  searchData.submitSitemaps().then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.submitSitemaps().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 // Daily MPP reconciliation: chain transfers to our Tempo recipient vs the
 // sales ledger vs the refund ledger, plus the MPP evm leg and Stripe SPT rows
@@ -5901,7 +5901,7 @@ app.post("/__operator/mpp-reconcile/run", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || "")) ? String(req.query.day) : null;
-  mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message).slice(0, 200) }));
+  mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) }));
 });
 // Mark ONE reconciliation item as explained ({tx, note}) or lift the mark
 // ({tx, action:"restore"}). Writes only the explanations document, then
@@ -5913,7 +5913,7 @@ app.post("/__operator/mpp-reconcile/explain", express.json(), (req, res) => {
   const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   mppReconciler.explain({ tx: b.tx, note: b.note, action: b.action === undefined ? "explain" : b.action }).then(
     (r) => res.set("Cache-Control", "no-store").json(r),
-    (e) => res.status(Number.isInteger(e?.statusCode) ? e.statusCode : 500).set("Cache-Control", "no-store").json({ error: String(e?.message || e).slice(0, 300) }),
+    (e) => res.status(Number.isInteger(e?.statusCode) ? e.statusCode : 500).set("Cache-Control", "no-store").json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) }),
   );
 });
 app.get("/__operator/backup.json", (req, res) => {
@@ -5935,7 +5935,7 @@ app.post("/__operator/refunds/backfill", async (req, res) => {
   try {
     res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
   } catch (e) {
-    res.status(500).json({ error: String(e.message) });
+    res.status(500).json({ error: redactSecrets(String(e.message)) });
   }
 });
 app.get("/__operator/dataset.json", (req, res) => {
@@ -5945,7 +5945,7 @@ app.get("/__operator/dataset.json", (req, res) => {
   // second or it reports an outage after every deploy.
   datasetRecorded().then(
     (recorded) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded }),
-    (e) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded: { error: String(e.message) } })
+    (e) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded: { error: redactSecrets(String(e.message)) } })
   );
 });
 // Write today's ecosystem snapshot by hand. Immutable: a day already recorded
@@ -5960,7 +5960,7 @@ app.post("/__operator/dataset/run", (req, res) => {
     force: String(req.query.force || "") === "1",
   }).then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e.message) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)) })
   );
 });
 app.post("/__operator/backup/run", (req, res) => {
@@ -5968,7 +5968,7 @@ app.post("/__operator/backup/run", (req, res) => {
   if (operatorHeavyLimited(req, res)) return;
   runBackup().then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e.message) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)) })
   );
 });
 // Publish/remove a /.well-known verification document at runtime. Local
@@ -5983,7 +5983,7 @@ app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) =
     const r = registerWellKnown(path, body, contentType || undefined);
     res.json({ ok: true, ...r, servedAt: `/.well-known/${r.path}`, entries: listWellKnown() });
   } catch (e) {
-    res.status(e.statusCode || 500).json({ error: e.message });
+    res.status(e.statusCode || 500).json({ error: redactSecrets(e?.message) });
   }
 });
 // The refund ledger - who is owed money for a charged-but-failed call, and
@@ -6109,7 +6109,7 @@ app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
     else if (action === "remove") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"add"|"remove","wallet":"0x...","note":"optional"}' });
   } catch (e) {
-    return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
+    return res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
   if (r.changed) dispatchEvidenceCache = null;
   res.set("Cache-Control", "no-store").json({ ok: true, ...r });
@@ -6203,7 +6203,7 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
     else if (action === "restore") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"clear"|"restore","wallet":"0x...","note":"optional"} or {"action":"disable"|"enable"}' });
   } catch (e) {
-    return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
+    return res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
   if (r.changed) dispatchEvidenceCache = null;
   res.set("Cache-Control", "no-store").json({ ok: true, wallet: r.wallet, cleared: r.listed, source: r.source ?? null, changed: r.changed });
@@ -6255,7 +6255,7 @@ app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, 
         const r = await registerOrigin(o);
         rows.push({ origin: o, listed: !!r?.listed, ...(r?.pending ? { pending: true } : {}), ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
       } catch (e) {
-        rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
+        rows.push({ origin: o, listed: false, error: redactSecrets(String(e?.message || e)).slice(0, 200) });
       }
     }
   };
@@ -6293,7 +6293,7 @@ app.get("/__operator/seller-evidence.json", async (req, res) => {
   try {
     res.set("Cache-Control", "no-store").json(await operatorDossier(origin));
   } catch (e) {
-    res.status(e?.statusCode || 500).json({ error: String(e?.message || e).slice(0, 300) });
+    res.status(e?.statusCode || 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
 });
 
@@ -6349,7 +6349,7 @@ app.get("/__operator/ledger-sync.json", async (req, res) => {
     const c = EVM_CHAINS[chain];
     if (!c) return;
     try { heads[chain] = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16); }
-    catch (e) { heads[chain] = { error: String(e?.message || e).slice(0, 120) }; }
+    catch (e) { heads[chain] = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
   }));
   const payload = {
     asOf: new Date().toISOString(),
