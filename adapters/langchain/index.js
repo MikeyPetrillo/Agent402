@@ -61,7 +61,8 @@ async function discoveryFetch(fetchImpl, label, url, init) {
   let attempts = 0;
   for (;;) {
     attempts++;
-    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    const i = (typeof init === "function" ? init() : init) || {};
+    r = await fetchImpl(url, { ...i, headers: { "User-Agent": USER_AGENT, ...(i.headers || {}) } });
     if (r.ok) return r;
     if (attempts >= DISCOVERY_ATTEMPTS) break;
     const wait = await shedRetryWaitMs(r);
