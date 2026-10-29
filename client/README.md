@@ -115,7 +115,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const signer = privateKeyToAccount(process.env.AGENT_KEY); // its address holds a Gateway deposit on Base or Arc
 const a = new Agent402({ gateway: { signer }, maxPerCallUsd: 0.05 });
-const out = await a.call("extract", { url: "https://example.com/article" });
+const out = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
 
 `signer` is any EIP-712 signer with `address` and `signTypedData` (a viem

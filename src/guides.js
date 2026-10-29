@@ -152,7 +152,7 @@ agent402-client has no dependencies: install viem for \`privateKeyToAccount\`, o
 
 Off by default; a 402 with no batched accept falls back to the plain payment
 fetch. The mechanism, the pending-settlement resend and the signing helpers:
-[wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
+[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway).
 
 ## Or from the command line
 
