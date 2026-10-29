@@ -9,6 +9,7 @@
 // that by signature is a losing game. Names are constrained by an allowlist
 // instead, which an attacker cannot write their way around.
 import { requestContractOf, packRequestContract, unpackRequestContract, safeName, requestContractFromInputSchema, requestContractStrength } from "../src/request-contract.js";
+import { responseContractOf, UNSUPPORTED } from "../src/response-contract.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -204,6 +205,24 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
   const m = requestContractFromInputSchema({ type: "object", properties: { companyNumber: { type: "string" }, query: { type: "string" } } }, "GET");
   ok(m.state === "absent" && m.optional?.query?.join() === "companyNumber,query", `a manifest schema with no required list keeps its properties as optional (${JSON.stringify(m.optional)})`);
   ok(requestContractStrength(packed) > requestContractStrength(["absent", {}]), "a tuple with optional names outranks the same state without them when crawl sources merge");
+}
+
+// --- one refusal rule for both contracts -------------------------------------
+// The request side refuses the same composed-schema keywords as the response
+// side: every keyword in the shared set makes both read the schema as not
+// understood, and a plain annotation keyword makes neither refuse.
+{
+  const KEYWORDS = ["$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "dependentSchemas", "patternProperties", "unevaluatedProperties"];
+  ok(UNSUPPORTED.size === KEYWORDS.length && KEYWORDS.every((k) => UNSUPPORTED.has(k)), `the shared refusal set is the twelve composed-schema keywords (got ${[...UNSUPPORTED].join(",")})`);
+  const reqWith = (k) => requestContractOf({ requestBody: jsonBody(obj(["a"], { a: { type: "object", required: ["b"], properties: { b: { type: "string", [k]: {} } } } })) });
+  const resWith = (k) => responseContractOf({ responses: { 200: { content: { "application/json": { schema: obj(["a"], { a: { type: "object", required: ["b"], properties: { b: { type: "string", [k]: {} } } } }) } } } } });
+  const refusedBy = { request: [], response: [] };
+  for (const k of [...UNSUPPORTED, "description"]) {
+    if (reqWith(k).state !== "declared") refusedBy.request.push(k);
+    if (resWith(k).state !== "declared") refusedBy.response.push(k);
+  }
+  ok(refusedBy.request.join() === [...UNSUPPORTED].join(), `the request contract refuses every shared keyword and nothing else (${refusedBy.request.join(",")})`);
+  ok(refusedBy.response.join() === refusedBy.request.join(), `the response contract refuses the same keywords (${refusedBy.response.join(",")})`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
