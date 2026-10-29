@@ -4,9 +4,9 @@
 // Offline, in CI. The store under test is the file at STORE, so a
 // STATE_DATABASE_URL in the caller's shell is dropped before the module loads
 // (with it set, the store would be the database row, read asynchronously).
+import "./lib/file-mode.js";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-delete process.env.STATE_DATABASE_URL;
 const { createStripeSubscriptions, MONITOR_PRODUCTS } = await import("../src/stripe-subscriptions.js");
 
 const STORE = join("/tmp", `test-subs-${process.pid}.json`);

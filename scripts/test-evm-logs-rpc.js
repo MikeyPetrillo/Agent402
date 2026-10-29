@@ -10,6 +10,7 @@
 // than the depth never reaches the public lane; EVM_LOGS_ALCHEMY_FIRST=on
 // sends every read to the configured list; and the ledger records the same
 // rows whichever lane served it.
+import "./lib/file-mode.js";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +19,6 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "evm-logs-"));
 process.env.REVENUE_LEDGER_DB = join(dir, "ledger.db");
 process.env.SALES_LEDGER_DB = join(dir, "sales.db");
-delete process.env.STATE_DATABASE_URL;
 delete process.env.EVM_LOGS_ALCHEMY_FIRST;
 
 const L = await import("../src/evm-logs-rpc.js");
