@@ -70,6 +70,10 @@ Operations:
   without them. Public figures are unchanged.
 - An operator test wallet that pays the Gateway batched route is booked as
   our own traffic.
+- A catalog call served on the free proof-of-work or trial tier that ends
+  in a 5xx counts on its own lane of the operator tool-failure view, beside
+  a per-rail breakdown; the toolFailures word on /api/gateway-status reads
+  paying buyers' outcomes only.
 
 ### 2026-10-29 (payments, gateway, router, connector)
 Payments and refunds:
