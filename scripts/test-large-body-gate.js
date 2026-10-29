@@ -86,6 +86,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const q = createLargeBodyGate({ routes: [["/big", 1_000_000]], isPaid: () => true, maxInflightBytes: 100_000_000 });
     ok([0, 1, 2].map(() => run(q, fakeReq({ "content-length": "1000000" }))).every((x) => x.nexted), "with small routes the share is a quarter of the budget, not twice the route limit");
   }
+  {
+    // A sub-path is gated like its route (the parser mounted with app.use on
+    // the route runs there too), in any case.
+    const g = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: (req) => req.headers["x-paid"] === "1", maxInflightBytes: 100_000_000 });
+    for (const p of ["/big/x", "/BIG/X/", "/big/a/b"]) {
+      const x = run(g, fakeReq({ "content-length": big }, p));
+      ok(x.nexted && x.req.__bodyUnread === true, `a sub-path (${p}) is gated like its route: an unpaid big body is left unread`);
+    }
+    ok(run(g, fakeReq({ "content-length": big }, "/bigger")).req.__bodyUnread !== true, "a path that only starts with the route's letters is not the route");
+  }
+  {
+    // Parses with no plausible credential share a smaller budget: unpaid bodies
+    // read for their quote (or sent without a length) cannot spend it all.
+    const g = createLargeBodyGate({ routes: [["/quoted", 10_000_000]], isPaid: (req) => req.headers["x-paid"] === "1", bodyQuoted: () => true, clientKey: (req) => req.headers.ip, maxInflightBytes: 80_000_000 });
+    const ips = ["1.0.0.1", "1.0.0.2", "1.0.0.3"];
+    const got = ips.map((ip) => run(g, fakeReq({ "transfer-encoding": "chunked", ip }, "/quoted")));
+    ok(got[0].nexted && got[1].nexted === false && got[1].res.statusCode === 503 && g.unpaidBytes() === 10_000_000, "unpaid parses stop at the unpaid share (an eighth of the budget, at least one route body)");
+    ok(run(g, fakeReq({ "content-length": "9000000", "x-paid": "1", ip: "1.0.0.9" }, "/quoted")).nexted, "a paid parse still gets in while the unpaid share is spent");
+    got[0].res.emit("finish");
+    ok(g.unpaidBytes() === 0 && run(g, fakeReq({ "transfer-encoding": "chunked", ip: "1.0.0.4" }, "/quoted")).nexted, "a released unpaid parse frees the unpaid share");
+  }
   const free = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: () => false, freeMode: true });
   r = run(free, fakeReq({ "content-length": big }));
   ok(r.nexted && !r.req.__bodyUnread, "FREE_MODE reads every body");

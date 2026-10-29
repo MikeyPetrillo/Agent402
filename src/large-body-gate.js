@@ -20,7 +20,12 @@
 //     closes. One client address holds at most maxPerClientBytes of it (by
 //     default a quarter of the budget, never less than two of the largest
 //     route's bodies), so a few uploads under one address cannot spend it all;
-//     a slow body is bounded by the server's requestTimeout.
+//     a parse with no plausible credential draws on a smaller unpaid share
+//     (maxUnpaidBytes, an eighth of the budget, never less than the largest
+//     route's body); a slow body is bounded by the server's requestTimeout.
+//
+// A route matches with any sub-path under it, as the parser mounted with
+// app.use on that path does.
 //
 // A route's own parser still enforces its limit with a 413; a body declared
 // over that limit is left to it and reserves nothing.
@@ -42,15 +47,22 @@ export function largeBodyInflightMaxBytes(env = process.env) {
  * @param {(req) => string} [o.clientKey]
  * @param {number} [o.maxInflightBytes]
  */
-export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES, maxPerClientBytes }) {
+export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES, maxPerClientBytes, maxUnpaidBytes }) {
   const limits = new Map(routes);
-  const perClientMax = maxPerClientBytes ?? Math.max(Math.floor(maxInflightBytes / 4), 2 * Math.max(0, ...limits.values()));
-  let inFlight = 0;
+  const largest = Math.max(0, ...limits.values());
+  const perClientMax = maxPerClientBytes ?? Math.max(Math.floor(maxInflightBytes / 4), 2 * largest);
+  const unpaidMax = maxUnpaidBytes ?? Math.max(Math.floor(maxInflightBytes / 8), largest);
+  const limitOf = (path) => {
+    const p = String(path || "").toLowerCase().replace(/\/+$/, "");
+    for (const [route, limit] of limits) if (p === route || p.startsWith(route + "/")) return limit;
+    return 0;
+  };
+  let inFlight = 0, unpaidInFlight = 0;
   const byClient = new Map();
   function gate(req, res, next) {
     if (req.method !== "POST") return next();
     // Routing is case-insensitive and ignores a trailing slash; so is this.
-    const limit = limits.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
+    const limit = limitOf(req.path);
     if (!limit) return next();
     const enc = String(req.headers["content-encoding"] || "").trim().toLowerCase();
     if (enc && enc !== "identity") {
@@ -61,7 +73,8 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
     const hasBody = declared === null ? req.headers["transfer-encoding"] !== undefined : declared > 0;
     if (!hasBody) return next();
     const size = declared ?? limit;
-    if (!freeMode && size > UNPAID_BODY_MAX_BYTES && !isPaid(req)) {
+    const unpaid = !freeMode && !isPaid(req);
+    if (unpaid && size > UNPAID_BODY_MAX_BYTES) {
       if (!bodyQuoted(req)) {
         req.body = {};
         Object.defineProperty(req, "__bodyUnread", { value: true, enumerable: false });
@@ -74,16 +87,18 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
     }
     if (size > limit) return next();
     const who = clientKey(req), held = byClient.get(who) || 0;
-    if (inFlight + size > maxInflightBytes || held + size > perClientMax) {
+    if (inFlight + size > maxInflightBytes || held + size > perClientMax || (unpaid && unpaidInFlight + size > unpaidMax)) {
       res.set("Retry-After", "5");
       return res.status(503).json({ error: "busy", hint: "This host is reading other large request bodies right now; retry in a few seconds. Nothing was charged." });
     }
     inFlight += size;
+    if (unpaid) unpaidInFlight += size;
     byClient.set(who, held + size);
     let released = false;
     const release = () => {
       if (released) return;
       released = true; inFlight -= size;
+      if (unpaid) unpaidInFlight -= size;
       const left = (byClient.get(who) || 0) - size;
       if (left > 0) byClient.set(who, left); else byClient.delete(who);
     };
@@ -93,6 +108,7 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
   }
   gate.inFlightBytes = () => inFlight;
   gate.clientBytes = (key) => byClient.get(key) || 0;
+  gate.unpaidBytes = () => unpaidInFlight;
   return gate;
 }
 
