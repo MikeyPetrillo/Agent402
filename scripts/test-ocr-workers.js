@@ -34,6 +34,17 @@ for (const l of LANGS) {
   catch { missing.push(l); }
 }
 ok(missing.length === 0, `language data present for ${LANGS.join(", ")} in ${SOURCE_DIR} (missing: ${missing.join(", ") || "none"}; run node scripts/fetch-tessdata.js tessdata ${LANGS.join(" ")})`);
+{
+  // A workflow that sweeps the catalog against its own boot (the example
+  // sweeps, the corpus) must fetch the language data, or image-ocr answers 503
+  // there and its value assertion silently stops running.
+  const { readdirSync, readFileSync: rf } = await import("node:fs");
+  const wfDir = new URL("../.github/workflows/", import.meta.url);
+  for (const f of readdirSync(wfDir).filter((n) => /\.ya?ml$/.test(n))) {
+    const y = rf(new URL(f, wfDir), "utf8");
+    if (/scripts\/(test-corpus|test-all|test-non-metered-examples)\.js/.test(y)) ok(/node scripts\/fetch-tessdata\.js tessdata\b[^\n]*\beng\b/.test(y), `${f} sweeps the catalog and fetches the eng language data`);
+  }
+}
 if (missing.length) { console.log(`\n${pass} passed, ${fail} failed`); process.exit(1); }
 
 // ita is installed as a corrupt file: if the tool read its data from anywhere
