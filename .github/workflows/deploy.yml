@@ -3329,6 +3329,8 @@ jobs:
           t node scripts/test-util-kit.js
           # webhook-verify: per-provider HMAC vectors, tamper, replay tolerance, secret never echoed (offline)
           t node scripts/test-webhook-verify.js
+          # Burner sweep sizing: per-buy amount from the live 402, buys from the excess over the float (offline, no spend)
+          t node scripts/test-sweep-burner.js
           # x-data kit (offline)
           t node scripts/test-x-data-kit.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
