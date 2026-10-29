@@ -201,7 +201,7 @@ const paid = async (B, method, url, body, who, extra = {}) => {
 };
 const settles = (a) => fac.settle[a] || 0;
 const verifies = (a) => fac.verify[a] || 0;
-const status = async (B, auth) => (await (await fetch(`${B}/api/gateway-status`, auth ? { headers: { Authorization: "Bearer payer-screen-test-operator-token-0123456789" } } : {})).json()).sanctionsScreen;
+const status = async (B, auth) => (await (await fetch(`${B}/api/gateway-status`, auth ? { headers: { "X-Operator-Token": "payer-screen-test-operator-token-0123456789" } } : {})).json()).sanctionsScreen;
 
 const PUT = (key, value) => JSON.stringify({ key, value });
 try {

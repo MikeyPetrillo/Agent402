@@ -310,7 +310,7 @@ import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
-import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -417,7 +417,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, premiumUsdByNetworkName, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
@@ -598,7 +598,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
-import { mountMcp } from "./mcp-http.js";
+import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
@@ -2453,6 +2453,10 @@ if (CDN_PROXY_ON) {
 // Paid answers, every 402 and operator surfaces are never kept by a shared
 // cache (src/paid-no-store.js).
 app.use(paidNoStoreMiddleware());
+// Browser security headers on every answer, ahead of every route (the
+// email-link routes under /followups and /alerts are registered early; the
+// PostHog proxy sets its own nosniff as well).
+app.use(securityHeaders());
 // Server-side memo for public surfaces whose body is built from SQLite
 // aggregates (revenue, sales, status, proof). A Cache-Control header only
 // asks browsers to reuse a response; every crawler and bot hit still rebuilt
@@ -2799,6 +2803,22 @@ app.get("/followups/stop", async (req, res) => {
   res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
 });
 app.post("/followups/stop", async (req, res) => { const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+// Every /__operator answer: no-store (operator pages carry lead PII, revenue
+// figures and session state; no browser-history cache, shared proxy or CDN may
+// retain them), and the browser session read from the shared store (a cookie
+// minted on another container) before any gate looks at it. Registered ONCE,
+// ahead of the first operator route in this file: a route registered before
+// this middleware would answer 404 to a session the other container minted,
+// and each such refusal counts as a wrong credential. The names it reads
+// (OP_SESSION_SHARED, syncOperatorSession) are defined with the operator auth
+// below; the callback runs at request time, after they init.
+app.use("/__operator", (req, res, next) => {
+  res.set("Cache-Control", "no-store, private");
+  res.set("Pragma", "no-cache");
+  res.set("Vary", "Cookie, Authorization");
+  if (!OP_SESSION_SHARED) return next();
+  syncOperatorSession(req).then(() => next(), () => next());
+});
 app.get("/__operator/followups.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_followups.stats());
@@ -3373,8 +3393,6 @@ app.use(rugcheckPauseMiddleware(
   Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
 ));
 
-app.use(securityHeaders());
-
 // Free, unauthenticated routes
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
 // the top nav doesn't re-render the world every time. stale-while-revalidate
@@ -3448,7 +3466,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorAuthed(req)) {
+  if (!operatorElevated(req)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3581,7 +3599,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorAuthed(req);
+  const full = operatorElevated(req);
   // The wrong-credential count every replica contributed to, when shared.
   await refreshOperatorAuthShared();
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
@@ -3717,6 +3735,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // POST /__operator/credits/refusal-refunded. A word only; the session ids
     // are on /__operator/credits.json.
     creditsRefunds: _credits ? await _credits.refusalsToRefund().then((l) => ({ status: l.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
+    // CDN-range peers that reached the origin without the shared origin
+    // secret (src/cdn-client-ip.js): with the resolver on, each such request
+    // is keyed on the edge address instead of its client, so a missing or
+    // rotated CDN_ORIGIN_SECRET folds the per-address controls onto a few
+    // addresses. ok / unauthenticated / off; the count and whether a secret
+    // is configured for the operator.
+    cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
@@ -4179,9 +4204,9 @@ app.get("/api/revenue/mpp", (req, res) => {
   try {
     // Itemized rows (tool + price per settlement) are operator-only; everyone
     // else gets the adoption aggregate plus the tx hashes that prove it.
-    const authed = operatorAuthed(req);
+    const authed = operatorElevated(req);
     res.set("Cache-Control", authed ? "no-store, private" : "public, max-age=60")
-      .set("Vary", "Cookie, Authorization")
+      .set("Vary", "X-Operator-Token")
       .json(authed ? mppSales({ detailed: true }) : memoSurface("revenue:mpp", 60_000, () => mppSales({ detailed: false })));
   } catch (e) {
     res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
@@ -5172,14 +5197,16 @@ if (STATUS_PROBE_TOKEN) {
 function statusProbeAuthed(req) {
   // The narrow credential first, so an observer carrying only it never touches
   // the operator limiter or the guessing counter.
-  const presented = getOperatorToken(req);
+  // Both routes are public, so the credential is read from X-Operator-Token
+  // only (see operatorElevated).
+  const presented = getOperatorToken(req, { headerOnly: true });
   // An IP whose operator budget is spent gets no comparison at all, of either
   // token (a refused probe is a gap on /status, never a recorded outage).
   if (presented && operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return false;
   if (presented && statusProbeTokenOk(presented)) return true;
   // Otherwise the operator token still works, and a WRONG credential is
   // rate-limited and counted exactly as it was before.
-  return operatorAuthed(req);
+  return operatorElevated(req);
 }
 // The one other thing STATUS_PROBE_TOKEN does: on GET /api/pow/challenge for
 // PROBE_POW_SLUG it gets the status Worker a low-difficulty challenge it can
@@ -5205,11 +5232,19 @@ function statusProbeChallengeAuthed(req) {
   }
   return false;
 }
-const getOperatorToken = (req) => {
-  const auth = req.headers["authorization"];
-  if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+// A Bearer in the credits-key shape (src/credits.js KEY_RE) is a buyer's
+// credential, never an operator token: a credits client attaches it to every
+// request, and reading it here would count each read as a wrong operator
+// credential. An MPP credential uses the `Payment` scheme and is never read.
+// `headerOnly`: X-Operator-Token alone, for the public surfaces that carry an
+// operator branch (see operatorElevated).
+const CREDITS_KEY_PREFIX = "a402_";
+const getOperatorToken = (req, { headerOnly = false } = {}) => {
   const hdr = req.headers["x-operator-token"];
-  if (typeof hdr === "string") return hdr;
+  if (typeof hdr === "string" && hdr) return hdr;
+  if (headerOnly) return "";
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Bearer ") && !auth.slice(7).startsWith(CREDITS_KEY_PREFIX)) return auth.slice(7);
   return "";
 };
 // Opaque, revocable, expiring operator sessions (security audit R-12). The
@@ -5359,19 +5394,28 @@ export function operatorAuthStatus(full = false) {
     ? { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok", failures1h: n, threshold: OPERATOR_AUTH_FAIL_ALERT }
     : { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok" };
 }
-function operatorAuthed(req) {
-  const presented = Boolean(getOperatorToken(req)) || Boolean(readCookie(req, OPERATOR_COOKIE));
+function operatorAuthed(req, { headerOnly = false } = {}) {
+  const token = getOperatorToken(req, { headerOnly });
+  const presented = Boolean(token) || Boolean(readCookie(req, OPERATOR_COOKIE));
   if (!presented) return false;  // anonymous: nothing to brute-force, nothing to count
   const ip = operatorAttemptIp(req);
   // Budget already spent: refuse without looking at the credential at all.
   if (operatorAttemptLimiter.peek(ip).limited) return false;
-  if (operatorTokenOk(getOperatorToken(req))) return true;         // header token
+  if (operatorTokenOk(token)) return true;         // header token
   if (operatorSessionValid(readCookie(req, OPERATOR_COOKIE))) return true; // browser session
   // Only a WRONG credential consumes budget.
   operatorAttemptLimiter.check(ip);
   noteOperatorAuthFailure();
   return false;
 }
+// The operator branch of a PUBLIC surface (/health, /api/gateway-status,
+// /api/index, the leaderboards, /api/analytics, /api/revenue): read from
+// X-Operator-Token only. On these routes an Authorization header is a buyer's
+// credential (a credits key, an MPP credential, a key for another service a
+// client attaches everywhere), so it is neither compared nor counted; the
+// session cookie is scoped to /__operator and never arrives here. The
+// operator routes keep the Bearer form for curl.
+function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -5386,17 +5430,9 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // Secure on HTTPS, and an 8h absolute expiry.
 // F20: operator pages carry lead PII, revenue figures, and session state.
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
-// them. Registered before the routes so it runs on every /__operator response
-// (login form, dashboard, stats, wishes, logout).
-app.use("/__operator", (req, res, next) => {
-  res.set("Cache-Control", "no-store, private");
-  res.set("Pragma", "no-cache");
-  res.set("Vary", "Cookie, Authorization");
-  // A browser session minted on another container: read it from the shared
-  // store before the gate below looks at the cookie.
-  if (!OP_SESSION_SHARED) return next();
-  syncOperatorSession(req).then(() => next(), () => next());
-});
+// them. The middleware that sets this and syncs the session cookie is
+// registered once, ahead of the FIRST operator route (see the
+// /__operator app.use above the followups route), not here.
 app.get("/__operator/login", (_req, res) => {
   res.type("html").send(operatorLoginPage(BASE_URL));
 });
@@ -5443,7 +5479,9 @@ app.get("/__operator/stats", (req, res) => {
   // PostHog. This is the number to compare against a provider's own dashboard.
   // `daily` is the deploy-proof series (stats DB, UTC day buckets): the number
   // to sum over a billing month; the in-memory fields reset on every redeploy.
-  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
+  // mcpClientsSeenSinceBoot: the client names MCP sessions announce at
+  // initialize (caller-chosen strings, so operator-only).
+  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), mcpClientsSeenSinceBoot: mcpClientsSeenSinceBoot(), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
 });
 // The intent pass is OPT-IN (?intent=1) and never runs on a default load.
 // It is a PAID third-party call per uncached row, on a request path, and the
@@ -7918,7 +7956,7 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorAuthed(req) ? 1000 : 200);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
   res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
@@ -8019,7 +8057,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorAuthed(req)) {
+  if (operatorElevated(req)) {
     return res.set("Cache-Control", "no-store").json(snap);
   }
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
@@ -8356,7 +8394,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorAuthed(req) ? 500 : 50;
+  const topCeiling = operatorElevated(req) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -9128,7 +9166,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorAuthed(req)));
+  res.json(redactAnalytics(data, operatorElevated(req)));
 });
 
 let __analyticsSlugSet = null;
@@ -9143,7 +9181,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorAuthed(req)) return res.redirect(302, "/status");
+  if (!operatorElevated(req)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9151,7 +9189,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorAuthed(req)), {
+  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.
@@ -9184,11 +9222,13 @@ const mcpMountOpts = {
   getLeaderboard: getLeaderboardSnapshot,
   // The MPP counterpart (src/mpp-leaderboard.js) behind sellers.list wire=mpp.
   getMppLeaderboard: mppLeaderboardSnapshot,
-  // MCP-served calls land on the same accounting + analytics rails as
-  // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
-  // tier), so the served-call counter records under "pow". Analytics gets
-  // the full meta (latency, errored). Cache hits don't flow through MCP
-  // today — that path bypasses the central HTTP dispatcher.
+  // Free-tier MCP calls (the handler runs in this process, PoW is the gate,
+  // no x402 settlement) land on the same accounting + analytics rails as
+  // direct-HTTP ones, under "pow". A PAID call is replayed to its own HTTP
+  // route (src/mcp-mpp.js), which books its sale, analytics row and failure
+  // count itself, so the connector never calls this for a paid outcome.
+  // Cache hits don't flow through MCP today — that path bypasses the central
+  // HTTP dispatcher.
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
     // MCP doesn't carry an HTTP status, so we synthesize one for the split:
@@ -9198,9 +9238,11 @@ const mcpMountOpts = {
     // Probe detection: a 4xx with zero input keys = scanning/discovery call.
     const isProbe = meta.errored && status >= 400 && status < 500
       && Array.isArray(meta.inputKeys) && meta.inputKeys.filter((k) => k !== "slug").length === 0;
-    // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
-    // ride along — synthetic is always false here. Pass explicitly so future
-    // refactors don't accidentally let a stray truthy value through.
+    // The free path books here without reading the heartbeat marker, so
+    // synthetic is false for these outcomes. (The marker IS forwarded on the
+    // paid loopback, and the paid route classifies its own booking.) Pass
+    // explicitly so future refactors don't accidentally let a stray truthy
+    // value through.
     if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false, isProbe);
     const latencyMs = meta.latencyMs | 0;
     const errored = !!meta.errored;
@@ -9316,6 +9358,11 @@ app.get("/api/pricing", (_req, res) => {
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
       ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // The settlement premium a chain adds to every price quoted on it (the
+      // same map the accepts builder prices through, src/payments.js), for the
+      // offered chains that carry one: a client capping a call at the list
+      // price is refused there otherwise.
+      ...(() => { const p = premiumUsdByNetworkName(); const offered = Object.fromEntries(publicNetworks().filter((n) => p[n] > 0).map((n) => [n, p[n]])); return Object.keys(offered).length ? { premiumUsdByNetwork: offered } : {}; })(),
       // The accept kinds each network's 402 carries, read from the live offer
       // (exact everywhere; upto where it is on; the Circle Gateway batched
       // kind where that option is on). Absent before the paywall is built.

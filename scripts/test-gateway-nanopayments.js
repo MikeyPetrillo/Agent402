@@ -1392,7 +1392,7 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     assert.deepEqual(pub.gatewayPending, { status: "ok" });
     assert.ok(["unknown", "ok", "withdraw"].includes(pub.gatewayBalance?.status) && Object.keys(pub.gatewayBalance).join(",") === "status", `gatewayBalance publishes its word only (${JSON.stringify(pub.gatewayBalance)})`);
     await sleep(2000);
-    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${OP}` } })).json();
+    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": OP } })).json();
     assert.equal(op.gatewayBalance.status, "withdraw", `30.5 is past the default alert (${JSON.stringify(op.gatewayBalance)})`);
     assert.equal(op.gatewayBalance.usd, 30.5, "the figure is on the operator view");
     const pub2 = await (await fetch(`${base}/api/gateway-status`)).json();

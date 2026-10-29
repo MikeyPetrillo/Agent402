@@ -496,14 +496,24 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
      * paid loopback never returned a 200, so the buyer was NOT charged).
      * Returns { orphaned, pruned }; never throws.
      */
+    const abortRun = (id, rec = null) => {
+      const ctl = runs.get(id);
+      runs.delete(id);
+      if (ctl) { try { ctl.abort(); } catch { /* already aborted */ } }
+      if (rec) mine.set(id, rec); // the capacity view reads the row's terminal state
+    };
     async function sweep() {
-      let orphaned = 0, pruned = 0;
+      let orphaned = 0, pruned = 0, cancelled = 0;
       try {
         const rows = await records.list(collection, { limit: 100_000 });
         const alive = new Map(); // owner -> boolean
         for (const { id, body: rec } of rows) {
           if (!rec || rec.taskId !== id) { await delRow(id); continue; }
           if (expired(rec)) { if (await delRow(id)) pruned++; continue; }
+          // A cancel written by another container (tasks/cancel reached the
+          // replica that does not run the task): the live run here observes it
+          // on this sweep and stops, as a cancel on this container would have.
+          if (rec.status === "cancelled" && runs.has(id)) { abortRun(id, rec); cancelled++; continue; }
           if (rec.status !== "working" || rec.owner === bootId || runs.has(id)) continue;
           if (!alive.has(rec.owner)) {
             let holder = null;
@@ -519,10 +529,10 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
         }
       } catch (e) {
         log(`[${label}] sweep could not read the state database: ${String(e?.message || e).slice(0, 120)}`);
-        return { orphaned, pruned };
+        return { orphaned, pruned, cancelled };
       }
-      if (orphaned || pruned) log(`[${label}] sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned`);
-      return { orphaned, pruned };
+      if (orphaned || pruned || cancelled) log(`[${label}] sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned, ${cancelled} run(s) stopped on a cancel from another container`);
+      return { orphaned, pruned, cancelled };
     }
 
     /**
@@ -635,6 +645,9 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       await ready;
       let rec;
       try { rec = await rowOf(String(id || "")); } catch { return false; }
+      // The run's own progress write is the earliest point it reads the row:
+      // a cancel another container wrote stops it here, ahead of the sweep.
+      if (rec?.status === "cancelled" && runs.has(id)) { abortRun(id, rec); return false; }
       if (!applyProgress(rec, patch)) return false;
       try { return await putRow(stamp(rec)); } catch { return false; }
     }
@@ -644,9 +657,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       let rec;
       try { rec = await rowOf(String(id || "")); } catch { rec = mine.get(id) || null; }
       if (!rec) return false;
-      const ctl = runs.get(id);
-      if (ctl) { try { ctl.abort(); } catch { /* already aborted */ } }
-      runs.delete(id);
+      abortRun(id);
       if (isTerminal(rec.status)) return true;
       rec.status = "cancelled";
       rec.statusMessage = CANCEL_MESSAGE;

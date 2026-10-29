@@ -181,7 +181,7 @@ const file = join(dir, "outbound-destinations.json");
     const pub = await (await fetch(`${base}/api/gateway-status`)).json();
     ok(JSON.stringify(pub.outboundDestinations) === JSON.stringify({ status: "burst" }), `the public field is the word alone, read from the stored body at boot (${JSON.stringify(pub.outboundDestinations)})`);
     ok(!JSON.stringify(pub).includes(EVM.toLowerCase()) && !JSON.stringify(pub).includes(SOL), "no recipient on the public endpoint");
-    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json();
     ok(op.outboundDestinations.status === "burst" && op.outboundDestinations.newInWindow === 2 && op.outboundDestinations.known === 3 && op.outboundDestinations.burstOver === 1, `the operator field carries the counts (${JSON.stringify(op.outboundDestinations)})`);
     ok(!JSON.stringify(op.outboundDestinations).includes(EVM.toLowerCase()), "and still no recipient");
     const anon = await fetch(`${base}/__operator/outbound-destinations.json`);

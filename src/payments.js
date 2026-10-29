@@ -30,7 +30,7 @@ import {
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
-import { x402EvmOnly } from "./rails.js";
+import { x402EvmOnly, RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
@@ -544,6 +544,32 @@ export function parseNetworkPremiums(raw = process.env.NETWORK_PRICE_PREMIUMS ||
   return out;
 }
 const NETWORK_PREMIUMS = parseNetworkPremiums();
+
+/** The configured settlement premium per network, keyed by the network's
+ *  public name ({ optimism: 0.001 }): every price quoted on that chain is the
+ *  list (or per-request) price plus this, raised to the chain's floor. Read
+ *  by the machine price surfaces (/api/pricing, openapi, llms.txt,
+ *  payment.info) from the same map the accepts builder prices through, so a
+ *  client budgeting from a surface meets the amount the 402 asks. Empty when
+ *  no premium is set. */
+export function premiumUsdByNetworkName(premiums = parseNetworkPremiums()) {
+  const out = {};
+  for (const [name, caip2] of Object.entries(NETWORKS)) {
+    const micro = premiums.get(caip2);
+    if (micro > 0) out[name] = micro / 1e6;
+  }
+  return out;
+}
+/** The premiums as one clause for prose ("on Optimism every call quotes
+ *  $0.001 above its list price, the settlement premium its 402 carries");
+ *  "" when none is set. */
+export function premiumClause(premiums = parseNetworkPremiums()) {
+  const parts = Object.entries(premiumUsdByNetworkName(premiums)).map(([name, usd]) => {
+    const rail = RAILS.find((r) => r.caip2 === NETWORKS[name]);
+    return `on ${rail ? rail.name : name} every call quotes $${usd} above its list price (the settlement premium its 402 carries)`;
+  });
+  return parts.join("; ");
+}
 
 // Per-chain price floors (src/network-floors.js): on a chain whose settlement
 // we may pay for ourselves the accept quotes at least the floor. Applied after

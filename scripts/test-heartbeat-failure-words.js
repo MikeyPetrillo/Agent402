@@ -152,6 +152,45 @@ try {
     assert.ok(ALARMS.some((a) => a.title === GP_TITLE), "the Worker carries the same title");
   });
 
+  // The CDN origin secret (src/cdn-client-ip.js): its own step and title;
+  // unauthenticated pages, ok and off close, unknown and absent do neither,
+  // and the body names no address or count.
+  const CDN_TITLE = "CDN origin secret: edge traffic reached the origin unauthenticated";
+  const cdnStep = steps.find((s) => String(s.name || "").startsWith("CDN origin secret check"));
+  await check("cdnOrigin: unauthenticated opens one issue, ok and off close it, unknown and absent do neither", async () => {
+    assert.ok(cdnStep, "heartbeat.yml has the CDN origin step");
+    assert.match(cdnStep.run, /\.cdnOrigin\.status/);
+    assert.doesNotMatch(cdnStep.run, /curl[^\n]*\/__operator\//, "the step never reads the operator endpoint");
+    assert.equal(cdnStep.env?.OP_TOKEN, undefined, "no operator token in the step");
+    const { calls } = await run({ gateway: { cdnOrigin: { status: "unauthenticated" } }, script: cdnStep.run });
+    const c = created(calls);
+    assert.deepEqual(c.map((x) => x.title), [CDN_TITLE]);
+    assert.match(c[0].body, /cdnOrigin\.status=unauthenticated/);
+    assert.match(c[0].body, /CDN_ORIGIN_SECRET/);
+    assert.doesNotMatch(c[0].body, /\b\d{1,3}(\.\d{1,3}){3}\b/, "no address in the body");
+    let r = await run({ gateway: { cdnOrigin: { status: "unauthenticated" } }, open: CDN_TITLE, script: cdnStep.run });
+    assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
+    assert.ok(r.calls.some((x) => x[0] === "issue" && x[1] === "comment" && x[2] === "41"));
+    for (const w of ["ok", "off"]) {
+      r = await run({ gateway: { cdnOrigin: { status: w } }, open: CDN_TITLE, script: cdnStep.run });
+      assert.equal(closed(r.calls).length, 1, w);
+    }
+    r = await run({ gateway: { cdnOrigin: { status: "unknown" } }, open: CDN_TITLE, script: cdnStep.run });
+    assert.equal(closed(r.calls).length, 0);
+    assert.deepEqual(created(r.calls), []);
+    r = await run({ gateway: {}, script: cdnStep.run });
+    assert.deepEqual(created(r.calls), [], "an older build without the field opens nothing");
+    const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
+    assert.ok(ALARMS.some((a) => a.title === CDN_TITLE), "the Worker carries the same title");
+    const j = (gw) => judge({ gateway: gw })[CDN_TITLE];
+    assert.equal(j({ cdnOrigin: { status: "unauthenticated" } }), "bad");
+    assert.equal(j({ cdnOrigin: { status: "ok" } }), "good");
+    assert.equal(j({ cdnOrigin: { status: "off" } }), "good");
+    assert.equal(j({ cdnOrigin: { status: "unknown" } }), "quiet");
+    assert.equal(j({}), "quiet");
+    assert.match(ALARMS.find((a) => a.title === CDN_TITLE).body({ gateway: { cdnOrigin: { status: "unauthenticated" } } }), /cdnOrigin\.status=unauthenticated/);
+  });
+
   await check("the status Worker maps the same three words under the same titles", async () => {
     const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
     for (const t of Object.values(TITLES)) assert.ok(ALARMS.some((a) => a.title === t), `Worker has "${t}"`);

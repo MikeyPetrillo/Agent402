@@ -49,7 +49,7 @@ try {
   ok(d1.asOf && d1.asOf === d2.asOf, `a repeat /api/revenue/daily inside the window is the memoized body (asOf ${d1.asOf})`);
   const s1 = await j("/api/status"); await new Promise((r) => setTimeout(r, 20)); const s2 = await j("/api/status");
   ok(s1.generatedAt === s2.generatedAt, "a repeat /api/status inside 30 s is the memoized snapshot");
-  const w = await fetch(`${base}/api/status/probe`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` }, body: JSON.stringify({ source: "test", components: { api: { ok: true } } }) });
+  const w = await fetch(`${base}/api/status/probe`, { method: "POST", headers: { "content-type": "application/json", "x-operator-token": TOKEN }, body: JSON.stringify({ source: "test", components: { api: { ok: true } } }) });
   ok(w.status === 200, `probe write accepted (${w.status})`);
   const s3 = await j("/api/status");
   ok(s3.generatedAt !== s1.generatedAt, "a probe write drops the memo, so the next read is rebuilt");

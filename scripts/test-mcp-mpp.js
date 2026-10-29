@@ -152,11 +152,28 @@ try {
   const payer = await connect();
   McpClient.wrap(payer, { methods: [evm.charge({ account, currencies: [evm.assets.base.USDC], maxAmount: "1.00" })] });
   const before = { ...facCalls };
+  const served = async () => (await (await fetch(`${B}/api/stats`)).json()).toolCallsServed;
+  const servedBefore = await served();
   const paid = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-write", params: { key, value: { hello: "mpp" } } } });
   ok(!paid.isError, `mppx MCP client pays the challenge and the tool answers (isError=${paid.isError})`);
   ok(paid.structuredContent?.slug === "memory-write" && paid.structuredContent?.result, "result is the catalog.call envelope {slug, result}");
   ok(paid.receipt && paid._meta?.["org.paymentauth/receipt"], `receipt rides in _meta["org.paymentauth/receipt"] (and McpClient surfaces it as result.receipt: ${JSON.stringify(paid.receipt).slice(0, 80)})`);
   ok(facCalls.verify - before.verify === 1 && facCalls.settle - before.settle === 1, `the REAL gates settled it: facilitator verify +${facCalls.verify - before.verify}, settle +${facCalls.settle - before.settle} (loopback, settlement authority unchanged)`);
+  {
+    // One paid call is ONE served call on /api/stats, booked by the paid route
+    // the loopback reached, under its wire: the connector books nothing of its
+    // own for it (it used to add a second, proof-of-work, count).
+    const servedAfter = await served();
+    ok(servedAfter.total - servedBefore.total === 1 && servedAfter.viaProofOfWork === servedBefore.viaProofOfWork && servedAfter.viaMPPWire - servedBefore.viaMPPWire === 1,
+      `a paid MCP call is counted once, on the MPP wire (total +${servedAfter.total - servedBefore.total}, viaProofOfWork +${servedAfter.viaProofOfWork - servedBefore.viaProofOfWork}, viaMPPWire +${servedAfter.viaMPPWire - servedBefore.viaMPPWire})`);
+  }
+  {
+    // The client names sessions announce at initialize are operator-only.
+    const about = await payer.callTool({ name: "server.describe", arguments: {} });
+    ok(!JSON.stringify(about).includes("clientsSeenSinceBoot"), "server.describe does not republish the caller-chosen client names");
+    const opStats = await (await fetch(`${B}/__operator/stats`, { headers: { "X-Operator-Token": OP } })).json();
+    ok(opStats.mcpClientsSeenSinceBoot && Object.keys(opStats.mcpClientsSeenSinceBoot).some((k) => k.startsWith("test-mcp-mpp@")), `the operator surface carries them (${Object.keys(opStats.mcpClientsSeenSinceBoot || {}).join(", ")})`);
+  }
 
   // 3. Same wallet reads it back (payer attribution survived the loopback)
   const read = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });

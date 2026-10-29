@@ -63,6 +63,39 @@ export function receiptFromHeader(h) {
   try { return JSON.parse(JSON.stringify(Receipt.deserialize(String(h)))); } catch { return null; }
 }
 
+/** The x402 settle receipt ({success, transaction, network, payer}) the paid
+ *  route's 200 carries beside the MPP receipt (the shim mirrors PAYMENT-RESPONSE
+ *  and leaves it in place); null when absent or unreadable. It is the ledger's
+ *  proof of a charge, and names the chain and the payer a debt is repaid on. */
+export function settleReceiptFromHeader(h) {
+  if (typeof h !== "string" || !h) return null;
+  try {
+    const r = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+    return r && typeof r === "object" && !Array.isArray(r) ? r : null;
+  } catch { return null; }
+}
+
+/** What an evm/charge credential signed for (its EIP-3009 value, in the
+ *  challenge's token units) and the chain its challenge names; null when
+ *  unreadable. The signed value is the quote the task's 402 minted on that
+ *  chain (list or per-request quote, premium and floor included), which is
+ *  what a lost result is owed at. */
+export function credentialSignedUsd(credentialHeader) {
+  if (!credentialHeader) return null;
+  try {
+    const c = Credential.deserialize(String(credentialHeader));
+    const request = c?.challenge?.request || {};
+    const details = request.methodDetails || {};
+    const raw = String(c?.payload?.value ?? request.amount ?? "");
+    if (!/^[0-9]{1,30}$/.test(raw)) return null;
+    const decimals = Number.isInteger(details.decimals) ? details.decimals : 6;
+    const usd = Number(BigInt(raw)) / 10 ** decimals;
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+    const chainId = Number(details.chainId);
+    return { usd, caip2: Number.isInteger(chainId) && chainId > 0 ? `eip155:${chainId}` : null, payer: typeof c?.payload?.from === "string" ? c.payload.from : null };
+  } catch { return null; }
+}
+
 /** challengeId of the credential the client sent (for the receipt meta). */
 export function challengeIdFromMeta(meta) {
   const cred = meta && typeof meta === "object" ? meta[MCP_CREDENTIAL_META] : null;

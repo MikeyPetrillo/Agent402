@@ -50,7 +50,7 @@ try {
   ok(!("flags" in pubBody) && !("checks" in pubBody), "public /health hides flags/checks");
 
   const t0 = Date.now();
-  const res = await fetch(`${BASE}/health`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  const res = await fetch(`${BASE}/health`, { headers: { "X-Operator-Token": TOKEN } });
   const latencyMs = Date.now() - t0;
   ok(res.status === 200, `authed /health → 200 (got ${res.status})`);
   ok((res.headers.get("content-type") || "").includes("application/json"), `content-type is application/json`);

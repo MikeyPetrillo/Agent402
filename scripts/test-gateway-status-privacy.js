@@ -37,7 +37,7 @@ for (let i = 0; i < 120; i++) {
 
 const pub = await fetch(`${base}/api/gateway-status`);
 const pubBody = await pub.json();
-const opRes = await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+const opRes = await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } });
 const opBody = await opRes.json();
 
 // --- the ledgers' local dead-letter: one word publicly, counts for the operator ---
@@ -59,6 +59,10 @@ ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubB
 ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
+
+// --- the CDN origin secret: one word publicly (off without CDN_PROXY), counts and the secret's presence for the operator ---
+ok(pubBody?.cdnOrigin?.status === "off" && Object.keys(pubBody.cdnOrigin).join(",") === "status", `cdnOrigin publishes its word only (${JSON.stringify(pubBody?.cdnOrigin)})`);
+ok(opBody?.cdnOrigin?.status === "off", "the operator view of cdnOrigin carries the same word while the resolver is off");
 
 // --- the Tempo direct-mode screen word appears only while direct mode is mounted ---
 ok(!("sanctionsScreen" in pubBody) && !("sanctionsScreen" in opBody), "no sanctionsScreen field without Tempo direct mode (scripts/test-sanctions-screen.js covers the direct-mode words)");

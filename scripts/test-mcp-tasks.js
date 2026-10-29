@@ -24,12 +24,15 @@ process.env.AGENT402_MCP_REQ_PER_MIN = "1000000";
 process.env.AGENT402_MCP_REQ_PER_HOUR = "1000000";
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_SYNC_ON_START = "false";
+// Small enough that one test's result cannot be retained (every other result
+// here is a few hundred bytes).
+process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES = "4096";
 
 import express from "express";
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Challenge } from "mppx";
+import { Challenge, Receipt } from "mppx";
 
 const TMP = mkdtempSync(join(tmpdir(), "a402-mcp-tasks-"));
 process.env.REFUND_DB_DIR = TMP;
@@ -249,6 +252,27 @@ ok(unpaid.error?.code === -32042, "an unpaid composite gets the normal -32042 pa
 ok(Array.isArray(unpaid.error?.data?.challenges) && unpaid.error.data.challenges.length > 0, "that ask carries live challenges");
 ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that has not cleared the paywall");
 
+// A PAID blocking call to a slow route from a client that did not declare the
+// tasks extension is refused BEFORE the loopback: served blocking, the run
+// would be cut after the gate passed and its charge owed. The refusal carries
+// the HTTP route's own code and names both ways forward. Unpaid, the same call
+// still reaches the loopback for its 402; a route without a run budget past
+// the connector's wait is served blocking as before.
+{
+  plan = { "image-gen-premium": { delayMs: 0, res: jsonRes(200, { never: true }) } };
+  const nCalls = calls.length;
+  const paidMeta = { "org.paymentauth/credential": "Payment not-a-real-credential" };
+  const refused = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } }, _meta: paidMeta });
+  const text = String(refused.result?.content?.[0]?.text || "");
+  ok(refused.result?.isError === true && /^respond_async_required:/.test(text) && /refused before any payment was taken/.test(text), `a paid blocking call to a slow route without the tasks extension is refused as respond_async_required (${text.slice(0, 80)})`);
+  ok(calls.length === nCalls, "...before any loopback ran (nothing was verified, run or charged)");
+  ok(text.includes(TASKS_EXTENSION) && /Prefer: respond-async/.test(text) && /POST \/api\/image-gen-premium/.test(text), "the refusal names the tasks extension, the HTTP header and the route");
+  const unpaid = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } } });
+  ok(calls.length === nCalls + 1 && !/respond_async_required/.test(JSON.stringify(unpaid)), "an unpaid blocking call to the same route still reaches the loopback (for its 402)");
+  const quick = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  ok(calls.length === nCalls + 2 && !/respond_async_required/.test(JSON.stringify(quick)), "a paid blocking call to a route without a long run budget is served through the loopback as before");
+}
+
 // A fast success inside the gate window is answered synchronously, unchanged.
 plan = { research: { delayMs: 0, res: jsonRes(200, { quick: true }) } };
 const beforeFast = readdirSync(STORE_DIR).length;
@@ -274,6 +298,35 @@ ok(/recorded as owed in our refund ledger and repaid after review/.test(String(c
 await sleep(300);
 const stillCancelled = await rpc("tasks/get", { taskId: toCancel.result.taskId, _meta: CLIENT_CAPS });
 ok(stillCancelled.result?.status === "cancelled", "a terminal task never transitions again, even if the run reports back late");
+
+// ------------------------------------------- 5b. a lost result's debt
+// A task whose settled 200 cannot be retained books the debt with the x402
+// settle receipt the loopback's 200 carries (proof of charge, chain, payer),
+// at what the credential signed on that chain (the quote its 402 minted,
+// premium and floor included), never the list price.
+{
+  const { listRefunds, refundLedgerFlush } = await import("../src/refund-ledger.js");
+  const payer = `0x${"ab".repeat(20)}`;
+  const tx = `0x${"cd".repeat(32)}`;
+  const challenge = JSON.parse(JSON.stringify(Challenge.from({
+    realm: "agent402.tools", method: "evm", intent: "charge", expires: new Date(Date.now() + 300_000),
+    request: { amount: "1001000", currency: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", recipient: "0x0000000000000000000000000000000000000001", methodDetails: { chainId: 10, credentialTypes: ["authorization"], decimals: 6 } },
+    secretKey: "test-secret-key-for-offline-tasks",
+  })));
+  const credential = { challenge, payload: { from: payer, to: "0x0000000000000000000000000000000000000001", value: "1001000", validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce: `0x${"77".repeat(32)}`, signature: `0x${"11".repeat(65)}`, type: "authorization" } };
+  const settle = Buffer.from(JSON.stringify({ success: true, transaction: tx, network: "eip155:10", payer })).toString("base64");
+  const mppReceipt = Receipt.serialize({ method: "evm", status: "success", reference: tx, timestamp: new Date().toISOString() });
+  plan = { research: { delayMs: 700, res: jsonRes(200, { report: "x".repeat(5_000) }, { "payment-response": settle, "payment-receipt": mppReceipt }) } };
+  const lost = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: { ...CLIENT_CAPS, "org.paymentauth/credential": credential } });
+  ok(lost.result?.resultType === "task", "the paid run is handed back as a task");
+  await sleep(900);
+  const got = await rpc("tasks/get", { taskId: lost.result.taskId, _meta: CLIENT_CAPS });
+  ok(got.result?.status === "failed", "its result could not be retained, so the task is failed");
+  await refundLedgerFlush();
+  const row = listRefunds({ status: "owed", limit: 50 }).find((r) => r.slug === "research");
+  ok(row && row.priceUsd === 1.001 && row.network === "eip155:10" && row.payer === payer,
+    `the debt is booked at the chain-priced amount the credential signed, on its chain and to its payer (${JSON.stringify(row && { priceUsd: row.priceUsd, network: row.network, payer: row.payer })})`);
+}
 
 // ------------------------------------------------------- 6. protocol errors
 
