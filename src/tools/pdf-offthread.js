@@ -6,6 +6,10 @@
 //
 // Refusals here are 422: the input could not be processed within the limits.
 // Like every response at or above 400, they cancel x402 settlement.
+//
+// At most PDF_WORKERS_MAX workers run at once (each may hold its heap limit),
+// with up to PDF_QUEUE_MAX calls waiting for a slot; past that a call answers
+// 503 with nothing charged. A call's deadline starts when its worker does.
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +20,24 @@ export const PDF_JOB_TIMEOUT_MS = 20_000;
 // fraction of this; a compressed stream that inflates past it is refused.
 export const PDF_DECODE_CAP_BYTES = 128 * 1024 * 1024;
 const HEAP_MB = 1024;
+const intEnv = (v, d) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : d; };
+export const PDF_WORKERS_MAX = intEnv(process.env.PDF_WORKERS_MAX, 2);
+export const PDF_QUEUE_MAX = intEnv(process.env.PDF_QUEUE_MAX, 16);
+let running = 0;
+const waiting = [];
+function acquire() {
+  if (running < PDF_WORKERS_MAX) { running++; return Promise.resolve(); }
+  if (waiting.length >= PDF_QUEUE_MAX) {
+    return Promise.reject(Object.assign(new Error("PDF processing is busy; retry in a few seconds. Nothing was charged."), { statusCode: 503, retryAfter: 5, shed: true }));
+  }
+  return new Promise((resolve) => waiting.push(resolve));
+}
+function release() {
+  const next = waiting.shift();
+  if (next) next(); else running--;
+}
+/** Workers running and calls waiting, for tests and status. */
+export function pdfPoolState() { return { running, waiting: waiting.length }; }
 
 function refused(message) {
   return Object.assign(new Error(message), { statusCode: 422 });
@@ -23,7 +45,11 @@ function refused(message) {
 
 /** Run one PDF transform (pdf-ops.js PDF_OPS) off the main thread. Resolves
  *  with the transform's answer; rejects with its statusCode and message. */
-export function runPdfOp(op, buffers, args = [], { timeoutMs = PDF_JOB_TIMEOUT_MS, decodeCapBytes = PDF_DECODE_CAP_BYTES } = {}) {
+export async function runPdfOp(op, buffers, args = [], opts = {}) {
+  await acquire();
+  try { return await runPdfWorker(op, buffers, args, opts); } finally { release(); }
+}
+function runPdfWorker(op, buffers, args, { timeoutMs = PDF_JOB_TIMEOUT_MS, decodeCapBytes = PDF_DECODE_CAP_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(PDF_WORKER, {
       workerData: { op, buffers, args, decodeCapBytes },

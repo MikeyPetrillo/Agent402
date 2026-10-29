@@ -3,7 +3,7 @@
 import { PDFDocument } from "pdf-lib";
 import zlib from "node:zlib";
 import { pdfInfo, mergePdfs, extractPages, rotatePdf, imagesToPdf, parsePages } from "../src/tools/pdf-kit.js";
-import { runPdfOp } from "../src/tools/pdf-offthread.js";
+import { runPdfOp, pdfPoolState, PDF_WORKERS_MAX, PDF_QUEUE_MAX } from "../src/tools/pdf-offthread.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 
@@ -95,5 +95,22 @@ try { await runPdfOp("info", [a], [], { timeoutMs: 1 }); fail("a job past its de
 catch (e) { if (e.statusCode !== 422 || !/longer than/.test(e.message)) fail(`deadline refusal should be 422 (got ${e.statusCode} ${e.message})`); }
 console.log("bounds ✓ (inflation bomb refused off-thread, deadline enforced)");
 
+{
+  // At most PDF_WORKERS_MAX workers at once; PDF_QUEUE_MAX more wait; the rest
+  // answer 503 at once, and every slot is returned afterwards.
+  const n = PDF_WORKERS_MAX + PDF_QUEUE_MAX + 3;
+  const refusals = [];
+  const calls = Array.from({ length: n }, () => runPdfOp("info", [a]).then(() => "ok", (e) => { refusals.push(e); return e.statusCode; }));
+  const busy = pdfPoolState();
+  if (busy.running !== PDF_WORKERS_MAX || busy.waiting !== PDF_QUEUE_MAX) fail(`pool while saturated: ${JSON.stringify(busy)}`);
+  const out = await Promise.all(calls);
+  if (out.filter((x) => x === "ok").length !== PDF_WORKERS_MAX + PDF_QUEUE_MAX || out.filter((x) => x === 503).length !== 3) fail(`saturated pool answers: ${out.join(",")}`);
+  if (!refusals.every((e) => e.statusCode === 503 && e.retryAfter === 5 && e.shed === true)) fail("a busy refusal carries Retry-After 5 and the shed mark (never a tool failure)");
+  const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  if ((src.match(/if \(err\?\.shed === true[^)]*\) res\.locals\.shed = true;/g) || []).length !== 2) fail("both tool error responders mark a shed refusal for the failure monitor");
+  const after = pdfPoolState();
+  if (after.running !== 0 || after.waiting !== 0) fail(`slots not returned: ${JSON.stringify(after)}`);
+  console.log(`pool ✓ (${PDF_WORKERS_MAX} running, ${PDF_QUEUE_MAX} queued, the rest 503; slots returned)`);
+}
 console.log("\nPDF toolkit: all assertions passed");
 process.exit(0);

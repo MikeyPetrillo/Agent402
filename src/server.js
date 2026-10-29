@@ -10874,6 +10874,8 @@ function sendToolError(res, err, slug) {
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+  // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
+  if (err?.shed === true && res.locals) res.locals.shed = true;
   return res.status(status).json({
     error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
@@ -11402,6 +11404,8 @@ for (const tool of ALL_KIT) {
         : upstreamStatus ? "upstream" : null;
       const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+      // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
+      if (err?.shed === true) res.locals.shed = true;
       const provenance = {
         ...(upstreamStatus ? { upstreamStatus } : {}),
         ...(attribution ? { attribution } : {}),
