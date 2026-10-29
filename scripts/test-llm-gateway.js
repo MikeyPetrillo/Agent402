@@ -174,6 +174,38 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   delete process.env.OPENROUTER_API_KEY;
 }
 
+// A buyer's reasoning budget is fitted under EACH link's clamped cap: the
+// requested model's clamp left room for it, and a fallback that clamps lower
+// (pricier output at the same price) must not be sent a budget at or above
+// its own cap. Both caps are read from clampToMargin at the table's rates.
+{
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const { clampToMargin } = await import("../src/tools/llm-gateway-kit.js");
+  const tier = TIERS["v1-chat-nano"];
+  const capOf = (model) => { const b = { model, messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4 }; clampToMargin(b, tier, 0); return b.max_tokens; };
+  const capRequested = capOf("openai/gpt-5-nano"), capFallback = capOf("deepseek/deepseek-chat");
+  ok(capFallback < capRequested, `setup: at n=4 the fallback link clamps lower than the requested model (${capFallback} < ${capRequested})`);
+  const budget = capFallback; // under the requested model's cap, at the fallback's
+  const outbound = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); outbound.push(body);
+    if (body.model === "openai/gpt-5-nano") return { ok: false, status: 502, text: async () => JSON.stringify({ error: { message: "Provider returned error" } }) };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) };
+  };
+  const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
+  const res = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4, reasoning: { max_tokens: budget } });
+  const first = outbound[0], served = outbound.find((b) => b.model === "deepseek/deepseek-chat");
+  ok(res.model === "deepseek/deepseek-chat" && first?.model === "openai/gpt-5-nano" && first.reasoning?.max_tokens === budget && first.max_tokens === capRequested, `the requested link carries the buyer's budget under its own cap (${first?.reasoning?.max_tokens} under ${first?.max_tokens})`);
+  // The served body's own cap (its normalized input estimate may land a token
+  // off capOf's): lower than the requested link's, and at or under the budget,
+  // so a budget sent unfitted would sit at or above it.
+  ok(served && served.max_tokens < first.max_tokens && budget >= served.max_tokens, `setup: the fallback link was clamped lower than the requested one, to at most the budget (${served?.max_tokens} < ${first?.max_tokens}, budget ${budget})`);
+  ok(served && Number.isInteger(served.reasoning?.max_tokens) && served.reasoning.max_tokens < served.max_tokens, `the fallback link's budget is refitted under ITS clamped cap (reasoning.max_tokens ${served?.reasoning?.max_tokens} < max_tokens ${served?.max_tokens})`);
+  globalThis.fetch = realFetch;
+  delete process.env.OPENROUTER_API_KEY;
+}
+
 // Timed-out attempts may have generated (and billed) upstream on any rail, so
 // a chain walk stops after LLM_MAX_TIMED_OUT_ATTEMPTS of them (default 2)
 // instead of starting another; other failures still walk the whole chain.

@@ -25,7 +25,7 @@ const until = async (fn, ms = 3000) => { const t0 = Date.now(); while (Date.now(
 // the session that bought it.
 const OLD_KEY = "a402_" + "o".repeat(40);
 const OLD_HASH = hashKey(OLD_KEY);
-writeFileSync(join(DIR, `k_${OLD_HASH}.json`), JSON.stringify({ keyId: OLD_HASH.slice(0, 12), balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, calls: 0, createdAt: "2026-01-01T00:00:00.000Z", email: null, sessions: ["cs_old"], paymentIntents: ["pi_old"], pack: "credits-20", lastUsedAt: null }));
+writeFileSync(join(DIR, `k_${OLD_HASH}.json`), JSON.stringify({ keyId: OLD_HASH.slice(0, 12), balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, calls: 0, createdAt: "2026-01-01T00:00:00.000Z", email: null, sessions: ["cs_old"], paymentIntents: ["pi_old", "pi_old_b"], pack: "credits-20", lastUsedAt: null }));
 writeFileSync(join(DIR, "_sessions.json"), JSON.stringify({ cs_old: OLD_HASH }));
 
 const sessions = {
@@ -114,6 +114,13 @@ try {
   ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(B)) === "disputed" && (await B.enableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await A.balance(KEY)).disabled === false, "dispute-disabled, then won on the other container: the key is enabled again");
   ok((await A.setDisabled(minted.keyId, true)) === true && (await reasonOf(B)) === "operator" && (await B.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "operator-disabled, then disputed, then won: stays disabled for the operator");
   ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await B.setDisabled(minted.keyId, true)) === true && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "disputed, then operator-disabled, then won: stays disabled (and the key is disabled for the sections below)");
+  // A key paid by two payments (the imported record lists both): a dispute on
+  // one marks the key with that payment; a win on the other, read on the
+  // other container, lifts nothing, and the disputed payment's own win does.
+  const OLD_ID = OLD_HASH.slice(0, 12);
+  ok((await A.disableByPaymentIntent("pi_old_b", "disputed")) === OLD_ID && (await B.balance(OLD_KEY)).disabled === true, "setup: a dispute on the imported key's second payment disables it");
+  ok((await B.enableByPaymentIntent("pi_old", "disputed")) === null && (await A.balance(OLD_KEY)).disabled === true, "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
+  ok((await B.enableByPaymentIntent("pi_old_b", "disputed")) === OLD_ID && (await A.balance(OLD_KEY)).disabled === false, "the disputed payment's own win lifts it on the other container");
 
   // ---- (6) roll-forward: files written in a rollback window win per id -----
   const keyFile = join(DIR, `k_${HASH}.json`);
