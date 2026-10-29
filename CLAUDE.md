@@ -81,8 +81,10 @@ LLC: credit the entity, never a personal name.
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,
   and fails when a published route is neither live, key-gated nor retired).
 - **Upstream costs are private.** Model, speech, embedding, media and STT rates, vendor cards
-  (Exa, X), fixed fees and the meter markup live in `src/upstream-costs.js`'s table, loaded
-  from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`. Never commit a
+  (Exa, X) and fixed fees live in `src/upstream-costs.js`'s table, loaded
+  from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`, as does the
+  meter markup (a buyer can derive it from any metered 402, so it is not a secret; it is kept
+  in the table and never printed). Never commit a
   rate, never print one in a CI log, never type one in a test (`scripts/test-upstream-costs.js`
   scans the shipped trees and scripts). Blank the secret in every step that installs packages
   (`scripts/test-ci-secretless-install.js`). A drifted rate is a table edit, not a code change.

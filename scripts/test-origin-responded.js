@@ -55,6 +55,10 @@ ok(row("https://registryonly.test")?.originResponded === false,
   "indexSnapshot carries originResponded (read by /api/index and the market pages)");
 ok(sellerDetail("registryonly.test")?.originResponded === false,
   "sellerDetail carries it (read by seller-trust)");
+// The history legend describes every write of a 1: a parsed manifest or a
+// route list read from OpenAPI, agents.json or llms.txt.
+ok(/1 = the crawl found routes \(the manifest parsed, or an OpenAPI, agents\.json or llms\.txt read listed them\), 0 = it found none/.test(String(sellerDetail("registryonly.test")?.historyLegend)),
+  "sellerDetail's history legend names the fallback reads that also write a 1");
 // routableSellerSummaries filters on isRoutable, so a registry-only origin is
 // now ABSENT from it entirely — the router never even considers it. That is
 // stronger than carrying the flag, and it is the property that matters: the

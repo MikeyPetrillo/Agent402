@@ -194,6 +194,18 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, deliveryFailing: { base: true } }).chains.base.unprovenTier === undefined, "a failing delivery memo is something else wrong: no tier");
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, urlTemplate: true }).chains.base.unprovenTier === undefined, "a path template: no tier");
   ok(typeof dispatchLegend()["routerDispatchByChain.base.unprovenTier"] === "string", "the legend explains unprovenTier");
+  // The legend says whether the self-funding reader is on, so a reader can
+  // tell a gross count from a netted one; the env switch turns it off.
+  {
+    const saved = process.env.LEADERBOARD_FUNDING_SCAN;
+    delete process.env.LEADERBOARD_FUNDING_SCAN;
+    const on = dispatchLegend();
+    process.env.LEADERBOARD_FUNDING_SCAN = "off";
+    const off = dispatchLegend();
+    if (saved === undefined) delete process.env.LEADERBOARD_FUNDING_SCAN; else process.env.LEADERBOARD_FUNDING_SCAN = saved;
+    ok(on.settlementNetting === "on" && off.settlementNetting === "off", `the legend reports settlementNetting from the funding switch (${on.settlementNetting} / ${off.settlementNetting})`);
+    ok(dispatchLegend({ settlementNetting: false }).settlementNetting === "off" && /settlementNetting is on/.test(off["routerDispatchReason.settlement_self_funded"]), "a caller can pass the switch, and the self-funded reason says it depends on it");
+  }
   const { readFileSync } = await import("node:fs");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/verdict\.chains\.base\?\.unprovenTier === true/.test(srv), "the resolver admits only on the label's own unprovenTier verdict");

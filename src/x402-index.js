@@ -7963,7 +7963,7 @@ export function sellerDetail(originOrHost) {
       history: Array.isArray(v.history) ? v.history.slice(-HEALTH_WINDOW) : [],
       healthWindow: HEALTH_WINDOW,
       listingLegend: "Per tool: declared = your own manifest, OpenAPI, agents.json or llms.txt names the route; source = manifest, or registry for a row minted by a settled payment (omitted for rows read from your OpenAPI, agents.json or llms.txt); lastVerifiedAt = when the route last answered us live. A route you do not declare must answer a live 402 at least every 7 days, and leaves the listing when its method answers 404 or 405 twice at least an hour apart, or 410 once. A 410 removes even a declared route. Re-registering at /sell re-checks every route now.",
-      historyLegend: `the last ${HEALTH_WINDOW} crawl outcomes, oldest first: 1 = the manifest parsed, 0 = it did not. Fewer than ${HEALTH_WINDOW} entries means we have crawled this origin that many times, not that entries were dropped. Paywall liveness is measured separately and reported as \`paywall\`.`,
+      historyLegend: `the last ${HEALTH_WINDOW} crawl outcomes, oldest first: 1 = the crawl found routes (the manifest parsed, or an OpenAPI, agents.json or llms.txt read listed them), 0 = it found none. Fewer than ${HEALTH_WINDOW} entries means we have crawled this origin that many times, not that entries were dropped. Paywall liveness is measured separately and reported as \`paywall\`.`,
       // THE CAP HAS TO ANNOUNCE ITSELF. This list has been cut at 500 with
       // nothing saying so, on the one surface we tell a seller to use to check
       // what we hold for them ("?seller=<host> ... returns its full row").
