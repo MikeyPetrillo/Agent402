@@ -15,7 +15,7 @@
 // the set of Form 4 accession numbers - a new one = paid re-run + email.
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany, eftsSearch, fetchXmlText, issuerHits } from "./edgar-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -161,9 +161,10 @@ const withTimeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout
 const fmtUsd = (v) => `$${Math.round(v).toLocaleString("en-US")}`;
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 
+// `deps` is the test seam for the EDGAR reads (probeInsiderFilings, fetchXmlText).
 function makeInsiderHandlerInner(tierSlug) {
   const t = INSIDER_TIERS[tierSlug];
-  return async (input, req) => {
+  return async (input, req, deps = {}) => {
     // Job progress (src/job-progress.js): a no-op outside an async job or task.
     const steps = stepProgress(2, req);
     steps.next("reading insider filings");
@@ -176,11 +177,11 @@ function makeInsiderHandlerInner(tierSlug) {
     const user = safeUser(req);
 
     // 1) FILINGS (cheap) -> 2) XML per filing (bounded concurrency).
-    const pf = await probeInsiderFilings({ ticker: ticker || undefined, cik: cikIn || undefined, days, limit: t.maxFilings });
+    const pf = await (deps.probeInsiderFilings || probeInsiderFilings)({ ticker: ticker || undefined, cik: cikIn || undefined, days, limit: t.maxFilings });
     if (!pf.filings.length) throw bad(`No Form 4 filings against ${ticker || pf.name || pf.cik} in the last ${days} days. Not charged - widen "days" (max 365) or check the ticker.`, 422);
     const parsed = await mapLimit(pf.filings, XML_CONCURRENCY, async (f) => {
       if (!f.url) return { f, err: "no-url" };
-      try { const xml = await withTimeout(fetchXmlText(f.url), XML_TIMEOUT_MS); return { f, p: parseForm4(xml) }; }
+      try { const xml = await withTimeout((deps.fetchXmlText || fetchXmlText)(f.url), XML_TIMEOUT_MS); return { f, p: parseForm4(xml) }; }
       catch (e) { return { f, err: String(e?.message || e).slice(0, 100) }; }
     });
     // The XML names its issuer: a filing about another issuer is not this
@@ -262,7 +263,8 @@ NOTE: a gap in this material is never a finding about the company or an insider 
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Insider report synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
@@ -296,8 +298,8 @@ NOTE: a gap in this material is never a finding about the company or an insider 
 
 export function makeInsiderHandler(tierSlug) {
   const run = makeInsiderHandlerInner(tierSlug);
-  return async (input, req) => {
-    try { return await run(input, req); }
+  return async (input, req, deps) => {
+    try { return await run(input, req, deps); }
     catch (e) { try { recordCompositeUsage({ slug: tierSlug, upstreamUsd: 0, ok: false, priceUsd: priceUsdOf(INSIDER_TIERS[tierSlug]) }); } catch { /* never mask */ } throw e; }
   };
 }

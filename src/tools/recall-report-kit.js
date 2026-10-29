@@ -13,7 +13,7 @@
 // for the subscriber's query is what triggers a paid re-run + alert.
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -173,19 +173,21 @@ function makeRecallHandlerInner(tierSlug) {
 6. THE RECORDS BELOW ARE THE NEWEST N PER FEED, NOT THE UNIVERSE: the TOTALS line says how many records each feed holds in total. When a feed's total exceeds the rows shown, say "the N most recent of TOTAL" and never present the shown set as complete or its oldest row as the earliest recall. A record is one product line; several records share one recall EVENT (event id) - count events when you say how many recalls there were. A gap in this material is never a finding about the product or the firm: if something is not in the records shown, say the records shown do not include it.
 7. COUNTS: every count you state comes from the TOTALS and REASONS blocks, never from your own tally. When you group reasons, build each group's count by adding the REASONS lines it contains; the groups must add up to the records shown. Say how many records and events each group holds. Write counts as facts about the records; never name the blocks of this prompt (TOTALS, REASONS) in the report.
 8. TERMINOLOGY: name an impurity, contaminant or defect with the FDA reason's own term. Never relabel it as a related class it does not name (an azido impurity is not a nitrosamine; a foreign substance is not contamination by a named agent).
+9. ${QUOTED_MATERIAL_RULE}
 
 Write a clear, well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many records, by feed and by class, how many ongoing, the date range), WHAT IS RECALLED (products and firms, grouped sensibly), WHY (the reasons, grouped - contamination, labeling, impurity, defect, etc.), HOW WIDE (distribution patterns), STATUS & TIMELINE (ongoing vs terminated/completed, the most recent actions), and WHAT TO DO (per rule 4). Be specific; quote the FDA reason wording where useful.
 
 === QUERY ===\n"${query}" (scope: ${scope}). Feeds probed: ${feedStatus}.
 === TOTALS ===\nrecords shown: ${pr.items.length} of ${pr.totalAll} matching records in openFDA (${shown || "per-feed totals unavailable"}); distinct recall events among the shown records: ${pr.events}; by class (shown): ${JSON.stringify(byClass)}; ongoing (shown): ${ongoing}.
-=== REASONS (shown records, grouped by identical FDA wording; ${pr.items.length} records in all) ===\n${reasonLines || "(none)"}
-=== FDA RECORDS (newest first per feed; ${pr.items.length} of ${pr.totalAll}) ===\n${lines || "(no records matched)"}`;
+=== REASONS (shown records, grouped by identical FDA wording; ${pr.items.length} records in all) ===\n${reasonLines ? quotedMaterial("FDA REASONS", reasonLines) : "(none)"}
+=== FDA RECORDS (newest first per feed; ${pr.items.length} of ${pr.totalAll}) ===\n${lines ? quotedMaterial("FDA RECORDS", lines) : "(no records matched)"}`;
 
     let spent = 0;
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Recall report synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);

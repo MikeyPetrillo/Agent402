@@ -21,7 +21,7 @@
 import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle } from "../report-grounding.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
@@ -255,7 +255,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
       steps.next("searching the web");
       const q = `${gp.tokenName || address} ${gp.tokenSymbol || ""} token ${chain} scam OR rug OR honeypot OR audit reputation`.trim();
       const wr = await ask({ model: GROUND, reasoning: { effort: "low" }, messages: [{ role: "user", content: `Search the web for the reputation of this crypto token and answer with SPECIFIC facts and citations - any scam/rug/honeypot reports, audits, or notable coverage. If you find nothing credible, say so. Token: ${q}` }], max_tokens: 600, plugins: [{ id: "web", engine: "exa", max_results: 5 }] }, SEARCH_TIMEOUT_MS, user).catch(() => null);
-      if (wr) { web = { answer: textOf(wr), sources: (wr?.choices?.[0]?.message?.annotations || []).map((a) => a?.url_citation || a).filter((c) => c?.url).map((c) => ({ title: String(c.title || c.url).slice(0, 160), url: String(c.url) })) }; spent += costOf(wr); }
+      if (wr) { web = { answer: textOf(wr), sources: (wr?.choices?.[0]?.message?.annotations || []).map((a) => a?.url_citation || a).filter((c) => c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))).map((c) => ({ title: cleanSourceTitle(c.title, 160) || cleanSourceTitle(c.url, 160), url: String(c.url) })) }; spent += costOf(wr); }
     }
 
     // 3) GROUNDING BLOCKS.
@@ -316,7 +316,8 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
     steps.next("writing report");
     const sd = await ask({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
     spent += costOf(sd);
-    const prose = textOf(sd);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(textOf(sd), web?.sources || []);
     if (!prose) throw bad("Token risk synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);

@@ -12,7 +12,7 @@
 // WALLET_ONLY, not cached. Gated on OPENROUTER_API_KEY (503 without it).
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
@@ -57,12 +57,14 @@ function stripInlineCites(s) {
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
-function webSourcesFrom(d) {
+// A page title is read outside the quoted blocks and served in the Sources
+// list, so it is cleaned to one plain line here, once.
+export function webSourcesFrom(d) {
   const anns = d?.choices?.[0]?.message?.annotations || [];
   const out = [];
   for (const a of anns) {
     const c = a?.url_citation || a;
-    if (c?.url) out.push({ title: String(c.title || c.url).slice(0, 200), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
+    if (c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))) out.push({ title: cleanSourceTitle(c.title) || cleanSourceTitle(c.url), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
   }
   return out;
 }
@@ -374,7 +376,8 @@ function makeDossierHandlerInner(tierSlug) {
     // first, then deduped web citations. Everything the report cites is [n].
     const sources = [];
     const pushFiling = (f, label) => {
-      if (f?.url) sources.push({ title: `${label} filed ${f.filingDate || "?"}${f.reportDate ? ` (period ${f.reportDate})` : ""} - SEC EDGAR`, url: f.url });
+      // kind marks an EDGAR filing; a web page's title can say anything.
+      if (f?.url) sources.push({ title: `${label} filed ${f.filingDate || "?"}${f.reportDate ? ` (period ${f.reportDate})` : ""} - SEC EDGAR`, url: f.url, kind: "sec" });
     };
     for (const r of [k10, q10, k8]) {
       if (r.ok) for (const f of (r.data?.filings || [])) pushFiling(f, f.form || "Filing");
@@ -386,7 +389,7 @@ function makeDossierHandlerInner(tierSlug) {
     // 4) STRUCTURED DATA BLOCK for the synthesizer (grounding material).
     const q = quote.ok ? quote.data : null;
     const quoteBlock = q ? `Live quote (${q.symbol || ticker}): last ${q.price ?? q.last ?? "?"} ${q.currency || ""}, day range ${q.dayLow ?? "?"}-${q.dayHigh ?? "?"}, 52-week ${q.week52Low ?? q.fiftyTwoWeekLow ?? "?"}-${q.week52High ?? q.fiftyTwoWeekHigh ?? "?"}, prev close ${q.previousClose ?? "?"}, change ${q.change ?? q.changePercent ?? "?"}.` : "Live quote: unavailable.";
-    const filingLines = numbered.filter((s) => s.title.includes("SEC EDGAR")).map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n") || "(no filings retrieved)";
+    const filingLines = numbered.filter((s) => s.kind === "sec").map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n") || "(no filings retrieved)";
     const insiderTrades = insider.ok ? (insider.data?.trades || insider.data?.transactions || []) : [];
     // edgar-insider-trades returns Form 4 FILINGS (who filed, when, the filing
     // URL) via full-text search - it does not parse the transaction table, so
@@ -399,16 +402,16 @@ function makeDossierHandlerInner(tierSlug) {
     const insiderBlock = insiderTrades.length
       ? insiderTrades.slice(0, 25).map((tr) => `- ${insiderName(tr)} filed Form ${tr.form || "4"} on ${tr.filedDate || tr.date || tr.filedAt || "?"}`).join("\n")
       : (insider.ok ? "No Form 4 insider filings in the window." : "Insider data unavailable.");
-    const webBlock = webGood.map((r, i) => `WEB ANGLE ${i + 1}: ${r.q}\n${stripInlineCites(r.answer)}`).join("\n\n") || "(web research unavailable)";
+    const webBlock = webGood.length ? quotedMaterial("WEB RESEARCH", webGood.map((r, i) => `WEB ANGLE ${i + 1}: ${r.q}\n${stripInlineCites(r.answer)}`).join("\n\n")) : "(web research unavailable)";
     // Web sources WITH their snippet content, so the model can only cite [n] for
     // what a source actually says - not guess a claim from a title alone.
-    const webSourceLines = numbered.filter((s) => !s.title.includes("SEC EDGAR")).map((s) => `[${s.n}] ${s.title}${s.snippet ? `\n    "${s.snippet.slice(0, 320)}"` : ""} - ${s.url}`).join("\n") || "(none)";
+    const webSourceLines = numbered.filter((s) => s.kind !== "sec").map((s) => `[${s.n}] ${s.title} - ${s.url}${s.snippet ? `\n${quotedMaterial(`SOURCE [${s.n}]`, s.snippet.slice(0, 320))}` : ""}`).join("\n") || "(none)";
     const financialsBlock = financials.lines.length ? financials.lines.join("\n") : "SEC XBRL financial facts unavailable for this issuer.";
     const maxCite = numbered.length;
     const excerptSrc = excerpts.filing ? numbered.find((s) => s.url === excerpts.filing.url) : null;
     const excerptBlock = excerpts.excerpts.length
       ? `Verbatim text from ${excerptSrc ? `source [${excerptSrc.n}]` : "the filing"} (${excerpts.filing.form} filed ${excerpts.filing.filingDate || "?"}). These are the filing's OWN words - cite ${excerptSrc ? `[${excerptSrc.n}]` : "the filing"} for anything taken from them.\n` +
-        excerpts.excerpts.map((x, i) => `(${i + 1}) [${x.term}] "${x.text}"`).join("\n")
+        quotedMaterial("FILING EXCERPTS", excerpts.excerpts.map((x, i) => `(${i + 1}) [${x.term}] "${x.text}"`).join("\n"))
       : `(no filing text available${excerpts.note ? `: ${excerpts.note}` : ""} - the material below does NOT include the filing's own explanations, so where a figure is not explained here, say the material does not explain it; do not call it undisclosed or unexplained by the company)`;
 
     // 5) SYNTHESIZE - grounding-strict cited dossier.
@@ -421,6 +424,7 @@ function makeDossierHandlerInner(tierSlug) {
 4. Do not overstate: reproduce magnitudes and dates exactly as given. Where sources disagree or are silent, say so. Being less specific beats stating something you cannot ground.
 4b. A GAP IN THIS MATERIAL IS NEVER A FINDING ABOUT THE COMPANY. If the material does not explain WHY a figure is what it is, write "the material provided here does not explain ..." - never "unexplained", "undisclosed", "cannot be reconciled" or a red flag, because the filing may explain it in text you were not given. Before characterising any gap between operating and net income, read the OPERATING-TO-NET BRIDGE (reported non-operating and tax lines) and the FILING EXCERPTS (the filing's own words); if they account for it, say what the item is and cite the excerpt's source.
 5. Do NOT write a "Sources" section - a complete numbered source list is appended automatically. Prioritize COMPLETING the dossier (finish your final sentence and section) over length.
+6. ${QUOTED_MATERIAL_RULE}
 
 Write a thorough, well-structured dossier of up to ${t.words} words, with these sections where the material supports them: an opening SNAPSHOT (what the company is, current quote, one-paragraph bottom line), BUSINESS & RECENT FILINGS (what the latest 10-K/10-Q/8-K disclose), FINANCIAL POSTURE, RECENT DEVELOPMENTS (from the web research), INSIDER ACTIVITY (which insiders filed Form 4s and when - NOT buy/sell direction or amounts, which these filings do not contain), RISKS & RED FLAGS, and a closing DILIGENCE READ (the balanced takeaway). Be specific and analytical, not a data dump; call out what matters for someone deciding whether to trust, invest in, or partner with this company.${focus.length ? `\nEmphasize: ${focus.join(", ")}.` : ""}
 
@@ -435,7 +439,8 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Dossier synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
@@ -476,7 +481,7 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
     const out = format === "json"
       ? { dossier, company, ticker, sources: numbered, tables, meta, grounding }
       : { dossier, company, ticker, sources: numbered, tables, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })), quoteBlock, insiderBlock, financialsBlock, bridge: financials.bridge, excerptBlock, webSources: numbered.filter((s) => !s.title.includes("SEC EDGAR")).map((s) => ({ n: s.n, snippet: s.snippet })) };
+    if (process.env.RESEARCH_DEBUG === "1") out._debug = { webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })), quoteBlock, insiderBlock, financialsBlock, bridge: financials.bridge, excerptBlock, webSources: numbered.filter((s) => s.kind !== "sec").map((s) => ({ n: s.n, snippet: s.snippet })) };
     // A composite that CALLS this one in-process passes `accountAs`, so the sale is
     // booked once against the product the buyer actually paid for; the caller folds
     // this leg's spend into its own. Direct callers are unaffected.
