@@ -731,7 +731,9 @@ export function llmsFullTxt(baseUrl, catalog) {
     const m = t.match(/^(.{20,240}?[.!?])(\s|$)/);
     return m ? m[1] : t.slice(0, 240);
   };
-  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price ? priceOfLine(t) : "see /api/pricing"} | ${firstSentence(t.description)}`).join("\n");
+  // A route quoted by a stated formula carries it after the sentence, so the
+  // line prices the call whatever the description's first sentence says.
+  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price ? priceOfLine(t) : "see /api/pricing"} | ${firstSentence(t.description)}${t.quoteRange && t.quoteFormula ? ` The quote is ${t.quoteFormula}.` : ""}`).join("\n");
   const learnLines = LEARN.map((l) => `- [${l.term}](${baseUrl}/learn/${l.slug}): ${l.summary}`).join("\n");
   return `${llmsFullBody(baseUrl, catalog)}
 ## Learn (summaries)
