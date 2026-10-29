@@ -467,6 +467,15 @@ export function floorClause(floors = networkPriceFloors()) {
     .join("; ");
 }
 
+// One line under the chain list: the floors and premiums a 402 quotes, derived
+// from the same maps the 402 reads. The bullets above stay chain: asset (CAIP-2).
+function chainClauses() {
+  const floor = floorClause(), premium = premiumClause();
+  if (!floor && !premium) return "";
+  const fields = [premium && "the premium under \`payment.premiumUsdByNetwork\`", floor && "the floor under \`payment.minPriceUsdByNetwork\`"].filter(Boolean).join(" and ");
+  return `\nPrices by chain: ${[floor, premium].filter(Boolean).join("; ")}. /api/pricing lists ${fields}.\n`;
+}
+
 function llmsFullBody(baseUrl, catalog) {
   const identityBoundList = identityBoundListOf(catalog);
   // Route prices in this text are READ FROM THE CATALOG at render time. They
@@ -632,7 +641,7 @@ ${packItems}
 
 ## Settlement chains
 ${chainItems}
-
+${chainClauses()}
 ${toolSections}
 
 ## Optional
