@@ -26,7 +26,9 @@ const SECRET_NAME_RE = /(KEY|TOKEN|SECRET|PASSWORD|MNEMONIC|PRIVATE)/i;
 const URL_NAME_RE = /URLS?$/i;
 const DB_URL_NAME_RE = /(DATABASE|REDIS|POSTGRES|PG|MONGO|AMQP)_?URLS?$/i;
 const CREDENTIAL_PARAM_RE = /^(key|api[-_]?key|apikey|token|access[-_]?token|auth|secret|password|pass|sig|signature|x-api-key)$/i;
-const USERINFO_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:)([^\s@/]+)@/gi;
+// Bounded parts, so the scan is linear: error text can carry a caller's input
+// (100 KB of "a.a.a..." once took seconds with an unbounded scheme).
+const USERINFO_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{0,256}:)([^\s@/]{1,256})@/gi;
 const MIN_SECRET_LEN = 8;
 
 /** The credential-bearing strings in one URL-named variable's value. */
@@ -64,5 +66,6 @@ export function redactSecrets(text) {
   for (const value of secretValues()) {
     if (out.includes(value)) out = out.split(value).join("[redacted]");
   }
+  if (!out.includes("://") || !out.includes("@")) return out;
   return out.replace(USERINFO_IN_TEXT_RE, "$1[redacted]@");
 }

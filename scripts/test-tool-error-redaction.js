@@ -64,6 +64,16 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(!r(`dial mysql://root:${loose}@10.0.0.9/app`).includes(loose), "a userinfo password in the text itself is redacted even when no variable names it");
   ok(r("see https://public.example.test/docs for the shape") === "see https://public.example.test/docs for the shape", "a plain URL passes through unchanged");
   ok(r("Missing or invalid \"pattern\"") === "Missing or invalid \"pattern\"", "innocent text passes through unchanged");
+  // Error text can carry a caller's input, so the scan must stay linear on
+  // any shape: a long dotted run, and the same with URLs and @ in it.
+  for (const [label, text] of [
+    ["a dotted run", "Cannot parse duration: " + "a.".repeat(50_000) + "-"],
+    ["a dotted run with a URL and @", "x://" + "a.".repeat(50_000) + "@"],
+    ["repeated scheme-like runs", ("ab+c.d-".repeat(20) + "://u:" + "p".repeat(300) + " ").repeat(200) + "@"],
+  ]) {
+    const t0 = performance.now(); r(text); const ms = performance.now() - t0;
+    ok(ms < 100, `redaction of ${text.length} chars (${label}) takes ${ms.toFixed(1)} ms, under 100`);
+  }
   for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
   Object.assign(process.env, saved);
 }
