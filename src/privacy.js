@@ -45,7 +45,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-28.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-29.</p>
 </section>
 
 <section>
@@ -238,7 +238,8 @@ on this page is <strong>Cardhavok LLC</strong>, doing business as <strong>Havok 
 call or a purchase; our legitimate interest in running and protecting the service, for the operational logs,
 rate limiting and abuse control above; and your consent, for the analytics cookie and for email alerts,
 which you can withdraw at any time ("analytics choices" at the foot of the page, or the unsubscribe link
-in every alert). You have the right to ask for access to your data, to have it corrected or erased, to
+in every alert). Where your browser reports a European time zone, the cookie waits for your choice;
+elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
 consent, and to complain to your supervisory authority. To exercise a right, email
 <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
