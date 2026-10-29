@@ -552,12 +552,15 @@ const NETWORK_PREMIUMS = parseNetworkPremiums();
  *  public name ({ optimism: 0.001 }): every price quoted on that chain is the
  *  list (or per-request) price plus this, raised to the chain's floor. Read
  *  by the machine price surfaces (/api/pricing, openapi, llms.txt,
- *  payment.info) from the same map the accepts builder prices through, so a
- *  client budgeting from a surface meets the amount the 402 asks. Empty when
+ *  payment.info) through src/public-networks.js, from the same map the
+ *  accepts builder prices through, so a client budgeting from a surface
+ *  meets the amount the 402 asks. `names` limits the answer to those network
+ *  names (the offered ones); null means every configured premium. Empty when
  *  no premium is set. */
-export function premiumUsdByNetworkName(premiums = parseNetworkPremiums()) {
+export function premiumUsdByNetworkName(premiums = parseNetworkPremiums(), names = null) {
   const out = {};
   for (const [name, caip2] of Object.entries(NETWORKS)) {
+    if (names && !names.includes(name)) continue;
     const micro = premiums.get(caip2);
     if (micro > 0) out[name] = micro / 1e6;
   }
@@ -565,9 +568,9 @@ export function premiumUsdByNetworkName(premiums = parseNetworkPremiums()) {
 }
 /** The premiums as one clause for prose ("on Optimism every call quotes
  *  $0.001 above its list price, the settlement premium its 402 carries");
- *  "" when none is set. */
-export function premiumClause(premiums = parseNetworkPremiums()) {
-  const parts = Object.entries(premiumUsdByNetworkName(premiums)).map(([name, usd]) => {
+ *  "" when none is set. `names` as above. */
+export function premiumClause(premiums = parseNetworkPremiums(), names = null) {
+  const parts = Object.entries(premiumUsdByNetworkName(premiums, names)).map(([name, usd]) => {
     const rail = RAILS.find((r) => r.caip2 === NETWORKS[name]);
     return `on ${rail ? rail.name : name} every call quotes $${usd} above its list price (the settlement premium its 402 carries)`;
   });

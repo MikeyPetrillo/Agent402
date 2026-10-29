@@ -25,6 +25,7 @@
 // not 127.0.0.1 (trust proxy is 1 hop).
 import { Challenge, Credential, Receipt } from "mppx";
 import { PROGRESS_HEADER } from "./job-progress.js";
+import { tempoSenderOf } from "./mpp-tempo.js";
 
 export const MCP_PAYMENT_REQUIRED_CODE = -32042;
 // mppx 0.9.1+ ("Fixed MCP payment errors to use the specification-defined
@@ -73,6 +74,19 @@ export function settleReceiptFromHeader(h) {
     const r = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
     return r && typeof r === "object" && !Array.isArray(r) ? r : null;
   } catch { return null; }
+}
+
+/** A Tempo receipt ({method:"tempo", status:"success", reference}) restated
+ *  as the proof row the refund ledger demands (receiptProvesCharge): success,
+ *  the chain, the transfer hash, and the sender when the credential's own
+ *  signature proves one (a push credential or a keychain sender names
+ *  nobody; a manual refund reads the payer off the transaction). null for
+ *  anything else, so an unreadable receipt still records nothing. */
+export function tempoSettleProof(receipt, credentialHeader) {
+  if (!receipt || receipt.method !== "tempo" || receipt.status !== "success") return null;
+  const tx = String(receipt.reference || "").toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(tx)) return null;
+  return { success: true, network: "tempo", transaction: tx, payer: credentialHeader ? tempoSenderOf(credentialHeader) : null };
 }
 
 /** What an evm/charge credential signed for (its EIP-3009 value, in the

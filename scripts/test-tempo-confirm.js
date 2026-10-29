@@ -395,6 +395,13 @@ async function listen(app) {
     const { registerOfferedNetworks } = await import("../src/payment-attempt.js");
     registerOfferedNetworks(["eip155:8453"]);
     ok(carriesPaymentAttempt(R({ "payment-signature": x402() })) && !carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: "eip155:1" } }) })), "attempt: with the offer registered, a payload naming a network this server does not sell on is not one");
+    // The Algorand id has two spellings on the wire; the paywall folds the
+    // legacy one, so a header carrying it is an attempt on the offered chain.
+    const { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } = await import("../src/avm-network.js");
+    registerOfferedNetworks(["eip155:8453", ALGORAND_MAINNET_CAIP2]);
+    ok(carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_LEGACY_CAIP2 } }) })) && carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_CAIP2 } }) })), "attempt: with Algorand offered, a payload naming its legacy genesis-hash id is an attempt too");
+    registerOfferedNetworks(["eip155:8453"]);
+    ok(!carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_LEGACY_CAIP2 } }) })), "attempt: the legacy spelling counts only when Algorand itself is offered");
     registerOfferedNetworks([]);
   }
   const mpp = Credential.serialize({ challenge: Challenge.from({ realm: "test.local", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "1000", currency: "0x20c000000000000000000000000000000000000a", decimals: 6, recipient: "0x1111111111111111111111111111111111111111", methodDetails: { chainId: 4217 } }, secretKey: "attempt-secret" }), payload: { hash: "0x" + "1".repeat(64), type: "hash" } });

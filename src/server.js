@@ -7,18 +7,12 @@ import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tool
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
-import { onGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
-import { GATED_RAILS, railKey } from "./rails.js";
-// The networks a PUBLIC surface names: the configured ones, minus any gated
-// rail that is not in the live offer, and minus Arc unless it is: Arc is
-// configured by its key alone and offered only after its facilitator's
-// /supported check, so a key without that check never names it. Operator
-// views read the full configured list (enabledNetworks) so a dropped rail
-// stays visible there.
-const GATED_NETWORK_NAMES = new Map([...GATED_RAILS.map((r) => [railKey(r), r.caip2]), ["arc", "eip155:5042"]]);
-function publicNetworks() {
-  return enabledNetworks(NETWORK).filter((n) => !GATED_NETWORK_NAMES.has(n) || gatedRailOffered(GATED_NETWORK_NAMES.get(n)));
-}
+import { onGatedRailOffered } from "./gated-rails.js";
+// The networks a PUBLIC surface names (src/public-networks.js): the
+// configured ones minus any gated rail that is not in the live offer.
+// Operator views read the full configured list (enabledNetworks) so a
+// dropped rail stays visible there.
+import { publicNetworks, publicPremiumUsdByNetwork } from "./public-networks.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -310,7 +304,7 @@ import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
-import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -417,7 +411,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, premiumUsdByNetworkName, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
@@ -2447,7 +2441,15 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 // secret (CDN_ORIGIN_SECRET) for its CF-Connecting-IP to count.
 const CDN_PROXY_ON = cdnProxyEnabled();
 if (CDN_PROXY_ON) {
-  app.use(cdnClientIpMiddleware());
+  // The unauthenticated-peer count behind the cdnOrigin word spans the
+  // replicas through the shared limiter store, as the operator-auth
+  // failure count does (the store's own word reports a write that fails).
+  app.use(cdnClientIpMiddleware({
+    shared: sharedLimitsEnabled() ? {
+      windowAdd: (...a) => sharedLimitsWrite("cdn-origin", sharedLimits.windowAdd(...a)),
+      windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
+    } : null,
+  }));
   app.use(cdnSyncDeadlineMiddleware());
 }
 // Paid answers, every 402 and operator surfaces are never kept by a shared
@@ -3600,8 +3602,9 @@ app.get("/api/gateway-status", async (req, res) => {
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
   const full = operatorElevated(req);
-  // The wrong-credential count every replica contributed to, when shared.
-  await refreshOperatorAuthShared();
+  // The wrong-credential and unauthenticated-CDN-peer counts every replica
+  // contributed to, when shared.
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3739,8 +3742,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // secret (src/cdn-client-ip.js): with the resolver on, each such request
     // is keyed on the edge address instead of its client, so a missing or
     // rotated CDN_ORIGIN_SECRET folds the per-address controls onto a few
-    // addresses. ok / unauthenticated / off; the count and whether a secret
-    // is configured for the operator.
+    // addresses. ok / unauthenticated (past the alert count in the hour,
+    // counted across replicas) / off; the count, the threshold and whether
+    // a secret is configured for the operator.
     cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
@@ -9229,6 +9233,16 @@ const mcpMountOpts = {
   // count itself, so the connector never calls this for a paid outcome.
   // Cache hits don't flow through MCP today — that path bypasses the central
   // HTTP dispatcher.
+  // The one paid outcome no route books: a loopback that returned no answer
+  // (timed out, failed, or a task run that was aborted). Counted once here,
+  // under the connector's own class, so a connector that cuts every paid
+  // call off shows on the failure monitor; a probe's own cut-off is
+  // synthetic, as its route booking would be.
+  onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
+    const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
+    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic }); } catch { /* bookkeeping only */ }
+    logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
+  },
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
     // MCP doesn't carry an HTTP status, so we synthesize one for the split:
@@ -9361,8 +9375,9 @@ app.get("/api/pricing", (_req, res) => {
       // The settlement premium a chain adds to every price quoted on it (the
       // same map the accepts builder prices through, src/payments.js), for the
       // offered chains that carry one: a client capping a call at the list
-      // price is refused there otherwise.
-      ...(() => { const p = premiumUsdByNetworkName(); const offered = Object.fromEntries(publicNetworks().filter((n) => p[n] > 0).map((n) => [n, p[n]])); return Object.keys(offered).length ? { premiumUsdByNetwork: offered } : {}; })(),
+      // price is refused there otherwise. The same helper feeds openapi,
+      // llms.txt and the connector's payment.info.
+      ...(() => { const offered = publicPremiumUsdByNetwork(); return Object.keys(offered).length ? { premiumUsdByNetwork: offered } : {}; })(),
       // The accept kinds each network's 402 carries, read from the live offer
       // (exact everywhere; upto where it is on; the Circle Gateway batched
       // kind where that option is on). Absent before the paywall is built.

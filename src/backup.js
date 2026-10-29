@@ -776,6 +776,11 @@ export function startBackupScheduler({ log = console.log } = {}) {
     const day = now.toISOString().slice(0, 10);
     if (now.getUTCHours() !== cfg().utcHour || lastDay === day) return;
     // Under the lease: the other replica may have taken this day already.
+    // lastAttempt is written when a run STARTS (runBackup), so a run that
+    // then fails still counts as the day's attempt and no sibling replica
+    // retries it: one attempt per day, success or not, and a failed night
+    // reads as failed on the status surfaces rather than being retried
+    // against the same fault.
     try { await refreshStatus(now.getTime(), { force: true }); } catch { /* the stored status is advisory here */ }
     lastDay = day;
     if (String(status.lastAttempt || "").slice(0, 10) === day) return { skipped: "already attempted today" };

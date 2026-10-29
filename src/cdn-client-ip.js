@@ -117,39 +117,82 @@ export function resolveClientIp(edgeIp, cfHeader, ranges, originAuthed = false) 
 // the resolver on, each such request is keyed on the edge address instead of
 // its client. A missing or rotated CDN_ORIGIN_SECRET looks exactly like this,
 // so it is one word on /api/gateway-status (ok / unauthenticated / off) with
-// the count for the operator. Per process; the window is an hour.
+// the count for the operator. The window is an hour.
+//
+// THRESHOLD: the word turns only past CDN_ORIGIN_UNAUTH_ALERT such requests
+// in the window (default 100, floor 1). A Worker, a health check or a crawler
+// on the CDN's own ranges that calls the hosting edge's host directly reaches
+// the origin without the secret and is correctly keyed on its own address;
+// a few of those an hour are not a lost secret. A missing or rotated secret
+// makes EVERY proxied request count, so it crosses the threshold inside
+// minutes of ordinary traffic.
+//
+// SHARED: every such request is also an entry in a shared hour window
+// (src/shared-limits.js, injected by the mount as `shared`), and the count
+// every replica contributed to is mirrored here (refreshed by each write and
+// by refreshCdnOriginShared, which the status read awaits); the word reads
+// the larger of that and this process's own count, so two replicas behind
+// one proxy answer the same word instead of each reading only the requests
+// it happened to serve. Without a shared store the count is per process.
 const CDN_ORIGIN_WINDOW_MS = 60 * 60_000;
 const CDN_ORIGIN_MAX_KEPT = 5_000;
+const CDN_ORIGIN_SHARED_NAME = "cdn-origin-unauth";
+/** How many unauthenticated CDN-range requests in the window turn the word. */
+export const CDN_ORIGIN_UNAUTH_ALERT = Math.max(1, parseInt(process.env.CDN_ORIGIN_UNAUTH_ALERT || "100", 10) || 100);
 const unauthenticatedCdnPeers = []; // timestamps
 let unauthenticatedCdnPeersTotal = 0;
 let lastUnauthenticatedCdnPeerAt = 0;
+let cdnShared = null; // { windowAdd, windowRead } or null
+let cdnSharedMirror = { count: 0, at: 0 };
+let cdnSharedSeq = 0;
+const cdnSharedProc = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 function noteUnauthenticatedCdnPeer(now = Date.now()) {
   unauthenticatedCdnPeersTotal++;
   lastUnauthenticatedCdnPeerAt = now;
   unauthenticatedCdnPeers.push(now);
   if (unauthenticatedCdnPeers.length > CDN_ORIGIN_MAX_KEPT) unauthenticatedCdnPeers.splice(0, unauthenticatedCdnPeers.length - CDN_ORIGIN_MAX_KEPT);
+  if (cdnShared) {
+    Promise.resolve()
+      .then(() => cdnShared.windowAdd(CDN_ORIGIN_SHARED_NAME, "all", { windowMs: CDN_ORIGIN_WINDOW_MS, member: `${cdnSharedProc}:${++cdnSharedSeq}`, now }))
+      .then((r) => { if (r?.ok) cdnSharedMirror = { count: r.count, at: now }; }, () => { /* the store's own status word reports it */ });
+  }
+}
+/** Read the shared hour window into the mirror (a no-op without a shared store). */
+export async function refreshCdnOriginShared(now = Date.now()) {
+  if (!cdnShared) return;
+  try {
+    const r = await cdnShared.windowRead(CDN_ORIGIN_SHARED_NAME, "all", { windowMs: CDN_ORIGIN_WINDOW_MS, now });
+    if (r?.ok) cdnSharedMirror = { count: r.count, at: now };
+  } catch { /* the store's own status word reports it */ }
 }
 /** The status word (/api/gateway-status): off while the resolver is off,
- *  unauthenticated when a CDN-range peer reached the origin without a valid
- *  X-Origin-Auth inside the window, else ok. `full` adds the counts. */
-export function cdnOriginStatus({ full = false, now = Date.now(), enabled = cdnProxyEnabled(), secret = cdnOriginSecret() } = {}) {
+ *  unauthenticated when at least `threshold` CDN-range requests reached the
+ *  origin without a valid X-Origin-Auth inside the window (across the
+ *  replicas, when a shared store is wired), else ok. `full` adds the counts. */
+export function cdnOriginStatus({ full = false, now = Date.now(), enabled = cdnProxyEnabled(), secret = cdnOriginSecret(), threshold = CDN_ORIGIN_UNAUTH_ALERT } = {}) {
   if (!enabled) return { status: "off" };
   while (unauthenticatedCdnPeers.length && now - unauthenticatedCdnPeers[0] > CDN_ORIGIN_WINDOW_MS) unauthenticatedCdnPeers.shift();
-  const n = unauthenticatedCdnPeers.length;
-  const status = n ? "unauthenticated" : "ok";
+  // The shared count is a reading of the hour window; one older than a few
+  // minutes may overstate (entries age out), never understate, so it is kept
+  // only that long.
+  const sharedN = cdnShared && now - cdnSharedMirror.at < 300_000 ? cdnSharedMirror.count : 0;
+  const n = Math.max(unauthenticatedCdnPeers.length, sharedN);
+  const status = n >= threshold ? "unauthenticated" : "ok";
   return full
-    ? { status, unauthenticatedInWindow: n, unauthenticatedSinceBoot: unauthenticatedCdnPeersTotal, windowMinutes: CDN_ORIGIN_WINDOW_MS / 60_000, lastAt: lastUnauthenticatedCdnPeerAt ? new Date(lastUnauthenticatedCdnPeerAt).toISOString() : null, secretConfigured: Boolean(secret) }
+    ? { status, unauthenticatedInWindow: n, threshold, scope: cdnShared ? "shared" : "instance", unauthenticatedSinceBoot: unauthenticatedCdnPeersTotal, windowMinutes: CDN_ORIGIN_WINDOW_MS / 60_000, lastAt: lastUnauthenticatedCdnPeerAt ? new Date(lastUnauthenticatedCdnPeerAt).toISOString() : null, secretConfigured: Boolean(secret) }
     : { status };
 }
-/** Tests: forget the counted peers. */
-export function __resetCdnOriginStatus() { unauthenticatedCdnPeers.length = 0; unauthenticatedCdnPeersTotal = 0; lastUnauthenticatedCdnPeerAt = 0; }
+/** Tests: forget the counted peers (this process's count and its mirror of the shared window). */
+export function __resetCdnOriginStatus() { unauthenticatedCdnPeers.length = 0; unauthenticatedCdnPeersTotal = 0; lastUnauthenticatedCdnPeerAt = 0; cdnSharedMirror = { count: 0, at: 0 }; }
 
 /** Express middleware: mount right after app.set("trust proxy", ...) and
  *  before any middleware that reads req.ip. Off (CDN_PROXY unset), it only
- *  calls next(). */
-export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cdnOriginSecret(), ranges = null, log = console.warn } = {}) {
+ *  calls next(). `shared` ({ windowAdd, windowRead }, src/shared-limits.js)
+ *  makes the unauthenticated count span the replicas. */
+export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cdnOriginSecret(), ranges = null, log = console.warn, shared = null } = {}) {
   if (!enabled) return function cdnClientIpOff(_req, _res, next) { next(); };
   if (!secret) log(`[cdn-client-ip] CDN_PROXY is on but CDN_ORIGIN_SECRET is unset or shorter than ${MIN_ORIGIN_SECRET_LENGTH} characters: CF-Connecting-IP is ignored on every request`);
+  cdnShared = shared && typeof shared.windowAdd === "function" && typeof shared.windowRead === "function" ? shared : null;
   const list = ranges || buildCdnRanges();
   return function cdnClientIp(req, _res, next) {
     let edgeIp = "";

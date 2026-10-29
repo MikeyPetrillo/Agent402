@@ -44,24 +44,42 @@ ok(baseCli(JSON.stringify(RUNS), 300) === sha("a") && baseCli("not json", 300) =
 const changedSince = (base) => (base === sha("a") ? ["README.md", "worker/server.js"] : ["README.md"]);
 ok(touchesWorker(changedSince(lastDeployedBase(RUNS, 300))), "a worker change in the failed push still selects the worker on the next push");
 
+// Two steps: a SELECTOR that runs the repository script with every job
+// secret shadowed (it needs only the workflow token to read runs and the
+// diff) and writes `run` to its outputs, and a CLI step, gated on that
+// output, that holds the Railway token and runs no repository code.
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
 const steps = wf.jobs.deploy.steps;
 const idx = steps.findIndex((s) => /railway" up --service agent402-worker --environment production --project "\$RAILWAY_PROJECT_ID" --ci/.test(String(s.run || "")));
 ok(idx >= 0, "the deploy job has the worker redeploy step");
 const step = steps[idx] || {};
 const run = String(step.run || "");
-ok(/node scripts\/worker-deploy-paths\.js --check/.test(run), "the step selects on worker-deploy-paths.js");
-ok(!/github\.event\.before/.test(JSON.stringify(step)), "the step does not diff from the push's before");
-ok(/gh run list [^\n]*--workflow deploy\.yml[^\n]*--branch main[^\n]*--status success/.test(run) && /worker-deploy-paths\.js --base "\$GITHUB_RUN_ID"/.test(run), "the step takes its base from the last successful deploy run on main");
+const selIdx = steps.findIndex((s) => /node scripts\/worker-deploy-paths\.js --check/.test(String(s.run || "")));
+ok(selIdx >= 0 && selIdx < idx, "a selector step runs worker-deploy-paths.js before the CLI step");
+const sel = steps[selIdx] || {};
+const selRun = String(sel.run || "");
+ok(typeof sel.id === "string" && sel.id && String(step.if || "") === `steps.${sel.id}.outputs.run == 'yes'`, `the CLI step runs only on the selector's run=yes output (if: ${step.if})`);
+ok(/echo "run=\$RUN" >> "\$GITHUB_OUTPUT"/.test(selRun) && /RUN=yes/.test(selRun) && /RUN=no/.test(selRun), "the selector writes run=yes|no to its step output, yes by default (fail-open)");
+ok(!/github\.event\.before/.test(JSON.stringify(sel)) && !/github\.event\.before/.test(JSON.stringify(step)), "neither step diffs from the push's before");
+ok(/gh run list [^\n]*--workflow deploy\.yml[^\n]*--branch main[^\n]*--status success/.test(selRun) && /worker-deploy-paths\.js --base "\$GITHUB_RUN_ID"/.test(selRun), "the selector takes its base from the last successful deploy run on main");
+ok(/gh api "repos\/\$GITHUB_REPOSITORY\/compare\/\$DIFF_BASE\.\.\.\$GITHUB_SHA"/.test(selRun) && /worker-deploy-paths\.js --check\)" = "yes"/.test(selRun), "the selector diffs base...head through the API and asks the script whether the worker is touched");
+// Every job-level secret is shadowed with "" in the selector's env (it runs
+// repository code), and the token it does hold is the workflow's own.
+const jobSecrets = Object.entries(wf.jobs.deploy.env || {}).filter(([, v]) => /secrets\./.test(String(v))).map(([k]) => k);
+ok(jobSecrets.length >= 3 && jobSecrets.includes("RAILWAY_API_TOKEN"), `the deploy job carries secrets at job level (${jobSecrets.join(", ")})`);
+const unshadowed = jobSecrets.filter((k) => sel.env?.[k] !== "");
+ok(unshadowed.length === 0, `the selector shadows every job secret with "" (${unshadowed.length ? `missing: ${unshadowed.join(", ")}` : "all shadowed"})`);
+ok(String(sel.env?.GH_TOKEN || "") === "${{ github.token }}" && !Object.values(sel.env || {}).some((v) => /secrets\./.test(String(v))), "the selector holds the workflow token only, no repository secret");
+ok(!/npm (i|install|ci)\b/.test(selRun) && !/railway/.test(selRun), "the selector installs nothing and never runs the Railway CLI");
 ok(wf.jobs.deploy.permissions?.actions === "read" && wf.jobs.deploy.permissions?.contents === "read" && Object.keys(wf.jobs.deploy.permissions).length === 2, "the deploy job can read runs (actions: read) and nothing more than contents: read besides");
 ok(/sha256sum -c -/.test(run) && /^[0-9a-f]{64}$/.test(String(step.env?.RAILWAY_CLI_SHA256 || "")) && /^\d+\.\d+\.\d+$/.test(String(step.env?.RAILWAY_CLI_VERSION || "")), "the CLI is a pinned version checked against its sha256");
-ok(!/npm (i|install|ci)\b/.test(run), "no package install in the step");
+ok(!/npm (i|install|ci)\b/.test(run) && !/\bnode\b/.test(run), "no package install and no repository code in the CLI step");
+ok(step.env?.RAILWAY_API_TOKEN === undefined && String(wf.jobs.deploy.env?.RAILWAY_API_TOKEN || "").includes("secrets.RAILWAY_TOKEN"), "the CLI step keeps the job's Railway token (it is not shadowed there)");
 const waitIdx = steps.findIndex((s) => /Wait for the NEW deployment/.test(String(s.name || "")));
-ok(waitIdx >= 0 && idx > waitIdx, "it runs after the main app's rollout is confirmed");
-ok(!step["continue-on-error"], "a failed worker deploy fails the job");
-ok(String(wf.jobs.deploy.env?.RAILWAY_API_TOKEN || "").includes("secrets.RAILWAY_TOKEN"), "the CLI reads the job's Railway token");
+ok(waitIdx >= 0 && selIdx > waitIdx, "the selector runs after the main app's rollout is confirmed");
+ok(!step["continue-on-error"] && !sel["continue-on-error"], "a failed selector or worker deploy fails the job");
 const setupNodeIdx = steps.findIndex((s) => /actions\/setup-node/.test(String(s.uses || "")));
-ok(setupNodeIdx >= 0 && setupNodeIdx < idx, "node is set up before the step runs the selector");
+ok(setupNodeIdx >= 0 && setupNodeIdx < selIdx, "node is set up before the selector runs the script");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
