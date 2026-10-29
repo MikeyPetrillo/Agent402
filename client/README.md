@@ -94,6 +94,41 @@ credits call reserves its price like a wallet call). A payment `fetch` still win
 when both are given, and free pure-CPU tools keep settling with proof-of-work.
 The same Bearer header also reads the balance directly, e.g. `curl -H "Authorization: Bearer a402_..." https://agent402.tools/api/credits/balance`.
 
+## Paying from a Circle Gateway deposit (batched, no gas per call)
+
+Where a server offers it (Agent402 does on Arc and Base when its operator turns
+it on; `/api/pricing` says under `payment.gatewayNanopayments`), the 402 carries
+a second `exact` accept whose `extra.name` is `GatewayWalletBatched`. A buyer who
+deposited USDC into Circle Gateway once (an on-chain transfer through Circle's
+GatewayWallet contract; it pays gas once, and this SDK never deposits or
+withdraws) pays each call by signing the same EIP-3009 authorization under the
+Gateway domain the accept carries instead of the USDC contract's; Gateway
+verifies it against the deposit, settles it off chain and lands the batch on
+chain later. Pass the signer as the `gateway` option. Off by default: without it
+nothing changes.
+
+```js
+import { Agent402 } from "agent402-client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(process.env.AGENT_KEY); // its address holds a Gateway deposit on Base or Arc
+const a = new Agent402({ gateway: { signer }, maxPerCallUsd: 0.05 });
+const out = await a.call("extract", { url: "https://example.com/article" });
+```
+
+`signer` is any EIP-712 signer with `address` and `signTypedData` (a viem
+account). `gateway.networks` (chain names, as `withNetworkPreference` takes, for
+example `["arc"]`) limits which chains' batched accepts are signed; the default
+is any EVM chain the 402 offers one on. The caps are checked against the
+accept's own amount before anything is signed. A 402 with no batched accept this
+signer may pay (another seller, an identity-bound route, a route with a lasting
+effect) falls back to your payment `fetch` or `creditsKey` exactly as without the
+option, and with neither fails with a 402 that says so. A refusal for a short
+Gateway balance relays the server's hint and says to deposit first, and the
+amount is released from the caps. The mechanism in full: [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
+Two helpers are exported for a client of your own: `gatewayAcceptOf(accepts,
+networks?)` and `signGatewayPayment(accept, { signer, resource })`.
+
 ## Retries and double charges
 
 Every send carries an `Idempotency-Key`. By default it is derived from the
@@ -124,12 +159,11 @@ What the server does with it depends on how the call was paid:
   route with the same body, from its first answer inside the replay window,
   with no second settlement, and marks it `X-Replayed-Answer: 1` (identity-bound
   routes, routes with a lasting effect and streamed calls excepted).
-- **Circle Gateway batched option:** where the server offers it on Arc or Base,
-  the 402 carries a second accept whose `extra.name` is `GatewayWalletBatched`.
-  This package pays the plain accept on those networks (the stock x402 client
-  takes the first accept it can pay, and the plain one is first); the batched
-  one needs a client that signs under the Gateway domain against a Circle
-  Gateway deposit.
+- **Circle Gateway batched option:** a payment the server has not had confirmed
+  by Gateway yet is answered `402` with reason `settlement-pending`; the SDK
+  resends the same signed header after the server's `Retry-After` (never a new
+  signature), and past three resends throws `GatewayPendingError` with
+  `paymentHeader`, the header to resend later. See the section above.
 
 ## Workflows (skill packs)
 
@@ -228,7 +262,7 @@ that runs as one.
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above) |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above) |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |

@@ -31,6 +31,15 @@ Payments and refunds:
   dispute is won, which also re-enables a key the dispute disabled.
 - The unpaid-quote limiters and the gateway cache count a payment header only
   when it decodes to a payment on a chain this server sells on.
+- agent402-client 0.8.20 pays the Circle Gateway batched accept on Arc and
+  Base with the gateway option (an EIP-712 signer whose address holds a USDC
+  deposit in Circle Gateway): the authorization is signed under the Gateway
+  domain the accept carries, the caps hold before the signature, a pending
+  settlement is resent with the same header, and a 402 with no batched accept
+  falls back to the payment fetch. Off by default. A refusal for a short
+  Gateway balance says to deposit, not to fund the wallet, and reads no wallet
+  balance. The mechanism is on the wiki's Circle Gateway page and in the x402
+  guide.
 
 LLM gateway:
 - A reasoning or thinking budget is fitted under the output cap the price
@@ -65,7 +74,7 @@ Surfaces:
   on /api/pricing, in /llms.txt, in the openapi guidance and on the
   connector's payment.info, beside the per-chain floors.
 - Algorand mainnet is offered under its 32-character CAIP-2 id; a payment
-  naming the older full-hash id still settles. agent402-client 0.8.19,
+  naming the older full-hash id still settles. agent402-client 0.8.20,
   agent402-mcp 0.13.22 and agent402-openclaw 0.5.7 read both spellings; the
   earlier client matches only the old id. agent402-mcp 0.13.22,
   elizaos-plugin-agent402 0.2.9 and agent402-agentkit 0.1.9 describe a

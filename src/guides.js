@@ -126,6 +126,32 @@ live search, PDFs, durable memory - most a flat ${TYPICAL_PRICE_RANGE.text} per 
 The full catalog is machine-readable at
 [/api/pricing](https://agent402.tools/api/pricing).
 
+## No gas per call: pay from a Circle Gateway deposit
+
+Where the 402 on Arc or Base carries a second \`exact\` accept whose
+\`extra.name\` is \`GatewayWalletBatched\` (it does while the operator turns the
+option on; \`/api/pricing\` says under \`payment.gatewayNanopayments\`), a buyer
+who deposited USDC into Circle Gateway once (an on-chain transfer through
+Circle's GatewayWallet contract, gas paid once) pays each call by signing the
+same EIP-3009 authorization under the Gateway domain the accept carries, for
+the same price to the same payTo. Circle Gateway verifies it against the
+deposit, settles it off chain and lands the batch on chain later. A stock
+x402 client signs under the USDC contract's domain and keeps paying the plain
+accept, which stays first; [agent402-client](https://www.npmjs.com/package/agent402-client)
+0.8.20 and later pays the batched one when it is given the signer:
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const a = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGENT_KEY) }, maxPerCallUsd: 0.05 });
+const out = await a.call("extract", { url: "https://example.com/article" });
+\`\`\`
+
+Off by default; a 402 with no batched accept falls back to the plain payment
+fetch. The mechanism, the pending-settlement resend and the signing helpers:
+[wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
+
 ## Or from the command line
 
 Stripe's open-source [purl](https://github.com/stripe/purl) is "curl for paid

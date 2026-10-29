@@ -50,7 +50,8 @@ Sign with an ordinary EOA key.
   `GatewayWalletBatched`) beside the plain one: buyers who deposited USDC into
   Gateway sign per call with no gas, and Gateway settles off chain in batches
   into the seller's Gateway balance, withdrawn on chain separately. Off by
-  default. Buyer side: [[Paying with x402|Paying-with-x402]]; operator side:
+  default. Buyer side: [[Circle Gateway (batched USDC)|Circle-Gateway]]
+  (`agent402-client` pays it with the `gateway` option); operator side:
   [[Self-Hosting]].
 
 ## Find other sellers on the chain
