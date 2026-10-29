@@ -84,8 +84,23 @@ export function decomposePrompt(task, maxSteps, { guidance = "" } = {}) {
 /** What the judge sees of a tool's description: the same bounded, link-free
  *  text for every seller, so a longer or link-laden listing buys no advantage
  *  and a URL in a listing is never offered to the model as somewhere to go. */
+// A sentence written to whatever rates the listing rather than about what the
+// tool does (a fit it asks for, a perfect fit, a note or notice to the judge,
+// an instruction to set aside the rules) is dropped before the judge reads it.
+const RATER_ADDRESS = new RegExp([
+  /\bfit\s*(?:score\s*)?(?:of\s*|[:=]\s*)?(?:0?\.\d+|1\.0+|100\s*%)(?![\d.])/,
+  /\b(?:a\s+)?fit\s*(?:score\s*)?(?:of|[:=])\s*1\b/,
+  /\bperfect\s+fit\b/,
+  /\b(?:rate[sd]?|score[sd]?|grade[sd]?|judge[sd]?|rank(?:s|ed)?|mark(?:s|ed)?)\s+(?:it|this|me|us)\s+(?:as\s+)?(?:a\s+)?(?:1(?:\.0+)?\b|10\b|100\b|perfect|the\s+(?:best|top|highest)|first|highest|top)/,
+  /\bnote\s+to\s+(?:the\s+|any\s+|all\s+)?(?:ranking|ranker|judge|judging|model|llm|evaluator|grader|rater|scorer|selector)s?\b/,
+  /\b(?:evaluators?|raters?|graders?|rankers?|judges?|scorers?|ranking\s+models?|selecting\s+(?:models?|agents?))\s+(?:should|must|will|always|rate|give|score|pick|choose|prefer|select)\b/,
+  /\bsystem\s+(?:notice|note|override|directive|alert)\b/,
+  /\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:what|everything|anything|previous|prior|above|earlier|other)\b/,
+].map((re) => `(?:${re.source})`).join("|"), "i");
+
 export function judgeText(desc, max = 300) {
-  const t = String(desc || "").replace(/\bhttps?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim();
+  const flat = String(desc || "").replace(/\bhttps?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim();
+  const t = flat.split(/(?<=[.!?])\s+/).filter((s) => !RATER_ADDRESS.test(s)).join(" ");
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 

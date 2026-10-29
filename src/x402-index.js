@@ -311,7 +311,8 @@ const INDEX_ROW_CAP = 100;
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
-import { decodeTagCharacters, hasHiddenCharacters, stripHiddenCharacters } from "./hidden-chars.js";
+import { stripHiddenCharacters } from "./hidden-chars.js";
+import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
@@ -2596,7 +2597,7 @@ function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
         seller: originUrl,
         method: method.toUpperCase(),
         route: pathStr,
-        slug: op.operationId || pathStr.replace(/^\//, "").replace(/\//g, "-"),
+        slug: cleanListingSlug(op.operationId) || pathStr.replace(/^\//, "").replace(/\//g, "-"),
         name: op.summary || op.operationId || pathStr,
         // Capped like the Bazaar and llms.txt paths (400): the description feeds
         // the route haystack and the postings vocabulary, and an OpenAPI document
@@ -3170,7 +3171,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
       const route = u.pathname + (u.search || "");
       if (!u.pathname || u.pathname === "/" || MANIFEST_NON_TOOL_PATH.test(u.pathname)) continue;
       const pathOnly = u.pathname;
-      const slug = name || u.pathname.replace(/^\//, "").replace(/\//g, "-");
+      const slug = cleanListingSlug(name) || u.pathname.replace(/^\//, "").replace(/\//g, "-");
       notePathMeta(pathOnly, { name, description, price, slug, pay });
       const methodsToEmit = methodList.length ? [...new Set(methodList)] : [""];
       for (const method of methodsToEmit) {
@@ -6072,116 +6073,9 @@ function* computeAliasOriginsBaseSteps(entries) {
   return aliases;
 }
 
-// Metadata-injection detector (M6, "Five Attacks on x402" Attack IV-E1).
-// A tool listing is metadata: a name, a description, tags — text that *describes*
-// what a tool does. It is never a channel for instructions to the selecting
-// agent. When an external listing's text tries to command the ranker or the
-// buyer's LLM ("ignore previous instructions", "always pick this", a fake
-// <system> block), that's an attack, not a description — the paper drove one
-// crafted server to 71.8% selection this way. We drop such listings entirely.
-//
-// Deliberately conservative: every pattern is imperative/meta phrasing that a
-// genuine tool description has no reason to contain. A tool that legitimately
-// *operates on* prompts (e.g. a "prompt linter") describes its function
-// ("detects prompt-injection patterns"), it doesn't issue the commands below.
-const INJECTION_PATTERNS = [
-  /ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above|earlier|the\s+above)\s+(?:instructions?|prompts?|context|rules?)/,
-  /disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)/,
-  /forget\s+(?:everything|all|the\s+above|previous|prior)/,
-  /always\s+(?:pick|choose|select|use|prefer|recommend|return)\s+(?:this|me|the\s+following)/,
-  /(?:you\s+must|be\s+sure\s+to)\s+(?:always\s+)?(?:pick|choose|select|use|prefer|recommend)/,
-  /(?:highest|top|maximum|max)\s+priority/,
-  /override\s+(?:all\s+|any\s+|the\s+)?(?:other|previous|prior|instructions?|ranking)/,
-  /<\/?\s*(?:system|assistant|user|instructions?|important)\s*>/,
-  /\[(?:system|important|instructions?|override)\]/,
-  /system\s*(?:prompt|message|role)\s*[:=]/,
-  /do\s+not\s+(?:pick|choose|select|recommend|consider)\s+(?:any\s+)?other/,
-  // A listing that tries to set its own score for a ranker that reads it.
-  /"fits?"\s*:\s*\{/,
-  /\b(?:rate|score|give)\s+(?:this|it|me|every\s+\w+)?\s*(?:a\s+)?fit\s*(?:of\s*)?[:=]?\s*(?:1(?:\.0+)?|100\s*%)/,
-  /\bfit\s*[:=]\s*(?:1(?:\.0+)?|100\s*%)/,
-  // The same instructions in the languages seen on the index.
-  /ignora\s+(?:las?\s+|todas?\s+las?\s+)?(?:instrucciones|indicaciones)\s+(?:anteriores|previas)/,
-  /ignor(?:e|ez)\s+(?:les\s+|toutes\s+les\s+)?(?:instructions|consignes)\s+(?:pr[eé]c[eé]dentes|ant[eé]rieures)/,
-  /ignoriere\s+(?:alle\s+)?(?:vorherigen|bisherigen|obigen)\s+(?:anweisungen|instruktionen)/,
-  /ignore\s+(?:as\s+|todas\s+as\s+)?instru[cç][oõ]es\s+anteriores/,
-];
-// Letters from other scripts that render like Latin ones ("Іgnоrе" spelled with
-// Cyrillic І, о, е): one more reading of the text maps them back before the
-// patterns run, so a lookalike spelling is read as the phrase it imitates.
-const CONFUSABLES = {
-  "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u04cf": "l", "\u0501": "d", "\u051b": "q", "\u051d": "w",
-  "\u03b1": "a", "\u03bf": "o", "\u03c1": "p", "\u03b5": "e", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x",
-};
-const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
-// The patterns are written lowercase; the text is brought to that form before
-// matching, twice: as written (so a literal <system> tag is still seen) and
-// with markup/entities/invisible characters turned to spaces (so
-// "Ignore&lt;previous instructions" or a zero-width split cannot slip a phrase
-// past the screen that a later cleaning step would reassemble). Text spelled
-// in the TAG block (U+E0020..U+E007E, a copy of printable ASCII that renders
-// as nothing) is read back as the ASCII it spells first, so the patterns see
-// those words too (src/hidden-chars.js).
-// Plain printable ASCII with no markup, entity or backtick characters: NFKC,
-// entity decoding, invisible-character handling and the lookalike map are all
-// identity on it, so the four forms below reduce to the lowercased text and its
-// whitespace-collapsed copy. Nearly every listing is this, and the full path
-// costs several times more per listing across an index of tens of thousands.
-const PLAIN_LISTING = /^[\t\n\r\x20-\x7e]*$/;
-const MARKUP_CHARS = /[&<>`*~|]/;
-function injectionForms(text) {
-  const raw = String(text || "");
-  if (PLAIN_LISTING.test(raw) && !MARKUP_CHARS.test(raw)) {
-    const lower = raw.toLowerCase();
-    if (!/[\t\n\r]| {2}/.test(lower)) return [lower];
-    return [lower, lower.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ")];
-  }
-  const decoded = decodeTagCharacters(raw).normalize("NFKC")
-    .replace(/&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6});/gi, (m) => {
-      const e = m.toLowerCase();
-      return e === "&lt;" ? "<" : e === "&gt;" ? ">" : e === "&amp;" ? "&" : " ";
-    })
-    .toLowerCase();
-  // Invisible characters are DELETED (a zero-width split inside a word must
-  // rejoin it); markup punctuation becomes a space. Underscores are left as
-  // they are: identifiers like max_priority_fee are honest listing text.
-  // An invisible character may split a word (delete it) or two words (read it
-  // as a space): both readings are checked.
-  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u00ad\u180e\ufe00-\ufe0f\ufff9-\ufffb]|[\u{e0100}-\u{e01ef}]/gu;
-  const flatten = (x) => x.replace(/[\u0000-\u001f\u007f-\u009f<>`*~|]/g, " ").replace(/\s+/g, " ");
-  const forms = [decoded.replace(INVIS, ""), flatten(decoded.replace(INVIS, "")), flatten(decoded.replace(INVIS, " "))];
-  if (CONFUSABLE_RE.test(decoded)) { CONFUSABLE_RE.lastIndex = 0; forms.push(flatten(decoded.replace(INVIS, "").replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]))); }
-  CONFUSABLE_RE.lastIndex = 0;
-  return forms;
-}
-// One alternation of every pattern: the same any-match answer as testing them
-// in turn (none carries a flag or a lastIndex), in one pass over the text.
-const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
-export function looksLikeListingInjection(text) {
-  const t = String(text || "");
-  if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
-  // A character that renders as nothing (TAG text, a zero-width or bidi
-  // control, a run of variation selectors, a soft hyphen) is a carrier for
-  // text the reader never sees: the listing is a finding whatever it spells.
-  // Emoji joiners, keycaps and joining scripts are allowed (src/hidden-chars.js).
-  if (hasHiddenCharacters(t)) return true;
-  return matchesInjectionPhrase(t);
-}
-/** The phrase rules alone (no length or hidden-character rule), for a caller
- *  that screens one sentence and reports hidden characters on its own. */
-export function matchesInjectionPhrase(text) {
-  for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
-  return false;
-}
-/** Which rule of looksLikeListingInjection the text trips, by name, or null:
- *  the same three rules in the same order, so this is non-null exactly when
- *  that screen says true. */
-export function listingInjectionFinding(text) {
-  const t = String(text || "");
-  if (t.length > 8000) return "oversized";
-  if (hasHiddenCharacters(t)) return "hidden-characters";
-  return matchesInjectionPhrase(t) ? "instruction-phrase" : null;
-}
+// The listing screen lives in src/listing-screen.js (dependency-free, so a
+// workflow can run it with no install); re-exported here for every caller.
+export { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding };
 
 // Serve-time hygiene for seller-written text on the JSON surfaces an agent
 // reads (/api/index/tools, /api/index?seller=, /api/mpp-index, sellers.list).
@@ -6189,11 +6083,31 @@ export function listingInjectionFinding(text) {
 // text exactly as the seller wrote it.
 export const LISTING_NAME_MAX = 120;
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+// Markup an agent's renderer would act on: a markdown image or link (the label
+// is kept as text), an HTML comment, an angle-bracket autolink (kept as the
+// bare URL) and an HTML tag that loads or runs something: any tag carrying an
+// attribute written name=value, and an element that embeds, scripts or takes
+// input, open or closed. A bare placeholder ("<source>", "<plain English>",
+// "Array<string>") stays as written.
+const ACTIVE_ELEMENTS = "script|style|iframe|frame|frameset|object|embed|applet|svg|math|form|img|image|video|audio|template|noscript|textarea|input|button|select|marquee|meta|base|portal";
+const HTML_TAG = new RegExp(`<(?:/?(?:${ACTIVE_ELEMENTS})(?:[\\s/][^<>]*)?|[a-zA-Z][a-zA-Z0-9-]*[\\s/]+[a-zA-Z_:][\\w:.-]*\\s*=[^<>]*)>`, "gi");
+function stripListingMarkup(s) {
+  if (!/[<[]/.test(s)) return s;
+  return s
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .replace(/<((?:https?|mailto):[^<>\s]*)>/gi, "$1")
+    .replace(HTML_TAG, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
 /** Seller text with every hidden character and control character removed,
- *  trimmed, and capped at `max` code points (never splitting a pair). */
+ *  markdown link and image syntax and HTML tags removed, trimmed, and capped
+ *  at `max` code points (never splitting a pair). */
 export function cleanListingText(text, max = 0) {
   if (text == null) return text;
-  let s = stripHiddenCharacters(String(text)).replace(CONTROL_CHARS, "").trim();
+  let s = stripListingMarkup(stripHiddenCharacters(String(text)).replace(CONTROL_CHARS, "").trim());
   if (max > 0 && s.length > max) {
     const cps = Array.from(s);
     if (cps.length > max) s = cps.slice(0, max).join("").trimEnd();
@@ -6202,26 +6116,37 @@ export function cleanListingText(text, max = 0) {
 }
 /** A seller-written name, cleaned and capped. */
 export const cleanListingName = (name) => cleanListingText(name, LISTING_NAME_MAX);
+/** A seller-written tool identifier (an OpenAPI operationId, a catalogue
+ *  name used as the slug), cleaned and capped at ingest and again at serve. */
+export const LISTING_SLUG_MAX = 120;
+export function cleanListingSlug(slug) { return slug == null ? slug : cleanListingText(slug, LISTING_SLUG_MAX); }
 /** One listing's served text. `fields` are the seller's own name, description,
- *  category and tags; the screen reads them joined, the way the router's does.
- *  A flagged listing keeps its fields but serves no description and no tags,
- *  and a name that itself trips the screen falls back to `fallbackName`. */
-export function screenListingForServe({ name, description, category, tags } = {}, { fallbackName = null } = {}) {
+ *  category and tags, and the row's slug and route; the screen reads them
+ *  joined, the way the router's does. A flagged listing keeps its fields but
+ *  serves no description and no tags, a name that itself trips the screen
+ *  falls back to `fallbackName`, and a slug that does falls back to one built
+ *  from the route. The slug is served cleaned and capped. */
+export function screenListingForServe({ name, description, category, tags, slug, route } = {}, { fallbackName = null } = {}) {
   const tagList = Array.isArray(tags) ? tags : [];
-  const finding = listingInjectionFinding(`${name ?? ""} ${description ?? ""} ${category ?? ""} ${tagList.join(" ")}`);
+  const ids = slug != null || route != null ? ` ${slug ?? ""} ${route ?? ""}` : "";
+  const finding = listingInjectionFinding(`${name ?? ""} ${description ?? ""} ${category ?? ""} ${tagList.join(" ")}${ids}`);
+  const servedSlug = slug === undefined ? {} : { slug: cleanListingSlug(slug) };
   if (!finding) {
     return {
       name: cleanListingName(name),
       description: cleanListingText(description),
       tags: tagList.map((x) => (typeof x === "string" ? cleanListingText(x, LISTING_NAME_MAX) : x)),
+      ...servedSlug,
       finding: null,
     };
   }
   const nameFlagged = name != null && matchesInjectionPhrase(String(name));
+  const slugFlagged = slug != null && matchesInjectionPhrase(String(slug));
   return {
     name: nameFlagged ? fallbackName : cleanListingName(name),
     description: description == null ? description : "",
     tags: [],
+    ...(slugFlagged ? { slug: cleanListingSlug(String(route || "").replace(/^\//, "").replace(/\//g, "-")) || null } : servedSlug),
     finding,
   };
 }
@@ -6294,15 +6219,15 @@ export function _serveScreenRunsForTest() { return serveScreenRuns; }
 const toolScreenMemo = new WeakMap();
 function screenToolForServe(t, category, fallbackName) {
   if (!t || typeof t !== "object") return memoServeScreen(null, "listing", [], () => screenListingForServe({}, { fallbackName }));
-  const name = t.name, description = t.description, tags = t.tags;
+  const name = t.name, description = t.description, tags = t.tags, slug = t.slug ?? null, route = t.route ?? null;
   const hit = toolScreenMemo.get(t);
-  if (hit && hit.name === name && hit.description === description && hit.category === category && hit.fallbackName === fallbackName && sameServeInput(hit.tags, tags)) return hit.value;
+  if (hit && hit.name === name && hit.description === description && hit.category === category && hit.fallbackName === fallbackName && hit.slug === slug && hit.route === route && sameServeInput(hit.tags, tags)) return hit.value;
   serveScreenRuns++;
   // The object is frozen but its tag list is not: the build slices it for
   // every row, and slice on a frozen array leaves the fast path. The build
   // never hands that list out, only its slice.
-  const value = Object.freeze(screenListingForServe({ name, description, category, tags }, { fallbackName }));
-  toolScreenMemo.set(t, { name, description, category, fallbackName, tags: Array.isArray(tags) ? tags.slice() : tags, value });
+  const value = Object.freeze(screenListingForServe({ name, description, category, tags, slug, route }, { fallbackName }));
+  toolScreenMemo.set(t, { name, description, category, fallbackName, slug, route, tags: Array.isArray(tags) ? tags.slice() : tags, value });
   return value;
 }
 /** `servedSellerName`, memoized on the object the name was read from. */
@@ -8062,9 +7987,10 @@ export function screenSellerDetailForServe(d) {
       const category = rawRow?.category ?? t.category;
       // Keyed on the crawled row (the served row is rebuilt per request); the
       // served row's own text is the input, so a mismatch screens it afresh.
-      const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null],
-        () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags }, { fallbackName: t.route || null }));
+      const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null, t.slug ?? null],
+        () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags, slug: t.slug ?? null, route: t.route ?? null }, { fallbackName: t.route || null }));
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
+      if (t.slug !== undefined) row.slug = s.slug ?? null;
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
       return { ...row, ...untrustedMarker(s.finding) };
     });
@@ -8455,7 +8381,9 @@ function toolStatics(t) {
     // that favours the host, and a catalog entry of ours that tripped it would
     // be a bug worth seeing rather than an exception worth granting.
     // scripts/test-discovery-note.js asserts no local tool trips it.
-    injected: looksLikeListingInjection(hay),
+    // The slug and route are seller-written too (an operationId, a path) and
+    // are screened beside the text; they stay out of `hay`, which is scored.
+    injected: looksLikeListingInjection(hay) || looksLikeListingInjection(`${t.slug || ""} ${t.route || ""}`),
     // A route in a category the router lists but never buys (personal data
     // about individuals, src/route-category.js): it stays in the index and on
     // /api/index?seller= with its category_excluded verdict, and is never
@@ -9329,7 +9257,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       seller: t.seller,
       sellerHome: t.sellerHome,
       sellerName: t.sellerName,
-      slug: t.slug,
+      slug: served ? served.slug : t.slug,
       name: served ? served.name : t.name,
       method: t.method,
       route: t.route,
@@ -9961,7 +9889,7 @@ function flatRowOf(origin, t, sellerName, { memo = true } = {}) {
     // the rows the crawl has replaced since the last one.
     const served = memo ? screenToolForServe(t, t?.category, route)
       : (t && typeof t === "object"
-        ? Object.freeze(screenListingForServe({ name: t.name, description: t.description, category: t?.category, tags: t.tags }, { fallbackName: route }))
+        ? Object.freeze(screenListingForServe({ name: t.name, description: t.description, category: t?.category, tags: t.tags, slug: t.slug ?? null, route: t.route ?? null }, { fallbackName: route }))
         : screenToolForServe(t, t?.category, route));
     const description = String(served.description || "").trim();
     const flatRow = {
@@ -9993,7 +9921,7 @@ function flatRowOf(origin, t, sellerName, { memo = true } = {}) {
       // The identifier a caller needs to actually invoke the tool. Present on
       // /api/route and /api/find, missing here, on the surface that lists all
       // 65k third-party rows.
-      slug: t?.slug || null,
+      slug: served.slug || null,
       // Added to /api/route earlier today and to nothing else, which is the
       // inert-field defect this file's own header warns about, committed the
       // same afternoon as a fix for it. It belongs wherever a tool row is

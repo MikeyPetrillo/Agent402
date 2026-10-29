@@ -151,7 +151,7 @@ for (const t of ["Weather forecast API: returns JSON with hourly temps.", "Price
 {
   // Every pattern is flag-free: the screen runs them as ONE alternation, which
   // would silently drop an /i or /g on a pattern added later.
-  const src = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/listing-screen.js", import.meta.url), "utf8");
   const block = src.slice(src.indexOf("const INJECTION_PATTERNS = ["), src.indexOf("];", src.indexOf("const INJECTION_PATTERNS = [")));
   const flagged = [...block.matchAll(/^\s*\/.*\/([a-z]+),?\s*$/gm)].map((m) => m[1]);
   ok(flagged.length === 0 && /new RegExp\(INJECTION_PATTERNS\.map/.test(src), `injection patterns carry no flags, so their single alternation is exact (${flagged.join(",") || "none"})`);
