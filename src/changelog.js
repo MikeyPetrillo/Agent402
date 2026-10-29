@@ -16,6 +16,7 @@ const ENTRIES = [
       "LLM gateway: a reasoning or thinking budget is fitted under the output cap the price covers on the chat, Messages and Responses wires, or refused with a 400 when the provider's floor leaves no room.",
       "LLM gateway: /v1/audio/speech stops walking links once its timed-out budget is spent, and a stream the upstream dropped after its first frame ends with an SSE error frame instead of silence.",
       "LLM gateway: o4-mini is served by gpt-5.6-terra and the answer says so in agent402_model_substituted; the premium tier no longer lists it.",
+      "Payments: a Solana, Stellar or Algorand x402 payer is screened against the sanctions list after its payment verifies, as an EVM payer already was; a listed signer is refused before the tool runs.",
       "Router: a Solana payer's route-execute leg runs under a time budget, as the Algorand and Tempo legs do; a resolve that used it up is refused before anything is signed.",
       "Router: purchases the router makes with our own wallets never count toward a seller's settlement proof, on every source the floor reads.",
       "Router: /api/route serves a seller's name, homepage, description and tags through the same listing screen as the index, and our own catalog is recognized by canonical host, a redirected manifest included.",

@@ -43,6 +43,9 @@ LLM gateway:
   agent402_model_substituted; the premium tier no longer lists it.
 
 Router and index:
+- A Solana, Stellar or Algorand x402 payer is screened against the sanctions
+  list after its payment verifies, as an EVM payer already was; a listed
+  signer is refused before the tool runs.
 - A Solana payer's route-execute leg runs under a time budget, as the
   Algorand and Tempo legs do; a resolve that used it up is refused before
   anything is signed.

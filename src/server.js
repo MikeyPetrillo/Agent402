@@ -9239,7 +9239,7 @@ const mcpMountOpts = {
   // direct-HTTP ones, under "pow". A PAID call is replayed to its own HTTP
   // route (src/mcp-mpp.js), which books its sale, analytics row and failure
   // count itself, so the connector never calls this for a paid outcome.
-  // Cache hits don't flow through MCP today — that path bypasses the central
+  // Cache hits don't flow through MCP today; that path bypasses the central
   // HTTP dispatcher.
   // The one paid outcome no route books: a loopback that returned no answer
   // (timed out, failed, or a task run that was aborted). Counted once here,
