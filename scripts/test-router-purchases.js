@@ -134,6 +134,22 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 10 }, W);
   foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 70, l30DaysUniquePayers: 4 }, W);
   ok(mixed.get(SELLER).payers30d === 4 && mixed.get(SELLER).byPayTo[W].calls === 80 && mixed.get(SELLER).byPayTo[W].payers === 4, "a measured figure beside an unmeasured item folds as the measured one");
+  // A stored entry is read in the shape the fold writes now: a zero payer
+  // figure without the measured marker (what an older fold wrote for an item
+  // with no payer field) is unknown; a measured zero carries the marker and
+  // refuses; both survive a save and a reload.
+  const { qualityFromStored, _routerReplicaQualityOf } = await import("../src/x402-index.js");
+  const oldShape = { calls30d: 80, payers30d: 0, lastCalledAt: null, payTos: [W], curated: false, byPayTo: { [W]: { calls: 80, payers: 0 } } };
+  const reloadedOld = qualityFromStored(JSON.parse(JSON.stringify(oldShape)));
+  const bo = buildEvidenceBinding({ bazaarQuality: [[SELLER, reloadedOld]], ...FLOORS }).get(SELLER);
+  ok(reloadedOld.payers30d === undefined && reloadedOld.byPayTo[W].payers === undefined && bo?.byWallet.get(W)?.settled === 80 && bo.byWallet.get(W).payers === undefined && bo.clearing.has(W), `an old-shape stored entry (payers 0, no marker) loads as unknown and clears on calls alone (${JSON.stringify(bo?.byWallet.get(W))})`);
+  const measuredZero = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(zero.get(SELLER)))));
+  const bz = buildEvidenceBinding({ bazaarQuality: [[SELLER, measuredZero]], ...FLOORS }).get(SELLER);
+  ok(zero.get(SELLER).payersMeasured === true && zero.get(SELLER).byPayTo[W].measured === true && measuredZero.payers30d === 0 && measuredZero.byPayTo[W].payers === 0 && bz?.byWallet.get(W)?.payers === 0 && !bz.clearing.has(W), "a new-shape entry measured at zero carries the marker, reloads as zero and refuses");
+  const reloadedNoField = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(noField.get(SELLER)))));
+  ok(reloadedNoField.payers30d === undefined && reloadedNoField.byPayTo[W].payers === undefined && !Object.hasOwn(reloadedNoField, "payersMeasured"), "a new-shape entry with no payer field reloads as unknown");
+  const reloadedMixed = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(mixed.get(SELLER)))));
+  ok(reloadedMixed.payers30d === 4 && reloadedMixed.byPayTo[W].payers === 4 && reloadedMixed.payersMeasured === true, "a measured figure above zero reloads unchanged");
 }
 
 // --- 4. The chain join: the merchant SQL leaves our wallets out ------------

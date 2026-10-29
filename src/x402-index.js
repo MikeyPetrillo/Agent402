@@ -1794,7 +1794,10 @@ export function foldBazaarQuality(map, origin, q, basePayTo = null, { curated = 
   if (!cur.byPayTo || typeof cur.byPayTo !== "object") Object.defineProperty(cur, "byPayTo", { value: {}, enumerable: false, writable: true, configurable: true });
   if (!Object.hasOwn(cur, "payersOffBase")) Object.defineProperty(cur, "payersOffBase", { value: 0, enumerable: false, writable: true, configurable: true });
   cur.calls30d += calls;
-  if (measured) cur.payers30d = Math.max(cur.payers30d ?? 0, payers);
+  // `payersMeasured` (and `measured` on a wallet split) says the figure was
+  // folded from a payer field, so a stored zero is told apart from the zero
+  // an older fold wrote for an item with no payer field (qualityFromStored).
+  if (measured) { cur.payers30d = Math.max(cur.payers30d ?? 0, payers); cur.payersMeasured = true; }
   if (last && (!cur.lastCalledAt || last > cur.lastCalledAt)) cur.lastCalledAt = last;
   const w = typeof basePayTo === "string" && /^0x[0-9a-f]{40}$/i.test(basePayTo) ? basePayTo.toLowerCase() : null;
   if (!w && measured) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
@@ -1803,10 +1806,34 @@ export function foldBazaarQuality(map, origin, q, basePayTo = null, { curated = 
   if (w && calls > 0 && (Object.hasOwn(cur.byPayTo, w) || Object.keys(cur.byPayTo).length < BAZAAR_QUALITY_MAX_PAYTOS)) {
     const at = cur.byPayTo[w] || { calls: 0, payers: undefined };
     at.calls += calls;
-    if (measured) at.payers = Math.max(at.payers ?? 0, payers);
+    if (measured) { at.payers = Math.max(at.payers ?? 0, payers); at.measured = true; }
     cur.byPayTo[w] = at;
   }
   map.set(origin, cur);
+}
+
+/** A quality object read back from storage or a shipment, in the shape the
+ *  fold writes now: a payer figure of zero carries `payersMeasured` (or
+ *  `measured` on a wallet split) only when it was folded from a payer field.
+ *  A zero without the marker is what an older fold wrote for an item that had
+ *  no payer field, and reads as unknown (undefined), never as a measured
+ *  zero that would refuse at the breadth floor. Returns a new object. */
+export function qualityFromStored(q) {
+  if (!q || typeof q !== "object") return q;
+  const out = { ...q };
+  if (out.payersMeasured !== true && !(Number(out.payers30d) > 0)) delete out.payers30d;
+  const split = q.byPayTo && typeof q.byPayTo === "object" ? q.byPayTo : null;
+  if (split) {
+    const by = {};
+    for (const [w, at] of Object.entries(split)) {
+      if (!at || typeof at !== "object") continue;
+      const e = { ...at };
+      if (e.measured !== true && !(Number(e.payers) > 0)) delete e.payers;
+      by[w] = e;
+    }
+    out.byPayTo = by;
+  }
+  return out;
 }
 
 // Public x402 seller registries we crawl. Each exposes an unauthenticated
@@ -2442,8 +2469,10 @@ export function bazaarItemToTool(item, originUrl) {
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
+    // A payer figure rides only when the item carries one, marked as measured
+    // (qualityFromStored reads a stored zero without the marker as unknown).
     quality: item.quality && typeof item.quality === "object"
-      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, payers30d: Number(item.quality.l30DaysUniquePayers) || 0, lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
+      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, ...(item.quality.l30DaysUniquePayers !== undefined && item.quality.l30DaysUniquePayers !== null && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
       : null,
   };
 }
@@ -7210,7 +7239,10 @@ export function loadPersistedIndexCache(file = INDEX_CACHE_FILE) {
 /** One warm-started entry into the cache (shared by both loaders). */
 function foldWarmEntry(origin, v) {
   if (typeof origin !== "string" || !origin || cache.has(origin) || !v || typeof v !== "object") return false;
-  cache.set(origin, { ...v, warmStarted: true });
+  // A stored tool's Bazaar quality is read in the shape the fold writes now
+  // (a zero payer figure without the measured marker is unknown).
+  const tools = Array.isArray(v.tools) ? v.tools.map((t) => (t && typeof t === "object" && t.quality && typeof t.quality === "object" ? { ...t, quality: qualityFromStored(t.quality) } : t)) : v.tools;
+  cache.set(origin, { ...v, ...(Array.isArray(tools) ? { tools } : {}), warmStarted: true });
   // CRITICAL: re-seed the crawler with every warm-started origin (see the
   // legacy loader below for the incident that made this load-bearing).
   discoveredSeeds.add(origin);
@@ -8878,7 +8910,7 @@ export function _routerReplicaQualityOf(q) {
 }
 function replicaQualityFromShipped(q) {
   if (!q || typeof q !== "object") return q;
-  const { byPayTo, payersOffBase, ...rest } = q;
+  const { byPayTo, payersOffBase, ...rest } = qualityFromStored(q);
   if (byPayTo && typeof byPayTo === "object") Object.defineProperty(rest, "byPayTo", { value: byPayTo, enumerable: false, writable: true, configurable: true });
   if (payersOffBase !== undefined) Object.defineProperty(rest, "payersOffBase", { value: payersOffBase, enumerable: false, writable: true, configurable: true });
   return rest;
