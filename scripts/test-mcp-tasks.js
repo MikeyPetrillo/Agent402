@@ -249,6 +249,27 @@ ok(unpaid.error?.code === -32042, "an unpaid composite gets the normal -32042 pa
 ok(Array.isArray(unpaid.error?.data?.challenges) && unpaid.error.data.challenges.length > 0, "that ask carries live challenges");
 ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that has not cleared the paywall");
 
+// A PAID blocking call to a slow route from a client that did not declare the
+// tasks extension is refused BEFORE the loopback: served blocking, the run
+// would be cut after the gate passed and its charge owed. The refusal carries
+// the HTTP route's own code and names both ways forward. Unpaid, the same call
+// still reaches the loopback for its 402; a route without a run budget past
+// the connector's wait is served blocking as before.
+{
+  plan = { "image-gen-premium": { delayMs: 0, res: jsonRes(200, { never: true }) } };
+  const nCalls = calls.length;
+  const paidMeta = { "org.paymentauth/credential": "Payment not-a-real-credential" };
+  const refused = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } }, _meta: paidMeta });
+  const text = String(refused.result?.content?.[0]?.text || "");
+  ok(refused.result?.isError === true && /^respond_async_required:/.test(text) && /refused before any payment was taken/.test(text), `a paid blocking call to a slow route without the tasks extension is refused as respond_async_required (${text.slice(0, 80)})`);
+  ok(calls.length === nCalls, "...before any loopback ran (nothing was verified, run or charged)");
+  ok(text.includes(TASKS_EXTENSION) && /Prefer: respond-async/.test(text) && /POST \/api\/image-gen-premium/.test(text), "the refusal names the tasks extension, the HTTP header and the route");
+  const unpaid = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } } });
+  ok(calls.length === nCalls + 1 && !/respond_async_required/.test(JSON.stringify(unpaid)), "an unpaid blocking call to the same route still reaches the loopback (for its 402)");
+  const quick = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  ok(calls.length === nCalls + 2 && !/respond_async_required/.test(JSON.stringify(quick)), "a paid blocking call to a route without a long run budget is served through the loopback as before");
+}
+
 // A fast success inside the gate window is answered synchronously, unchanged.
 plan = { research: { delayMs: 0, res: jsonRes(200, { quick: true }) } };
 const beforeFast = readdirSync(STORE_DIR).length;

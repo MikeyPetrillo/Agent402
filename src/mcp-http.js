@@ -34,7 +34,7 @@ import {
   mcpBinaryResult,
 } from "./mcp-mpp.js";
 import {
-  TASKS_EXTENSION, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
+  TASKS_EXTENSION, CLIENT_CAPABILITIES_META, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
   mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
 } from "./mcp-tasks.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
@@ -54,6 +54,7 @@ import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
+import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import {
   FLAGSHIP_SLUGS,
@@ -101,6 +102,19 @@ const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /
 // applies the same quota.
 const mcpLimiter = createLimiter("mcp");
 const rateLimited = (ip) => mcpLimiter.check(ip).limited;
+// The limiter above divides its budget among the replicas (src/rate-limit.js
+// perReplica): the figure a client is told is the service-wide one, so the
+// copy says so rather than quoting it as a per-replica allowance.
+const RATE_LIMIT_COPY = `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client, shared across replicas`;
+
+// Adoption telemetry: every session's initialize names its client. In memory
+// since boot, one map for every mount, read on the operator surface only
+// (the names are caller-chosen strings, so they never ride a public answer).
+const mcpClients = new Map(); // "name@version" -> initialize count since boot
+/** The clients seen since boot, most frequent first (operator surface). */
+export function mcpClientsSeenSinceBoot(limit = 20) {
+  return Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, limit));
+}
 
 // Outer transport guards (audit R-11). The tool limiter above only fires INSIDE
 // call_tool; a flood of initialize/discovery/malformed POSTs would otherwise
@@ -230,7 +244,6 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   }
   const freeCount = [...tools.values()].filter((t) => t.free).length;
   const freeSlugs = new Set([...tools.entries()].filter(([, t]) => t.free).map(([slug]) => slug));
-  const mcpClients = new Map(); // "name@version" -> initialize count since boot
 
   // MCP Tasks (io.modelcontextprotocol/tasks). Armed only when tasks are enabled
   // AND the MPP loopback exists: the whole point is selling the long-running
@@ -648,6 +661,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (handle) return handle;
         // Fell through: the run finished (or was refused) inside the gate window,
         // so answer synchronously exactly as a blocking call would.
+      } else if (credentialHeader && needsAsyncOrWait(entry.def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+        // A paid run whose budget outlasts this connector's blocking wait
+        // cannot be served blocking: the loopback would be cut after the gate
+        // passed, the run would settle, and the answer would be owed. The HTTP
+        // route refuses the same shape before any gate
+        // (src/slow-sync-window.js); so does this, before the loopback, for a
+        // client that did not declare the tasks extension on this request.
+        // An unpaid call still gets its 402 from the loopback.
+        return { content: [{ type: "text", text: slowCallRefusalText(entry.def) }], isError: true };
       }
 
       // The paid loopback must end BEFORE this connector's own request
@@ -660,7 +682,6 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-        onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", inputKeys: Object.keys(params || {}) });
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} tool=${entry.def.slug} after=${Date.now() - startedAt}ms`);
         // "Not charged" is only true when no payment credential rode along:
         // with one, the server-side request may have settled after this
@@ -677,10 +698,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return translateMppResponse(entry, meta, params, startedAt, isNamed, r);
     }
 
+    /** The refusal a blocking paid call to a slow route gets ahead of the
+     *  loopback (the HTTP route's respond_async_required, in this wire's terms). */
+    function slowCallRefusalText(def) {
+      const budget = Number(def.asyncProfile?.maxSeconds);
+      const wait = Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000);
+      return `respond_async_required: ${def.slug} can take up to ${budget} s, longer than this connector waits for a blocking call (${wait} s). Call it again declaring the MCP tasks extension on the request (_meta["${CLIENT_CAPABILITIES_META}"].extensions["${TASKS_EXTENSION}"]) and the run is handed back as a task handle to poll, or call the HTTP route ${def.route} with the header Prefer: respond-async, which answers 202 with a job link. This call was refused before any payment was taken.`;
+    }
+
     /** Turn a completed loopback response into the MCP answer. Shared by the
      *  blocking path and the task path, so a task result is byte-identical to
      *  what the blocking call would have returned (an ext-tasks MUST). Throws
-     *  McpError(-32042) for a payment ask. */
+     *  McpError(-32042) for a payment ask.
+     *  Nothing on the paid path calls onServed: the loopback IS a request to
+     *  the real route, which books its own sale, analytics row and failure
+     *  count once; a second booking here counted every paid call twice. */
     function translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk = true } = {}) {
       if (r.status === 402) {
         const challenges = challengesFromHeader(r.headers.get("www-authenticate"));
@@ -719,11 +751,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         throw new McpError(presented ? MCP_PAYMENT_VERIFICATION_FAILED_CODE : MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${walletRequiredText(entry.def)}`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
       }
       if (r.status >= 400) {
-        onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: r.status, errorMessage: String(r.json?.error || r.text || r.status).slice(0, 200), inputKeys: Object.keys(params || {}) });
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
         return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? " - not charged" : " - not charged (settlement runs only after a successful handler)"}: ${detail}` }], isError: true };
       }
-      onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};
       if (r.bytes) {
@@ -828,7 +858,6 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           let current = null;
           try { current = await tasks.get(rec.taskId); } catch { current = null; }
           if (aborted && current?.status === "cancelled") return; // cancel() already wrote the terminal state
-          onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: 504, errorMessage: aborted ? "task run aborted" : "task run failed", inputKeys: Object.keys(params || {}) });
           // Never relay an upstream/internal error body to the buyer.
           await tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The connector stopped waiting for the run." : "The run did not complete." },
             `The run's result did not reach this connector. ${PAID_CUTOFF_TEXT}`);
@@ -1036,7 +1065,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             toolsEvergreen: "500+",
             freeHere: freeCount,
             walletOnly: tools.size - freeCount,
-            rateLimit: `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`,
+            rateLimit: RATE_LIMIT_COPY,
             workflows: {
               count: SKILL_PACKS.length,
               usage: "prompts/list → prompts/get { name: '<slug>', arguments: { … } } - same slugs as below.",
@@ -1047,7 +1076,6 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 tagline: p.tagline,
               })),
             },
-            clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
             paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
@@ -1230,7 +1258,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         if (rateLimited(ip)) {
           return {
-            content: [{ type: "text", text: `Free-tier rate limit reached (${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour). For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }],
+            content: [{ type: "text", text: `Free-tier rate limit reached (${RATE_LIMIT_COPY}). For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }],
             isError: true,
           };
         }

@@ -593,7 +593,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
-import { mountMcp } from "./mcp-http.js";
+import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
@@ -5438,7 +5438,9 @@ app.get("/__operator/stats", (req, res) => {
   // PostHog. This is the number to compare against a provider's own dashboard.
   // `daily` is the deploy-proof series (stats DB, UTC day buckets): the number
   // to sum over a billing month; the in-memory fields reset on every redeploy.
-  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
+  // mcpClientsSeenSinceBoot: the client names MCP sessions announce at
+  // initialize (caller-chosen strings, so operator-only).
+  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), mcpClientsSeenSinceBoot: mcpClientsSeenSinceBoot(), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
 });
 // The intent pass is OPT-IN (?intent=1) and never runs on a default load.
 // It is a PAID third-party call per uncached row, on a request path, and the
@@ -9179,11 +9181,13 @@ const mcpMountOpts = {
   getLeaderboard: getLeaderboardSnapshot,
   // The MPP counterpart (src/mpp-leaderboard.js) behind sellers.list wire=mpp.
   getMppLeaderboard: mppLeaderboardSnapshot,
-  // MCP-served calls land on the same accounting + analytics rails as
-  // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
-  // tier), so the served-call counter records under "pow". Analytics gets
-  // the full meta (latency, errored). Cache hits don't flow through MCP
-  // today — that path bypasses the central HTTP dispatcher.
+  // Free-tier MCP calls (the handler runs in this process, PoW is the gate,
+  // no x402 settlement) land on the same accounting + analytics rails as
+  // direct-HTTP ones, under "pow". A PAID call is replayed to its own HTTP
+  // route (src/mcp-mpp.js), which books its sale, analytics row and failure
+  // count itself, so the connector never calls this for a paid outcome.
+  // Cache hits don't flow through MCP today — that path bypasses the central
+  // HTTP dispatcher.
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
     // MCP doesn't carry an HTTP status, so we synthesize one for the split:
@@ -9193,9 +9197,11 @@ const mcpMountOpts = {
     // Probe detection: a 4xx with zero input keys = scanning/discovery call.
     const isProbe = meta.errored && status >= 400 && status < 500
       && Array.isArray(meta.inputKeys) && meta.inputKeys.filter((k) => k !== "slug").length === 0;
-    // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
-    // ride along — synthetic is always false here. Pass explicitly so future
-    // refactors don't accidentally let a stray truthy value through.
+    // The free path books here without reading the heartbeat marker, so
+    // synthetic is false for these outcomes. (The marker IS forwarded on the
+    // paid loopback, and the paid route classifies its own booking.) Pass
+    // explicitly so future refactors don't accidentally let a stray truthy
+    // value through.
     if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false, isProbe);
     const latencyMs = meta.latencyMs | 0;
     const errored = !!meta.errored;
