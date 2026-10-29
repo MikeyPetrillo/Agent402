@@ -16,14 +16,15 @@
 // Under CI the private table is required; a fork's run may skip (UPSTREAM_COSTS_OPTIONAL).
 const { worstCaseUpstreamCost, clampToMargin, meteredQuoteUsd, reasoningOutsideMaxTokens, UNCAPPED_REASONING_OUT_FACTOR, TIERS, costFor, MARGIN } = await import("../src/tools/llm-gateway-kit.js");
 const { meterMarkup } = await import("../src/gateway-meter.js");
-const { upstreamCostsLoaded } = await import("../src/upstream-costs.js");
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-if (!upstreamCostsLoaded() || meterMarkup() == null) {
-  const msg = "no private cost table (UPSTREAM_COSTS_JSON or UPSTREAM_COSTS_FILE)";
-  if (process.env.CI && !process.env.UPSTREAM_COSTS_OPTIONAL) { console.error(`FAIL - ${msg}: required under CI`); process.exit(1); }
+requireUpstreamCosts("test-metered-uncapped-reasoning");
+if (meterMarkup() == null) {
+  const msg = "the private cost table carries no meter markup";
+  if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") { console.error(`FAIL - ${msg}: required under CI`); process.exit(1); }
   console.log(`SKIP - ${msg}`);
   process.exit(0);
 }
