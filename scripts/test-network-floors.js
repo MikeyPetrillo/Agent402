@@ -81,7 +81,15 @@ await check("every surface that states the floor reads the same constant", async
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
   assert.match(src("server.js"), /minPriceUsdByNetwork: \{ robinhood: networkFloorUsd\(RH_FLOOR_CAIP2\) \}/, "/api/pricing");
   assert.match(src("server.js"), /floorUsd: caip2 \? networkFloorUsd\(caip2\) : 0/, "chain page extras");
-  assert.match(src("seo.js"), /\$\{networkFloorUsd\(ROBINHOOD_CAIP2\)\}/, "llms.txt");
+  // llms.txt states every floor once, in the x402 paragraph, from the floors
+  // map; the chain list stays chain: asset (CAIP-2) only (test-legal-claims
+  // pins that shape).
+  const { floorClause, llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  assert.equal(floorClause(new Map()), "", "no floor, no clause");
+  assert.match(floorClause(new Map([[RH, 2000], [OP, 1500]])), /^on Robinhood Chain every call costs at least \$0\.002, the floor its 402 quotes; on Optimism every call costs at least \$0\.0015, the floor its 402 quotes$/, "each floored chain is named from the rails list");
+  const llms = llmsFullTxt("https://agent402.tools", {});
+  assert.ok(llms.includes(`hold the stablecoin (on Robinhood Chain every call costs at least $${ROBINHOOD_MIN_PRICE_DEFAULT_USD}, the floor its 402 quotes)`), "llms.txt x402 paragraph states the floor");
+  for (const t of [llms, llmsTxt("https://agent402.tools", {})]) assert.ok(!/^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\).+$/m.test(t), "no llms.txt chain line carries a floor or premium clause");
   assert.ok((src("guides.js").match(/\$\{networkFloorUsd\(ROBINHOOD_CAIP2\)\}/g) || []).length >= 2, "guides");
   const { guidePage } = await import("../src/guides.js");
   const g = guidePage("https://agent402.tools", "usdg-payments-robinhood-chain");
@@ -104,7 +112,7 @@ await check("the premium map and clause derive from NETWORK_PRICE_PREMIUMS, by p
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
   assert.match(src("server.js"), /premiumUsdByNetwork: offered/, "/api/pricing publishes premiumUsdByNetwork beside minPriceUsdByNetwork");
   assert.match(src("seo.js"), /\$\{premiumClause\(\)\}/, "llms-full.txt");
-  assert.match(src("seo.js"), /premiums\.get\(c\.caip2\)/, "the chain bullets read the premium map");
+  assert.doesNotMatch(src("seo.js"), /premiums\.get\(c\.caip2\)/, "the chain bullets stay bare; the premium is stated in the x402 paragraph");
   assert.match(src("pages.js"), /premiumUsdByNetwork: premium/, "openapi x-payment-info");
   assert.match(src("pages.js"), /payment\.premiumUsdByNetwork/, "openapi guidance names the field");
   assert.match(src("mcp-http.js"), /\$\{premiumClause\(\)\}/, "MCP payment.info");

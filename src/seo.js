@@ -1,6 +1,6 @@
 import { whyPointsPlain } from "./why.js";
-import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
-import { premiumClause, parseNetworkPremiums } from "./payments.js";
+import { networkPriceFloors } from "./network-floors.js";
+import { premiumClause } from "./payments.js";
 import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
@@ -10,7 +10,7 @@ import { BLOG_POSTS } from "./blog.js";
 import { ADAPTERS } from "./adapter-docs.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
-import { RAILS_OR } from "./rails.js";
+import { RAILS, RAILS_OR } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { CHAIN_PAGES } from "./market-page.js";
@@ -456,6 +456,17 @@ function identityBoundListOf(catalog) {
   ].join(", ");
 }
 
+/** The per-chain price floors as prose ("on Robinhood Chain every call costs
+ *  at least $0.006, the floor its 402 quotes"), read from the same map the
+ *  accepts builder floors through (src/network-floors.js); empty when no
+ *  chain has one. Stated once, in the x402 paragraph; the chain list stays
+ *  chain: asset (CAIP-2) only. */
+export function floorClause(floors = networkPriceFloors()) {
+  return [...floors.entries()]
+    .map(([caip2, micro]) => `on ${RAILS.find((r) => r.caip2 === caip2)?.name || caip2} every call costs at least $${micro / 1e6}, the floor its 402 quotes`)
+    .join("; ");
+}
+
 function llmsFullBody(baseUrl, catalog) {
   const identityBoundList = identityBoundListOf(catalog);
   // Route prices in this text are READ FROM THE CATALOG at render time. They
@@ -525,17 +536,12 @@ function llmsFullBody(baseUrl, catalog) {
     })
     .join("\n");
 
-  // Chain, asset and CAIP-2 id, plus what that chain adds to a price (its
-  // settlement premium, its floor), read from the maps the 402 prices
-  // through; which facilitator settles a chain is an operating detail, not
-  // something a buyer needs to pay.
-  const premiums = parseNetworkPremiums();
+  // Chain, asset and CAIP-2 id only: which facilitator settles a chain is an
+  // operating detail, not something a buyer needs to pay. What a chain adds
+  // to a price (its floor, its settlement premium) is stated once, in the
+  // x402 paragraph, from the same maps the 402 prices through.
   const chainItems = Object.entries(CHAIN_PAGES)
-    .map(([key, c]) => {
-      const premium = (premiums.get(c.caip2) || 0) / 1e6;
-      const floor = networkFloorUsd(c.caip2);
-      return `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)${premium > 0 ? `; every call quotes $${premium} above its list price (the settlement premium its 402 carries)` : ""}${floor > 0 ? `; every call costs at least $${floor} (the floor its 402 quotes)` : ""}`;
-    })
+    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)`)
     .join("\n");
 
   return `# Agent402.Tools
@@ -554,7 +560,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? ` (on Robinhood Chain every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}, the floor its 402 quotes)` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}
 
 **${creditsSalesEnabled() ? "Pay with a prepaid credits key." : "Already hold a prepaid credits key?"}** ${creditsSalesEnabled() ? `Packs are sold by card at ${baseUrl}/credits.` : "New credits are not on sale; a key already issued keeps working."} Send it as \`Authorization: Bearer a402_...\` on any paid tool except the ones that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
