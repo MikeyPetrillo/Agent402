@@ -20,6 +20,7 @@ import { routingProofSentence, routerRankingSentence } from "./routing-proof.js"
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
+import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -125,6 +126,24 @@ That one wrapped \`fetch\` now covers 500+ tools - browser rendering,
 live search, PDFs, durable memory - most a flat ${TYPICAL_PRICE_RANGE.text} per call, with premium AI, media and multi-tool packs priced higher.
 The full catalog is machine-readable at
 [/api/pricing](https://agent402.tools/api/pricing).
+
+## Call a model with the same fetch
+
+The model gateway's default route is metered, and the same wrapped \`fetch\`
+pays it: ${meteredRoutesInline()}, no key, model-backed, from
+${meteredFromPrice()} a call. ${meteredQuoteSentence()}
+
+\`\`\`js
+const chat = await payFetch("https://agent402.tools/v1/metered/chat/completions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ model: "${meteredDefaultModel()}", max_tokens: 200,
+    messages: [{ role: "user", content: "Summarize x402 in one line" }] }),
+});
+console.log((await chat.json()).choices[0].message.content);
+\`\`\`
+
+${flatTiersLine()}
 
 ## No gas per call: pay from a Circle Gateway deposit
 

@@ -54,6 +54,7 @@ import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
+import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
@@ -1119,7 +1120,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 price: tools.get(slug).def.price,
                 access: tools.get(slug).free ? "free here" : mppLoopback ? "paid: payable here over MPP, or with a wallet on the npm server" : "wallet required on this hosted connector",
               })),
-              llmGateway: `OpenAI-compatible LLM gateway at ${baseUrl}/v1 - flat per-call pricing${gatewayFlat ? `: ${gatewayFlat}` : ""}. No API key: a funded wallet IS the account (x402 settles per call). Reach tiers via catalog.call (slugs v1-chat-nano, v1-chat-auto, v1-embeddings) on the npm server.`,
+              llmGateway: `Call a model at ${baseUrl}/v1/metered/chat/completions, the default (also /v1/metered/messages and /v1/metered/responses; model-backed, from ${meteredFromPrice()} a call). ${meteredQuoteSentence().replace(/`/g, "")} No API key: a funded wallet IS the account. ${flatTiersLine().replace(/`/g, "")} Reach the gateway via catalog.call (slugs v1-chat-metered, v1-chat-nano, v1-chat-auto, v1-embeddings) on the npm server.`,
               freeTier: `${freeCount} pure-CPU tools run free right here with no wallet - payable with ~milliseconds of proof-of-work CPU (discover via catalog.find / catalog.search).`,
             },
             install,
@@ -1276,7 +1277,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               // line was fixed for, one field away. test-price-prose pins the
               // retired figures by name, so do not quote them back in here.
               prices: `most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""} (the metered tier is quoted per request${networkFloorUsd(ROBINHOOD_CAIP2) > 0 ? `; on Robinhood Chain (USDG) every call costs at least $${networkFloorUsd(ROBINHOOD_CAIP2)}` : ""}${premiumClause() ? `; ${premiumClause()}, listed under payment.premiumUsdByNetwork on ${baseUrl}/api/pricing` : ""}), multi-tool skill packs ${PACK_PRICE_RANGE.text}, model-backed report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
-              llmGateway: `the /v1 OpenAI-compatible endpoints${gatewayFlat ? ` (${gatewayFlat})` : ""} settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
+              llmGateway: `the /v1 OpenAI-compatible endpoints settle the same way. Default: point any OpenAI SDK at ${baseUrl}/v1/metered through an x402-paying fetch (POST /v1/metered/chat/completions, and the /v1/metered/messages and /v1/metered/responses wires): ${meteredQuoteSentence().replace(/`/g, "")} The flat tiers${gatewayFlat ? ` (${gatewayFlat})` : ""} stay as the predictable-price option at ${baseUrl}/v1. No API key, the wallet is the account`,
               retries: "an Idempotency-Key header (or the x402 payment-identifier extension) replays a served paid call instead of charging again; a request re-sent with the same signed EVM payment and no key is answered from its first answer too (X-Replayed-Answer: 1), except on identity-bound routes, routes with a lasting effect and streamed calls",
               // The Circle Gateway batched option, read from the live offer
               // (src/gateway-nanopayments.js); absent while it is off.

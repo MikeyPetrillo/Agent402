@@ -69,6 +69,7 @@ import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
 import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
+import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
@@ -9991,6 +9992,26 @@ if (FREE_MODE) {
               summary: "No wallet? This tool is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
               challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${encodeURIComponent(def.slug)}`,
               info: `${BASE_URL}/api/pow`,
+            };
+          }
+          return origJson(body);
+        };
+      }
+      // A flat chat tier's unpaid 402 names its metered twin on the same wire
+      // (additive `meteredTwin`; x402 clients read `accepts`): the same models,
+      // priced from this body instead of one flat price per call. Only on a
+      // first-contact quote: a refused payment keeps its own explanation.
+      const twin = meteredTwinSlug(def.slug);
+      const twinDef = twin ? Object.values(CATALOG).find((d) => d.slug === twin) : null;
+      if (twinDef && !req.header("x-payment") && !req.header("payment-signature")) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.meteredTwin) {
+            const [, twinPath] = String(twinDef.route).split(" ");
+            body.meteredTwin = {
+              route: twinDef.route,
+              url: `${BASE_URL}${twinPath}`,
+              note: `Same models, priced per request from this body. ${meteredQuoteSentence()} This route stays one flat price per call.`,
             };
           }
           return origJson(body);
