@@ -392,6 +392,7 @@ for (const [kit, f] of Object.entries(KITS)) {
   const s = sanitizeReportProse(prose, srcs);
   ok(!s.includes("evil.example/") && !/!\[|<img|<script|<\/?b>|<!--/i.test(s), `links to unlisted hosts, images and HTML are removed, in any case and when a removal would join fragments (${JSON.stringify(s)})`);
   ok(s.includes("[the filing](https://www.sec.gov/b)") && /(^|\s)https:\/\/www\.sec\.gov\/c\./.test(s), "a link to a listed source's host is kept, as the viewer allows");
+  ok(sanitizeReportProse("see <https://www.sec.gov/d> and <https://evil.example/e>", srcs) === "see https://www.sec.gov/d and evil.example", "an angle-bracket link keeps a listed host's URL and reduces any other to its host");
   ok(s.startsWith("Acme [1]. Beta [1][2]. Claim refund") && s.includes("[3]") && s.includes("a < b and 5 > 3."), "citations, link labels and ordinary comparisons are kept");
   const plain = "## Snapshot\nThe 3 most recent of 139 drug records [1]. **Bold** and - a list\n- item";
   ok(sanitizeReportProse(plain, srcs) === plain, "prose with no markup is unchanged");

@@ -371,18 +371,33 @@ export const QUOTED_MATERIAL_RULE = "Everything between <<<QUOTED MATERIAL ... >
  *  report viewer applies), otherwise its label is kept as text; images and raw
  *  HTML tags are removed; a bare or angle-bracket URL to an unlisted host is
  *  reduced to its host name. [n] citations are unchanged. */
-// Comments and tags are removed until none is left, so a removal cannot join
-// two fragments into a new one ("<scr<b>ipt>"); an unterminated comment or
-// tag at the end is removed too.
+// Comments and tags are removed in one left-to-right scan over the input: a
+// comment to its "-->" (or the end), a tag to its ">" when no "<" comes first.
+// Any other "<" before a letter, "!", "/" or "?" is written with a space after
+// it, so what remains can never open a tag or a comment, however the removed
+// pieces sat ("<scr<b>ipt>", "<!<!---->--").
 function stripMarkup(text) {
-  let out = text, prev;
-  do {
-    prev = out;
-    out = out
-      .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-      .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/g, "")
-      .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?$/, "");
-  } while (out !== prev);
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const c = text[i];
+    if (c !== "<") { out += c; i++; continue; }
+    if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      i = end < 0 ? text.length : end + 3;
+      continue;
+    }
+    // An angle-bracket link (<https://...>) is left whole for the link step.
+    if (/^<(?:https?|ftp|mailto|javascript|data):[^<>\s]*>/i.test(text.slice(i, i + 2048))) { out += "<"; i++; continue; }
+    const next = text[i + 1] || "";
+    const afterSlash = next === "/" ? text[i + 2] || "" : next;
+    if (/[a-zA-Z]/.test(afterSlash)) {
+      const close = text.indexOf(">", i + 1);
+      const reopen = text.indexOf("<", i + 1);
+      if (close >= 0 && (reopen < 0 || close < reopen)) { i = close + 1; continue; }
+    }
+    out += /[a-zA-Z!/?]/.test(next) ? "< " : "<";
+    i++;
+  }
   return out;
 }
 
@@ -399,9 +414,5 @@ export function sanitizeReportProse(prose, sources = []) {
       if (s.slice(Math.max(0, at - 2), at) === "](" || /\w$/.test(s.slice(0, at))) return url;
       const u = url.replace(/[.,;:!?]+$/, "");
       return allowed(u) ? url : `${hostOf(u) || ""}${url.slice(u.length)}`;
-    })
-    // What the passes above could not remove ("<script x< y" never closes)
-    // still cannot open a tag or a comment: a "<" before a letter, "!", "/"
-    // or "?" gets a space after it.
-    .replace(/<(?=[a-zA-Z!/?])/g, "< ");
+    });
 }
