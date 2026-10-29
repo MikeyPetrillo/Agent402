@@ -87,6 +87,27 @@ for (const job of jobs) {
 }
 ok(scriptSteps >= 4, `the scan found the package-code steps of the secret-holding jobs (${scriptSteps}) - zero would mean it is blind`);
 
+// The deploy job's variable upsert replaces each named service variable with
+// the copy the job holds, so a variable whose source of truth is Railway
+// itself must never be in it: the backup bucket is a Railway bucket whose
+// credentials Railway issues and can regenerate, and a copy upserted from an
+// Actions secret would write the stale value back over the current one on
+// every deploy. Neither the job env nor the upsert step may name them.
+const RAILWAY_OWNED = ["BACKUP_S3_KEY_ID", "BACKUP_S3_SECRET"];
+const deployJob = jobs.find((j) => j.name === "deploy");
+ok(!!deployJob, "the scan found the deploy job");
+if (deployJob) {
+  const upsertAt = deployJob.lines.findIndex((l) => /variableCollectionUpsert/.test(l));
+  ok(upsertAt >= 0, "the deploy job holds the service variable upsert");
+  const envNames = new Set(deployJob.lines.map((l) => /^ {6}([A-Z0-9_]+): /.exec(l)?.[1]).filter(Boolean));
+  const stepStart = deployJob.lines.slice(0, upsertAt).map((l, i) => (/^ {6}- /.test(l) ? i : -1)).filter((i) => i >= 0).pop() ?? 0;
+  const upsertStep = deployJob.lines.slice(stepStart, upsertAt + 1).filter((l) => !/^\s*#/.test(l)).join("\n");
+  for (const name of RAILWAY_OWNED) {
+    ok(!envNames.has(name), `deploy job env does not carry ${name} (a Railway-owned credential)`);
+    ok(!upsertStep.includes(name), `the variable upsert never names ${name} (a Railway-owned credential)`);
+  }
+}
+
 // Spending workflows: an install step runs dependency code with whatever its
 // environment holds, so no secret (nor the workflow token) may reach one.
 const SECRETISH = /secrets\.|github\.token|GITHUB_TOKEN/;

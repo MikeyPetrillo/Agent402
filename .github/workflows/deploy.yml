@@ -6007,14 +6007,12 @@ jobs:
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       MPP_SECRET_KEY: ${{ secrets.MPP_SECRET_KEY }}
       X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
-      # Offsite /data backup (src/backup.js) - Railway Bucket S3 creds. All
-      # four inject together or not at all (a half-armed backup would look
-      # configured while uploading nothing). Endpoint+bucket are repo
-      # VARIABLES (auditable, non-secret); keys are secrets.
-      BACKUP_S3_ENDPOINT: ${{ vars.BACKUP_S3_ENDPOINT }}
-      BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET }}
-      BACKUP_S3_KEY_ID: ${{ secrets.BACKUP_S3_KEY_ID }}
-      BACKUP_S3_SECRET: ${{ secrets.BACKUP_S3_SECRET }}
+      # The offsite backup's bucket variables (BACKUP_S3_*) are not here: the
+      # bucket is a Railway bucket whose credentials Railway issues and can
+      # regenerate, so the service variables (`railway bucket credentials`) are
+      # their only source of truth. A copy carried by this job would write a
+      # stale credential back over the current one on every deploy;
+      # scripts/test-ci-secretless-install.js keeps them out of the upsert.
       # /v1/audio/speech rollout gate (server.js GATEWAY_TOOLS_ENABLED) — a
       # repo VARIABLE (not secret) so flipping it is one `gh variable set`
       # away and the value is auditable. Injected only when set.
@@ -6057,11 +6055,8 @@ jobs:
           [ -n "$FRED_API_KEY_V2" ] && echo "::add-mask::$FRED_API_KEY_V2"
           [ -n "$MPP_SECRET_KEY" ] && echo "::add-mask::$MPP_SECRET_KEY"
           [ -n "$X_BEARER_TOKEN" ] && echo "::add-mask::$X_BEARER_TOKEN"
-          [ -n "$BACKUP_S3_KEY_ID" ] && echo "::add-mask::$BACKUP_S3_KEY_ID"
-          [ -n "$BACKUP_S3_SECRET" ] && echo "::add-mask::$BACKUP_S3_SECRET"
-          # Not credentials, but a bucket name and a project id narrow a target
-          # and have no reader in a public log.
-          [ -n "$BACKUP_S3_BUCKET" ] && echo "::add-mask::$BACKUP_S3_BUCKET"
+          # Not a credential, but a project id narrows a target and has no
+          # reader in a public log.
           [ -n "$RAILWAY_PROJECT_ID" ] && echo "::add-mask::$RAILWAY_PROJECT_ID"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
@@ -6228,8 +6223,6 @@ jobs:
           FRED_API_KEY_V2: ""
           MPP_SECRET_KEY: ""
           X_BEARER_TOKEN: ""
-          BACKUP_S3_KEY_ID: ""
-          BACKUP_S3_SECRET: ""
           WALLET_ADDRESS: ""
         run: node scripts/deploy-quiet-gate.js
 
@@ -6292,11 +6285,10 @@ jobs:
           if [ -n "$X_BEARER_TOKEN" ]; then
             VARS=$(echo "$VARS" | jq --arg v "$X_BEARER_TOKEN" '. + {X_BEARER_TOKEN:$v}')
           fi
-          # Offsite backup: all four or none - partial config would report
-          # "configured" while every upload fails.
-          if [ -n "$BACKUP_S3_ENDPOINT" ] && [ -n "$BACKUP_S3_BUCKET" ] && [ -n "$BACKUP_S3_KEY_ID" ] && [ -n "$BACKUP_S3_SECRET" ]; then
-            VARS=$(echo "$VARS" | jq --arg e "$BACKUP_S3_ENDPOINT" --arg b "$BACKUP_S3_BUCKET" --arg k "$BACKUP_S3_KEY_ID" --arg x "$BACKUP_S3_SECRET" '. + {BACKUP_S3_ENDPOINT:$e, BACKUP_S3_BUCKET:$b, BACKUP_S3_KEY_ID:$k, BACKUP_S3_SECRET:$x}')
-          fi
+          # Never a variable whose source of truth is Railway itself (the
+          # backup bucket's BACKUP_S3_* credentials): this upsert replaces the
+          # service's value, so a copy held here would overwrite a credential
+          # Railway has since regenerated.
           if [ -n "$SOR_EXTERNAL_ENABLED" ]; then
             VARS=$(echo "$VARS" | jq --arg v "$SOR_EXTERNAL_ENABLED" '. + {SOR_EXTERNAL_ENABLED:$v}')
           fi
@@ -6478,8 +6470,6 @@ jobs:
           FRED_API_KEY_V2: ""
           MPP_SECRET_KEY: ""
           X_BEARER_TOKEN: ""
-          BACKUP_S3_KEY_ID: ""
-          BACKUP_S3_SECRET: ""
           WALLET_ADDRESS: ""
         run: |
           if [ -z "$INDEXNOW_KEY" ]; then echo "INDEXNOW_KEY secret not set — skipping"; exit 0; fi
@@ -6549,8 +6539,6 @@ jobs:
           FRED_API_KEY_V2: ""
           MPP_SECRET_KEY: ""
           X_BEARER_TOKEN: ""
-          BACKUP_S3_KEY_ID: ""
-          BACKUP_S3_SECRET: ""
           WALLET_ADDRESS: ""
         run: |
           PROD=https://agent402.tools
@@ -6670,8 +6658,6 @@ jobs:
           FRED_API_KEY_V2: ""
           MPP_SECRET_KEY: ""
           X_BEARER_TOKEN: ""
-          BACKUP_S3_KEY_ID: ""
-          BACKUP_S3_SECRET: ""
           WALLET_ADDRESS: ""
         run: |
           set -euo pipefail
