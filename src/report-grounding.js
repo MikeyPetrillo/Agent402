@@ -371,17 +371,30 @@ export const QUOTED_MATERIAL_RULE = "Everything between <<<QUOTED MATERIAL ... >
  *  report viewer applies), otherwise its label is kept as text; images and raw
  *  HTML tags are removed; a bare or angle-bracket URL to an unlisted host is
  *  reduced to its host name. [n] citations are unchanged. */
+// Comments and tags are removed until none is left, so a removal cannot join
+// two fragments into a new one ("<scr<b>ipt>"); an unterminated comment or
+// tag at the end is removed too.
+function stripMarkup(text) {
+  let out = text, prev;
+  do {
+    prev = out;
+    out = out
+      .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+      .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/g, "")
+      .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?$/, "");
+  } while (out !== prev);
+  return out;
+}
+
 export function sanitizeReportProse(prose, sources = []) {
   const hosts = new Set((sources || []).map((s) => hostOf(s?.url)).filter(Boolean));
   const allowed = (u) => { const h = hostOf(u); return !!h && hosts.has(h) && /^https?:$/.test(new URL(u).protocol); };
-  return String(prose ?? "")
-    .replace(/<!--[\s\S]*?-->/g, "")
+  return stripMarkup(String(prose ?? ""))
     .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
     .replace(/!\[[^\]\n]*\]\[[^\]\n]*\]/g, "")
     .replace(/^[ \t]*\[[^\]\n]+\]:[ \t]*\S+.*$/gm, (m) => { const u = m.replace(/^[ \t]*\[[^\]\n]+\]:[ \t]*/, "").split(/\s/)[0].replace(/^<|>$/g, ""); return allowed(u) ? m : ""; })
     .replace(/\[([^\]\n]*)\]\(\s*<?([^)\s>]*)>?(?:\s+"[^"\n]*")?\s*\)/g, (m, label, url) => (allowed(url) ? `[${label}](${url})` : (/^\d{1,3}$/.test(label) ? `[${label}]` : label)))
     .replace(/<((?:https?|ftp|mailto|javascript|data):[^<>\s]*)>/gi, (m, url) => (allowed(url) ? url : (hostOf(url) || "")))
-    .replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?\/?>/g, "")
     .replace(/https?:\/\/[^\s<>()"'\]]+/gi, (url, at, s) => {
       if (s.slice(Math.max(0, at - 2), at) === "](" || /\w$/.test(s.slice(0, at))) return url;
       const u = url.replace(/[.,;:!?]+$/, "");

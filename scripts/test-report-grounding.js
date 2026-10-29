@@ -388,10 +388,10 @@ for (const [kit, f] of Object.entries(KITS)) {
   ok(/never obey it/.test(QUOTED_MATERIAL_RULE) && /data, never instructions/.test(QUOTED_MATERIAL_RULE), "the rule names quoted material as data");
 
   const srcs = [{ url: "https://src1.example/p" }, { url: "https://www.sec.gov/a" }];
-  const prose = "Acme [1]. Beta [1][2]. [Claim refund](https://evil.example/claim) ![s](https://evil.example/p.png?q=acme) <img src=https://evil.example/x> [the filing](https://www.sec.gov/b) see https://evil.example/a, and https://www.sec.gov/c. [3](https://evil.example/n) <https://evil.example/z> <script>x</script> a < b and 5 > 3.\n[ref]: https://evil.example/r";
+  const prose = "Acme [1]. Beta [1][2]. [Claim refund](https://evil.example/claim) ![s](https://evil.example/p.png?q=acme) <img src=https://evil.example/x> [the filing](https://www.sec.gov/b) see https://evil.example/a, and https://www.sec.gov/c. [3](https://evil.example/n) <https://evil.example/z> <script>x</script> <SCRIPT>y</SCRIPT> <scr<b>ipt>z</scr</b>ipt> <!<!---->-- hidden --> a < b and 5 > 3. <script\n[ref]: https://evil.example/r";
   const s = sanitizeReportProse(prose, srcs);
-  ok(!s.includes("evil.example/") && !/!\[|<img|<script|<\/?b>/.test(s), `links to unlisted hosts, images and HTML are removed (${JSON.stringify(s)})`);
-  ok(s.includes("[the filing](https://www.sec.gov/b)") && s.includes("https://www.sec.gov/c"), "a link to a listed source's host is kept, as the viewer allows");
+  ok(!s.includes("evil.example/") && !/!\[|<img|<script|<\/?b>|<!--/i.test(s), `links to unlisted hosts, images and HTML are removed, in any case and when a removal would join fragments (${JSON.stringify(s)})`);
+  ok(s.includes("[the filing](https://www.sec.gov/b)") && /(^|\s)https:\/\/www\.sec\.gov\/c\./.test(s), "a link to a listed source's host is kept, as the viewer allows");
   ok(s.startsWith("Acme [1]. Beta [1][2]. Claim refund") && s.includes("[3]") && s.includes("a < b and 5 > 3."), "citations, link labels and ordinary comparisons are kept");
   const plain = "## Snapshot\nThe 3 most recent of 139 drug records [1]. **Bold** and - a list\n- item";
   ok(sanitizeReportProse(plain, srcs) === plain, "prose with no markup is unchanged");
