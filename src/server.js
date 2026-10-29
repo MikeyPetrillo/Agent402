@@ -3672,12 +3672,25 @@ app.get("/api/gateway-status", async (req, res) => {
     // Money we owe a buyer (src/refund-ledger.js): "owed" once any buyer's
     // debt has stood past REFUND_OWED_NOTICE_MINUTES (default 15), "aging"
     // when one has waited past REFUND_OWED_ALARM_HOURS, "stuck" when a row
-    // sits mid-send.
+    // sits mid-send. A card report refund the store could not issue
+    // (src/human-checkout.js owedRefunds, listed on
+    // /__operator/human-checkout.json) is owed too, on the same notice and
+    // aging; "unknown" when that list cannot be read.
     // One word publicly, so the status Worker can page; counts for the operator.
-    refundsOwed: (() => {
+    refundsOwed: await (async () => {
       const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
-      const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48, noticeMinutes: Number.isFinite(notice) && notice >= 0 ? notice : 15 });
-      return full ? r : { status: r.status };
+      const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
+      const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
+      const r = refundAlarmStatus({ owedHours, noticeMinutes });
+      const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
+      const ages = (card || []).map((x) => Date.now() - Date.parse(x.at)).filter((a) => Number.isFinite(a));
+      const cardOwed = ages.filter((a) => a >= noticeMinutes * 60_000).length;
+      const cardAging = ages.filter((a) => a >= owedHours * 3600_000).length;
+      const status = r.status === "stuck" ? "stuck"
+        : r.status === "aging" || cardAging ? "aging"
+          : r.status === "owed" || cardOwed ? "owed"
+            : card === null ? "unknown" : r.status;
+      return full ? { ...r, status, cardOwedCount: card === null ? null : cardOwed, cardAgingCount: card === null ? null : cardAging } : { status };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a
