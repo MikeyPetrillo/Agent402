@@ -21,6 +21,7 @@
 // and no network is required.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { getFreePorts } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -81,11 +82,13 @@ async function acceptsFor(env, port, facPort, kinds, signers) {
   return { up, status, accepts, log };
 }
 
-const P = 3960 + (process.pid % 20);
+// Distinct OS-assigned ports, addressed by slot: slot(n).
+const PORTS = await getFreePorts(52);
+const slot = (n) => PORTS[n];
 
 // --- 1. DEFAULT: unset means byte-identical to today -------------------------
 {
-  const { up, status, accepts, log } = await acceptsFor({}, P, P + 40, [kind("exact"), kind("upto")]);
+  const { up, status, accepts, log } = await acceptsFor({}, slot(0), slot(40), [kind("exact"), kind("upto")]);
   ok(up, "server booted with upto unset");
   if (!up) console.error(log.slice(-1200));
   ok(status === 402, `paywall active (got ${status})`);
@@ -101,7 +104,7 @@ const P = 3960 + (process.pid % 20);
 // amount rather than replaced.
 {
   const { up, status, accepts } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2 }, P + 1, P + 41, [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(1), slot(41), [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with upto opted in");
   const schemes = (accepts || []).map((a) => a.scheme);
   ok(schemes.includes("upto"), `upto is offered when opted in (got ${schemes.join(",")})`);
@@ -125,7 +128,7 @@ const P = 3960 + (process.pid % 20);
   const rotating = () => { calls++; return [kind("exact"), { ...kind("upto"), extra: { facilitatorAddress: SIGNERS[(calls + process.pid) % SIGNERS.length] } }]; };
   const named = [];
   for (const i of [0, 1, 2]) {
-    const { up, accepts } = await acceptsFor({ X402_UPTO_NETWORKS: BASE_CAIP2 }, P + 6 + i, P + 46 + i, rotating, { "eip155:*": SIGNERS });
+    const { up, accepts } = await acceptsFor({ X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(6 + i), slot(46 + i), rotating, { "eip155:*": SIGNERS });
     ok(up, `replica ${i + 1} booted against a facilitator that rotates its signer`);
     named.push((accepts || []).find((a) => a.scheme === "upto")?.extra?.facilitatorAddress || null);
   }
@@ -145,8 +148,8 @@ const P = 3960 + (process.pid % 20);
   const named = [];
   for (const i of [0, 1, 2]) {
     const { up, accepts, log } = await acceptsFor({ PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg",
-        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P + 49 + i}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "" },
-      P + 9 + i, P + 49 + i, rotating, { "eip155:*": [], "solana:*": PAYERS });
+        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${slot(49 + i)}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "" },
+      slot(9 + i), slot(49 + i), rotating, { "eip155:*": [], "solana:*": PAYERS });
     ok(up, `replica ${i + 1} booted against a facilitator that rotates its Solana fee payer`);
     if (!up) console.error(log.slice(-1200));
     named.push((accepts || []).find((a) => a.network === SOL)?.extra?.feePayer || null);
@@ -178,7 +181,7 @@ const P = 3960 + (process.pid % 20);
 // Offering it here would take a signature and then fail the buyer.
 {
   const { up, status, accepts, log } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2 }, P + 2, P + 42, [kind("exact")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(2), slot(42), [kind("exact")]);
   ok(up, "server booted when the facilitator lacks upto");
   ok(status === 402, `and the paywall still builds a 402 rather than 500ing (got ${status})`);
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
@@ -191,7 +194,7 @@ const P = 3960 + (process.pid % 20);
 // --- 4. An unserved network in the opt-in list is ignored --------------------
 {
   const { up, status, accepts } = await acceptsFor(
-    { X402_UPTO_NETWORKS: "eip155:999999" }, P + 3, P + 43, [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: "eip155:999999" }, slot(3), slot(43), [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with an unserved network opted in");
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
   ok(!schemes.includes("upto"), "a network we do not serve never gains a scheme");
@@ -204,12 +207,12 @@ const P = 3960 + (process.pid % 20);
 // The first version of this feature broke that invariant precisely because this
 // suite only ever probed /api/uuid.
 {
-  const fac = await stubFacilitator(P + 45, [kind("exact"), kind("upto")]);
-  const port = P + 5;
+  const fac = await stubFacilitator(slot(45), [kind("exact"), kind("upto")]);
+  const port = slot(5);
   const child = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, PORT: String(port), FREE_MODE: "", NETWORK: "base",
-      PAYMENT_NETWORKS: "base", FACILITATOR_URL: `http://127.0.0.1:${P + 45}`,
+      PAYMENT_NETWORKS: "base", FACILITATOR_URL: `http://127.0.0.1:${slot(45)}`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
       X402_INDEX_CRAWL: "off", STATS_ALLOW_EPHEMERAL: "true",
@@ -251,13 +254,13 @@ const P = 3960 + (process.pid % 20);
 // every chain, not just the offending one. The gate must prove pricing, not
 // trust the advertisement.
 {
-  const facPort = P + 46;
+  const facPort = slot(46);
   const fac = await stubFacilitator(facPort, [
     kind("exact"), kind("upto"),
     { x402Version: 2, scheme: "exact", network: "eip155:42220" },
     { x402Version: 2, scheme: "upto", network: "eip155:42220" }, // Celo: unpriceable by the stock scheme
   ]);
-  const port = P + 6;
+  const port = slot(6);
   let log = "";
   const child = spawn(process.execPath, ["src/server.js"], {
     env: {
@@ -294,7 +297,7 @@ const P = 3960 + (process.pid % 20);
 // chain's premium, so upto is refused there exactly as on a floored chain.
 {
   const { up, status, accepts, log } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2, NETWORK_PRICE_PREMIUMS: `${BASE_CAIP2}=0.001` }, P + 7, P + 47, [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2, NETWORK_PRICE_PREMIUMS: `${BASE_CAIP2}=0.001` }, slot(7), slot(47), [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with upto opted in on a premium network");
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
   ok(!schemes.includes("upto"), `upto is REFUSED on a network with a settlement premium (got ${schemes.join(",")})`);

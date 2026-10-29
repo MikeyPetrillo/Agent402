@@ -7,19 +7,12 @@
 //
 //   node scripts/test-worker-wake-retry.js
 import http from "node:http";
+import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Reserve a free port, then release it so connections to it are refused.
-async function freePort() {
-  const s = http.createServer();
-  await new Promise((r) => s.listen(0, "127.0.0.1", r));
-  const { port } = s.address();
-  await new Promise((r) => s.close(r));
-  return port;
-}
 function stub(handler) {
   let calls = 0;
   const srv = http.createServer((req, res) => {
@@ -61,7 +54,7 @@ const { runOnWorker, isConnectFailure, connectFailureClass, isEdgeUnavailable, w
 
 // --- worker refuses connections, then starts listening -----------------------
 {
-  const port = await freePort();
+  const port = await getFreePort();
   process.env.RENDER_WORKER_URL = `http://127.0.0.1:${port}`;
   const s = stub((req, res, _n, raw) => json(res, 200, { ok: true, echo: JSON.parse(raw).slug }));
   const t0 = Date.now();
@@ -135,7 +128,7 @@ for (const [label, delayMs, maxCalls] of [["200 ms after the body (inside the ea
 
 // --- a worker that never starts fails inside the deadline with a 503 ----------
 {
-  const port = await freePort();
+  const port = await getFreePort();
   process.env.RENDER_WORKER_URL = `http://127.0.0.1:${port}`;
   const t0 = Date.now();
   let err = null;
@@ -148,7 +141,7 @@ for (const [label, delayMs, maxCalls] of [["200 ms after the body (inside the ea
 
 // --- a caller abort stops the wait --------------------------------------------
 {
-  const port = await freePort();
+  const port = await getFreePort();
   process.env.RENDER_WORKER_URL = `http://127.0.0.1:${port}`;
   const ac = new AbortController();
   setTimeout(() => ac.abort(), 300);
