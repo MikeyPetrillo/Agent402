@@ -2775,7 +2775,7 @@ const _monitorTargetValidators = {
   },
   // The alert path puts the target in an email SUBJECT sent to any address, so it is tighter than the
   // paid tool's query (no slashes, no plus signs, letters/digits first): a drug, food, brand or device name.
-  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q) || hostnameShapedToken(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation), not a web address."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
+  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q) || hostnameShapedToken(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation), not a web address; put a space after a period in a name (St. Ives)."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   ipo: (t) => normIpoKeyword(t) || "all",
   research: (t) => { const q = String(t ?? "").trim().replace(/\s+/g, " "); if (q.length < 12 || q.length > 300) { const e = new Error("Enter a research question of 12 to 300 characters."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   filing: (t) => { const k = String(t).trim().toUpperCase(); if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(k)) { const e = new Error(`"${t}" is not a valid US ticker`); e.statusCode = 400; e.buyerSafe = true; throw e; } return k; },
