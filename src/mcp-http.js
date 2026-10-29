@@ -249,9 +249,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // (mcp/networks.js NETWORK_CAIP2, pinned by test-legal-claims.js); every
   // other EVM rail is reachable by its CAIP-2 id. Arc is named by its CAIP-2
   // id, which every published version of the package passes through.
-  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", robinhood: "Robinhood Chain", arc: "Arc" };
-  const otherEvm = RAILS.filter((r) => r.chainId && !Object.values(NPM_EVM_PRESETS).includes(r.name)).map((r) => `${r.name} ${r.caip2}`);
-  const npmEvmSetup = `Use a new wallet holding only a few dollars of USDC. Never your main wallet. AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by its CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", robinhood: "Robinhood Chain", arc: "Arc" };
+  const SETUP_NAMED = ["Base", "Polygon", "Arbitrum", "Robinhood Chain", "Arc"];
+  const presetOf = (name) => Object.keys(NPM_EVM_PRESETS).find((k) => NPM_EVM_PRESETS[k] === name);
+  const otherEvm = RAILS.filter((r) => r.chainId && !SETUP_NAMED.includes(r.name)).map((r) => (presetOf(r.name) ? `${presetOf(r.name)} (${r.caip2})` : `${r.name} ${r.caip2}`));
+  const npmEvmSetup = `Use a new wallet holding only a few dollars of USDC. Never your main wallet. AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
   // MPP start-here set (src/mpp-flagship.js) as served by this connector's
   // catalog, prices read from it. Surfaced in payment.info.
   const mppStartHere = mppFlagshipRows(catalog).map((r) => ({ slug: r.slug, method: r.method, path: r.path, url: `${baseUrl}${r.path}`, price: r.price, why: r.why }));

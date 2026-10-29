@@ -29,6 +29,16 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
   eq(parseNetworkPrefs("base, solana"), ["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"], "list maps + trims");
   eq(parseNetworkPrefs("eip155:9999"), ["eip155:9999"], "raw CAIP-2 passes through");
   eq(parseNetworkPrefs(""), [], "unset -> no restriction");
+  eq(parseNetworkPrefs("celo,Optimism"), ["eip155:42220", "eip155:10"], "every rail name maps, case-insensitive");
+  eq(parseNetworkPrefs("algorand"), ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="], "algorand names both id spellings");
+  eq(filterAcceptsByNetworks([{ network: "eip155:8453", asset: "b" }, { network: "eip155:42220", asset: "celo" }], parseNetworkPrefs("celo")).map((a) => a.asset), ["celo"], "a celo preference picks the Celo accept");
+  // Every rail the server settles is reachable by its name (rails.js names it;
+  // " Chain" dropped, lowercased), so the npm package never lags the server.
+  const { RAILS } = await import("../src/rails.js");
+  for (const r of RAILS) {
+    const name = r.name.replace(/ Chain$/, "").toLowerCase();
+    if (!parseNetworkPrefs(name).includes(r.caip2)) fail(`AGENT402_NETWORKS=${name} does not resolve to the ${r.name} rail ${r.caip2}`);
+  }
   const accepts = [
     { network: "eip155:8453", asset: "usdc-base" },
     { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", asset: "usdc-sol" },
