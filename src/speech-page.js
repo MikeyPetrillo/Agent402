@@ -12,7 +12,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { TTS_TOOLS, TTS_TIERS, VOICES, FORMATS, LITE_FORMATS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, TTS_DEADLINE_MS } from "./tools/tts-kit.js";
 import { STT_TOOLS, STT_TIERS, DIARIZE_MODEL, MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
-import { DUB_TOOLS, DUB_TIERS, TRANSLATE_SLUG, dubPriceUsd } from "./tools/dub-kit.js";
+import { DUB_TOOLS, DUB_TIERS, DUB_MAX_CHARS, TRANSLATE_SLUG, dubPriceUsd } from "./tools/dub-kit.js";
 import { SPEECH_MODELS, SPEECH_PATH, SPEECH_MAX_CHARS, SPEECH_FORMATS, OPENAI_SPEECH_VOICES } from "./tools/llm-gateway-kit.js";
 import { ORG_SAME_AS } from "./repo-link.js";
 
@@ -69,7 +69,8 @@ export function speechPage(baseUrl, catalog = null) {
   const formatsOf = (slug) => [...(TTS_TIERS[slug].provider === "openrouter" ? LITE_FORMATS : FORMATS)];
   const ttsTable = table(["route", "price", "model", "max chars", "formats", "voices"], ttsRows.map(({ def, live, tier }) => row([
     tdMono(routeLink(live)),
-    tdPrice(live.price),
+    // A tier quoted per request shows its floor; its formula is in the prose below.
+    tdPrice(typeof live.quote === "function" ? `from ${live.price}` : live.price),
     tdMono(esc(tier.model.split("/").pop())),
     td(fmtInt(tier.maxChars), `${mono}font-size:var(--fs-sm);color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;`),
     td(`<span class="ml-codelist">${formatsOf(def.slug).map((f) => `<code style="${mono}font-size:var(--fs-sm);color:var(--ink);">${esc(f)}</code>`).join(" ")}</span>`),
@@ -77,6 +78,7 @@ export function speechPage(baseUrl, catalog = null) {
   ])).join(""));
 
   const ttsDef = ttsRows.find((r) => r.def.slug === "tts")?.live || ttsRows[0]?.live || null;
+  const quotedTts = ttsRows.filter((r) => typeof r.live.quote === "function" && r.live.quoteFormula);
 
   // ---- dub: translate, then speak (src/tools/dub-kit.js) -----------------------
   const dubDef = served(catalog, DUB_TOOLS[0]);
@@ -88,7 +90,7 @@ export function speechPage(baseUrl, catalog = null) {
       tdPrice(`$${dubPriceUsd(tier).toFixed(3)}`),
       tdMono(esc(translateRoute || `the ${TRANSLATE_SLUG} tier`)),
       tdMono(speech ? routeLink(speech.live) : esc(`/api/${slug}`)),
-      td(fmtInt(TTS_TIERS[slug].maxChars), `${mono}font-size:var(--fs-sm);color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;`),
+      td(fmtInt(DUB_MAX_CHARS), `${mono}font-size:var(--fs-sm);color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;`),
     ]);
   }).join("")) : "";
   const ttsExample = ttsDef ? JSON.stringify(ttsDef.discovery?.output?.example || {}, null, 2) : "";
@@ -161,7 +163,7 @@ export function speechPage(baseUrl, catalog = null) {
 ${section("tts", `
   ${eyebrow("01 / TEXT TO SPEECH")}
   ${h2("Three tiers, one request shape.")}
-  ${p(`Send ${code("text")}, an optional ${code("voice")} and an optional ${code("format")}; the answer is JSON with the audio base64-encoded and the model, voice and format that actually spoke. The three tiers differ in model, price and cap, not in interface, so a buyer moves between them by changing the path.`)}
+  ${p(`Send ${code("text")}, an optional ${code("voice")} and an optional ${code("format")}; the answer is JSON with the audio base64-encoded and the model, voice and format that actually spoke. The three tiers differ in model, price and cap, not in interface, so a buyer moves between them by changing the path.${quotedTts.length ? ` ${listAnd(quotedTts.map((r) => r.def.route.split(" ")[1]))} ${quotedTts.length > 1 ? "are" : "is"} priced per request from the length of the text: ${quotedTts.map((r) => `${esc(r.def.route.split(" ")[1])} costs ${esc(r.live.quoteFormula)}`).join("; ")}.` : ""}`)}
   ${ttsTable}
   ${h3("Example call")}
   ${pre(`${ttsDef ? ttsDef.route : "POST /api/tts"}, paid over x402`, `# the first request answers 402 with the price; a paying client retries it
@@ -181,7 +183,7 @@ console.log(out.model, out.voice, out.chars);`)}
   ${pre("the answer", ttsExample || "{ model, provider, voice, format, audio, chars }")}
   ${p(`${code("model")} and ${code("voice")} name what spoke, which matters when a backup served the call (below). ${code("chars")} is the number of characters spoken, the unit the cap is counted in; a text over the tier's cap is a 400 before anything is generated, and a 400 is not charged on x402.`)}
   ${dubDef ? `${h3("Translate and speak in one call")}
-  ${p(`${routeLink(dubDef)} takes ${code("text")} and a ${code("targetLanguage")} (a BCP-47 tag or an English name), translates the text on the chat gateway and speaks the translation on the speech tier its ${code("tier")} names; the price is the sum of the two tiers, read from the catalog. The answer is the audio as raw bytes with the translation, the detected source language and the models that served in the ${code("X-Dub-Translation")} header, or JSON with the audio base64 when the call says ${code("json: 1")}. The speech tier's cap applies to the translation, and the source text is checked against it before any model runs.`)}
+  ${p(`${routeLink(dubDef)} takes ${code("text")} and a ${code("targetLanguage")} (a BCP-47 tag or an English name), translates the text on the chat gateway and speaks the translation on the speech tier its ${code("tier")} names; the price is the translate tier's price plus the speech tier's price for ${fmtInt(DUB_MAX_CHARS)} characters, read from the catalog. The answer is the audio as raw bytes with the translation, the detected source language and the models that served in the ${code("X-Dub-Translation")} header, or JSON with the audio base64 when the call says ${code("json: 1")}. The ${fmtInt(DUB_MAX_CHARS)}-character cap applies to the source text and to the translation, and the source text is checked against it before any model runs.`)}
   ${dubRows}` : ""}
 `, true)}
 

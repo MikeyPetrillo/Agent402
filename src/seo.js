@@ -29,6 +29,8 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+// A catalog line's price: a route quoted per request lists its floor as "from".
+const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),
@@ -524,11 +526,11 @@ function llmsFullBody(baseUrl, catalog) {
       // listed at roughly a tenth of the bytes; the pointer below still leads
       // to the full schemas.
       if (inCat.length > 40) {
-        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}`).join("\n");
+        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${priceOfLine(t)}/call${slowRouteMarker(t)}`).join("\n");
         return `## Tools - ${label}\n\n${compact}\n\n- [Full input schemas for all ${inCat.length} ${label} endpoints](${baseUrl}/api/pricing)`;
       }
       const items = inCat.map(
-        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}. ${t.description}`
+        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${priceOfLine(t)}/call${slowRouteMarker(t)}. ${t.description}`
       );
       return `## Tools - ${label}\n\n${items.join("\n")}`;
     })
@@ -719,7 +721,7 @@ export function llmsFullTxt(baseUrl, catalog) {
     const m = t.match(/^(.{20,240}?[.!?])(\s|$)/);
     return m ? m[1] : t.slice(0, 240);
   };
-  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price || "see /api/pricing"} | ${firstSentence(t.description)}`).join("\n");
+  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price ? priceOfLine(t) : "see /api/pricing"} | ${firstSentence(t.description)}`).join("\n");
   const learnLines = LEARN.map((l) => `- [${l.term}](${baseUrl}/learn/${l.slug}): ${l.summary}`).join("\n");
   return `${llmsFullBody(baseUrl, catalog)}
 ## Learn (summaries)

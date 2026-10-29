@@ -9403,7 +9403,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -9427,7 +9427,7 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd } } : {}),
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.

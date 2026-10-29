@@ -426,7 +426,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
   if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
   else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
-  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.`);
+  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
   // The method alias (server.js) runs only when no catalog route of the other
@@ -797,7 +797,7 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
@@ -856,6 +856,8 @@ export function openapiSpec(baseUrl, catalog) {
           price: range
             ? { mode: "dynamic", currency: "USD", min: fmtUsd(range.minUsd), max: fmtUsd(range.maxUsd) }
             : { mode: "fixed", currency: "USD", amount: String(tool.price ?? "").replace(/[^0-9.]/g, "") || "0" },
+          // How a dynamic price is computed from the body, where the route states it.
+          ...(range && tool.quoteFormula ? { quoteFormula: tool.quoteFormula } : {}),
           ...(Object.keys(premium).length ? { premiumUsdByNetwork: premium } : {}),
           offers: mpp.map((o) => ({
             intent: o.intent,
