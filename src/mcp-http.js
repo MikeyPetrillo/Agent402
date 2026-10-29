@@ -30,7 +30,7 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
+  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
 } from "./mcp-mpp.js";
 import {
@@ -55,6 +55,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } fr
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import {
   FLAGSHIP_SLUGS,
@@ -698,6 +699,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return translateMppResponse(entry, meta, params, startedAt, isNamed, r);
     }
 
+    /** The USD a task's lost result is owed at: what the credential signed on
+     *  its chain (the quote its 402 minted, premium and floor included), else
+     *  the list price priced on the settle receipt's network. */
+    function taskPaidUsd(def, credentialHeader, settle) {
+      const signed = credentialSignedUsd(credentialHeader);
+      if (signed) return signed.usd;
+      return paidPriceUsd({ basePriceUsd: toolPriceUsd(def.slug), caip2: settle?.network ?? null });
+    }
+
     /** The refusal a blocking paid call to a slow route gets ahead of the
      *  loopback (the HTTP route's respond_async_required, in this wire's terms). */
     function slowCallRefusalText(def) {
@@ -878,7 +888,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // completed carrying isError:true is a COMPLETED task whose result says
         // it went wrong (and our text already says "not charged"), so a caller
         // can never mistake it for a silent empty success.
-        await tasks.complete(rec.taskId, out, { receipt: receiptFromHeader(r.headers?.get?.("payment-receipt")), priceUsd: toolPriceUsd(entry.def.slug) });
+        // A result that cannot be retained books a debt: the x402 settle
+        // receipt the 200 carries is the proof (success, chain, payer; the
+        // MPP receipt names none of these), at what the credential signed on
+        // that chain, never the list price.
+        const settle = settleReceiptFromHeader(r.headers?.get?.("payment-response"));
+        await tasks.complete(rec.taskId, out, { receipt: settle || receiptFromHeader(r.headers?.get?.("payment-receipt")), priceUsd: taskPaidUsd(entry.def, credentialHeader, settle) });
       }).catch(() => { /* settled never rejects; belt and braces */ });
 
       return createTaskResult(rec);
