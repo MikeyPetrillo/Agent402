@@ -275,7 +275,7 @@ const decodeHeader = (res) => {
 // header would be one of OUR body fields written back into the challenge a
 // buyer pays from.
 const PROTOCOL_KEYS = new Set(["x402Version", "error", "resource", "accepts", "extensions"]);
-const BODY_ONLY_KEYS = ["altPayment", "replacement", "reason", "hint", "retry", "payerUsdcOnBase", "type", "title", "detail", "status"];
+const BODY_ONLY_KEYS = ["altPayment", "replacement", "meteredTwin", "reason", "hint", "retry", "payerUsdcOnBase", "type", "title", "detail", "status"];
 /** The header carries protocol keys only, none of ours. */
 const assertHeaderUntouched = (label, decoded) => {
   const extra = Object.keys(decoded).filter((k) => !PROTOCOL_KEYS.has(k));
@@ -384,6 +384,41 @@ try {
     const base = (x) => (x.accepts || []).find((a) => a.network === "eip155:8453");
     ok(base(body)?.amount === base(decoded)?.amount, `B4 the body's quote is the header's (${base(body)?.amount})`);
     ok(base(body)?.amount !== base(floorBody)?.amount, `B4 and it is this request's quote, not the floor (${base(body)?.amount} vs ${base(floorBody)?.amount})`);
+  }
+
+  // B4b a flat chat tier's unpaid 402 names its metered twin on the same wire;
+  // the metered routes carry no twin and offer exact plus upto on Base.
+  {
+    const chat = { messages: [{ role: "user", content: "hi" }], max_tokens: 16 };
+    const TWINS = [
+      ["/v1/chat/completions", "POST /v1/metered/chat/completions", { ...chat, model: "openai/gpt-4o-mini" }],
+      ["/v1/pro/messages", "POST /v1/metered/messages", { ...chat, model: "anthropic/claude-sonnet-5" }],
+      ["/v1/nano/responses", "POST /v1/metered/responses", { input: "hi", max_output_tokens: 16 }],
+    ];
+    for (const [path, twin, body] of TWINS) {
+      const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      ok(r.status === 402, `B4b unpaid ${path} -> 402 (got ${r.status})`);
+      const [b] = assertMirror(`B4b ${path}`, r, await r.text());
+      ok(b.meteredTwin?.route === twin && b.meteredTwin?.url === `${BASE_URL}${twin.split(" ")[1]}`, `B4b ${path} names its metered twin ${twin} (${JSON.stringify(b.meteredTwin?.route)})`);
+      ok(/settlement never exceeds that quote/.test(b.meteredTwin?.note || ""), `B4b ${path}: the twin note says settlement never exceeds the quote`);
+    }
+    for (const path of ["/v1/auto/chat/completions", "/v1/embeddings"]) {
+      const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.includes("embed") ? { input: "x" } : chat) });
+      const b = JSON.parse(await r.text());
+      ok(r.status === 402 && !("meteredTwin" in b), `B4b control: ${path} (not a flat chat tier) carries no meteredTwin (${r.status})`);
+    }
+    for (const path of ["/v1/metered/chat/completions", "/v1/metered/messages", "/v1/metered/responses"]) {
+      const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.endsWith("responses") ? { input: "hi", max_output_tokens: 16 } : { ...chat, model: "openai/gpt-4o-mini" }) });
+      ok(r.status === 402, `B4b unpaid ${path} -> 402 (got ${r.status})`);
+      const [b, decoded] = assertMirror(`B4b ${path}`, r, await r.text());
+      ok(!("meteredTwin" in b), `B4b ${path} carries no meteredTwin`);
+      const schemes = (decoded.accepts || []).filter((a) => a.network === "eip155:8453").map((a) => a.scheme);
+      ok(schemes.includes("exact") && schemes.includes("upto"), `B4b ${path} offers exact and upto on Base (${schemes.join(",")})`);
+    }
+    // A refused payment on a flat tier keeps its own explanation, no twin.
+    const r = await fetch(`${B}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": b64({ x402Version: 2, accepted: { scheme: "lightning", network: "eip155:8453" }, payload: {} }) }, body: JSON.stringify({ ...chat, model: "openai/gpt-4o-mini" }) });
+    const b = JSON.parse(await r.text());
+    ok(r.status === 402 && !("meteredTwin" in b), `B4b a refused payment on a flat tier carries no meteredTwin (${r.status})`);
   }
 
   // B5 a gate refusal before any facilitator: the sample /x402-test prints
