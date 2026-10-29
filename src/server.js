@@ -3488,7 +3488,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorElevated(req)) {
+  if (!operatorView(req, res)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3621,7 +3621,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorElevated(req);
+  const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
@@ -5456,6 +5456,15 @@ function operatorAuthed(req, { headerOnly = false } = {}) {
 // session cookie is scoped to /__operator and never arrives here. The
 // operator routes keep the Bearer form for curl.
 function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
+// A public surface whose answer differs for the operator: keyed on the
+// operator header in every answer, and never stored by a shared cache when
+// elevated. Returns operatorElevated(req); call it once per request.
+function operatorView(req, res) {
+  const elevated = operatorElevated(req);
+  res.vary("X-Operator-Token");
+  if (elevated) res.set("Cache-Control", "private, no-store");
+  return elevated;
+}
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -7997,8 +8006,10 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
-  res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
+  const elevated = operatorView(req, res);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), elevated ? 1000 : 200);
+  if (!elevated) res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+  res.json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
   const lb = mppLeaderboardSnapshot();
@@ -8098,9 +8109,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorElevated(req)) {
-    return res.set("Cache-Control", "no-store").json(snap);
-  }
+  if (operatorView(req, res)) return res.json(snap);
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
   // `perPage` is honoured as an alias for `limit` because two consumers in a row
   // guessed that name - our own scripts/seller-sweep.mjs and an outside seller's
@@ -8435,7 +8444,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorElevated(req) ? 500 : 50;
+  const topCeiling = operatorView(req, res) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -9208,7 +9217,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorElevated(req)));
+  res.json(redactAnalytics(data, operatorView(req, res)));
 });
 
 let __analyticsSlugSet = null;
@@ -9223,7 +9232,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorElevated(req)) return res.redirect(302, "/status");
+  if (!operatorView(req, res)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9231,7 +9240,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
+  res.type("html").send(analyticsPage(redactAnalytics(data, true), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.
