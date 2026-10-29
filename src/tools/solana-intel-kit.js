@@ -38,16 +38,20 @@ import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBud
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
 import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
-const MAX_BODY_BYTES = 24 * 1024 * 1024;  // DefiLlama bulk docs run ~11MB; this is the hard ceiling.
-// Refuse an over-large body BEFORE reading it into a string: `res.text()` has
-// no cap of its own, so a broken or hostile upstream could push an unbounded
-// buffer into memory once per concurrent call.
-function assertBodyWithinCap(res, capBytes, label) {
+const MAX_BODY_BYTES = 24 * 1024 * 1024;  // the hard ceiling on any one upstream document read here.
+import { readBytesCapped, readTextCapped, decodeUtf8 } from "../capped-body.js";
+// Read a body under a byte cap: `res.text()` has no cap of its own, so a
+// broken or hostile upstream could push an unbounded buffer into memory once
+// per concurrent call. A declared Content-Length over the cap is refused before
+// reading; a body without one stops at the cap (src/capped-body.js). Either is
+// a 502.
+async function readBodyWithinCap(res, capBytes, label) {
+  const tooLarge = () => Object.assign(new Error(`${label} response is larger than the ${Math.round(capBytes / 1048576)}MB cap`), { statusCode: 502 });
   const declared = Number(res.headers?.get?.("content-length") || 0);
-  if (declared && declared > capBytes) {
-    const e = new Error(`${label} response is larger than the ${Math.round(capBytes / 1048576)}MB cap`);
-    e.statusCode = 502; throw e;
-  }
+  if (declared && declared > capBytes) throw tooLarge();
+  const { bytes, truncated } = await readBytesCapped(res, capBytes);
+  if (truncated) throw tooLarge();
+  return decodeUtf8(bytes);
 }
 
 // DEADLINES. Every upstream read carries its own cap, and every handler runs
@@ -192,7 +196,7 @@ async function upstreamJsonOnce(url, { label, step = "data", timeoutMs = JUPITER
     // mint while its report builder is down (measured 2026-09-25 on JUP and
     // BONK): that is its outage, not the buyer's input, so it is a retryable
     // 503 rather than a 422 blaming the mint.
-    const errText = await res.text().then((t) => t.slice(0, 500)).catch(() => "");
+    const errText = await readTextCapped(res, 4096).then((t) => t.slice(0, 500)).catch(() => "");
     if (/unable to generate|temporarily|try again|timeout/i.test(errText)) {
       // RugCheck answered for this input; the pause does not count it.
       throw Object.assign(bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503), { rugcheckNoReport: true });
@@ -201,10 +205,9 @@ async function upstreamJsonOnce(url, { label, step = "data", timeoutMs = JUPITER
   }
   if (!res.ok) throw bad(`${label} refused the request (HTTP ${res.status})`, 502);
   let text;
-  assertBodyWithinCap(res, MAX_BODY_BYTES, label);
   // The same signal bounds the body, so a body that stalls past the cap ends
   // as the deadline it is, not as an unreadable response.
-  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) {
+  try { text = await bodyUnderDeadline(readBodyWithinCap(res, MAX_BODY_BYTES, label), ctx); } catch (err) {
     if (err?.statusCode) throw err;
     throw bad(`${label} response could not be read`, 502);
   }
