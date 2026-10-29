@@ -9427,6 +9427,10 @@ const asyncJobs = createAsyncJobs({
   port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
+  // A job's debt books what the buyer paid: the gated price (list or the
+  // request's quote) on the chain the receipt names, or the meter's amount.
+  quoteOf: quotedPriceUsd,
+  paidOf: ({ basePriceUsd, receipt, meteredUsd, req }) => paidPriceUsd({ basePriceUsd, caip2: receipt?.network ?? null, meteredUsd, paymentHeader: paymentHeaderOf(req) }),
 });
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
