@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 // option) moves the sha, not the date, until that switch ships on.
 const PINS = {
   "src/terms.js": { date: "2026-10-29", sha: "d1096b9e1d0cde90" },
-  "src/privacy.js": { date: "2026-10-30", sha: "dc35273ebd51bf15" },
+  "src/privacy.js": { date: "2026-10-29", sha: "dc35273ebd51bf15" },
 };
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };

@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-10-30 (metered default, speech quotes, sale paths)
+### 2026-10-29 (metered default, speech quotes, sale paths)
 Surfaces:
 - The metered gateway (/v1/metered/chat/completions and its Messages and
   Responses twins) is the default way to call a model on /llms.txt, the
@@ -24,15 +24,14 @@ Surfaces:
 - /api/revenue's cacheSeconds is the HTTP max-age it sends;
   refreshesEverySeconds and nextRefreshAt state the cadence of the rail scan
   behind it.
-- The privacy page (dated 2026-10-30) says the sales ledger keeps how a paid
+- The privacy page (dated 2026-10-29) says the sales ledger keeps how a paid
   call arrived.
 
 Speech:
 - /api/tts and /api/tts-hd are quoted per request from the length of the
-  text: $0.005 plus $0.0575 per 1,000 characters on tts and $0.010 plus $0.115
-  per 1,000 characters on tts-hd, rounded up to the next $0.001, so 2,000
-  characters costs what the flat price did ($0.120 and $0.240). The cap stays
-  2,000 characters on both. The 402, Tempo and credits all read the quote;
+  text: a floor plus a per-character rate, rounded up to the next $0.001, so
+  2,000 characters costs what the flat price did. The cap stays 2,000
+  characters on both. The 402, Tempo and credits all read the quote;
   /api/pricing (quoteRange, quoteFormula), /openapi.json, the tool pages and
   /llms.txt publish the range and the formula. /api/dub keeps its
   2,000-character cap and its price; /api/tts-lite stays flat.
@@ -73,13 +72,14 @@ Operations:
 - A catalog call served on the free proof-of-work or trial tier that ends
   in a 5xx counts on its own lane of the operator tool-failure view, beside
   a per-rail breakdown; the toolFailures word on /api/gateway-status reads
-  paying buyers' outcomes only.
+  paying buyers' outcomes, and free outcomes only when a tool fails nearly
+  every free call.
 
 Limits:
 - A request body nested more than 64 levels deep answers 400; a compressed
   request body (any Content-Encoding) on the large-upload routes answers 415;
-  a large upload while this host's in-flight upload budget is full answers
-  503 with Retry-After; repeated unpaid large bodies from one address to a
+  a large upload while this host's in-flight upload budget, or one address's
+  share of it, is full answers 503 with Retry-After; repeated unpaid large bodies from one address to a
   quoted route answer 429; a PDF whose streams decode past the processing
   limits answers 422. None of these is charged.
 
