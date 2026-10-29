@@ -75,6 +75,19 @@ Operations:
   a per-rail breakdown; the toolFailures word on /api/gateway-status reads
   paying buyers' outcomes only.
 
+Limits:
+- A request body nested more than 64 levels deep answers 400; a compressed
+  request body (any Content-Encoding) on the large-upload routes answers 415;
+  a large upload while this host's in-flight upload budget is full answers
+  503 with Retry-After; repeated unpaid large bodies from one address to a
+  quoted route answer 429; a PDF whose streams decode past the processing
+  limits answers 422. None of these is charged.
+
+Live view:
+- Where a network holds the event stream back, the page switches to short
+  polls of /api/poll after 8 seconds and keeps updating; its status label
+  reads the connection, so a quiet minute on a working connection reads live.
+
 ### 2026-10-29 (payments, gateway, router, connector)
 Payments and refunds:
 - A card report bought at checkout is generated from the Stripe webhook as
