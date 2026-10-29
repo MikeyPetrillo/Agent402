@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from "node:dns/promises";
 import { assertPublicUrl, hostIsPublic } from "./fetch-guard.js";
 import { htmlToArticle } from "./extract.js";
 import { partialFields } from "../partial-answer.js";
@@ -111,6 +112,25 @@ function releaseSlot() {
   else active--;
 }
 
+// One validating egress proxy per process for the in-process browser, started
+// with the first launch. Its resolver honors the network guard, so a test that
+// points the guard at a loopback fixture gets the same answer from the proxy.
+let inProcessProxy = null;
+function startInProcessProxy() {
+  if (!inProcessProxy) {
+    inProcessProxy = import("../../worker/egress-proxy.js").then(({ startEgressProxy, resolvePinned }) => startEgressProxy({
+      resolve: async (host) => {
+        if (guard === PUBLIC_GUARD) return resolvePinned(host);
+        if (!(await guard.hostIsPublic(host))) throw new Error(`blocked: ${host} is not a public host`);
+        const { address, family } = await dnsLookup(host, { order: "ipv4first" });
+        return { address, family };
+      },
+    })).then((proxy) => { proxy.server.unref(); return proxy; })
+      .catch((e) => { inProcessProxy = null; throw e; });
+  }
+  return inProcessProxy;
+}
+
 async function getBrowser() {
   if (!browserPromise) {
     browserPromise = import("playwright")
@@ -122,7 +142,11 @@ async function getBrowser() {
         // WebRTC may not send UDP outside the proxy: neither the route guard nor
         // the egress proxy sees STUN/TURN traffic.
         const launchArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"];
-        const egressProxy = (process.env.RENDER_EGRESS_PROXY_URL || "").trim();
+        // Without one (the in-process self-host path), start the same proxy here:
+        // context.route does not see redirect hops or a popup's first request,
+        // so the proxy is what checks every connection Chromium makes.
+        let egressProxy = (process.env.RENDER_EGRESS_PROXY_URL || "").trim();
+        if (!egressProxy) egressProxy = (await startInProcessProxy()).url;
         if (egressProxy) {
           launchArgs.push(`--proxy-server=${egressProxy}`);
           // Chromium implicitly bypasses the proxy for loopback + link-local
@@ -253,6 +277,9 @@ async function withPage(rawUrl, fn, { signal, contextOptions = null, beforeGoto 
       }
     });
     const page = await context.newPage();
+    // A window the page opens is closed as it appears: its first request is
+    // not one context.route sees. Only the page opened here is kept.
+    if (typeof context.on === "function") context.on("page", (p) => { if (p !== page) p.close().catch(() => {}); });
     // F03: count ACTUAL transferred bytes via CDP, not Content-Length. A
     // chunked / streamed / no-Content-Length response reports zero to the
     // old header-based accounting and bypasses the cap; WebSocket/EventSource
