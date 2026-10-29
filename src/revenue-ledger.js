@@ -27,6 +27,7 @@ import { leased, stateDbEnabled, stateQuery, stateDbSchema, withStateTx, importO
 import { retryingLoad } from "./store-retry.js";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { REVENUE_LEDGER_SYNC_MS } from "./refresh-cadence.js";
 import {
   EVM, SOLANA_RPCS, rpcCall, pad, TRANSFER_TOPIC, USDC_SOL_MINT,
   MAX_CALL_USD, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS, USDC_ISSUER,
@@ -1943,7 +1944,7 @@ export function startRevenueLedger({ walletAddress, solanaWallet, stellarWallet,
     let allCaughtUp = false;
     try { const r = await syncOnce(); allCaughtUp = r === true; }
     catch (e) { console.warn(`revenue-ledger: sync tick threw (will retry): ${String(e?.message || e).slice(0, 100)}`); }
-    setTimeout(tick, allCaughtUp ? 300_000 : 20_000).unref?.();
+    setTimeout(tick, allCaughtUp ? REVENUE_LEDGER_SYNC_MS : 20_000).unref?.();
   };
   setTimeout(tick, 5_000).unref?.(); // let boot settle first
   console.log(`revenue-ledger: sync loop started (${USE_PG ? `state database; mirror: ${DB_PATH}` : `db: ${DB_PATH}`})`);

@@ -99,6 +99,8 @@ ok(scans === before + 2, "without a shared store each process scans for itself")
 const { readFileSync } = await import("node:fs");
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 ok(/refreshed \$\{revenueSnapshotCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the live scan's cadence from the constant");
+ok(/refreshed \$\{revenueLedgerCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the ledger's cadence from the constant");
+ok(/allCaughtUp \? REVENUE_LEDGER_SYNC_MS :/.test(src("revenue-ledger.js")), "the ledger waits the constant the page prints");
 const pages = ["ledger-leaderboard.js", "ledger-home.js", "what-is-x402.js", "pages.js", "tools/x402-kit.js"];
 ok(pages.every((f) => /leaderboardCadence\(\)/.test(src(f)) && !/[Hh]ourly (on-chain )?snapshot|refreshe[sd] hourly|>HOURLY</.test(src(f))), "every leaderboard surface says the cadence from the constant, none says hourly");
 const { ledgerLeaderboardPage } = await import("../src/ledger-leaderboard.js");

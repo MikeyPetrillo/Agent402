@@ -169,5 +169,24 @@ async function boot(query = { range: "7d" }) {
   });
 }
 
+{
+  const asOf = "2026-10-10T08:00:00.000Z";
+  const lineOf = (allTime) => {
+    const d = new JSDOM(revenuePage("https://example.test", { asOf, rails: [], allTime, mpp: {}, standing: {} })).window.document;
+    return [...d.querySelectorAll('[data-rv-live="head"] p')].map((p) => p.textContent).find((t) => /as of/.test(t)) || "";
+  };
+  await check("the timestamp line names the payments' read time apart from the rail status scan", () => {
+    const sec = (iso) => Date.parse(iso) / 1000;
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: sec("2026-10-10T11:58:00Z") }, solana: { syncedAt: sec("2026-10-10T11:55:30Z") } } });
+    assert.match(line, /payments read from the chains as of 2026-10-10T11:55:30\.000Z, refreshed every 5 minutes/, "the oldest chain's read, the ledger cadence");
+    assert.match(line, /rail status as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
+  });
+  await check("with no ledger read times the line keeps the rail scan's", () => {
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: null } } });
+    assert.match(line, /^rails read as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
+    assert.ok(!/payments read/.test(line));
+  });
+}
+
 console.log(`\ntest-revenue-live-refresh: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

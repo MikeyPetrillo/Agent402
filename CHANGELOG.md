@@ -12,6 +12,9 @@ Surfaces:
   is visible: the headline, the rail and MPP tables and the chart, for the
   same date range (a preset range moves with the day). A failed read keeps
   what is shown.
+- /revenue's timestamp line says when the payment figures were last read
+  from the chains (every 5 minutes) apart from the rail status scan behind
+  the Status column (every 4 hours).
 
 ### 2026-10-29 (metered default, speech quotes, sale paths)
 Surfaces:

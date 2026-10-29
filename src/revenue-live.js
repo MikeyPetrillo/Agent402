@@ -262,7 +262,7 @@ export const EVM = {
 // src/solana-history-rpc.js, which also routes getTransaction (an immutable
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
-import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence } from "./refresh-cadence.js";
+import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence, revenueLedgerCadence } from "./refresh-cadence.js";
 import { registerMemoryStore } from "./memory-stores.js";
 export { SOLANA_RPCS };
 
@@ -2080,6 +2080,11 @@ export function revenuePage(baseUrl, snap) {
       <td>${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">explorer</a>` : "-"}</td>
     </tr>`;
   };
+  // The figures come from the ledger, which reads each chain on its own
+  // cycle; the oldest chain's read time is when every figure was current.
+  // snap.asOf is only the rail scan behind the Status column.
+  const synced = Object.values(at.perChain || {}).map((c) => Number(c?.syncedAt)).filter((n) => n > 0);
+  const ledgerAsOf = synced.length ? new Date(Math.min(...synced) * 1000).toISOString() : null;
   const railsSorted = [...snap.rails].sort((a, b) => (Number(perChainOf(b)?.inboundCount) || 0) - (Number(perChainOf(a)?.inboundCount) || 0));
   const partialNotes = snap.rails.filter((r) => r.scanNote).length;
 
@@ -2126,7 +2131,7 @@ export function revenuePage(baseUrl, snap) {
     ${standing}
     ${hero}
     <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers${gwBatched ? ", Circle Gateway batched buyers" : ""}, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">${ledgerAsOf ? `payments read from the chains as of ${esc(ledgerAsOf)}, refreshed ${revenueLedgerCadence()} · rail status as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}` : `rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}`} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection(snap.range)}
