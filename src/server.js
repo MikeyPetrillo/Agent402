@@ -304,7 +304,7 @@ import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
-import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -2441,7 +2441,15 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 // secret (CDN_ORIGIN_SECRET) for its CF-Connecting-IP to count.
 const CDN_PROXY_ON = cdnProxyEnabled();
 if (CDN_PROXY_ON) {
-  app.use(cdnClientIpMiddleware());
+  // The unauthenticated-peer count behind the cdnOrigin word spans the
+  // replicas through the shared limiter store, as the operator-auth
+  // failure count does (the store's own word reports a write that fails).
+  app.use(cdnClientIpMiddleware({
+    shared: sharedLimitsEnabled() ? {
+      windowAdd: (...a) => sharedLimitsWrite("cdn-origin", sharedLimits.windowAdd(...a)),
+      windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
+    } : null,
+  }));
   app.use(cdnSyncDeadlineMiddleware());
 }
 // Paid answers, every 402 and operator surfaces are never kept by a shared
@@ -3594,8 +3602,9 @@ app.get("/api/gateway-status", async (req, res) => {
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
   const full = operatorElevated(req);
-  // The wrong-credential count every replica contributed to, when shared.
-  await refreshOperatorAuthShared();
+  // The wrong-credential and unauthenticated-CDN-peer counts every replica
+  // contributed to, when shared.
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3733,8 +3742,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // secret (src/cdn-client-ip.js): with the resolver on, each such request
     // is keyed on the edge address instead of its client, so a missing or
     // rotated CDN_ORIGIN_SECRET folds the per-address controls onto a few
-    // addresses. ok / unauthenticated / off; the count and whether a secret
-    // is configured for the operator.
+    // addresses. ok / unauthenticated (past the alert count in the hour,
+    // counted across replicas) / off; the count, the threshold and whether
+    // a secret is configured for the operator.
     cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
