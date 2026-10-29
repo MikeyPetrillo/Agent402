@@ -1550,7 +1550,7 @@ await check("agent402-client with the gateway option pays the batched accept and
     });
     assert.equal(st.gwHits.filter((h) => h.url === "/v1/x402/settle").length, 0, "nothing was settled");
     assert.equal(sales(port).length, before, "nothing was booked");
-    assert.equal(buyer.spendingSummary().dailyUsd, rows[0].price_usd, "the refused call is released from the caps");
+    assert.equal(buyer.spendingSummary().dailyUsd, Number((rows[0].price_usd * 2).toFixed(6)), "the refused authorization was sent and stays counted against the caps");
     st.gwVerify = "ok";
     // settlement_pending: the server books the payment and asks for the same
     // header after Retry-After; the client resends it and is served once.

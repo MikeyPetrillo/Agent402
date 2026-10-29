@@ -124,8 +124,13 @@ accept's own amount before anything is signed. A 402 with no batched accept this
 signer may pay (another seller, an identity-bound route, a route with a lasting
 effect) falls back to your payment `fetch` or `creditsKey` exactly as without the
 option, and with neither fails with a 402 that says so. A refusal for a short
-Gateway balance relays the server's hint and says to deposit first, and the
-amount is released from the caps. The mechanism in full: [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
+Gateway balance relays the server's hint and says to deposit first. A batched
+accept asking for a validity window past seven days and an hour
+(`GATEWAY_MAX_TIMEOUT_SECONDS`) is never signed: the signed authorization is a
+bearer claim on the deposit until its `validBefore`. For the same reason a
+batched authorization that was sent and refused stays valid until its
+`validBefore` and keeps counting against the caps; only a signer that throws
+before anything is sent releases the amount. The mechanism in full: [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
 Two helpers are exported for a client of your own: `gatewayAcceptOf(accepts,
 networks?)` and `signGatewayPayment(accept, { signer, resource })`.
 

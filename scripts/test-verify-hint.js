@@ -60,7 +60,16 @@ ok(reads === 0 && hintForCredential(credentialKeyOf(C2), { now })?.retry === "fr
   let gwReads = 0;
   const g = await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
   ok(gwReads === 0 && g.balanceUsd === null, "a batched payment on Base reads no wallet balance (the deposit is what paid)");
-  ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-wallet" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on eip155/.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with the price (${g.hint})`);
+  ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-gateway-deposit" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on eip155/.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with its own retry verb and the price (${g.hint})`);
+  {
+    // The middleware reads the wall clock: note the failure under it.
+    await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now: () => Date.now(), balanceReader: async () => { gwReads++; return 12; } });
+    const mwG = verifyHintMiddleware();
+    const resG = { statusCode: 402, headersSent: false, headers: {}, out: null, setHeader(k, v) { this.headers[k] = v; }, json(b) { this.out = b; return this; } };
+    mwG({ headers: { "payment-signature": toHeader(batched) } }, resG, () => {});
+    resG.json({ x402Version: 2, accepts: [] });
+    ok(resG.out.retry === "fund-gateway-deposit" && resG.out.reason === "insufficient-funds" && resG.headers["Retry-After"] === "60", `the 402 to the retried batched credential carries the deposit verb and a slowing Retry-After (${resG.out.retry}, ${resG.headers["Retry-After"]})`);
+  }
   ok(hintFor({ reason: "insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).hint.includes("Fund the wallet") && !hintFor({ reason: "insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).hint.includes("Gateway"), "control: the same word on a plain payment still says to fund the wallet");
   const other = await noteVerifyFailure({ paymentPayload: { ...batched, payload: cred("0x" + "ee".repeat(32)).payload }, network: "eip155:8453", reason: "invalid_signature", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
   ok(gwReads === 0 && other.retry === "fresh-authorization" && !/Gateway/.test(other.hint), "another refusal of a batched payment reads no balance and keeps its own words");

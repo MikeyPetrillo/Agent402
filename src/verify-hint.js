@@ -198,7 +198,7 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
     const rail = network ? ` on ${String(network).split(":")[0]}` : "";
     return {
       reason: "insufficient-funds",
-      retry: "fund-wallet",
+      retry: "fund-gateway-deposit",
       hint: `${short}'s Circle Gateway balance holds less than this call costs (${price})${rail}. Deposit USDC into Circle Gateway for that address (an on-chain transfer, gas paid once) or pay the plain accept from the wallet, then sign a NEW authorization; re-sending this one will keep failing.`,
     };
   }
@@ -327,7 +327,7 @@ export function verifyHintMiddleware() {
         }
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {
-          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
+          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" || h.retry === "fund-gateway-deposit" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
           // A hint that names its class carries it as `reason`, the field
           // every refusal class is read from (and the paywall rollup).
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;

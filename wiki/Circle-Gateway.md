@@ -67,8 +67,12 @@ const out = await a.call("extract", { url: "https://example.com/article" });
   with a lasting effect), the call falls back to the payment `fetch` or the
   `creditsKey` as if the option were off; with neither, it fails with a 402
   that says the seller offers no batched accept.
-- A refusal for a short Gateway balance relays the server's hint and says to
-  deposit first, and the amount is released from the caps.
+- A refusal for a short Gateway balance (the 402 carries `reason`
+  `insufficient-funds` and `retry` `fund-gateway-deposit`) relays the server's
+  hint and says to deposit first. A refused authorization was still sent and stays valid until
+  its `validBefore`, so it keeps counting against the caps; only a signer that
+  throws before anything is sent releases the amount. An accept whose
+  `maxTimeoutSeconds` is past seven days and an hour is never signed.
 - A payment Gateway has not confirmed inside the server's wait is answered
   `402` with reason `settlement-pending` and `Retry-After`. The client resends
   the **same** signed header after that wait, up to three times, and is served

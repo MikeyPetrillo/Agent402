@@ -91,6 +91,13 @@ const GATEWAY_TYPES = Object.freeze({
 });
 const GATEWAY_PENDING_RESENDS = 3;
 const GATEWAY_PENDING_MAX_WAIT_MS = 30_000;
+// The longest validity window a batched accept may ask for. A seller's
+// accept sets validBefore (now plus its maxTimeoutSeconds), and the signed
+// authorization is a bearer claim on the deposit until then, so an accept
+// asking for years is refused unsigned. Gateway's kinds publish a minimum
+// validity of seven days, and a seller derives its window from that plus a
+// small buffer, so seven days and an hour admits every honest accept.
+export const GATEWAY_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600 + 3600;
 const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway";
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
 
@@ -663,7 +670,9 @@ export class Agent402 {
    * the payment header on the plain fetch (never the payment-wrapped one,
    * which would sign the plain accept). Returns NO_GATEWAY_ACCEPT, with
    * nothing reserved or signed, when the answer is not a 402 or offers no
-   * batched accept this signer may pay, so the caller falls back.
+   * batched accept this signer may pay, so the caller falls back. Once the
+   * signed header has been sent the amount is spent for the caps whatever
+   * comes back; only a signer that throws releases the reservation.
    */
   async _gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache, validator, maxResponseBytes }) {
     const pre = await paidSend();
@@ -678,38 +687,37 @@ export class Agent402 {
     // catalog's figure never lowers what the caps are checked against.
     const usd = Math.max(listUsd, acceptUsd(accept));
     const reservation = this._spendReserve(host, usd, slug, listUsd);
-    let settled = false;
+    let header;
     try {
-      const { header } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource });
-      const paidHeaders = { "PAYMENT-SIGNATURE": header, ...asyncHeaders };
-      let r = await collect(await paidSend(paidHeaders));
-      let body = null;
-      for (let resend = 0; ; resend++) {
-        if (r.status !== 402) break;
-        body = await readJsonQuietly(r);
-        const pending = body && typeof body === "object" && (body.reason === "settlement-pending" || body.retry === "same-payment");
-        if (!pending) break;
-        if (resend >= GATEWAY_PENDING_RESENDS) {
-          // Gateway may yet settle it: the amount counts, and the header
-          // is handed back so the same payment can be resent later.
-          this._spendSettle(reservation);
-          settled = true;
-          throw new GatewayPendingError(slug, header, body);
-        }
-        const retryAfterSec = Number(r.headers?.get?.("retry-after")) || Number(body.retryAfterSeconds) || 10;
-        await this._sleep(Math.min(Math.max(0, retryAfterSec) * 1000, GATEWAY_PENDING_MAX_WAIT_MS));
-        r = await collect(await paidSend(paidHeaders));
-      }
-      if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
-      if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
-      this._spendSettle(reservation);
-      settled = true;
-      return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+      ({ header } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource }));
     } catch (e) {
-      if (e instanceof AsyncJobPendingError || e instanceof PaymentRedirectError) this._spendSettle(reservation);
-      else if (!settled) this._spendRelease(reservation);
+      // Nothing signed: the reservation is the only thing to undo.
+      this._spendRelease(reservation);
       throw e;
     }
+    // From here the signed authorization leaves this process. It is a bearer
+    // claim on the deposit until its validBefore whatever the seller answers
+    // (a refusal, a failure, a redirect, a job still running), so it counts
+    // as spent against the caps from the first send.
+    this._spendSettle(reservation);
+    const paidHeaders = { "PAYMENT-SIGNATURE": header, ...asyncHeaders };
+    let r = await collect(await paidSend(paidHeaders));
+    let body = null;
+    for (let resend = 0; ; resend++) {
+      if (r.status !== 402) break;
+      body = await readJsonQuietly(r);
+      const pending = body && typeof body === "object" && (body.reason === "settlement-pending" || body.retry === "same-payment");
+      if (!pending) break;
+      // Gateway may yet settle it: the header is handed back so the same
+      // payment can be resent later.
+      if (resend >= GATEWAY_PENDING_RESENDS) throw new GatewayPendingError(slug, header, body);
+      const retryAfterSec = Number(r.headers?.get?.("retry-after")) || Number(body.retryAfterSeconds) || 10;
+      await this._sleep(Math.min(Math.max(0, retryAfterSec) * 1000, GATEWAY_PENDING_MAX_WAIT_MS));
+      r = await collect(await paidSend(paidHeaders));
+    }
+    if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
+    if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
+    return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
   }
 
   async _assertOutput(slug, body, validator, { paid = false, cacheHit = false } = {}) {
@@ -995,9 +1003,9 @@ function normalizeGateway(value) {
 /** The first Circle Gateway batched accept a buyer may pay: scheme exact,
  *  `extra.name` the Gateway kind, on an EVM chain (among `networks` when
  *  given), with a payTo, a verifyingContract, a domain version, a validity
- *  window and an amount in a known asset (so the caps can price it; a batched
- *  accept in an asset the table does not know is never signed). null when
- *  there is none. */
+ *  window of at most GATEWAY_MAX_TIMEOUT_SECONDS and an amount in a known
+ *  asset (so the caps can price it; a batched accept in an asset the table
+ *  does not know is never signed). null when there is none. */
 export function gatewayAcceptOf(accepts, networks = null) {
   const list = Array.isArray(accepts) ? accepts : [];
   const wanted = networks ? new Set(networks.flatMap((n) => networkIdsOf(n)).map((id) => id.toLowerCase())) : null;
@@ -1006,7 +1014,7 @@ export function gatewayAcceptOf(accepts, networks = null) {
     && /^eip155:[0-9]{1,12}$/.test(String(a.network || "")) && (!wanted || wanted.has(String(a.network).toLowerCase()))
     && EVM_ADDR.test(String(a.payTo || "")) && EVM_ADDR.test(String(a.extra.verifyingContract || ""))
     && typeof a.extra.version === "string" && /^[0-9]{1,4}$/.test(a.extra.version)
-    && /^[0-9]{1,78}$/.test(String(a.amount ?? "")) && Number(a.maxTimeoutSeconds) > 0
+    && /^[0-9]{1,78}$/.test(String(a.amount ?? "")) && Number(a.maxTimeoutSeconds) > 0 && Number(a.maxTimeoutSeconds) <= GATEWAY_MAX_TIMEOUT_SECONDS
     && acceptUsd(a) != null) || null;
 }
 
@@ -1047,7 +1055,7 @@ function gatewayRefusalMessage(slug, body, accept, address) {
   const chain = String(accept.network);
   return `call "${slug}" refused on the Circle Gateway batched option (${chain}): HTTP 402${said != null ? ` - ${typeof said === "string" ? said : JSON.stringify(said)}` : ""}${short
     ? ` The signer ${address} needs a USDC balance in Circle Gateway on that chain: deposit through Circle's GatewayWallet contract first (this client never deposits), then call again; see ${GATEWAY_DOCS_URL}.`
-    : ""}`;
+    : ""} The refused authorization was sent and stays valid until its validBefore, so it counts against this client's spending caps.`;
 }
 
 /** The dearest amount a 402 asks for, in USD, or null when it cannot be read.
