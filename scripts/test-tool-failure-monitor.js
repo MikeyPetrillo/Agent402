@@ -11,7 +11,9 @@ import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
-import { createToolFailureMonitor, toolClassOf, upstreamKindOfError, upstreamKindOfStatus, BUCKET_MS, DAY_MS } from "../src/tool-failure-monitor.js";
+import { readFileSync } from "node:fs";
+import { outcomeRailOf } from "../src/payment-rail.js";
+import { createToolFailureMonitor, toolLaneOf, toolClassOf, upstreamKindOfError, upstreamKindOfStatus, BUCKET_MS, DAY_MS } from "../src/tool-failure-monitor.js";
 import { withSettleDemotion, isDemoted, demotedList, isFundsRefusal, _resetSettleDemotion } from "../src/settle-demotion.js";
 
 let pass = 0, fail = 0;
@@ -63,6 +65,62 @@ await check("tool words: 2 outside 5xx ok, 3 degraded, a >25% share over 8 calls
   assert.equal((await m3.status({ fresh: true })).toolFailures.status, "ok", "buyer errors, settle refusals, hang-ups and shed answers are not tool failures");
   const full = await m2.status({ full: true, fresh: true });
   assert.deepEqual(full.toolFailures.tools.map((r) => r.slug), ["render"]);
+});
+
+await check("free lane: nine free 5xx do not move toolFailures; nine paid 5xx still fail it", async () => {
+  const c = clock();
+  const m = createToolFailureMonitor({ now: c.now, env: {} });
+  for (let i = 0; i < 9; i++) m.noteTool("hash", 500, { rail: "pow" });
+  for (let i = 0; i < 9; i++) m.noteTool("hash", 503, { rail: "trial" });
+  assert.equal((await m.status({ fresh: true })).toolFailures.status, "ok", "free proof-of-work and trial 5xx never page");
+  const r = await m.report();
+  assert.equal(r.tools[0].slug, "hash", "free failures stay visible on the operator view");
+  assert.equal(r.tools[0].hour.free.fail, 18);
+  assert.equal(r.tools[0].hour.free5xx, 18);
+  assert.equal(r.tools[0].hour.outside5xx, 0);
+  assert.equal(r.byRail.pow.hour.free.fail, 9);
+  assert.equal(r.byRail.trial.hour.free.fail, 9);
+  const paid = createToolFailureMonitor({ now: c.now, env: {} });
+  for (let i = 0; i < 9; i++) paid.noteTool("hash", 500, { rail: "x402" });
+  assert.equal((await paid.status({ fresh: true })).toolFailures.status, "failing", "nine paid 5xx in nine calls");
+  assert.equal((await paid.report()).byRail.x402.hour.outside.fail, 9);
+  const none = createToolFailureMonitor({ now: c.now, env: {} });
+  for (let i = 0; i < 9; i++) none.noteTool("hash", 500);
+  assert.equal((await none.status({ fresh: true })).toolFailures.status, "failing", "an outcome with no rail is an outside buyer's");
+  assert.equal(toolLaneOf({ synthetic: true, rail: "pow" }), "s", "our own traffic stays synthetic on any rail");
+});
+
+await check("free lane merges across replicas, and a snapshot without it reads as zeros", async () => {
+  const c = clock();
+  const kv = new Map();
+  const store = {
+    async publish(id, json) { kv.set(id, json); return { ok: true }; },
+    async readAll() { return { ok: true, snapshots: [...kv].map(([id, v]) => ({ id, ...JSON.parse(v) })) }; },
+  };
+  const a = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "a" });
+  const b = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "b" });
+  for (let i = 0; i < 5; i++) a.noteTool("ocr", 500, { rail: "pow" });
+  for (let i = 0; i < 5; i++) b.noteTool("ocr", 500, { rail: "pow" });
+  await a.publish(); await b.publish();
+  const bucket = String(Math.floor(c.t / BUCKET_MS));
+  kv.set("old", JSON.stringify({ at: c.t, tools: { ocr: { [bucket]: { o: [0, 0, 1, 0, 0, 0, 0], s: [0, 0, 0, 0, 0, 0, 0] } } } }));
+  assert.equal((await a.status({ fresh: true })).toolFailures.status, "ok");
+  const r = await a.report();
+  assert.equal(r.tools[0].hour.free.fail, 10);
+  assert.equal(r.tools[0].hour.outside.fail, 1, "an older replica's row has no free lane and still merges");
+});
+
+await check("outcome rail: the free rails come from the gates' response headers only", () => {
+  const res = (h = {}) => ({ getHeader: (k) => h[k] });
+  assert.equal(outcomeRailOf({ headers: {} }, res({ "X-Pow-Accepted": "true" })), "pow");
+  assert.equal(outcomeRailOf({ headers: {} }, res({ "X-Trial-Accepted": "true" })), "trial");
+  assert.equal(outcomeRailOf({ headers: { "x-pow-solution": "abc" } }, res()), "none", "a solution header the gate did not accept is not the free rail");
+  assert.equal(outcomeRailOf({ headers: { "payment-signature": "x", "x-pow-solution": "abc" } }, res()), "x402");
+  assert.equal(outcomeRailOf({ headers: {}, creditsSettled: true }, res()), "credits");
+  // The route binder hands the rail to the monitor for every catalog outcome.
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("function noteToolOutcomeOnClose("), src.indexOf("function sendToolError("));
+  assert.match(fn, /noteTool\(slug, status, \{[^}]*rail: outcomeRailOf\(req, res\)/, "noteToolOutcomeOnClose passes the outcome rail");
 });
 
 await check("the hour rolls: failures older than an hour leave the word but stay in the 24 h rows", async () => {

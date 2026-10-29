@@ -7,8 +7,12 @@
 //              dispatcher, by class: ok (< 400), buyer (4xx), fail (5xx other
 //              than 504), timeout (504), payment (402 after the handler: a
 //              settle refusal), gone (499: the buyer left), shed (load shed or
-//              drain; never a tool failure). Split by origin: outside (a buyer)
-//              or synthetic (heartbeat token, status probe, our own wallets).
+//              drain; never a tool failure). Split by origin: outside (a buyer),
+//              synthetic (heartbeat token, status probe, our own wallets) or
+//              free (an outside call the proof-of-work or trial gate accepted:
+//              shown on the operator view, never read by the toolFailures
+//              word). Each outcome carries its payment rail, counted per rail
+//              as operator detail.
 //   upstreams  per named upstream host, every outbound fetch the egress
 //              meter sees, by outcome: ok, s5xx, timeout, network (refused or
 //              reset before an answer), throttled (429), aborted (the caller
@@ -77,10 +81,19 @@ export const FUNDS_WORDS = ["ok", "low", "refused", "demoted"];
 export const ANSWER_WORDS = ["ok", "degraded"];
 export const BUYER_REFUSAL_WORDS = ["ok", "refusing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
+// Rails whose outcomes count on the free lane: no payment was taken, so a free
+// caller's 5xx is shown but never pages.
+export const FREE_RAILS = new Set(["pow", "trial"]);
+/** The lane an outcome counts on: s (ours), f (free rail) or o (outside buyer). */
+export function toolLaneOf({ synthetic = false, rail = null } = {}) {
+  if (synthetic) return "s";
+  return FREE_RAILS.has(String(rail || "")) ? "f" : "o";
+}
 export { ANSWER_CLASSES };
 const LAST_ANSWERS_PER_SLUG = 5;
 const MAX_SLUGS = 2_000;
 const MAX_PATHS = 64;
+const MAX_RAILS = 16;
 const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
 const REMOTE_MAX_AGE_MS = 30_000;
@@ -203,7 +216,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const refusals = [];          // { at, network, facilitator, reason }
   const replays = new Map();    // slug -> Map(bucket -> [implicit, keyed])
   const buyerRefusals = new Map(); // bucket -> count (no slug, no key)
-  const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [] })
+  const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [], f: [] })
+  const rails = new Map();      // payment rail -> Map(bucket -> { o: [], s: [], f: [] })
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
   let remote = { at: 0, snapshots: [], ok: false, merged: null };
@@ -233,16 +247,26 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     } catch { return false; }
   }
 
-  function noteTool(slug, status, { synthetic = false, shed = false, at = now(), path = null } = {}) {
+  function noteTool(slug, status, { synthetic = false, shed = false, at = now(), path = null, rail = null } = {}) {
     const s = String(slug || "");
     if (!s) return null;
     let m = tools.get(s);
     if (!m) { if (tools.size >= MAX_SLUGS) return null; m = new Map(); tools.set(s, m); }
     const b = bucketOf(at);
     let row = m.get(b);
-    if (!row) { row = { o: emptyTool(), s: emptyTool() }; m.set(b, row); prune(m, at); }
+    if (!row) { row = { o: emptyTool(), s: emptyTool(), f: emptyTool() }; m.set(b, row); prune(m, at); }
     const klass = toolClassOf(status, { shed });
-    row[synthetic ? "s" : "o"][TOOL_CLASSES.indexOf(klass)]++;
+    const lane = toolLaneOf({ synthetic, rail });
+    (row[lane] ||= emptyTool())[TOOL_CLASSES.indexOf(klass)]++;
+    // The same outcome by payment rail (operator detail only).
+    const r = String(rail || "none").slice(0, 32);
+    let rm = rails.get(r);
+    if (!rm && rails.size < MAX_RAILS) { rm = new Map(); rails.set(r, rm); }
+    if (rm) {
+      let rr = rm.get(b);
+      if (!rr) { rr = { o: emptyTool(), s: emptyTool(), f: emptyTool() }; rm.set(b, rr); prune(rm, at); }
+      rr[lane][TOOL_CLASSES.indexOf(klass)]++;
+    }
     // The same outcome by arrival path (operator detail only): the group, so
     // client versions share one row.
     if (path) {
@@ -251,8 +275,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       if (!pm && paths.size < MAX_PATHS) { pm = new Map(); paths.set(g, pm); }
       if (pm) {
         let pr = pm.get(b);
-        if (!pr) { pr = { o: emptyTool(), s: emptyTool() }; pm.set(b, pr); prune(pm, at); }
-        pr[synthetic ? "s" : "o"][TOOL_CLASSES.indexOf(klass)]++;
+        if (!pr) { pr = { o: emptyTool(), s: emptyTool(), f: emptyTool() }; pm.set(b, pr); prune(pm, at); }
+        (pr[lane] ||= emptyTool())[TOOL_CLASSES.indexOf(klass)]++;
       }
     }
     return klass;
@@ -377,6 +401,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       gas: relayerGas.filter((r) => r.at > t - DAY_MS),
       replays: pack(replays),
       paths: pack(paths),
+      rails: pack(rails),
       buyerRefusals: Object.fromEntries([...buyerRefusals].filter(([b]) => b > floor)),
     };
   }
@@ -408,27 +433,24 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     const gasM = {}; // newest reading per (network, facilitator, signer)
-    const repM = {}, brM = {}, pathM = {};
-    for (const s of all) {
-      for (const [g, rows] of Object.entries(s.paths || {})) {
-        const dst = (pathM[g] ||= {});
-        for (const [b, row] of Object.entries(rows)) {
-          const d = (dst[b] ||= { o: emptyTool(), s: emptyTool() });
-          add(d.o, row.o); add(d.s, row.s);
-        }
+    const repM = {}, brM = {}, pathM = {}, railM = {};
+    // A row from a replica that predates the free lane has no f; add reads it as zeros.
+    const addLanes = (into, key, rows) => {
+      const dst = (into[key] ||= {});
+      for (const [b, row] of Object.entries(rows)) {
+        const d = (dst[b] ||= { o: emptyTool(), s: emptyTool(), f: emptyTool() });
+        add(d.o, row.o); add(d.s, row.s); add(d.f, row.f);
       }
+    };
+    for (const s of all) {
+      for (const [g, rows] of Object.entries(s.paths || {})) addLanes(pathM, g, rows);
+      for (const [r, rows] of Object.entries(s.rails || {})) addLanes(railM, r, rows);
       for (const [slug, rows] of Object.entries(s.replays || {})) {
         const dst = (repM[slug] ||= {});
         for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyReplay()), row);
       }
       for (const [b, n] of Object.entries(s.buyerRefusals || {})) brM[b] = (brM[b] || 0) + (Number(n) || 0);
-      for (const [slug, rows] of Object.entries(s.tools || {})) {
-        const dst = (toolsM[slug] ||= {});
-        for (const [b, row] of Object.entries(rows)) {
-          const d = (dst[b] ||= { o: emptyTool(), s: emptyTool() });
-          add(d.o, row.o); add(d.s, row.s);
-        }
-      }
+      for (const [slug, rows] of Object.entries(s.tools || {})) addLanes(toolsM, slug, rows);
       for (const [name, rows] of Object.entries(s.upstreams || {})) {
         const dst = (upM[name] ||= {});
         for (const [b, row] of Object.entries(rows)) {
@@ -453,7 +475,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM, rails: railM };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -473,8 +495,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolRows = [];
     let toolWord = "ok";
     for (const [slug, rows] of Object.entries(m.tools)) {
-      const h = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, hourFloor);
-      const d = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, dayFloor);
+      const h = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, hourFloor);
+      const d = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, dayFloor);
+      // The word reads the outside lane only: synthetic and free outcomes are
+      // in the rows, never in the word.
       const o = named(TOOL_CLASSES, h.o);
       const s5 = o.fail + o.timeout;
       const calls = o.ok + o.buyer + o.fail + o.timeout;
@@ -482,12 +506,12 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       if (calls >= th.toolMinCalls && s5 / calls > th.toolFailRate) word = "failing";
       else if (s5 >= th.tool5xxDegraded) word = "degraded";
       if (word === "failing" || (word === "degraded" && toolWord === "ok")) toolWord = word;
-      const anyFail = d.o[2] + d.o[3] + d.s[2] + d.s[3] > 0;
+      const anyFail = d.o[2] + d.o[3] + d.s[2] + d.s[3] + d.f[2] + d.f[3] > 0;
       if (!anyFail && word === "ok") continue;
       toolRows.push({
         slug, status: word,
-        hour: { outside: o, synthetic: named(TOOL_CLASSES, h.s), outside5xx: s5, outsideCalls: calls },
-        day: { outside: named(TOOL_CLASSES, d.o), synthetic: named(TOOL_CLASSES, d.s) },
+        hour: { outside: o, synthetic: named(TOOL_CLASSES, h.s), free: named(TOOL_CLASSES, h.f), outside5xx: s5, outsideCalls: calls, free5xx: h.f[2] + h.f[3] },
+        day: { outside: named(TOOL_CLASSES, d.o), synthetic: named(TOOL_CLASSES, d.s), free: named(TOOL_CLASSES, d.f) },
         lastError: m.lastToolError[slug] ? { ...m.lastToolError[slug], at: new Date(m.lastToolError[slug].at).toISOString() } : null,
       });
     }
@@ -571,16 +595,22 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     }
     replayRows.sort((a, b) => (b.day.implicit + b.day.keyed) - (a.day.implicit + a.day.keyed) || a.slug.localeCompare(b.slug));
     // Catalog outcomes by arrival path (detail only, never a word).
-    const byPath = {};
-    for (const [g, rows] of Object.entries(m.paths || {})) {
-      const h = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, hourFloor);
-      const d = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, dayFloor);
-      const ho = named(TOOL_CLASSES, h.o), dO = named(TOOL_CLASSES, d.o);
-      byPath[g] = {
-        hour: { outside: ho, synthetic: named(TOOL_CLASSES, h.s), outsideErrors: ho.fail + ho.timeout },
-        day: { outside: dO, synthetic: named(TOOL_CLASSES, d.s), outsideErrors: dO.fail + dO.timeout },
-      };
-    }
+    const laneRows = (src) => {
+      const out = {};
+      for (const [g, rows] of Object.entries(src || {})) {
+        const h = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, hourFloor);
+        const d = sumWindow(rows, ["o", "s", "f"], TOOL_CLASSES.length, dayFloor);
+        const ho = named(TOOL_CLASSES, h.o), dO = named(TOOL_CLASSES, d.o);
+        out[g] = {
+          hour: { outside: ho, synthetic: named(TOOL_CLASSES, h.s), free: named(TOOL_CLASSES, h.f), outsideErrors: ho.fail + ho.timeout },
+          day: { outside: dO, synthetic: named(TOOL_CLASSES, d.s), free: named(TOOL_CLASSES, d.f), outsideErrors: dO.fail + dO.timeout },
+        };
+      }
+      return out;
+    };
+    const byPath = laneRows(m.paths);
+    // Catalog outcomes by payment rail (detail only, never a word).
+    const byRail = laneRows(m.rails);
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
@@ -588,7 +618,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
-      replays: replayRows, replayTotals, byPath,
+      replays: replayRows, replayTotals, byPath, byRail,
       thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
       answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
