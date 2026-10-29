@@ -464,5 +464,15 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   delete process.env.CREDITS_DAILY_MAX_USD;
   try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* cleanup */ }
 }
+// The debit books the request's arrival path (src/sale-path.js) with the sale.
+{
+  const before = debits.length;
+  const r = fakeRes();
+  let went = false;
+  cr.gate(priceFor)({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}`, "user-agent": "agent402-client/0.8.21" } }, r, () => { went = true; });
+  r.statusCode = 200; r.emit("finish");
+  const d = debits.slice(before).at(-1);
+  ok(went && d?.slug === "whois" && d?.via === "agent402-client/0.8.21", `a credits debit carries the sale path (${JSON.stringify(d)})`);
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
