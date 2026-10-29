@@ -78,7 +78,9 @@ for (const p of standalone) {
   try {
     copyFileSync(p, join(dir, "package.json"));
     copyFileSync(lock, join(dir, "package-lock.json"));
-    const r = spawnSync("npm", ["ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund", "--offline"], { cwd: dir, encoding: "utf8", timeout: 60_000 });
+    // A dry run reads the registry only for metadata a lock entry does not carry
+    // (a peer range, for one), so it is not run offline; a desynced lock still fails.
+    const r = spawnSync("npm", ["ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, encoding: "utf8", timeout: 60_000 });
     if (r.status !== 0) desynced.push(`${lock.replace(root + "/", "")}: ${(r.stderr || "").split("\n").filter((l) => /Missing|Invalid|in sync/.test(l)).slice(0, 4).join(" | ") || `exit ${r.status}`}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -115,7 +115,7 @@ const STELLAR_NETWORKS = {
 const AVM_NETWORKS = {
   // Algorand mainnet (CAIP-2: the first 32 characters of the base64 genesis
   // hash, src/avm-network.js; the full-hash spelling is read as an alias).
-  // USDC is ASA 31566704 — resolved by @x402/avm's built-in asset config, so
+  // USDC is ASA 31566704, resolved by @x402/avm's built-in asset config, so
   // no custom money parser. Settlement via the GoPlausible-operated
   // facilitator (keyless /supported verified 2026-07-10); fee-sponsored, so
   // buyers don't need ALGO for gas.

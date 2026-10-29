@@ -406,10 +406,13 @@ caps hold at signing by default.
 `amount`, so each option is priced from a built-in table of known assets per
 network (`KNOWN_ASSETS`: USDC on each Agent402 rail, USDG on Robinhood Chain,
 with their on-chain decimals), never from a decimals value the seller sends. An
-option in an asset outside the table cannot be priced, and a capped wallet never
-signs it. Since 0.8.19 such an option is skipped when another option in the
-same `402` can be priced (the quote is then the priced one), and a capped call
-is refused only when no option can be priced. When a cap is set, the client preflights the `402` and checks the
+option in an asset outside the table cannot be priced. With the `x402Client`
+passed, the signing guard drops such an option before anything is signed, so
+it is skipped beside an option that can be priced and the call pays that one;
+the call is refused only when no option can be priced. With a pre-wrapped
+`fetch` and no `x402Client`, nothing stops the wallet from signing it, so a
+capped call is refused before the wallet runs when any option in the `402`
+cannot be priced. When a cap is set, the client preflights the `402` and checks the
 ceiling against the **larger** of the advertised price (from the seller's
 `/api/pricing`) and the amount the `402` quotes; if no `402` comes back
 (FREE_MODE) it checks the advertised price. Caps hold under **concurrency** too:

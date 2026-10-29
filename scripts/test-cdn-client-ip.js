@@ -22,6 +22,7 @@
 //   - a malformed CF-Connecting-IP from a CDN peer falls back to the peer;
 //   - the same holds for an IPv6 CDN peer.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";
 import { buildCdnRanges, resolveClientIp, inCdnRanges, normalizeIp, cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginSecret, originAuthOk, cdnOriginStatus, refreshCdnOriginShared, __resetCdnOriginStatus, CDN_ORIGIN_UNAUTH_ALERT, ORIGIN_AUTH_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "../src/cdn-client-ip.js";
 
@@ -123,6 +124,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 3, now: Date.now() + 6 * 60_000 }).status === "ok", "a shared reading older than a few minutes is not reused");
   __resetCdnOriginStatus();
   cdnClientIpMiddleware({ ranges: R, log: () => {}, enabled: true, secret: SECRET }); // detach the store
+}
+
+// The mount in server.js hands the middleware the shared limiter store, so
+// the count behind the word spans the replicas (the "shared" scope above).
+{
+  const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/cdnClientIpMiddleware\(\{\s*shared: sharedLimitsEnabled\(\) \? \{[\s\S]{0,400}?sharedLimits\.windowAdd\([\s\S]{0,400}?sharedLimits\.windowRead\(/.test(serverSrc),
+    "server.js mounts the resolver with the shared limiter store's window, so the count spans replicas");
 }
 
 // ---- end to end ----

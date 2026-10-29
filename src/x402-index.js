@@ -255,17 +255,35 @@ const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-
 // The colon form is anchored to a whole segment (/:name) so an ordinary path
 // containing a colon, or a scheme, is not mistaken for a template.
 const SELF_BAZAAR_ORIGIN = "https://agent402.tools"; // the origin our Bazaar listing is keyed under
+const SELF_HOST = canonicalHost(SELF_BAZAAR_ORIGIN);
+// The canonical host of each string the self check has seen: every whole-cache
+// walk (the seller summaries, the snapshot, the route pool, the directory) asks
+// it once per entry, and parsing a URL per entry per walk is a cost that grows
+// with the whole cache, not with what changed. Cleared when it grows past the
+// cache's own scale, so unbounded input never holds memory.
+const selfCheckHostMemo = new Map(); // string -> canonical host or null
+const SELF_CHECK_HOST_MEMO_MAX = 50_000;
+function selfCheckHost(s) {
+  let h = selfCheckHostMemo.get(s);
+  if (h === undefined) {
+    if (selfCheckHostMemo.size >= SELF_CHECK_HOST_MEMO_MAX) selfCheckHostMemo.clear();
+    h = canonicalHost(s);
+    selfCheckHostMemo.set(s, h);
+  }
+  return h;
+}
+export function _selfCheckHostMemoForTest() { return selfCheckHostMemo; }
 /** True when `origin` is this catalog itself: the instance's own base URL or
  *  the production domain, compared by canonical host (so a www. twin, a
  *  trailing slash or letter case never makes our own catalog an outside
  *  seller), or an entry whose manifest was permanently redirected onto one
  *  of them (`redirectedTo`). A ported twin is another host. */
 export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {}) {
-  const hosts = new Set([canonicalHost(SELF_BAZAAR_ORIGIN), canonicalHost(String(baseUrl || ""))].filter(Boolean));
-  const own = canonicalHost(String(origin || ""));
-  if (own && hosts.has(own)) return true;
-  const landed = canonicalHost(String(redirectedTo || ""));
-  return !!(landed && hosts.has(landed));
+  const base = baseUrl ? selfCheckHost(String(baseUrl)) : null;
+  const own = origin ? selfCheckHost(String(origin)) : null;
+  if (own && (own === SELF_HOST || own === base)) return true;
+  const landed = redirectedTo ? selfCheckHost(String(redirectedTo)) : null;
+  return !!(landed && (landed === SELF_HOST || landed === base));
 }
 // /index used to render every crawled seller server-side (~1,477 rows → a
 // 475KB response with no compression). Cap the default render to the top N

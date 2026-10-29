@@ -296,7 +296,7 @@ WHERE address = '${USDC_BASE}'
   AND event_name = 'Transfer'
   AND block_timestamp >= '${since}'
   AND transaction_hash IN (SELECT transaction_hash FROM auth_txs)
-  AND lower(toString(parameters['from'])) NOT IN (${ourWalletsSql(ourWallets)})
+  AND (lower(toString(parameters['from'])) IN (${ourWalletsSql(ourWallets)})) = 0
 GROUP BY merchant
 ORDER BY payments DESC
 LIMIT 12`;

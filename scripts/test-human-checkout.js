@@ -204,6 +204,10 @@ if (!hadLegacy) {
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/onPaymentSession: \(session\) => \([\s\S]{0,200}session\?\.metadata\?\.product && _humanCheckout \? _humanCheckout\.fulfill\(session\.id\)/.test(serverSrc),
     "server.js wires the webhook's payment-session hook to the report store's fulfill");
+  // The dispute-closed hook lifts a credits key only on a win, through the
+  // store's own enable (which lifts nothing a stronger cause holds).
+  ok(/onDisputeClosed: \(paymentIntent, \{ won \}\) => \(won && _credits \? _credits\.enableByPaymentIntent\(paymentIntent, "disputed"\) : null\)/.test(serverSrc),
+    "server.js wires the webhook's dispute-closed hook to the credits store's enable, gated on a win");
 }
 
 // --- failure breaker: after three failed reports from one address, the next paid session is refunded with NO generation attempt
