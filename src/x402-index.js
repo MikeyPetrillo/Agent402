@@ -30,7 +30,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
-import { createJsonDocument } from "./json-document.js";
+import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
@@ -50,8 +50,7 @@ export function __probeExampleMemoStatsForTest() { return probeExampleMemo.stats
 
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
-const docs = new Map();
-const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+const { docs, docFor } = createDocumentCache();
 // With a database, a save made while a document's load is still running (or
 // failed and re-reading) is refused: it would replace a body nobody read.
 // Changes made in that window are kept here instead: the refused save marks

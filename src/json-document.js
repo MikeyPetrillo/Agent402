@@ -114,6 +114,15 @@ function writeJsonFile(file, body) {
   return raw;
 }
 
+/** Documents made once per file name, for a module that keeps several: the
+ *  first `docFor(file)` creates the document (quiet log) and later calls return
+ *  it. `docs` is the map, for the module's memory-store registration. */
+export function createDocumentCache() {
+  const docs = new Map();
+  const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+  return { docs, docFor };
+}
+
 /**
  * @param {object} o
  * @param {string} o.name   document name in the database (defaults to the file's basename)

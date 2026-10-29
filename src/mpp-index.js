@@ -24,12 +24,11 @@
 // one discovery source (not four), no Bazaar-style pagination, no per-path
 // backoff matrix (one representative endpoint per seller, not four candidate
 // manifest paths) - grow this only if a second real MPP registry surfaces.
-import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
+import { createDocumentCache, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
-const docs = new Map();
-const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";

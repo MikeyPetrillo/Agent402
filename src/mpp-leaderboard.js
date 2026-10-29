@@ -24,12 +24,11 @@
 // spends real money on, disclosed as such. Counts feed the router's
 // proven-seller cache (tempo-buyer.js primeTempoInboundCount) so a routed
 // buy to a ranked seller does not re-scan the chain.
-import { createJsonDocument } from "./json-document.js";
+import { createDocumentCache } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
-const docs = new Map();
-const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { redactSecrets } from "./tools/redact.js";
 import { mppIndexSnapshot } from "./mpp-index.js";
