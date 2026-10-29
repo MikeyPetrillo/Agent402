@@ -29,6 +29,12 @@ import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
 
+// The external leg's default budget for a Solana payer: the short end of a
+// recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
+// out) less a settle margin, so the facilitator's broadcast after the handler
+// still lands inside it. SOR_SVM_BUDGET_MS overrides it.
+export const SVM_BUDGET_MS_DEFAULT = 40_000;
+
 // Two execution tiers, both from buildRouteExecuteTool. The tier a buyer needs
 // is quoted by /api/route (routeExecuteHint below), so there's no guessing:
 //   route-execute      $0.01  — internal + external tools ≤ $0.005 (the cheap
@@ -355,7 +361,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // AVM payments are signed for a short round window by default, so the
           // external leg runs under a budget there too.
           const avmBudgetMs = tempoBudgetMs == null && String(payNet || "").startsWith("algorand:") ? (Number(process.env.SOR_AVM_BUDGET_MS) || 16000) : null;
-          const windowBudgetMs = tempoBudgetMs ?? avmBudgetMs;
+          // An SVM payment is a transaction signed against a recent blockhash,
+          // which lives about a minute (the life the buyer path waits out in
+          // src/solana-buyer.js confirmSvmNotDebited), and the facilitator
+          // broadcasts it after the handler: the leg keeps a settle margin
+          // inside the short end of that life, the same rule as above.
+          const svmBudgetMs = tempoBudgetMs == null && String(payNet || "").startsWith("solana:") ? (Number(process.env.SOR_SVM_BUDGET_MS) || SVM_BUDGET_MS_DEFAULT) : null;
+          const windowBudgetMs = tempoBudgetMs ?? avmBudgetMs ?? svmBudgetMs;
           const startedAt = Date.now();
           const remainingMs = () => (windowBudgetMs == null ? null : windowBudgetMs - (Date.now() - startedAt));
           // REQUEST-SCOPED BOUND for the buyer's refusal wait. After a refused
@@ -363,7 +375,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // it will treat "no debit" as proof and fall through to the next
           // seller (up to ~90 s on Solana, the refusal window on Base). That
           // wait must never outlive this request: every chain gets a deadline
-          // (the Tempo budget where one exists, else SOR_EXTERNAL_DEADLINE_MS,
+          // (a short rail's budget where one exists, else SOR_EXTERNAL_DEADLINE_MS,
           // under the 300 s our own 402 advertises), and the remaining budget
           // rides into payExternal as refusalMaxWaitMs. A wait cut short keeps
           // the hold (nothing falls through), so the bound is money-safe. An
@@ -417,7 +429,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
             if (list.length) { candidateList = list; chain = c; break; }
           }
-          if (avmBudgetMs != null && remainingMs() < 4000) {
+          if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used this payment's time budget; nothing was spent and nothing is charged. Retry with a fresh payment, or pay this route over an EVM rail.`, 504);
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
