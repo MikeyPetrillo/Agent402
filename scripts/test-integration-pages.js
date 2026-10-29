@@ -10,13 +10,14 @@
 //   - tool cards mark model-backed tools and show prices in one form.
 // Offline (credit sales switch read from env, as the server reads it).
 delete process.env.CREDITS_SALES;
+import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";
 const { INTEGRATIONS, integrationPage, displayPrice } = await import("../src/integration-pages.js");
 const { ledgerIntegrationsPage } = await import("../src/ledger-integrations.js");
 const { creditsSalesEnabled } = await import("../src/credits-sales.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const strip = (h) => h.replace(/<\/?(code|a|strong|em|span)\b[^>]*>/g, "").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const strip = (h) => decodeEntities(stripTags(stripInlineTags(h))).replace(/\s+/g, " ");
 const BUILTIN = /^(node:|fs$|path$|crypto$)/;
 const pkgRoot = (s) => (s.startsWith("@") ? s.split("/").slice(0, 2).join("/") : s.split("/")[0]);
 

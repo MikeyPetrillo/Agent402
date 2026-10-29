@@ -39,6 +39,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { requestExampleOf } from "../src/openapi-request.js";
+import { stripTags as stripTagsSep } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -126,7 +127,7 @@ function dropScripts(html) {
     const c = low.indexOf(">", b); i = c < 0 ? html.length : c + 1;
   }
 }
-const stripTags = (s) => { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; };
+const stripTags = (s) => stripTagsSep(s, "");
 const decode = (s) => stripTags(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&hellip;/g, "…").replace(/&rarr;/g, "→").replace(/&amp;/g, "&");
 const get = async (p) => { const r = await fetch(BASE + p); return { status: r.status, text: await r.text() }; };
 const json = async (p) => (await fetch(BASE + p)).json();

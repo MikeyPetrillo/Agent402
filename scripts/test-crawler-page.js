@@ -11,6 +11,7 @@
 // and, from the source, that every raw 402 probe sends the crawler User-Agent
 // the page quotes, and that the robots token the page names is the crawler's.
 // Offline: no network, no server.
+import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
@@ -26,7 +27,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 
 const html = crawlerPage("https://agent402.tools", { unpaidQuoteBudget: 0 });
-const text = html.replace(/<\/?(code|a|em|strong)\b[^>]*>/g, "").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const text = decodeEntities(stripTags(stripInlineTags(html))).replace(/\s+/g, " ");
 
 // ---- the page's identity strings are the crawler's ---------------------------
 const idxSrc = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
