@@ -140,30 +140,6 @@ function externalLeaderboardRows(leaderboardSnapshot, limit = 6) {
     }));
 }
 
-// Capability chips - a concrete row of what the catalog answers, each chip a
-// direct internal link to that tool's own page (the pages search engines and
-// LLM crawlers actually land on). Labels are ours; every PRICE is read from
-// the live catalog, never typed here: a hand-typed price on the homepage is
-// the same rot class test-docs-truth exists to catch in the docs. A slug the
-// running server does not serve (env-gated kit, self-host without a key)
-// simply drops its chip rather than linking to a 404.
-const CAPABILITY_CHIPS = [
-  ["perp-funding", "Perp funding rates"],
-  ["perp-markets", "Every listed perp"],
-  ["crypto-options-chain", "Options chain"],
-  ["defi-yields", "DeFi yield screener"],
-  ["stablecoins", "Stablecoin supply"],
-  ["sol-token-safety", "Solana token risk"],
-  ["sol-token-report", "Solana risk report"],
-  ["crypto-market-pulse", "Crypto market pulse"],
-  ["coin-profile", "Coin profile"],
-  ["asset-transfers", "Wallet transfers"],
-  ["site-crawl", "Crawl a site to markdown"],
-  ["v1-images-fast", "Text to image"],
-  ["v1-videos", "Text to video"],
-];
-
-
 // Third door: Agent402 Decide, a band under the two doors. Rendered only when
 // the decide tools are live (the chrome flag the server sets at boot); every
 // figure is read from the decide config.

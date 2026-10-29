@@ -657,8 +657,6 @@ export class GatewayNanopaymentsClient {
 const scope = new AsyncLocalStorage();
 const INSTALLED = Symbol.for("agent402.gatewayRouting");
 
-/** The Gateway client bound to the current async scope, or null. */
-export function activeGatewayClient() { return scope.getStore()?.client || null; }
 
 /**
  * Wrap verifyPayment, settlePayment and getFacilitatorClient on an

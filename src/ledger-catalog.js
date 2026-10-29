@@ -6,7 +6,6 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
-import { RAILS_SHORT } from "./rails.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");

@@ -66,9 +66,6 @@ export function emptyBody(b) {
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9._:-]{0,120}$/;
-// Kept for callers that still import it; json-document itself no longer
-// compares a file's mtime with the database clock (see reimportIfFileNewer).
-export const NEWER_FILE_GRACE_MS = 60_000;
 /** Backoff between load attempts (ms); the first load at boot tries 1 + length times. */
 export const LOAD_RETRY_DELAYS_MS = Object.freeze([250, 1000, 3000]);
 

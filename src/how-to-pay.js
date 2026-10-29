@@ -48,7 +48,6 @@ const eyebrow = (t, lit = false) => `<div style="${mono}font-size:var(--fs-sm);c
 const h2 = (t, panel = false) => `<h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--${panel ? "on-panel" : "ink"});">${t}</h2>`;
 const h3 = (t) => `<h3 style="font-weight:600;font-size:var(--fs-xl);margin:28px 0 10px;color:var(--ink);">${t}</h3>`;
 const p = (t, extra = "") => `<p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;${extra}">${t}</p>`;
-const note = (t) => `<p style="font-size:var(--fs-base);line-height:1.65;color:var(--faint);max-width:820px;margin:0 0 18px;">${t}</p>`;
 const link = (href, t) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${t}</a>`;
 const code = (t) => `<code style="${mono}font-size:var(--fs-code-inline);color:var(--ink);">${esc(t)}</code>`;
 const pre = (label, s) => `<div style="border:1px solid var(--hairline);background:var(--panel);max-width:820px;margin:0 0 22px;">

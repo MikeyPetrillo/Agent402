@@ -49,10 +49,6 @@ function getPool() {
   return pool;
 }
 
-export function leadsDbEnabled() {
-  return !!DATABASE_URL;
-}
-
 // Drop the retired table if it exists. Resolves { ok, removed } where
 // `removed` is the row count it held (null when it was already gone). Only the
 // count is logged; no row is ever read.

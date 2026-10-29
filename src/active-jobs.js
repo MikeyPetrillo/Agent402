@@ -50,6 +50,3 @@ export function jobsDuring(fromMs, toMs = Date.now()) {
   }
   return names;
 }
-
-/** Tests only. */
-export function __resetJobsForTest() { active.clear(); ended.length = 0; }
