@@ -13,7 +13,7 @@ Jobs are selected by commit-message markers or `workflow_dispatch`; every push t
 | Job | What it proves |
 |---|---|
 | `test` | Boots the server in free mode and runs the full gauntlet: unit tests for memory/kit2/PDF/media/conversions, **every endpoint called with its own documented example** (500+ calls), live-site exercises, the SSRF guard (metadata endpoint must be blocked), PoW gate with payments enabled, MCP server e2e, the remote `/mcp` connector e2e - then polls **production** post-deploy: catalog size, 402 on unpaid calls, SEO surfaces, a real PoW-settled call, and the live `/mcp` endpoint |
-| `deploy` | Railway via GraphQL: find/create project + service, domains, env vars, trigger the image build, redeploy the render worker when its code changed, and deploy the decide service at the same commit |
+| `deploy` | Railway via GraphQL: find/create project + service, domains, env vars, trigger the image build, redeploy the render worker and the decide service when their code changed |
 | `publish` | Every published package to npm over OIDC trusted publishing (`agent402-mcp`, the tollbooth, the client, the OpenClaw plugin and the framework adapters), then the official MCP Registry via GitHub OIDC |
 | `paytest` | Funded-wallet end-to-end buys against production |
 | `purl` | Interop: Stripe's `purl` client must parse our 402 and (burner permitting) settle a real payment |

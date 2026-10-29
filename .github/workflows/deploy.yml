@@ -2895,6 +2895,7 @@ jobs:
           t node scripts/test-load-shed-warmup.js
           # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
           t node scripts/test-worker-deploy-step.js
+          t node scripts/test-decide-deploy-step.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
           t node scripts/test-deploy-has-status.js
           # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
@@ -6725,6 +6726,46 @@ jobs:
           tar -xzf "$CLI_DIR/cli.tgz" -C "$CLI_DIR"
           "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --ci
 
+      # The decide service redeploys only when the pushed range touches a file
+      # scripts/decide-deploy-paths.js lists (its image inputs, its import
+      # closure, and the export row format and kit it shares with the main
+      # app); tools reach it as data at runtime. Same base and FAIL-OPEN rules
+      # as the worker selector above: an unreadable diff or no base redeploys.
+      - name: Decide whether the decide service's code changed
+        id: decide-diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          set -euo pipefail
+          RUN=yes
+          RUNS=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy.yml --branch main --event push --status success --limit 30 --json databaseId,headSha,conclusion 2>/dev/null || true)
+          DIFF_BASE=$(printf '%s' "$RUNS" | node scripts/decide-deploy-paths.js --base "$GITHUB_RUN_ID")
+          if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
+            if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
+              if [ "$(printf '%s\n' "$CHANGED" | node scripts/decide-deploy-paths.js --check)" = "yes" ]; then
+                echo "decide files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-decide"
+              else
+                echo "no decide file changed in $DIFF_BASE...$GITHUB_SHA - agent402-decide keeps its build"
+                RUN=no
+              fi
+            else
+              echo "could not read the diff $DIFF_BASE...$GITHUB_SHA - redeploying agent402-decide (fail-open)"
+            fi
+          else
+            echo "no successful deploy run to diff from - redeploying agent402-decide (fail-open)"
+          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
       # The decide service (DECIDE_MODE=true, same image) builds from the same
       # commit, AFTER the main app is verified: its index syncs from the main
       # app's internal export, which this commit's main build serves. It runs
@@ -6733,6 +6774,7 @@ jobs:
       # step so a decide failure cannot skip a check of the main app, and it
       # still fails the job.
       - name: Deploy the decide service at the same commit
+        if: steps.decide-diff.outputs.run == 'yes'
         run: |
           gql() {
             curl -s -X POST https://backboard.railway.app/graphql/v2 \
