@@ -15,8 +15,17 @@ export const renderPathStore = new AsyncLocalStorage();
 // Pages import ledgerShell() and ledgerFooterCompact(), then pass their
 // body HTML to get a complete document with SEO metadata and shared chrome.
 
-export const esc = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+/** HTML-escapes & < > " and ' (null and undefined render empty). */
+export function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/** A count with US thousands separators (missing reads as 0). */
+export function fmtNum(n) { return Number(n || 0).toLocaleString("en-US"); }
+
+/** An external, untrusted URL as an href: only http(s) becomes a link (escaped);
+ *  any other scheme (javascript:, data:) renders inert as "#". */
+export function safeHref(u) { return /^https?:\/\//i.test(String(u || "")) ? esc(u) : "#"; }
 
 // Safely embeds a JSON-serializable value into a page for a same-origin
 // external script to read (the CSP-hardening replacement for baking

@@ -4,7 +4,7 @@
 // demand teaser, FAQ, closing CTA, footer.
 
 import { crawlIntervalLabel } from "./crawl-cadence.js";
-import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum } from "./ledger-chrome.js";
 import { whySectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { decideConfig } from "./decide/config.js";
 import { toolList } from "./pages.js";
@@ -61,7 +61,6 @@ function monitorPrice() {
   return prices.length ? usd(Math.min(...prices)) : "";
 }
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 // A route's price as the catalog states it, or "" when the server does not
 // serve that slug (the row then shows no figure rather than a typed one).
 const slugPrice = (tools, slug) => String(tools.find((t) => t.slug === slug)?.price || "");

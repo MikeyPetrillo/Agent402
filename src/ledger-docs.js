@@ -9,7 +9,7 @@
 // layout with a real navigation tree - the opposite of what a GitBook-style
 // docs hub should feel like.
 
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
 import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
@@ -19,7 +19,6 @@ import { whyDocsStubHtml } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
 // One price format for every figure this page quotes: at least two decimals,
 // three below a cent ("$0.003", "$0.08", "$3.30").

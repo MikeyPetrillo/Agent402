@@ -2,7 +2,7 @@
 // Two-plan split (FREE / PAID), price-by-category receipt table, "beat the
 // token math" comparison card, CTA, compact footer.
 
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { toolList } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
 import { RAILS_OR, RAILS_SHORT } from "./rails.js";
@@ -15,7 +15,6 @@ import { reportLadderProse } from "./report-tiers.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 const MONITOR_MONTHLY = reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly || "see /monitors";
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const priceNum = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, ""));
 // Shortest exact form at the $0.001 grain: $0.01, $0.004, $0.033, $1.94.
 const fmtUsd = (n) => { const s3 = n.toFixed(3); return `$${s3.endsWith("0") ? n.toFixed(2) : s3}`; };

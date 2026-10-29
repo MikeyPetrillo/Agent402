@@ -10,14 +10,13 @@
 // (joined through stats.js's CAIP2_NAMES, the same map that produces those
 // counter keys — a local copy here would be a second list that could drift),
 // and the adoption table is the live leaderboard snapshot's top rows.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { powCostPhrase } from "./pow.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 

@@ -2614,10 +2614,6 @@ export const SKILL_PACKS = [
 
 ];
 
-// HTML escape, copied from guides.js/pages.js to keep skills self-contained.
-const esc = (s) =>
-  String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
 // Build a quick { slug → toolDef } map from the CATALOG. CATALOG is keyed by
 // "METHOD /path", so we have to scan entries. Prefer `def.route` when present;
 // otherwise fall back to the map key so skill pages never render "undefined".

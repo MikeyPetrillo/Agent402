@@ -5,11 +5,10 @@
 // read from the decide config (src/decide/config.js), never typed here, so
 // the page cannot drift from what the 402 charges. Rendered only when the
 // decide tools are in the catalog (the route 404s otherwise).
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { decideConfig } from "./decide/config.js";
 import { x402RailsFor } from "./rails.js";
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const usd = (n) => `$${Number(n).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`;
 
 export const DECIDE_EXAMPLE_TASK = "Check whether a wallet is on a sanctions list, then list its recent token transfers on Base";

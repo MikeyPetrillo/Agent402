@@ -11,7 +11,7 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
-import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -46,9 +46,8 @@ const ROSTER_CSS = `
 .mkt-search-wrap{border:1px solid var(--hairline)}
 .mkt-search-wrap:focus-within{border-color:var(--accent)}`;
 
-const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-// Crawled manifests are third-party input: only http(s) may become an href.
-const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
+// Crawled manifests are third-party input: only http(s) may become an href
+// (safeHref, from ledger-chrome.js).
 // A seller with no declared homepage links to its API origin, which often
 // answers a browser with a 404; the link says what it is.
 const apiOriginTitle = (s) => (!s?.local && s?.origin && String(s.homepage || "").replace(/\/+$/, "") === String(s.origin).replace(/\/+$/, "") ? ' title="API origin: this seller declares no homepage"' : "");

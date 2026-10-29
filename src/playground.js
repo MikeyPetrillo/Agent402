@@ -9,11 +9,10 @@
 // user-controlled values never reach the DOM un-escaped. This pattern is
 // carried over from the original pre-migration code.
 
-import { ledgerShell, ledgerFooterCompact, esc, jsonScriptTag } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, jsonScriptTag, fmtNum } from "./ledger-chrome.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
 export function playgroundPage(baseUrl, catalog) {
   const freeCount = fmtNum(toolList(catalog).filter(isComputePayable).length);

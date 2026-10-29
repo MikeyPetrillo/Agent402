@@ -7,7 +7,7 @@
 // the page cannot drift from /api/pricing (the rule test-price-prose enforces
 // on the product pages). Deliberately narrow: an agent that lands here should
 // leave with one curl, not a catalog.
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { FEED_TTL_MS, META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
 import { META_TTL_MS as DERIV_META_TTL_MS } from "./tools/derivatives-kit.js";
 import { CACHE_TTL_MS as DEFI_CACHE_TTL_MS } from "./tools/defi-kit.js";
@@ -15,7 +15,6 @@ import { CACHE_TTL_MS as DEFI_CACHE_TTL_MS } from "./tools/defi-kit.js";
 // kits' own TTLs. The page said "a minute" while every one of them is longer.
 const MAX_CACHE_MIN = Math.round(Math.max(FEED_TTL_MS, SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, DEFI_CACHE_TTL_MS) / 60_000);
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /** Group definitions: slug order is the display order. Copy is what the tool
  *  RETURNS, not the upstream it reads - a buyer picks by answer, not by source. */
