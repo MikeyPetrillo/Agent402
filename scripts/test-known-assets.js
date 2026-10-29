@@ -53,7 +53,9 @@ const pkgText = (name) => {
 const svm = pkgText("@x402/svm"), stellar = pkgText("@x402/stellar"), avm = pkgText("@x402/avm");
 ok(svm.includes(`USDC_MAINNET_ADDRESS = "${KNOWN_ASSETS["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"][0].asset}"`), "Solana USDC mint matches @x402/svm");
 ok(stellar.includes(`USDC_PUBNET_ADDRESS = "${KNOWN_ASSETS["stellar:pubnet"][0].asset}"`) && /DEFAULT_TOKEN_DECIMALS = 7;/.test(stellar) && KNOWN_ASSETS["stellar:pubnet"][0].decimals === 7, "Stellar USDC contract and its 7 decimals match @x402/stellar");
-ok(avm.includes(`USDC_MAINNET_ASA_ID = "${KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="][0].asset}"`), "Algorand USDC ASA matches @x402/avm");
+ok(avm.includes(`USDC_MAINNET_ASA_ID = "${KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"][0].asset}"`), "Algorand USDC ASA matches @x402/avm");
+ok(avm.includes(`ALGORAND_MAINNET_CAIP2 = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"`), "the Algorand mainnet key is the CAIP-2 id @x402/avm names");
+ok(JSON.stringify(KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]) === JSON.stringify(KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"]), "the full-hash spelling of Algorand mainnet prices the same asset");
 
 // The pricing contract itself.
 const BASE = KNOWN_ASSETS["eip155:8453"][0].asset;

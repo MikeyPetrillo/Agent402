@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { translateV1Accepts } from "../src/x402-v1-accepts.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
 import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, proc = null, facilitator = null;
@@ -66,25 +67,48 @@ for (const junk of [null, undefined, "str", 42, [], { accepted: [] }, { accepted
 }
 pass++; console.log("ok - every malformed input is a no-op, never a throw");
 
+// The second explicit pair: the full-hash spelling of Algorand mainnet folds to
+// the CAIP-2 id the 402 carries. Any other network, the CAIP-2 id itself and
+// the testnet hash are left exactly as sent.
+const avm = (network, over = {}) => ({ x402Version: 2, accepted: { scheme: "exact", network, asset: "31566704", payTo: "A", amount: "1000", ...over }, payload: { paymentGroup: ["x"], paymentIndex: 0 } });
+const folded = translateV1Accepts(avm(ALGORAND_MAINNET_LEGACY_CAIP2));
+ok(folded?.payload.accepted.network === ALGORAND_MAINNET_CAIP2 && folded.translated.join(",") === "network(alias)", "the full-hash Algorand id becomes the CAIP-2 id, reported as a network alias");
+ok(folded.payload.payload.paymentGroup[0] === "x" && folded.payload.accepted.amount === "1000", "the signed group and every other term are carried through untouched");
+ok(translateV1Accepts(avm(ALGORAND_MAINNET_CAIP2)) === null, "the CAIP-2 id itself is a no-op");
+ok(translateV1Accepts(avm("algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=")) === null, "the testnet hash is never folded to mainnet");
+ok(translateV1Accepts(avm("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8")) === null && translateV1Accepts(avm(ALGORAND_MAINNET_LEGACY_CAIP2.toLowerCase())) === null, "only the exact full-hash spelling folds");
+const bothPairs = translateV1Accepts(avm(ALGORAND_MAINNET_LEGACY_CAIP2, { maxAmountRequired: "1000" }));
+ok(bothPairs?.payload.accepted.network === ALGORAND_MAINNET_CAIP2 && !("maxAmountRequired" in bothPairs.payload.accepted) && bothPairs.translated.length === 2, "both pairs apply to one payload");
+
 // ---- the wire: does a v1-shaped payment actually settle? ----
 const [PORT, FAC_PORT] = [await getFreePort(), await getFreePort()];
 const B = `http://127.0.0.1:${PORT}`;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
-const facCalls = { verify: 0, settle: 0 };
+const ALGO_TREASURY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
+const facCalls = { verify: 0, settle: 0, avmVerify: [], avmSettle: [] };
+// One stub facilitator, two paths: the EVM rail at /evm and the Algorand rail
+// at /avm, the latter listing the CAIP-2 id the way the live facilitator does.
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
   req.on("end", () => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    if (req.url === "/supported") return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
-    if (req.url === "/verify") facCalls.verify++;
-    if (req.url === "/settle") facCalls.settle++;
+    const [path] = req.url.split("?");
+    if (path === "/evm/supported") return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+    if (path === "/avm/supported") return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: ALGORAND_MAINNET_CAIP2 }], extensions: [], signers: {} }));
+    if (path === "/evm/verify") facCalls.verify++;
+    if (path === "/evm/settle") facCalls.settle++;
+    if (path === "/avm/verify") { facCalls.avmVerify.push(JSON.parse(b)); return res.end(JSON.stringify({ isValid: true, payer: ALGO_TREASURY })); }
+    if (path === "/avm/settle") { facCalls.avmSettle.push(JSON.parse(b)); return res.end(JSON.stringify({ success: true, transaction: "TX" + facCalls.avmSettle.length, network: ALGORAND_MAINNET_CAIP2, payer: ALGO_TREASURY })); }
     res.end(JSON.stringify({ isValid: true, success: true, transaction: `0x${"ab".repeat(32)}`, network: "eip155:8453" }));
   });
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 proc = spawn("node", ["src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, PAYMENT_NETWORKS: "base",
+    PAYMENT_NETWORKS: "base,algorand", ALGORAND_WALLET_ADDRESS: ALGO_TREASURY,
+    FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
+    PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}/evm`, ALGORAND_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}/avm`,
+    ALGORAND_UPSTREAM_BUYER_ADDRESS: "", MPP_SECRET_KEY: "", PAYMENT_SETTLE_FALLBACK: "", AVM_SUBCENT_GATE: "off", CIRCLE_FACILITATOR_API_KEY: "",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", X402_INDEX_CRAWL: "off" },
   stdio: "ignore",
 });
@@ -154,6 +178,35 @@ try {
 
   const bare = await fetch(`${B}/api/uuid`);
   ok(bare.status === 402 && !!bare.headers.get("payment-required"), "an unpaid request is unchanged");
+
+  // The network alias on the wire: the 402 offers Algorand under the CAIP-2
+  // id, and a payment echoing that accept under the full-hash spelling (a
+  // client holding its own copy of the id) still matches, verifies and
+  // settles, with the facilitator asked about the CAIP-2 id. Shape-only
+  // Algorand payloads reach the stub exactly as in test-avm-subcent-offer.
+  {
+    const pr = JSON.parse(Buffer.from(bare.headers.get("payment-required"), "base64").toString("utf8"));
+    const offered = (pr.accepts || []).map((a) => a.network);
+    const avmAccept = (pr.accepts || []).find((a) => String(a.network).startsWith("algorand:"));
+    ok(avmAccept?.network === ALGORAND_MAINNET_CAIP2 && offered.every((n) => /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/.test(n)), `the 402 offers Algorand as the CAIP-2 id and every accept is strict CAIP-2 (${offered.join(", ")})`);
+    const payAvm = (accepted) => fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64({ x402Version: 2, accepted, payload: { paymentGroup: [Buffer.from(`group-${Date.now()}-${Math.random()}`).toString("base64")], paymentIndex: 0 } }) } });
+
+    const control = await payAvm({ ...avmAccept });
+    ok(control.status === 200 && facCalls.avmSettle.length === 1, `control: a payment echoing the CAIP-2 accept settles on the Algorand rail (${control.status})`);
+
+    const legacy = await payAvm({ ...avmAccept, network: ALGORAND_MAINNET_LEGACY_CAIP2 });
+    ok(legacy.status === 200 && facCalls.avmSettle.length === 2, `a payment naming the full-hash Algorand id SETTLES (${legacy.status})`);
+    const seen = facCalls.avmVerify.at(-1);
+    ok(seen?.paymentPayload?.accepted?.network === ALGORAND_MAINNET_CAIP2 && seen?.paymentRequirements?.network === ALGORAND_MAINNET_CAIP2,
+      "and the facilitator is asked about the CAIP-2 id on both sides of the verify");
+
+    // An id that is not an alias of what was offered still fails to match
+    // before the facilitator: the fold is a vocabulary difference, not a
+    // weaker check.
+    const before = facCalls.avmVerify.length;
+    const testnet = await payAvm({ ...avmAccept, network: "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" });
+    ok(testnet.status === 402 && facCalls.avmVerify.length === before, `the testnet hash matches nothing and never reaches the facilitator (${testnet.status})`);
+  }
 
   console.log(`\nPASS - ${pass} checks (x402 v1 accepts translation)`);
   proc.kill("SIGKILL"); facilitator.close(); process.exit(0);

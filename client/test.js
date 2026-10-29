@@ -42,6 +42,18 @@ const advisoryWarnings = [];
   const untouched = { createPaymentPayload: (pr) => pr.accepts.length };
   withNetworkPreference(untouched, []);
   ok(untouched.createPaymentPayload({ accepts }) === 2, "empty preference leaves the client untouched");
+  // Algorand mainnet is spelled two ways on the wire: the 32-character CAIP-2
+  // reference and the full base64 genesis hash. One preference matches both.
+  const algoAccepts = [{ network: "eip155:8453", a: "base" }, { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", a: "caip2" }, { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", a: "hash" }];
+  const algoSeen = [];
+  const algo = { createPaymentPayload: (pr) => { algoSeen.push(pr.accepts.map((x) => x.a)); return "ok"; } };
+  withNetworkPreference(algo, ["algorand"]);
+  algo.createPaymentPayload({ accepts: algoAccepts });
+  ok(JSON.stringify(algoSeen[0]) === '["caip2","hash"]', "an algorand preference matches the CAIP-2 id and the full-hash spelling");
+  const byHash = { createPaymentPayload: (pr) => { algoSeen.push(pr.accepts.map((x) => x.a)); return "ok"; } };
+  withNetworkPreference(byHash, ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]);
+  byHash.createPaymentPayload({ accepts: algoAccepts.slice(0, 2) });
+  ok(JSON.stringify(algoSeen[1]) === '["caip2"]', "a preference typed as the full hash still matches a seller's CAIP-2 accept");
 }
 
 // Offline: withPayeeAllowlist refuses a 402 whose payTo is not allowlisted -
@@ -285,7 +297,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.006 && paid === 0, `payNetworks ${JSON.stringify(payNetworks)} with no option on those chains counts the dearest of all ($0.006) and is refused over a $0.004 cap`);
       }
     }
-    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]]) {
+    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"]]) {
       ok(NETWORK_CAIP2[name] === caip2, `NETWORK_CAIP2 maps ${name} -> ${caip2}`);
     }
   }

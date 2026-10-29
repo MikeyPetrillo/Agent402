@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
 import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
@@ -195,7 +196,11 @@ export const WALLET_LOW_MESSAGE = "Paying outside sellers is temporarily unavail
 // spending wallet — so the chain the buyer paid on decides where we spend.
 export const EXTERNAL_CHAIN_BY_NETWORK = {
   "eip155:8453": "base",
-  "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": "algorand",
+  // Both spellings of Algorand mainnet (src/avm-network.js): the 402 carries
+  // the CAIP-2 form, and a payment naming the full-hash form is folded to it
+  // before the paywall, but a seller row may still carry either.
+  [ALGORAND_MAINNET_CAIP2]: "algorand",
+  [ALGORAND_MAINNET_LEGACY_CAIP2]: "algorand",
   // Solana buyers fund the SVM spending wallet, which pays Solana sellers
   // (src/solana-buyer.js). Mainnet genesis only - devnet never maps.
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "solana",
@@ -215,7 +220,10 @@ export function externalChainsFor(payNet, supported, { tempoFromBase = process.e
   if (own === "base" && tempoFromBase && supported.includes("tempo")) chains.push("tempo");
   return chains;
 }
-const EXTERNAL_CHAIN_CAIP2 = Object.fromEntries(Object.entries(EXTERNAL_CHAIN_BY_NETWORK).map(([k, v]) => [v, k]));
+// Chain -> the id we advertise and book under: the first one listed for it
+// above (a chain with an alias lists its canonical id first).
+const EXTERNAL_CHAIN_CAIP2 = {};
+for (const [caip2, chain] of Object.entries(EXTERNAL_CHAIN_BY_NETWORK)) EXTERNAL_CHAIN_CAIP2[chain] ??= caip2;
 
 export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
@@ -473,7 +481,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             lastErr = bad(`Best external match "${ext.slug}" is ${ext.price} - over this tier's $${cap} cap.${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}).` : " No tier covers that price - call the seller directly."}`, 409);
             if (hasNext) continue; throw lastErr;
           }
-          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.includes(chainCaip2))) {
+          // Any spelling of the chain's id on the seller's row counts.
+          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => EXTERNAL_CHAIN_BY_NETWORK[n] === chain))) {
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
             if (hasNext) continue; throw lastErr;
           }

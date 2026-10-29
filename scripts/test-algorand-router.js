@@ -12,7 +12,9 @@ import { buildRouteExecuteTool, EXTERNAL_CHAIN_BY_NETWORK } from "../src/tools/r
 let passed = 0, failed = 0;
 const ok = (cond, name) => { if (cond) { passed++; console.log(`ok - ${name}`); } else { failed++; console.log(`FAIL - ${name}`); } };
 
-const ALGO_CAIP2 = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+const ALGO_CAIP2 = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
+// The full-hash spelling a seller that predates the CAIP-2 reference advertises.
+const ALGO_GENESIS_HASH_ID = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 // --- pickPayableAccept -------------------------------------------------------
@@ -28,7 +30,10 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   const decoy = { network: ALGO_CAIP2, scheme: "exact", asset: "999", amount: "1" };
   ok(pickPayableAccept([decoy, algoAccept], "algorand") === algoAccept, "cheap wrong-asset decoy first: real USDC accept still pinned");
   ok(pickPayableAccept([baseAccept], "nope") === null, "unknown chain -> null");
-  ok(BUYER_CHAINS.algorand.caip2 === ALGO_CAIP2, "algorand CAIP-2 constant matches mainnet genesis");
+  ok(BUYER_CHAINS.algorand.caip2 === ALGO_CAIP2, "algorand CAIP-2 constant is the 32-character mainnet reference");
+  const legacyAccept = { ...algoAccept, network: ALGO_GENESIS_HASH_ID };
+  ok(pickPayableAccept([baseAccept, legacyAccept], "algorand") === legacyAccept, "a seller advertising mainnet as the full genesis hash is still payable");
+  ok(EXTERNAL_CHAIN_BY_NETWORK[ALGO_GENESIS_HASH_ID] === "algorand", "and its row maps to the Algorand spending chain");
 }
 
 // --- rankAlgorandResources ---------------------------------------------------

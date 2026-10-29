@@ -13,6 +13,7 @@ import {
 } from "@x402/extensions/bazaar";
 import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
 import { gradeX402Response } from "../src/tools/x402-kit.js";
+import { CAIP2_PATTERN } from "../src/avm-network.js";
 
 const MAX_CHALLENGE_BYTES = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
@@ -222,6 +223,10 @@ try {
     // extension's typed schema, on the FIRST accept only (one copy, never per
     // rail: the buyer echoes the challenge back).
     const accepts = Array.isArray(paymentRequired.accepts) ? paymentRequired.accepts : [];
+    // The Bazaar validator parses every accept's network with the strict
+    // CAIP-2 grammar (reference at most 32 characters of [-_a-zA-Z0-9]); one
+    // id outside it drops the whole route from discovery.
+    for (const a of accepts) if (!CAIP2_PATTERN.test(String(a?.network || ""))) fail(route, `accept network "${a?.network}" is not a strict CAIP-2 id`);
     if (outputSchema) {
       if (JSON.stringify(accepts[0]?.outputSchema) !== JSON.stringify(outputSchema)) fail(route, "accepts[0].outputSchema is not the extension's typed output schema");
       if (accepts.slice(1).some((a) => a.outputSchema !== undefined)) fail(route, "outputSchema duplicated onto a later accept");

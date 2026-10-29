@@ -685,7 +685,7 @@ A router receipt looks like this (the seller and transaction are placeholders):
   "seller": "https://seller.example",
   "external": true,
   "settleTx": "<algorand transaction id>",
-  "settleNetwork": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  "settleNetwork": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
   "resolvedBy": "task-external"
 }
 \`\`\`

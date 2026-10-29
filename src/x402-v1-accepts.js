@@ -29,11 +29,22 @@
 //      vocabulary difference, never a disagreement about terms.
 //
 // AGENT402_X402_V1_ACCEPTS=off disables it.
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 
 /** The v1 name and its v2 equivalent. Deliberately a single, explicit pair -
  *  this is a known compatibility wart, not a general aliasing layer for the
  *  payment path. */
 const V1_TO_V2 = Object.freeze({ maxAmountRequired: "amount" });
+
+// The second explicit pair, with the same safety property: the full-hash
+// spelling of Algorand mainnet is folded to the CAIP-2 id every 402 now
+// carries. A payment naming the full hash can only have come from a client
+// that keeps its own copy of the id; without the fold it never deep-equals an
+// advertised accept and is refused before the facilitator. The Algorand
+// signature covers the transaction group (whose genesis hash is the chain
+// itself), not this block, and the facilitator reads both spellings as one
+// chain, so the fold forges nothing and weakens no check.
+const NETWORK_ALIASES = Object.freeze({ [ALGORAND_MAINNET_LEGACY_CAIP2]: ALGORAND_MAINNET_CAIP2 });
 
 /**
  * Do two price fields name the SAME base-unit amount? Numeric equality, not
@@ -94,6 +105,10 @@ export function translateV1Accepts(payload) {
       // BOTH names with DIFFERENT values: left exactly as sent. That is a real
       // disagreement about price, not a vocabulary difference, and it must
       // fail.
+    }
+    if (typeof next.network === "string" && Object.hasOwn(NETWORK_ALIASES, next.network)) {
+      next.network = NETWORK_ALIASES[next.network];
+      translated.push("network(alias)");
     }
     if (!translated.length) return null;
     return { payload: { ...payload, accepted: next }, translated };

@@ -980,7 +980,16 @@ export const NETWORK_CAIP2 = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
   stellar: "stellar:pubnet",
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
+};
+
+// Algorand mainnet is also spelled as its full base64 genesis hash (44
+// characters, trailing `=`) by sellers that predate the 32-character CAIP-2
+// reference; both name the same chain, so a preference matches either.
+const ALGORAND_MAINNET_GENESIS_HASH_ID = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+const sameNetwork = (a, b) => {
+  const fold = (n) => (n === ALGORAND_MAINNET_GENESIS_HASH_ID ? NETWORK_CAIP2.algorand : n).toLowerCase();
+  return fold(String(a || "")) === fold(String(b || ""));
 };
 
 export function withNetworkPreference(client, networks) {
@@ -989,7 +998,7 @@ export function withNetworkPreference(client, networks) {
   const orig = client.createPaymentPayload.bind(client);
   client.createPaymentPayload = (paymentRequired) => {
     const list = Array.isArray(paymentRequired?.accepts) ? paymentRequired.accepts : [];
-    const picked = prefs.flatMap((caip2) => list.filter((a) => String(a?.network || "").toLowerCase() === caip2.toLowerCase()));
+    const picked = prefs.flatMap((caip2) => list.filter((a) => sameNetwork(a?.network, caip2)));
     if (!picked.length) {
       const offered = [...new Set(list.map((a) => a?.network).filter(Boolean))];
       throw new Error(`network preference [${prefs.join(", ")}] matched none of the seller's payment options [${offered.join(", ")}]`);

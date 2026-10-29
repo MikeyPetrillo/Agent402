@@ -26,6 +26,7 @@ import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 
 // Network label -> the spending chain that pays it. Kept in lockstep with
 // route-execute's EXTERNAL_CHAIN_BY_NETWORK (pinned by test-dispatch-
@@ -36,7 +37,9 @@ export const SPEND_CHAIN_BY_NETWORK = Object.freeze({
   "solana": "solana",
   "solana-mainnet": "solana",
   "solana-mainnet-beta": "solana",
-  "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": "algorand",
+  // A seller's 402 may spell Algorand mainnet either way (src/avm-network.js).
+  [ALGORAND_MAINNET_CAIP2]: "algorand",
+  [ALGORAND_MAINNET_LEGACY_CAIP2]: "algorand",
   "eip155:4217": "tempo",
 });
 

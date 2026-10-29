@@ -15,6 +15,7 @@ import { installSettlePreference, registerSettlePreference } from "./settle-pref
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
+import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
 import { confirmStellarTransfer, settlePayerOf, settleWithStellarFallback } from "./stellar-confirm.js";
 import { clarifySvmSettleFailure } from "./svm-clarify.js";
@@ -112,11 +113,13 @@ const STELLAR_NETWORKS = {
   stellar: "stellar:pubnet",
 };
 const AVM_NETWORKS = {
-  // Algorand mainnet (genesis-hash CAIP-2). USDC is ASA 31566704 — resolved by
-  // @x402/avm's built-in asset config, so no custom money parser. Settlement
-  // via the GoPlausible-operated facilitator (keyless /supported verified
-  // 2026-07-10); fee-sponsored, so buyers don't need ALGO for gas.
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  // Algorand mainnet (CAIP-2: the first 32 characters of the base64 genesis
+  // hash, src/avm-network.js; the full-hash spelling is read as an alias).
+  // USDC is ASA 31566704 — resolved by @x402/avm's built-in asset config, so
+  // no custom money parser. Settlement via the GoPlausible-operated
+  // facilitator (keyless /supported verified 2026-07-10); fee-sponsored, so
+  // buyers don't need ALGO for gas.
+  algorand: ALGORAND_MAINNET_CAIP2,
 };
 // Exported for scripts/test-rails.js: the copy layer (src/rails.js) must
 // advertise every mainnet rail this file can settle — the test cross-checks.

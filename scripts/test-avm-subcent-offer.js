@@ -20,7 +20,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const g = await import("../src/avm-sponsorship.js");
-const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
 const PAYTO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
 const OTHER = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const exhaustedRow = { chain: "algorand", usedMonth: 1013, quota: 1000, suBalance: 0 };
