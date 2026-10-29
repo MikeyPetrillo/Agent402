@@ -551,7 +551,7 @@ export class Agent402 {
         }
       }
       if (this.creditsKey) {
-        // Prepaid card credits: the server authorizes against the key's balance
+        // A prepaid credits key: the server authorizes against the key's balance
         // before the handler and debits only on a 200 (X-Credits-Balance tells
         // what is left). The same spend caps apply as on the wallet path, and
         // against the same number: a credits gate holds and debits the amount

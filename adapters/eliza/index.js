@@ -314,7 +314,7 @@ export const aboutAction = {
   description: "What Agent402 is, how it is paid, and how many tools it serves right now. Free.",
   examples: [[
     { name: "user", content: { text: "What is Agent402?" } },
-    { name: "agent", content: { text: "Agent402 is a catalog of pay-per-call web tools, paid by card credits or USDC over x402.", actions: ["AGENT402_ABOUT"] } },
+    { name: "agent", content: { text: "Agent402 is a catalog of pay-per-call web tools, paid in USDC over x402 or with a prepaid credits key.", actions: ["AGENT402_ABOUT"] } },
   ]],
   validate: async () => true,
   handler: async (runtime, _message, _state, _options, callback) => {
@@ -328,7 +328,7 @@ export const aboutAction = {
         pay: "a prepaid credits key for Agent402's own services (AGENT402_CREDITS_KEY) or USDC over x402 from a wallet (AGENT402_WALLET_KEY); free-tier tools pay with proof-of-work",
         discover: `${baseUrl}/api/find?q=<task>`, docs: `${baseUrl}/llms.txt`, why: `${baseUrl}/#why`,
       };
-      return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid by card credits or USDC over x402. Docs: ${data.docs}`, data });
+      return reply(callback, { success: true, text: `Agent402 serves ${data.tools} pay-per-call tools right now (${data.freeTier} on the free tier), paid in USDC over x402 or with a prepaid credits key. Docs: ${data.docs}`, data });
     } catch (e) {
       return reply(callback, { success: false, text: `Agent402 is unreachable at ${baseUrl}: ${errorText(e)}`, error: errorText(e) });
     }

@@ -67,7 +67,10 @@ Surfaces:
 - Algorand mainnet is offered under its 32-character CAIP-2 id; a payment
   naming the older full-hash id still settles. agent402-client 0.8.19,
   agent402-mcp 0.13.22 and agent402-openclaw 0.5.7 read both spellings; the
-  earlier client matches only the old id.
+  earlier client matches only the old id. agent402-mcp 0.13.22,
+  elizaos-plugin-agent402 0.2.9 and agent402-agentkit 0.1.9 describe a
+  credits key as sold or already issued, and the mcp package shows a buy link
+  only while the service's /api/pricing says credits are on sale.
 - /health answers cross-origin requests, and a cdnOrigin word on
   /api/gateway-status reports whether a CDN-range peer reached the origin
   without its edge secret.

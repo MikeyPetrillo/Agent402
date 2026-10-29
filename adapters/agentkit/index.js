@@ -159,7 +159,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
         baseUrl: base,
         tools: endpoints.length,
         freeTier: endpoints.filter((e) => e.computePayable).length,
-        pay: "x402 (USDC on Base and other chains) from this wallet, or proof-of-work for free-tier tools; prepaid card credits also accepted",
+        pay: "x402 (USDC on Base and other chains) from this wallet, or proof-of-work for free-tier tools; a prepaid credits key, where sold or already issued, also pays on Agent402's own services",
         discover: `${base}/api/find?q=<task>`,
         docs: `${base}/llms.txt`,
       });

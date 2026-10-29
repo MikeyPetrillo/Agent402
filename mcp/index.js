@@ -68,7 +68,8 @@ const AGENT_KEY = process.env.AGENT_KEY || "";
 // settle on whichever chain the seller offers (EVM accepts are tried first).
 const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
 const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
-// Prepaid card credits (no wallet): a key issued at https://agent402.tools/credits.
+// A prepaid credits key (no wallet), already issued or bought where the
+// service sells them (creditsSale() below reads which).
 // Sent as Authorization: Bearer on every catalog call; the server debits the
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
@@ -415,7 +416,11 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     if (res.ok) spentUsd += price;
     if (res.status === 402) {
       let body = {}; try { body = await res.clone().json(); } catch { /* plain */ }
-      return { content: [{ type: "text", text: `Credits refused for "${tool.slug}": ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""}. Top up at ${body.topup || `${BASE}/credits`}.` }], isError: true };
+      // The refusal carries a topup link only while the service sells credits;
+      // otherwise its note says so and names where to pay per call instead.
+      const sale = creditsSale();
+      const next = body.topup ? `Top up at ${body.topup}.` : body.topupNote ? `${body.topupNote}${body.pay ? ` (${body.pay})` : ""}` : sale.buy ? `Top up at ${sale.buy}.` : `${sale.note[0].toUpperCase()}${sale.note.slice(1)}.`;
+      return { content: [{ type: "text", text: `Credits refused for "${tool.slug}": ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""}. ${next}` }], isError: true };
     }
   } else if (HAS_WALLET) {
     // The signing guard (installed on every key-built client, getPayFetch)
@@ -662,6 +667,17 @@ server.setRequestHandler(GetPromptRequestSchema, async (req) => {
 let curated = [];
 let pricingInfo = null;
 
+// Whether the service sells new credits is a switch on the server, read from
+// its /api/pricing (credits.onSale); this package cannot see the switch on its
+// own, so a buy link is shown only while the catalog read says they are sold,
+// and a key already issued keeps working either way.
+function creditsSale() {
+  const c = pricingInfo?.credits;
+  if (c?.onSale === true) return { onSale: true, buy: c.buy || `${BASE}/credits` };
+  if (c?.onSale === false) return { onSale: false, note: "new credits are not on sale; a key already issued keeps working" };
+  return { onSale: null, note: `whether new credits are sold is read from ${BASE}/api/pricing (credits.onSale); a key already issued keeps working` };
+}
+
 // A catalog that could not load at boot (a shed or unreachable service) is
 // read again on the next tools/list or tools/call, at most once per
 // CATALOG_RETRY_MS, so a session that started during a busy minute recovers
@@ -883,6 +899,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         try { solanaAddress = (await solanaSigner()).address; } catch { solanaAddress = "invalid SOLANA_AGENT_KEY"; }
       }
       const computePayable = [...catalog.values()].filter((t) => t.computePayable).length;
+      const sale = creditsSale();
       return mcpJsonResult({
         service: BASE,
         mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
@@ -894,7 +911,9 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         payableWithCompute: computePayable,
         walletOnly: catalog.size - computePayable,
         workflows: skillPacks.length,
-        credits: HAS_CREDITS ? { configured: true, how: "prepaid card credits (Authorization: Bearer a402_...) - every wallet-only tool except the wallet-identity-bound ones (memory, usage, receipts, attest, feedback) pays from the balance, debited only on a successful call", balance: `${BASE}/api/credits/balance`, topup: `${BASE}/credits` } : { configured: false, buy: `${BASE}/credits` },
+        credits: HAS_CREDITS
+          ? { configured: true, how: "a prepaid credits key (Authorization: Bearer a402_...) - every wallet-only tool except the wallet-identity-bound ones (memory, usage, receipts, attest, feedback) and the routes that buy from an outside seller pays from the balance, debited only on a successful call", balance: `${BASE}/api/credits/balance`, onSale: sale.onSale, ...(sale.buy ? { topup: sale.buy } : { note: sale.note }) }
+          : { configured: false, how: "a credits key, where sold or already issued, pays per successful call on Agent402's own services (AGENT402_CREDITS_KEY)", onSale: sale.onSale, ...(sale.buy ? { buy: sale.buy } : { note: sale.note }) },
         spendControls: (HAS_WALLET || HAS_CREDITS)
           ? {
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
@@ -906,7 +925,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         note: HAS_WALLET
           ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet(s) - EVM chains via AGENT_KEY, Solana via SOLANA_AGENT_KEY - within the spend controls above."
           : HAS_CREDITS
-            ? "Every tool on Agent402's own services is available; each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute, the flight tools) and the wallet-identity tools (memory, usage) need a wallet key."
+            ? "Every tool on Agent402's own services is available; each call is paid from the credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute, the flight tools) and the wallet-identity tools (memory, usage) need a wallet key."
             : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY).`,
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
