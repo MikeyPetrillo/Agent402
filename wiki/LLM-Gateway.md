@@ -48,7 +48,7 @@ Because tiers are flat-priced while upstream bills per token, every request is a
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
-| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus incl. opus-5.5, claude fable 5.1, and gemini 3.1 pro) | 200k chars | 8,192 tokens |
+| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3, claude opus incl. opus-5.5, claude fable 5.1, and gemini 3.1 pro) | 200k chars | 8,192 tokens |
 | `POST /v1/embeddings` | $0.002 | text-embedding-3-small (default), 3-large, ada-002 - batch up to 64 inputs | 16k chars | - |
 | `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with GPT-5 Image Mini as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
 | `POST /v1/audio/speech` | $0.06 | a five-model failover chain; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
@@ -69,7 +69,7 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 | `POST /v1/judge/locate` | $0.002 | Preview. One `image` and up to 4 `targets`; each comes back with `present` (a probability), `found`, `box` and `boxConfidence`. A box is always returned, so read `found` first. |
 | `POST /v1/judge/long` | $0.02 | Preview. `/v1/judge`'s questions over a document of up to 900,000 bytes (about 262k tokens). |
 
-`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged.
+`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged on x402.
 
 ## Retired model ids
 
@@ -77,7 +77,7 @@ A request that names a model the upstream has retired is served by its successor
 
 ## Metered tier - pay per request, quoted first
 
-`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price, plus our fee), never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
+`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price, plus our fee), never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels x402 settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
 
 Two ways to pay it:
 

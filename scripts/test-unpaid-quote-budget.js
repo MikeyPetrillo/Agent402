@@ -128,11 +128,17 @@ ok(secondsToHourBoundary(10 * HOUR + 1) === 3600 && secondsToHourBoundary(10 * H
 // A credential must LOOK like one. `Authorization: x` used to buy an exemption
 // here, the same class the metered quote limiter closed in its own review, so
 // these shapes are now the ONE rule both read (looksLikePayment).
-const REAL_PAYMENT = "A".repeat(40);
+// It must also DECODE to one (src/payment-attempt.js): an x402 payload naming
+// a scheme and an offered network, or a Payment credential with a challenge
+// and a payload. Junk bytes of any length are counted like any other request.
+const REAL_PAYMENT = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+const JUNK_PAYMENT = "A".repeat(40);
+const REAL_MPP = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", realm: "test.local", method: "evm", intent: "charge", request: {} }, payload: {} })).toString("base64url")}`;
 const REAL_POW = `${issueChallenge("hash").token}:41`;
-ok(looksLikePayment({ "payment-signature": REAL_PAYMENT }) && looksLikePayment({ "x-payment": REAL_PAYMENT }), "a payment header long enough to be one is a plausible credential");
-ok(looksLikePayment({ authorization: "Bearer a402_notarealkey" }) && looksLikePayment({ authorization: `Payment ${"A".repeat(24)}` }), "a credits key and an MPP Payment credential are plausible credentials");
+ok(looksLikePayment({ "payment-signature": REAL_PAYMENT }) && looksLikePayment({ "x-payment": REAL_PAYMENT }), "a payment header that decodes to a scheme and an offered network is a plausible credential");
+ok(looksLikePayment({ authorization: "Bearer a402_notarealkey" }) && looksLikePayment({ authorization: REAL_MPP }), "a credits key and an MPP Payment credential that decodes are plausible credentials");
 ok(!looksLikePayment({ authorization: "x" }) && !looksLikePayment({ authorization: "Bearer junk" }) && !looksLikePayment({ "payment-signature": "bm90LWEtcGF5bWVudA" }), "junk in an Authorization or a too-short payment header is NOT a credential");
+ok(!looksLikePayment({ "payment-signature": JUNK_PAYMENT }) && !looksLikePayment({ "x-payment": JUNK_PAYMENT }) && !looksLikePayment({ authorization: `Payment ${JUNK_PAYMENT}` }), "a long junk payment header or Payment credential that does not decode is NOT a credential either");
 ok(looksLikePowSolution(REAL_POW), "the `<token>:<nonce>` shape pow.js issues is a plausible proof-of-work solution");
 ok(!looksLikePowSolution("a:b") && !looksLikePowSolution("not-a-token:1") && !looksLikePowSolution(issueChallenge("hash").token) && !looksLikePowSolution(`${issueChallenge("hash").token}:`), "junk, a token with no nonce and a nonce with no token are not solutions");
 ok(hasCredentialHeader({ "payment-signature": REAL_PAYMENT }) && hasCredentialHeader({ "x-pow-solution": REAL_POW }), "a plausible payment or proof-of-work header marks a request as not a price check");
@@ -380,13 +386,18 @@ try {
   ok(pow.status !== 429, `a request with a proof-of-work solution is never a 429 (got ${pow.status})`);
   const bearer = await call(P, "/api/uuid", { headers: { authorization: "Bearer a402_notarealkey" } });
   ok(bearer.status !== 429, `a request with a credits key is never a 429 (got ${bearer.status})`);
-  const mppCred = await call(P, "/api/uuid", { headers: { authorization: `Payment ${REAL_PAYMENT}` } });
+  const mppCred = await call(P, "/api/uuid", { headers: { authorization: REAL_MPP } });
   ok(mppCred.status !== 429, `a request with an MPP Payment credential is never a 429 (got ${mppCred.status})`);
   // A header alone is not a credential: `Authorization: x` bought a full 402
-  // and an exemption before this, which is a budget anyone could opt out of.
+  // and an exemption before this, which is a budget anyone could opt out of;
+  // so did any 32 bytes of junk in a payment header.
   for (const [label, headers] of [
     ["a junk Authorization", { authorization: "x" }],
     ["a too-short payment header", { "payment-signature": "bm90LWEtcGF5bWVudA" }],
+    ["a long junk payment header", { "payment-signature": JUNK_PAYMENT }],
+    ["a long junk x-payment header", { "x-payment": JUNK_PAYMENT }],
+    ["a junk Payment credential", { authorization: `Payment ${JUNK_PAYMENT}` }],
+    ["a payload naming a network this server does not sell on", { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:1" }, payload: {} })).toString("base64") }],
     ["a malformed proof-of-work solution", { "x-pow-solution": "not-a-token:1" }],
   ]) {
     const r = await call(P, "/api/uuid", { headers });

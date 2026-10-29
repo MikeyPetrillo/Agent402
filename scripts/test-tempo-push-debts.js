@@ -102,7 +102,13 @@ app.use(async (req, res, next) => {
   return res.status(402).json({ details: { reason: "refunded", transferClaimed: true } });
 });
 app.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
-app.post("/paid", (req, res) => { handlerRuns++; return req.body?.text === "boom" ? res.status(500).json({ error: "handler failed" }) : res.json({ ok: true }); });
+app.post("/paid", (req, res) => {
+  handlerRuns++;
+  if (req.body?.text === "boom") return res.status(500).json({ error: "handler failed" });
+  // A handler refusal written for the settle-after rails, as the kits write them.
+  if (req.body?.text === "refuse") return res.status(422).json({ error: "The text is over the cap. Nothing was charged.", hint: "Send a shorter text; you were not charged.", problem: { detail: "Refused before any upstream call, so nothing was charged." } });
+  return res.json({ ok: true, note: "Nothing was charged for the free part." });
+});
 const server = app.listen(0);
 await new Promise((r) => server.once("listening", r));
 const url = `http://127.0.0.1:${server.address().port}/paid`;
@@ -366,6 +372,29 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/app\.use\(tempoGate\);[\s\S]{0,900}await tempoPushDebts\.claimForServe\(req\)/.test(src), "server.js holds the claim right after the Tempo gate, before any handler");
   ok(/res\.statusCode >= 400 && !req\.tempoPushRefunded\)/.test(src), "a push refused as refunded books no second debt or charged failure");
   ok(/const tx = req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\| tempoTxFromReceiptHeader/.test(src), "a push handler failure is keyed on the same hash too, so a mixed-case relay reference cannot book a second row for one transfer");
+}
+
+// A handler refusal on a CLAIMED push transfer is a charge booked as owed,
+// so the "not charged" sentence the kits write for the settle-after rails is
+// restated for this payer at send (src/push-refusal-body.js), with the fields
+// a client reads. A served answer and a refunded claim go out as written.
+{
+  const { PUSH_FAILURE_NOTE, rewriteNotChargedForPush } = await import("../src/push-refusal-body.js");
+  const h = hashFor(40);
+  const r = await post(pushCred(h), { text: "refuse" });
+  ok(r.status === 422 && r.body.charged === true && r.body.transferClaimed === true && r.body.refundOwed === true && r.body.payment === PUSH_FAILURE_NOTE, `push handler refusal: the body carries charged, transferClaimed, refundOwed and the owed note (${JSON.stringify(r.body).slice(0, 160)})`);
+  ok(!/not charged|nothing was charged/i.test(JSON.stringify(r.body)) && /recorded as a refund owed/.test(r.body.error) && /owed a refund/.test(r.body.hint) && /recorded as owed/.test(r.body.problem?.detail), `push handler refusal: every "not charged" sentence, nested ones too, is restated (${r.body.error})`);
+  ok(rowsFor(h).length === 1 && rowsFor(h)[0].status === "owed" && rowsFor(h)[0].httpStatus === 422, "...and the finish path books the debt the sentence names");
+  const served = await post(pushCred(hashFor(41)), { text: "x" });
+  ok(served.status === 200 && served.body.note === "Nothing was charged for the free part." && served.body.refundOwed === undefined, "a served push answer goes out as written (only a refusal is restated)");
+  ok(rewriteNotChargedForPush("This call is not charged on x402.") === "This call is not charged on x402." && rewriteNotChargedForPush("Bad input - not charged; retry") === "Bad input - a refund is owed; retry", "a sentence scoped to another rail is kept; an unscoped clause is restated in place");
+  // The refund run holds the claim: server.js answers its own refunded 402, untouched.
+  const h2 = hashFor(42);
+  const cred2 = pushCred(h2);
+  await post(cred2, {});
+  claimInWindow = h2;
+  const held = await post(cred2, { text: "refuse" });
+  ok(held.status === 402 && held.body.details?.reason === "refunded" && held.body.refundOwed === undefined && held.body.payment === undefined, `a claim the refund run holds is answered as refunded, not restated (${JSON.stringify(held.body)})`);
 }
 
 server.close();

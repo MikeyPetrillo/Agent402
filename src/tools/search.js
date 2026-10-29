@@ -713,7 +713,7 @@ export const SEARCH_TOOLS = [
     category: "web",
     price: "$0.08",
     description:
-      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged.",
+      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged, except a Tempo transfer sent before the call, which is recorded as owed.",
     tags: ["search", "batch", "multi-search", "research", "parallel"],
     discovery: {
       bodyType: "json",

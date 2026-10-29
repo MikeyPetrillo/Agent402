@@ -560,8 +560,8 @@ ${reportsParagraph(baseUrl, tools)}
 
 Determine it from the response you already hold, without asking us:
 
-- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged. Safe to retry.
-- **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged. Safe to retry with a fresh authorization.
+- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry.
+- **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged on x402. Safe to retry with a fresh authorization.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
 

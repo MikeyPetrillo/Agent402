@@ -66,7 +66,7 @@ One formula for every seller, ours included: fit to the step, observed reliabili
 
 - The decision fee comes back as a credit worth 100% of it, valid 24 hours, toward running that plan.
 - Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed 5% markup.
-- Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged.
+- Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed.
 - Every step returns its own receipt; outside results are marked as untrusted content.
 
 ## See also

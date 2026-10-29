@@ -36,6 +36,7 @@
 // — deliberately out of scope here; see the approved plan.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
+import { installPushRefusalBody } from "./push-refusal-body.js";
 import { Challenge, Credential, Errors, Method, Receipt } from "mppx";
 import { tempo } from "mppx/server";
 import { mppxReplayStore } from "./mppx-store.js";
@@ -1535,6 +1536,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         });
         settleReplay();
         req.tempoSettled = true;
+        // A handler refusal from here on is a charge on a claimed transfer:
+        // its "not charged" sentence is restated for this payer at send.
+        installPushRefusalBody(req, res);
         console.log(`[mpp-tempo] settled push credential before the handler ${req.method} ${req.path} tx=${f.receipt?.reference || "?"} [validate=${tValidated - t0}ms finalize=${Date.now() - tFinal0}ms]`);
         return next();
       }

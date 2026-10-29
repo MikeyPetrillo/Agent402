@@ -2,7 +2,7 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
-import { carriesPaymentAttempt } from "./payment-attempt.js";
+import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
@@ -811,6 +811,9 @@ const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 // Display/branding only — the x402 payTo is always the resolved 0x address.
 const WALLET_ENS = process.env.WALLET_ENS || "agent402.base.eth";
 const NETWORK = process.env.NETWORK || "base";
+// A payment header counts as a payment attempt (the unpaid-quote limiters,
+// the gateway cache) only when it names a network this server sells on.
+registerOfferedNetworks(enabledNetworks(NETWORK).map((n) => PAY_NETWORKS[n]).filter(Boolean));
 const FREE_MODE = process.env.FREE_MODE === "true";
 // FR4-06: fail fast on a partial render-worker config (one of URL/token set).
 assertWorkerConfig();

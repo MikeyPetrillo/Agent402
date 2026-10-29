@@ -32,7 +32,7 @@ Both tiers are **wallet-only** - every call burns real upstream transcription cr
 
 ## Supported audio formats
 
-mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepted too when their duration can be read; one whose duration cannot be read answers `422` and is not charged.
+mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepted too when their duration can be read; one whose duration cannot be read answers `422` and is not charged on x402.
 
 ## Request / Response
 
