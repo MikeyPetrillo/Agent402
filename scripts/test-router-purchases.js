@@ -119,6 +119,21 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   ok(u.get(SELLER).byWallet.get(W).payers === undefined && u.get(SELLER).clearing.has(W), "CONTROL: no payer figure at all stays unknown and does not refuse");
   const zc = buildEvidenceBinding({ chainProven: new Map([[SELLER, { settled: 600, payers: 0, payTo: W }]]), ...FLOORS });
   ok(zc.get(SELLER).byWallet.get(W).payers === 0 && !zc.get(SELLER).clearing.has(W), "a chain-join row measured at zero payers refuses too");
+  // The Bazaar fold keeps the distinction at the source: an item with no
+  // payer field folds as calls only, one measured at zero folds the zero.
+  const { foldBazaarQuality } = await import("../src/x402-index.js");
+  const noField = new Map();
+  foldBazaarQuality(noField, SELLER, { l30DaysTotalCalls: 80 }, W);
+  const nf = buildEvidenceBinding({ bazaarQuality: [...noField], ...FLOORS }).get(SELLER);
+  ok(noField.get(SELLER).payers30d === undefined && nf?.byWallet.get(W)?.settled === 80 && nf.byWallet.get(W).payers === undefined && nf.clearing.has(W), `a Bazaar item with no payer field leaves the breadth unknown and does not refuse (${JSON.stringify(nf?.byWallet.get(W))})`);
+  const zero = new Map();
+  foldBazaarQuality(zero, SELLER, { l30DaysTotalCalls: 80, l30DaysUniquePayers: 0 }, W);
+  const z0 = buildEvidenceBinding({ bazaarQuality: [...zero], ...FLOORS }).get(SELLER);
+  ok(zero.get(SELLER).payers30d === 0 && z0?.byWallet.get(W)?.payers === 0 && !z0.clearing.has(W), "a Bazaar item measured at zero payers refuses at the breadth floor");
+  const mixed = new Map();
+  foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 10 }, W);
+  foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 70, l30DaysUniquePayers: 4 }, W);
+  ok(mixed.get(SELLER).payers30d === 4 && mixed.get(SELLER).byPayTo[W].calls === 80 && mixed.get(SELLER).byPayTo[W].payers === 4, "a measured figure beside an unmeasured item folds as the measured one");
 }
 
 // --- 4. The chain join: the merchant SQL leaves our wallets out ------------

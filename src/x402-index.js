@@ -1782,23 +1782,28 @@ export function _setBazaarQualityForTest(origin, q) { if (q) bazaarQualityByOrig
 export const BAZAAR_QUALITY_MAX_PAYTOS = 8;
 export function foldBazaarQuality(map, origin, q, basePayTo = null, { curated = false } = {}) {
   if (!q || typeof q !== "object") return;
-  const calls = Number(q.l30DaysTotalCalls) || 0, payers = Number(q.l30DaysUniquePayers) || 0;
+  const calls = Number(q.l30DaysTotalCalls) || 0;
+  // A payer figure is folded only when the item carries one: a measured zero
+  // is evidence (the binding refuses on it), an item with no payer field
+  // leaves the breadth unknown (src/evidence-binding.js put).
+  const measured = q.l30DaysUniquePayers !== undefined && q.l30DaysUniquePayers !== null && Number.isFinite(Number(q.l30DaysUniquePayers));
+  const payers = measured ? Number(q.l30DaysUniquePayers) : undefined;
   const last = typeof q.lastCalledAt === "string" ? q.lastCalledAt : null;
-  const cur = map.get(origin) || { calls30d: 0, payers30d: 0, lastCalledAt: null, payTos: [], curated: false };
+  const cur = map.get(origin) || { calls30d: 0, payers30d: undefined, lastCalledAt: null, payTos: [], curated: false };
   cur.curated = cur.curated === true || curated === true;
   if (!cur.byPayTo || typeof cur.byPayTo !== "object") Object.defineProperty(cur, "byPayTo", { value: {}, enumerable: false, writable: true, configurable: true });
   if (!Object.hasOwn(cur, "payersOffBase")) Object.defineProperty(cur, "payersOffBase", { value: 0, enumerable: false, writable: true, configurable: true });
   cur.calls30d += calls;
-  cur.payers30d = Math.max(cur.payers30d, payers);
+  if (measured) cur.payers30d = Math.max(cur.payers30d ?? 0, payers);
   if (last && (!cur.lastCalledAt || last > cur.lastCalledAt)) cur.lastCalledAt = last;
   const w = typeof basePayTo === "string" && /^0x[0-9a-f]{40}$/i.test(basePayTo) ? basePayTo.toLowerCase() : null;
-  if (!w) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
+  if (!w && measured) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
   if (!Array.isArray(cur.payTos)) cur.payTos = [];
   if (w && !cur.payTos.includes(w) && cur.payTos.length < BAZAAR_QUALITY_MAX_PAYTOS) cur.payTos.push(w);
   if (w && calls > 0 && (Object.hasOwn(cur.byPayTo, w) || Object.keys(cur.byPayTo).length < BAZAAR_QUALITY_MAX_PAYTOS)) {
-    const at = cur.byPayTo[w] || { calls: 0, payers: 0 };
+    const at = cur.byPayTo[w] || { calls: 0, payers: undefined };
     at.calls += calls;
-    at.payers = Math.max(at.payers, payers);
+    if (measured) at.payers = Math.max(at.payers ?? 0, payers);
     cur.byPayTo[w] = at;
   }
   map.set(origin, cur);
