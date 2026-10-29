@@ -1,6 +1,7 @@
 import { whyPointsPlain } from "./why.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
-import { premiumClause, parseNetworkPremiums } from "./payments.js";
+import { parseNetworkPremiums } from "./payments.js";
+import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
