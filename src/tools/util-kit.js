@@ -1,10 +1,7 @@
-// Util-kit — deterministic gap-fillers that round out the catalog's existing
-// families: jwt-sign (completes decode/verify/sign), uuid-v5 (deterministic IDs
-// to pair with the random uuid/ulid), group-by (the data-wrangling aggregate
-// agents reach for), json-to-xml (reverse of xml-to-json), geo-distance
-// (haversine), color-contrast (WCAG), and webhook-verify (per-provider HMAC
-// signature check: GitHub/Stripe/Shopify/Slack). All pure-CPU, no network, no
-// LLM — proof-of-work eligible. Covered by scripts/test-util-kit.js and
+// Util-kit - deterministic gap-fillers: jwt-sign (completes decode/verify/sign),
+// geo-distance (haversine), and webhook-verify (per-provider HMAC signature
+// check: GitHub/Stripe/Shopify/Slack). All pure-CPU, no network, no LLM -
+// proof-of-work eligible. Covered by scripts/test-util-kit.js and
 // scripts/test-webhook-verify.js.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
