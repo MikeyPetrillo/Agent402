@@ -37,7 +37,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { installPushRefusalBody } from "./push-refusal-body.js";
-import { Challenge, Credential, Errors, Method, Receipt } from "mppx";
+import { Challenge, Credential, Errors, Method } from "mppx";
+import { receiptHeader as tempoReceiptHeader, txFromReceiptHeader as tempoTxFromReceiptHeader } from "./mpp-receipt.js";
 import { tempo } from "mppx/server";
 import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
@@ -47,7 +48,7 @@ import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
-import { screenAddresses, screenFunding, sanctionsScreenStatus } from "./sanctions-screen.js";
+import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
@@ -1058,7 +1059,6 @@ export function tempoPayerAddresses(authorizationHeader) {
   return [...out];
 }
 
-const maskOne = (a) => (typeof a === "string" && a.length > 12 ? `${a.slice(0, 6)}...${a.slice(-4)}` : "?");
 /** Direct mode's payment-party screen. null when every party passes, else the
  *  refusal result validate/broadcast return (screen-rejected or
  *  screen-unavailable). The address in `error` is masked. */
@@ -1133,27 +1133,12 @@ export async function broadcastTempoCredential(authorizationHeader) {
 }
 
 /** mppx's broadcastCredential already returns a properly-shaped
- *  Receipt.Receipt ({method:"tempo", status:"success", reference, timestamp})
- *  — this just serializes it for the Payment-Receipt header, same as
- *  mpp-shim.js's receiptFromPaymentResponse does for the evm side. */
-export function tempoReceiptHeader(receipt) {
-  try {
-    return Receipt.serialize(receipt);
-  } catch {
-    return null;
-  }
-}
-
-/** Reverse of the above — decodes OUR OWN Payment-Receipt response header
- *  back to its tx reference, for the sales-ledger tally in server.js (the
- *  same role txFromPaymentResponse plays for the x402 settle receipt). */
-export function tempoTxFromReceiptHeader(header) {
-  try {
-    return Receipt.deserialize(String(header)).reference || null;
-  } catch {
-    return null;
-  }
-}
+ *  Receipt.Receipt ({method:"tempo", status:"success", reference, timestamp});
+ *  the Payment-Receipt header and its reverse (the tx reference, for the
+ *  sales-ledger tally in server.js) are the method-agnostic pair in
+ *  mpp-receipt.js, the same role receiptFromPaymentResponse and
+ *  txFromPaymentResponse play on the evm side. */
+export { tempoReceiptHeader, tempoTxFromReceiptHeader };
 
 // Test-only hook: force the memoized method to rebuild on the next call.
 /** Test seam: the relay fetch wrapper under a fresh trace. */
