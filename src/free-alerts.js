@@ -23,7 +23,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
-import { headerText, escapeHtml } from "./email.js";
+import { headerText, escapeHtml } from "./email-text.js";
 
 export const ALERT_KINDS = Object.freeze({
   insider: { product: "insider-monitor", family: "insider", noun: "insider filings", cta: (t) => `Email me when ${t} insiders file a Form 4`, subject: (t, n) => `${n} new Form 4 filing${n === 1 ? "" : "s"} for ${t}`, what: (t) => `Form 4 insider filings against ${t}` },

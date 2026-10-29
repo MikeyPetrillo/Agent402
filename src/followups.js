@@ -25,7 +25,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
-import { headerText, escapeHtml } from "./email.js";
+import { headerText, escapeHtml } from "./email-text.js";
 
 const DAY = 24 * 60 * 60_000;
 export const STEP_DELAYS_MS = Object.freeze({ monitor: 2 * DAY, another: 7 * DAY });
