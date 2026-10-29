@@ -71,6 +71,12 @@ try {
     const r = await post(slug, JSON.stringify({ [field]: deep, path: "a" }));
     ok(r.status === 400 && /nested more than 64/.test(r.body.error), `${slug}: a deep JSON-text ${field} is a 400 (got ${r.status})`);
   }
+  // The bespoke contents routes read their input outside the binder
+  // (contentsUrlOf): the refusal is their own self-explaining 400.
+  for (const slug of ["extract", "render"]) {
+    const r = await post(slug, JSON.stringify({ url: "https://example.com/", meta: nest(200) }));
+    ok(r.status === 400 && /nested more than 64/.test(r.body.error) && r.body.tool === slug, `${slug}: a deep body is the route's own 400 (got ${r.status} ${JSON.stringify(r.body).slice(0, 80)})`);
+  }
   const fine = await post("json-flatten", JSON.stringify({ json: nest(30) }));
   ok(fine.status === 200, `json-flatten: a 30-level body is still served (got ${fine.status})`);
   const m = await fetch(`${B}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"catalog.call","arguments":{"slug":"json-flatten","params":{"json":${deep}}}}}` });
