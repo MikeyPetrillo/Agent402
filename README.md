@@ -6,7 +6,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.22`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.23`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -122,8 +122,8 @@ https://agent402.tools/mcp
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.13.22
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.22
+npx -y agent402-mcp@0.13.23
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.23
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):

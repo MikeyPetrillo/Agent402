@@ -48,7 +48,7 @@ The connector is also read every 6 hours by an independent client (the reference
 
 ```json
 { "mcpServers": { "agent402": {
-  "command": "npx", "args": ["-y", "agent402-mcp@0.13.22"],
+  "command": "npx", "args": ["-y", "agent402-mcp@0.13.23"],
   "env": {
     "AGENT_KEY": "0x<funded wallet key - optional>",
     "AGENT402_BUDGET": "1.00",
@@ -88,7 +88,7 @@ Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the
 | **Connector won't connect** in claude.ai/Claude Code | Confirm the URL is exactly `https://agent402.tools/mcp` (HTTPS, no trailing path). In Claude Code, `claude mcp list` should show `agent402 ✓ Connected`. If it's mid-deploy it can briefly drop - retry in ~60s. |
 | **"Error occurred during tool execution"** (transient) | Usually a redeploy window on the host; the same call succeeds on retry. The endpoint is health-gated in CI on every deploy. |
 | **`catalog.call` says a field is missing / "must be a number"** | Pass `params` as a JSON object, e.g. `{"slug":"unit-convert","params":{"value":42,"from":"kilometers","to":"miles"}}`. A stringified object (`"{\"value\":42}"`) is also accepted. |
-| **A tool returns "wallet required" / paid-path guidance** | That flagship (live search, browser render, STT, durable memory, …) isn't free on the authless hosted connector. Pay it in the call with an mppx MCP client, run the npm server `npx -y agent402-mcp@0.13.22` with `AGENT_KEY` (funded wallet) or `AGENT402_CREDITS_KEY` (a prepaid credits key, where sold or already issued), or call it over HTTP with any x402 client. |
+| **A tool returns "wallet required" / paid-path guidance** | That flagship (live search, browser render, STT, durable memory, …) isn't free on the authless hosted connector. Pay it in the call with an mppx MCP client, run the npm server `npx -y agent402-mcp@0.13.23` with `AGENT_KEY` (funded wallet) or `AGENT402_CREDITS_KEY` (a prepaid credits key, where sold or already issued), or call it over HTTP with any x402 client. |
 | **"Free-tier rate limit reached"** | The hosted connector is capped at 20 calls/min, 120/hour per client, shared across replicas. Wait, or use the npm server with a wallet (or a prepaid credits key) for the paid, uncapped path. |
 | **Finding the right tool** | Call `catalog.find` with a plain-language task - it returns the best match ready to call (slug + example + the exact `catalog.call` invocation). `catalog.search` is the broader, lower-level browse. |
 | **My client still sends `find_tool` / `call_tool`** | Those names remain CallTool aliases and keep working; only the listing moved to the dotted names. |
