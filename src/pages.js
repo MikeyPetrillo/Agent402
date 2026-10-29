@@ -192,7 +192,9 @@ function cutAtWord(text, max) {
 export function toolMetaDescription(tool, { computePayable = false, mpp = true } = {}) {
   const MAX = 155, MIN = 120;
   const p = priceWords(tool).long;
-  const pay = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
+  const payText = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
+  // The price words open their own sentence ("Quoted per request from ...").
+  const pay = payText.charAt(0).toUpperCase() + payText.slice(1);
   const room = MAX - pay.length - 2;
   let lead = String(tool.description || tool.name).replace(/\s+/g, " ").trim();
   lead = cutAtWord(lead, room);

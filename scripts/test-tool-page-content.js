@@ -73,6 +73,15 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
   ok(d.length >= 120 && d.length <= 155, `short description padded into range (${d.length})`);
 }
 {
+  // A quoted route: the lead keeps its whole first sentence, and the price
+  // words open their own sentence.
+  const quoted = { ...hostile, price: "$0.005", quoteRange: { minUsd: 0.005, maxUsd: 0.12 }, description: "Convert text to speech with the eleven-v4-turbo model, priced per request from the length of the text. The quote is $0.005 plus $0.0575 per 1,000 characters of text, rounded up to the next $0.001." };
+  for (const mpp of [true, false]) {
+    const d = toolMetaDescription(quoted, { mpp });
+    ok(d.startsWith("Convert text to speech with the eleven-v4-turbo model, priced per request from the length of the text. Quoted per request from $0.005 over x402"), `quoted meta description (mpp=${mpp}): whole first sentence, then a capitalized price sentence (${d})`);
+  }
+}
+{
   const tools = [hostile, { ...hostile, slug: "b", tags: ["html"], category: "web" }, { ...hostile, slug: "c", tags: [], category: "math" }];
   const rel = relatedTools(hostile, tools);
   ok(rel.length === 1 && rel[0].slug === "b", "relatedTools keeps category/tag matches and drops unrelated tools");

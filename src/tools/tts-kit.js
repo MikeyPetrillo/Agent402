@@ -542,7 +542,7 @@ export const TTS_TOOLS = [
     category: "ai",
     ...quotedFields("tts"),
     description:
-      `Convert text to speech with the eleven-v4-turbo model, quoted per request from the text: ${ttsQuoteFormula("tts")}. Returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten standard voice names each map to their own voice, or name one of 21 named voices directly; the answer names the voice that spoke. 90+ languages. If the primary speech model is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at ${TIERS.tts.maxChars} chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
+      `Convert text to speech with the eleven-v4-turbo model, priced per request from the length of the text. The quote is ${ttsQuoteFormula("tts")}. Returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). The ten standard voice names each map to their own voice, or name one of 21 named voices directly; the answer names the voice that spoke. 90+ languages. If the primary speech model is busy, throttling or down, a backup speech model with fewer voices and languages serves the call and the answer's model field names it. No API key needed; pay per call over x402 or MPP. Text capped at ${TIERS.tts.maxChars} chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at ${TTS_LITE_PRICE}.`,
     tags: [...SHARED_TAGS, "eleven-v4-turbo"],
     discovery: {
       bodyType: "json",
@@ -575,7 +575,7 @@ export const TTS_TOOLS = [
     category: "ai",
     ...quotedFields("tts-hd"),
     description:
-      `Convert text to speech with the eleven-v4 model, the most expressive speech tier, quoted per request from the text: ${ttsQuoteFormula("tts-hd")}. Inline audio tags such as [whispering] are read as delivery cues. Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at ${TIERS["tts-hd"].maxChars} chars. Model-backed.`,
+      `Convert text to speech with the eleven-v4 model, priced per request from the length of the text. It is the most expressive speech tier, and the quote is ${ttsQuoteFormula("tts-hd")}. Inline audio tags such as [whispering] are read as delivery cues. Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at ${TIERS["tts-hd"].maxChars} chars. Model-backed.`,
     tags: [...SHARED_TAGS, "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",
