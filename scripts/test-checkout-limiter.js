@@ -54,7 +54,8 @@ try {
   // cover; on a covered path they must not fire a second time.
   const src = await (await import("node:fs/promises")).readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const guardAt = src.indexOf("app.use(CHECKOUT_RATE_PATHS");
-  const parserAt = src.indexOf('app.use(express.json({ limit: "100kb" }))');
+  // The global parser may be wrapped (unlessBodyUnread), so match either form.
+  const parserAt = src.search(/app\.use\((?:unlessBodyUnread\()?express\.json\(\{ limit: "100kb" \}\)/);
   ok(guardAt > 0 && parserAt > 0 && guardAt < parserAt,
     "the rate check is mounted BEFORE the global body parser - otherwise a malformed body is never counted");
   const inRoute = src.match(/if \(!req\.__checkoutRateChecked && checkoutLimiter\.check/g) || [];
