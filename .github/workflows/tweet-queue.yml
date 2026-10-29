@@ -5,10 +5,11 @@
 # GitHub delivers this schedule sparsely (slots posted hours late or aged out).
 # At cutover the operator disables this workflow BEFORE the server starts
 # posting:   gh workflow disable tweet-queue.yml
-# so exactly one poster runs. The two keep separate posted-id records (the
-# Actions cache here, /data on the server), so running both would leave only
-# X's duplicate-text refusal between them. The server's FIRST run (no state
-# file) posts nothing already due, since this workflow may have posted it; set
+# so exactly one poster runs (this workflow is disabled now). The two keep
+# separate posted-id records (the Actions cache here, the server's state store),
+# so running both would leave only X's duplicate-text refusal between them. The
+# server's FIRST run (no stored state) posts nothing already due, since this
+# workflow may have posted it; set
 # TWEET_QUEUE_POST_AFTER (ISO time) on Railway to move that line. Kept, not
 # deleted, as the fallback:
 # re-enable it (gh workflow enable) only after TWEET_QUEUE_POSTING=off is set

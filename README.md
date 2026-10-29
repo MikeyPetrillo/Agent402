@@ -681,7 +681,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing, per-chain marketplace pages (`/stellar`, `/algorand`) |
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |
 | `src/human-checkout.js` | Card front door for the report products: `/reports` (page in `src/human-reports-page.js`), `POST /api/buy`, delivery at `/r/:sessionId` (Stripe Checkout, generate-once, auto-refund on failure) |
-| `src/stripe-subscriptions.js` | `/monitors` - $5/month monitor subscriptions (`MONITOR_PRODUCTS`: domain, filing, token, fund, recall, insider, ipo), signature-verified webhook, Customer Portal |
+| `src/stripe-subscriptions.js` | `/monitors` - $5/month monitor subscriptions (`MONITOR_PRODUCTS`: domain, filing, token, fund, recall, insider, research, ipo), signature-verified webhook, Customer Portal |
 | `src/monitor-scheduler.js` | Fulfilment for the monitors: cheap daily probes, paid re-runs on change, email delivery, reports at `/m/:id` |
 | `src/credits.js` | Prepaid card credits: `/credits`, `a402_` bearer keys, the authorize-then-debit gate in front of every priced route |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |

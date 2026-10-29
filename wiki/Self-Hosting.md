@@ -34,17 +34,7 @@ The server starts on port 3000 by default (`PORT` env var overrides).
 
 ### Docker
 
-```dockerfile
-FROM node:22-slim
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY . .
-ENV FREE_MODE=true
-ENV PORT=3000
-EXPOSE 3000
-CMD ["node", "src/server.js"]
-```
+The repository ships its own `Dockerfile` (Node 22, Chromium, ffmpeg and OCR data, running as a non-root user), so the browser, media and OCR tools work in the container:
 
 ```bash
 docker build -t agent402 .
@@ -59,7 +49,7 @@ For persistent state (stats, memory, PoW replay protection), mount a volume at `
 2. Create a new Railway project from your fork.
 3. Add a persistent volume mounted at `/data`.
 4. Set environment variables in the Railway dashboard (see table below).
-5. Deploy. Railway auto-detects the start command from `package.json`.
+5. Deploy. Railway builds the repository's `Dockerfile`.
 
 > **Protect in-flight calls across redeploys:** set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on the service (the hosted deploy job sets 120). Without a grace period between SIGTERM and SIGKILL, every redeploy kills in-flight requests. With it, the server's built-in graceful drain lets ordinary active requests finish (up to 75s) before exiting; report composites still running are cut off and answer 503. Settlement runs after the handler and only on a response under 400, so a request cut off this way is not charged on x402.
 
