@@ -67,6 +67,30 @@ try {
     await s3.ready();
     ok(!s3.has(W1) && s3.has(W2), "shared-paytos: the removal is in the row");
   }
+  // ---- router purchases (two containers append to one row) -------------------
+  {
+    const { createRouterPurchaseStore } = await import("../src/router-purchases.js");
+    const W = "0x" + "a".repeat(40);
+    const S1 = "https://s1.test", S2 = "https://s2.test";
+    const file = join(D1, "sor-router-purchases.json");
+    let t = Date.now();
+    writeFileSync(file, JSON.stringify({ version: 1, rows: { [`${S1}|${W}`]: { buys: [[t - 1000, "base"]] } } }));
+    const A = createRouterPurchaseStore({ file, now: () => t, log: quiet });
+    const B = createRouterPurchaseStore({ file: join(D2, "sor-router-purchases.json"), now: () => t, log: quiet });
+    await A.load(); await B.load();
+    ok(A.at(S1, W).calls === 1 && B.at(S1, W).calls === 1, "router-purchases: imported once, read by both containers");
+    A.record({ origin: S1, payTo: W, chain: "base" });
+    B.record({ origin: S2, payTo: W, chain: "solana" });
+    ok((await A.flush()) && (await B.flush()), "router-purchases: both writers store");
+    const row = (await sdb.documents.get("sor-router-purchases.json")).body.rows;
+    ok(row[`${S1}|${W}`]?.buys.length === 2 && row[`${S2}|${W}`]?.buys.length === 1, "router-purchases: the row holds both containers' buys");
+    t += 31_000;
+    A.snapshot(); await new Promise((r) => setTimeout(r, 300));
+    ok(A.at(S2, W).calls === 1 && A.at(S1, W).calls === 2, "router-purchases: A reads B's buy after a refresh");
+    const C = createRouterPurchaseStore({ file: join(D2, "sor-router-purchases.json"), now: () => t, log: quiet });
+    await C.load();
+    ok(C.at(S1, W).calls === 2 && C.at(S2, W).calls === 1, "router-purchases: a fresh container reads the union from the row");
+  }
   // ---- stripe subscriptions (merge-on-save keys + tally) --------------------
   {
     const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");

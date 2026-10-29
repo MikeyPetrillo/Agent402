@@ -628,7 +628,7 @@ import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamC
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
-import { routerPurchasesSnapshot } from "./router-purchases.js";
+import { routerPurchasesSnapshot, routerPurchaseStore } from "./router-purchases.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { paysThirdParty } from "./third-party-routes.js";
 import { ncTaxReport, NC_TAXABLE_SLUGS, monthBounds } from "./nc-sales-tax.js";
@@ -1388,6 +1388,9 @@ configureSellerFunding({ cleared: selfFundingClearedStore(), skip: (w) => shared
 // (src/outbound-destinations.js): read at boot so the first word on
 // /api/gateway-status is the stored body, not an empty memory.
 outboundDestinationStore().load();
+// The router's own purchases (src/router-purchases.js): read at boot, so the
+// first evidence build after a deploy deducts what was bought before it.
+routerPurchaseStore().load();
 function buildChainProven() {
   const econ = economySnapshotCached();
   return econ?.topMerchants?.length ? provenByChain({ sellers: routableSellerSummaries(), merchants: econ.topMerchants }) : new Map();

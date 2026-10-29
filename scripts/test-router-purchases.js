@@ -50,6 +50,40 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   rmSync(dir, { recursive: true, force: true });
 }
 
+// --- 1b. Two containers over one document: each appends, neither drops ----
+{
+  const dir = mkdtempSync(join(tmpdir(), "a402-rp2-"));
+  const file = join(dir, "purchases.json");
+  const OTHER = "https://other.example";
+  let t = 1_000_000_000_000;
+  const A = createRouterPurchaseStore({ file, now: () => t });
+  const B = createRouterPurchaseStore({ file, now: () => t });
+  A.load(); B.load();
+  // A writes first, then B: a whole-body save from B would erase A's row.
+  t += 1000; A.record({ origin: SELLER, payTo: W, chain: "base" });
+  ok(await A.flush(), "A's buy is stored");
+  t += 1000; B.record({ origin: OTHER, payTo: W, chain: "solana" });
+  t += 1000; B.record({ origin: SELLER, payTo: W, chain: "solana" });
+  ok(await B.flush(), "B's buys are stored");
+  const stored = JSON.parse(readFileSync(file, "utf8")).rows;
+  ok(stored[`${SELLER}|${W}`]?.buys.length === 2 && stored[`${OTHER}|${W}`]?.buys.length === 1, `the document holds the union of both writers (${JSON.stringify(Object.keys(stored))})`);
+  ok(B.at(SELLER, W).calls === 2 && B.at(SELLER, W).payers === 2, "the writer that landed last reads the union at once (its write returned the merged body)");
+  // A still holds its own memory copy; past the refresh interval a read re-reads the document.
+  t += 31_000;
+  const sa = A.snapshot(), sb = B.snapshot();
+  ok(sa.get(SELLER)?.get(W)?.calls === 2 && sa.get(SELLER).get(W).payers === 2 && sa.get(OTHER)?.get(W)?.calls === 1, `A's snapshot sees B's buys after a refresh (${JSON.stringify([...(sa.get(SELLER) || [])])})`);
+  ok(sb.get(SELLER)?.get(W)?.calls === 2 && sb.get(OTHER)?.get(W)?.calls === 1, "B's snapshot holds the same union");
+  // A buy recorded while another one is being written is never lost.
+  t += 1000; A.record({ origin: SELLER, payTo: W, chain: "base" });
+  const inFlight = A.flush();
+  t += 1000; A.record({ origin: OTHER, payTo: W, chain: "base" });
+  await inFlight; await A.flush();
+  const C = createRouterPurchaseStore({ file, now: () => t });
+  const sc = C.snapshot();
+  ok(sc.get(SELLER)?.get(W)?.calls === 3 && sc.get(OTHER)?.get(W)?.calls === 2, `a fresh instance reads every buy from both writers (${sc.get(SELLER)?.get(W)?.calls}, ${sc.get(OTHER)?.get(W)?.calls})`);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // --- 2. The Bazaar fold: the router's purchases come off the figures -------
 {
   // A seller the Bazaar counts at 60 calls from one payer: all of them ours.
@@ -101,6 +135,7 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   const at = server.indexOf("function buildEvidenceBindingByOrigin(");
   const builder = server.slice(at, server.indexOf("\n}\n", at));
   ok(/routerPurchases: routerPurchasesSnapshot\(\)/.test(builder), "the server's binding is built with the router's purchase record");
+  ok(/^routerPurchaseStore\(\)\.load\(\);/m.test(server) && server.indexOf("routerPurchaseStore().load();") < server.indexOf("function buildEvidenceBindingByOrigin("), "the server loads the purchase record at boot, before the first evidence build");
   ok(/merchants: econ\.topMerchants/.test(server.slice(server.indexOf("function buildChainProven("), server.indexOf("function buildChainProven(") + 400)), "the chain join reads topMerchants");
 }
 
