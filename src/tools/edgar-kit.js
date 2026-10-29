@@ -32,7 +32,7 @@ function bad(message, statusCode = 400) {
 // own email) — the fallback is a generic Agent402 contact, sufficient to avoid
 // the hard 403 from SEC but operators should set their own for friendlier rate
 // treatment.
-function edgarUserAgent() {
+export function edgarUserAgent() {
   return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools";
 }
 

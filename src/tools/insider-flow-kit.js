@@ -18,6 +18,7 @@ import { completeSynthesis, proseOf, reportChat, costOf } from "../report-synthe
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany, eftsSearch, fetchXmlText, issuerHits } from "./edgar-kit.js";
+import { mapLimit } from "./map-limit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
@@ -145,11 +146,6 @@ export function form4FilingsFromHits(allHits, issuerCik, limit = 40) {
   }).filter((f) => f.accessionNumber);
 }
 
-async function mapLimit(items, n, fn) {
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
-  return out;
-}
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("timeout")), ms))]);
 const fmtUsd = (v) => `$${Math.round(v).toLocaleString("en-US")}`;
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;

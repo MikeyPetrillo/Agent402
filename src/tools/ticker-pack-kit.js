@@ -43,7 +43,8 @@ import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock, reportChat, costOf, textOf } from "../report-synthesis.js";
 import { checkReportGrounding, combineGrounding, sanitizeReportProse } from "../report-grounding.js";
-import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText } from "./edgar-kit.js";
+import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText, edgarUserAgent } from "./edgar-kit.js";
+import { mapLimit } from "./map-limit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
 
@@ -111,7 +112,6 @@ const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, ""))
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(Math.max(n, lo), hi) : d; };
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
-function edgarUserAgent() { return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools"; }
 
 /** "4 x8, 144 x3, 10-K x1": the per-form tally of a filing list, in order of first appearance. */
 export function formCounts(list) {
@@ -283,13 +283,6 @@ export function summarizeIssuerRows(rows) {
   };
 }
 
-async function mapLimit(items, n, fn) {
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); }
-  }));
-  return out;
-}
 
 /** WHICH institutional managers report holding this ticker. One EDGAR
  *  full-text query over 13F-HR filings in the window, then a bounded scan of

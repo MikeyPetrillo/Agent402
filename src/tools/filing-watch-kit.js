@@ -28,11 +28,12 @@ import { completeSynthesis, proseOf, reportChat, costOf } from "../report-synthe
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany } from "./edgar-kit.js";
+import { mapLimit } from "./map-limit.js";
 // The submissions read itself is the helper ticker-pack already ships (one
 // EDGAR JSON read, column-oriented "recent" arrays zipped into rows). Imported,
 // never re-implemented, so there is exactly one place that knows that URL shape.
 import { probeCompanyFilings as edgarCompanyFilings } from "./ticker-pack-kit.js";
-import { fetchXmlText, edgarGetJson } from "./edgar-kit.js";
+import { fetchXmlText, edgarGetJson, edgarUserAgent } from "./edgar-kit.js";
 import { parseForm4 } from "./insider-flow-kit.js";
 import { extractFilingExcerpts } from "./dossier-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -244,11 +245,6 @@ const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.is
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-async function mapLimit(items, n, fn) {
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
-  return out;
-}
 
 /** CSV string or array -> a normalized, de-duplicated UPPERCASE form list.
  *  Throws 400 (no egress) on anything that is not a plausible form code. */
@@ -488,7 +484,7 @@ export async function fetchDocText(url, { maxBytes, maxChars, timeoutMs = DOC_TI
   try { u = new URL(String(url)); } catch { throw bad("EDGAR document URL is not a URL", 502); }
   if (u.protocol !== "https:" || u.host !== DOC_HOST) throw bad(`EDGAR document URL is not on ${DOC_HOST}`, 502);
   const res = await fetchImpl(u.toString(), {
-    headers: { "User-Agent": (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools", Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*" },
+    headers: { "User-Agent": edgarUserAgent(), Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*" },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res || !res.ok) throw new Error(`EDGAR document HTTP ${res ? res.status : "no-response"}`);
