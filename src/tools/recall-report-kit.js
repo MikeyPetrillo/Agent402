@@ -13,7 +13,7 @@
 // for the subscriber's query is what triggers a paid re-run + alert.
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -185,7 +185,8 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Recall report synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);

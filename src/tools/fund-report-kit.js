@@ -14,7 +14,7 @@
 // gated on OPENROUTER_API_KEY for the synthesis (503 without it).
 import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { get13fHoldings, resolveManager } from "./edgar-kit.js";
@@ -51,12 +51,14 @@ function stripInlineCites(s) {
     .replace(/\[[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}(?:\s*,\s*[a-z0-9][a-z0-9.\-]*\.[a-z]{2,})*\]/gi, "")
     .replace(/[ \t]{2,}/g, " ").trim();
 }
-function webSourcesFrom(d) {
+// A page title is read outside the quoted blocks and served in the Sources
+// list, so it is cleaned to one plain line here, once.
+export function webSourcesFrom(d) {
   const anns = d?.choices?.[0]?.message?.annotations || [];
   const out = [];
   for (const a of anns) {
     const c = a?.url_citation || a;
-    if (c?.url) out.push({ title: String(c.title || c.url).slice(0, 200), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
+    if (c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))) out.push({ title: cleanSourceTitle(c.title) || cleanSourceTitle(c.url), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
   }
   return out;
 }
@@ -188,8 +190,8 @@ function makeFundHandlerInner(tierSlug) {
 
     // 3) NUMBERED SOURCES: the 13F filings (real SEC URLs) first, then web.
     const sources = [];
-    if (latest.informationTableUrl) sources.push({ title: `13F-HR holdings filed ${latest.filedDate || "?"} (period ${latest.reportDate || "?"}) - SEC EDGAR`, url: latest.informationTableUrl });
-    if (prior && prior.informationTableUrl) sources.push({ title: `Prior 13F-HR holdings filed ${prior.filedDate || "?"} (period ${prior.reportDate || "?"}) - SEC EDGAR`, url: prior.informationTableUrl });
+    if (latest.informationTableUrl) sources.push({ title: `13F-HR holdings filed ${latest.filedDate || "?"} (period ${latest.reportDate || "?"}) - SEC EDGAR`, url: latest.informationTableUrl, kind: "sec" });
+    if (prior && prior.informationTableUrl) sources.push({ title: `Prior 13F-HR holdings filed ${prior.filedDate || "?"} (period ${prior.reportDate || "?"}) - SEC EDGAR`, url: prior.informationTableUrl, kind: "sec" });
     const seen = new Set(sources.map((s) => s.url));
     for (const r of webGood) for (const s of r.sources) if (s.url && !seen.has(s.url)) { seen.add(s.url); sources.push(s); }
     const numbered = sources.slice(0, 40).map((s, i) => ({ n: i + 1, ...s }));
@@ -210,8 +212,8 @@ function makeFundHandlerInner(tierSlug) {
           ...(prior.amendments?.length ? [`Amendments folded into the prior quarter: ${prior.amendments.map((a) => `${a.amendmentType} filed ${a.filedDate}${a.applied ? ` (${a.rows} rows applied)` : " (not applied)"}`).join("; ")}.`] : []),
         ].join("\n")
       : "No prior-quarter 13F-HR exists on EDGAR for this manager (this is their first), so quarter-over-quarter changes cannot be computed - report the current holdings only and say so.";
-    const webBlock = webGood.map((r, i) => `WEB ANGLE ${i + 1}: ${r.q}\n${stripInlineCites(r.answer)}`).join("\n\n") || "(web research unavailable)";
-    const webSourceLines = numbered.filter((s) => !s.title.includes("SEC EDGAR")).map((s) => `[${s.n}] ${s.title}${s.snippet ? `\n    "${s.snippet.slice(0, 300)}"` : ""} - ${s.url}`).join("\n") || "(none)";
+    const webBlock = webGood.length ? quotedMaterial("WEB RESEARCH", webGood.map((r, i) => `WEB ANGLE ${i + 1}: ${r.q}\n${stripInlineCites(r.answer)}`).join("\n\n")) : "(web research unavailable)";
+    const webSourceLines = numbered.filter((s) => s.kind !== "sec").map((s) => `[${s.n}] ${s.title} - ${s.url}${s.snippet ? `\n${quotedMaterial(`SOURCE [${s.n}]`, s.snippet.slice(0, 300))}` : ""}`).join("\n") || "(none)";
 
     // 5) SYNTHESIZE - grounding-strict fund report.
     const synthPrompt = `You are an investment analyst writing a FUND PORTFOLIO REPORT on ${managerName} (SEC CIK ${resolved.cik}) that will be SOLD to a paying customer. Accuracy is paramount; a fabricated figure fails the whole report.
@@ -223,6 +225,7 @@ function makeFundHandlerInner(tierSlug) {
 4. IMPORTANT CAVEATS you MUST state plainly in the report: a 13F-HR reports only LONG US-listed equity/option positions, is filed up to 45 days after quarter-end (so it is a lagged snapshot, not real-time), and excludes shorts, cash, non-US holdings, and most fixed income. Do not present it as the manager's complete book.
 5. Do not overstate: reproduce magnitudes and dates exactly as given. Do NOT write a "Sources" section - a numbered source list is appended automatically. Prioritize COMPLETING the report over length.
 6. A GAP IN THIS MATERIAL IS NEVER A FINDING ABOUT THE MANAGER: only the largest rows of each change bucket are listed (the counts say how many there are); write "the material provided here lists ..." rather than "the fund made no other moves". Honor every CAUTION line about confidential treatment.
+7. ${QUOTED_MATERIAL_RULE}
 
 Write a thorough, well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (the manager, reported portfolio value, number of positions, the report period and filing date), TOP HOLDINGS (the largest positions and how concentrated the book is), PORTFOLIO CHANGES (what they bought/added/trimmed/exited versus the prior quarter - this is the most important section), NOTABLE MOVES & WHAT THEY SIGNAL (interpret the biggest changes), and a CLOSING READ. Be specific and analytical.
 
@@ -235,7 +238,8 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
     steps.next("writing report");
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
-    const prose = proseOf(sd, cutShort);
+    // Links only to listed sources, no images or HTML (src/report-grounding.js).
+    const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
     if (!prose) throw bad("Fund report synthesis produced nothing - not charged", 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
