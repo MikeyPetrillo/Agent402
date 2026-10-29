@@ -6,6 +6,9 @@
 //      to the publishing job; the build backend is pinned to an exact version.
 //   3. wish-issues.yml puts buyer-supplied wish text in a code fence and
 //      neutralizes backticks and control characters first.
+//   4. No run step interpolates a dispatch input (${{ inputs.* }} or
+//      github.event.inputs.*) into its shell text: an input reaches the
+//      script through the step's env and is read as a quoted variable.
 import { readFileSync, readdirSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
 
@@ -56,6 +59,27 @@ ok(gated >= 2, `found the workflow_run-gated jobs (${gated})`);
   ok(!/\\n\\n> %s/.test(run), "no raw blockquote of wish text remains");
   ok(/if \. < 32 or \. == 127 then 32 elif \. == 96 then 39/.test(run), "control characters and backticks are neutralized before fencing");
   ok(/TEXT=\$\(echo "\$c" \| jq -r "\$CLEAN"' \.text \| clean'\)/.test(run), "the wish text passes through clean");
+}
+
+// 4. dispatch inputs never enter a shell line
+{
+  let steps = 0;
+  const offenders = [];
+  for (const f of readdirSync(DIR).filter((x) => /\.ya?ml$/.test(x))) {
+    const wf = load(f);
+    for (const [name, job] of Object.entries(wf?.jobs || {})) {
+      for (const step of job?.steps || []) {
+        if (typeof step?.run !== "string") continue;
+        steps++;
+        const hits = step.run.match(/\$\{\{[^}]*\b(?:github\.event\.)?inputs\.[^}]*\}\}/g) || [];
+        if (hits.length) offenders.push(`${f}:${name} "${String(step.name || "").slice(0, 50)}" (${hits.join(" ")})`);
+      }
+    }
+  }
+  ok(steps > 100 && offenders.length === 0, `no run step interpolates a dispatch input into its shell text (${steps} steps)${offenders.length ? `: ${offenders.join("; ")}` : ""}`);
+  const send = (load("solana-refund-send.yml").jobs.send.steps || []).find((s) => s.name === "Send");
+  ok(/inputs\.reclaim_sending/.test(String(send?.env?.RECLAIM_SENDING)) && /inputs\.send\b/.test(String(send?.env?.SEND)), "solana-refund-send: the two booleans ride in the step env");
+  ok(/\[ "\$RECLAIM_SENDING" = "true" \]/.test(send?.run || "") && /\[ "\$SEND" = "true" \]/.test(send?.run || ""), "solana-refund-send: the booleans are compared as strings");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
