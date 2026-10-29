@@ -11413,8 +11413,14 @@ app.use((req, res, next) => {
 // error handler uses for /api + /__operator. Registered after every route
 // and before the error handler. Status stays 404 so route-existence probes
 // (test-mcp-self-consistency's live GET oracle) are unaffected.
+// A machine surface by path, read case-insensitively (routing is, so /V1/x
+// reaches the same 404 as /v1/x and gets the same JSON answer).
+function isMachinePath(path) {
+  const p = String(path || "").toLowerCase();
+  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator");
+}
 app.use((req, res) => {
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // An unknown /api path is almost always a retired tool or a guessed slug
     // (four indexers probed soundex, string-similarity, uuid-v5 and ~25 old
@@ -11477,7 +11483,7 @@ app.use((err, req, res, _next) => {
   if (status === 400 && err?.type === "entity.parse.failed" && req.path.startsWith("/mcp")) {
     return res.status(400).json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null });
   }
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
     // it five times in 30 minutes, 2026-08-28): say where big bodies go.
