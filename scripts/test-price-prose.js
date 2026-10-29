@@ -163,8 +163,7 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
 // a number typed once beside a table that moves.
 {
   const { ledgerHomePage } = await import("../src/ledger-home.js");
-  const { CATALOG_FOR_TEST } = await import("./lib/home-catalog.js").catch(() => ({ CATALOG_FOR_TEST: null }));
-  const catalog = CATALOG_FOR_TEST || { a: { slug: "a", price: "$0.001" }, b: { slug: "b", price: "$3.30" } };
+  const catalog = { a: { slug: "a", price: "$0.001" }, b: { slug: "b", price: "$3.30" } };
   const html = ledgerHomePage("https://agent402.tools", catalog, {}, null, [], {});
   const hi = /"highPrice":"([0-9.]+)"/.exec(String(html));
   ok(hi && Number(hi[1]) === 3.30, `highPrice derives from the catalog ceiling (got ${hi ? hi[1] : "none"} for a $3.30 catalog)`);
