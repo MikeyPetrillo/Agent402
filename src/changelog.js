@@ -32,6 +32,9 @@ const ENTRIES = [
       "Surfaces: the privacy page carries a rights section for readers in the EU and the UK, and its backups wording names the state database.",
       "Operations: the operator view of a public surface reads X-Operator-Token only; an Authorization header there is a buyer's credential. An operator session is known on every operator route across containers.",
       "Operations: the nightly backup runs once a night across replicas; deploy and probe steps that run package code see no job secret; @hono/node-server 2.1.3 in the root and mcp overrides; the agentkit-live lockfile installs again.",
+      "Surfaces: /api/revenue's cacheSeconds is the HTTP max-age it sends; refreshesEverySeconds and nextRefreshAt state the cadence of the rail scan behind it. The privacy page says the sales ledger keeps how a paid call arrived.",
+      "Packages: agent402-client 0.8.21 takes a userAgent option (a calling package's own product token, sent before the client's). agent402-mcp 0.13.23, agent402-agentkit 0.1.10, agent402-ai-sdk 0.2.12, agent402-anthropic-tools 0.1.13, elizaos-plugin-agent402 0.2.10, agent402-google-adk 0.1.12, agent402-langchain 0.2.12, agent402-llamaindex 0.1.13, agent402-openai-agents 0.1.13, agent402-openai-tools 0.1.13, agent402-strands 0.1.13 and agent402-langchain 0.1.6 on PyPI name themselves in the User-Agent of every request.",
+      "Operations: each sale records the path it arrived on (the hosted connector's loopback, one of our client packages by its User-Agent product token, or HTTP; earlier rows read unknown). The operator sales and tool-failure views group by that path, and an operator cohort view lists wallets past a per-day distinct-tool or per-hour call threshold beside a daily series without them. Public figures are unchanged. An operator test wallet that pays the Gateway batched route is booked as our own traffic.",
     ],
   },
   {

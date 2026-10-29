@@ -108,8 +108,9 @@ try {
   await sdb.stateQuery(`INSERT INTO ${S}.refunds (evidence, slug, price_usd, created_at) VALUES ('0xdl-debt2', 'hash', 0.002, $1)`, [Date.now()]);
   // The landed sale is the queued one, value for value (a lost reply leaves exactly that row).
   const queued = (await sl._salesDeadLetterEntries()).find((e) => e.kind === "sale" && e.payload[6] === "0xdl-sale2")?.payload;
-  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, sale_uid)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, queued);
+  // (twelve values and the sale_uid, then the arrival path, src/sale-path.js)
+  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, sale_uid, via)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, queued);
   // ---- (4) and a fresh boot reading the same file is the one that replays --------
   const childSrc = `
     const rl = await import(${JSON.stringify(join(ROOT, "src/refund-ledger.js"))});
@@ -240,9 +241,19 @@ try {
     }
     await settle();
     ok(await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = '0xlegacy-entry'`) === 1 && sl.salesDeadLetterCount() === 0, "an entry queued before sale ids (eleven values) replays by the whole row, once");
+    // An entry queued before the arrival path existed (twelve values) lands with no path.
+    {
+      const pre = [realNow(), "pre-path", 0.01, "usdc", "base", PAYER, "0xprepath-entry", 0, "x402", null, null, "00000000-0000-4000-8000-00000000a7a1"];
+      const Database = (await import("better-sqlite3")).default;
+      const f = new Database(join(DIR, "agent402-sales.db"));
+      f.prepare("INSERT INTO pg_dead_letter (kind, payload, at) VALUES ('sale', ?, ?)").run(JSON.stringify(pre), realNow());
+      f.close();
+    }
+    await settle();
+    ok((await sdb.stateQuery(`SELECT via FROM ${S}.sales WHERE tx = '0xprepath-entry'`)).rows.map((r) => r.via).join() === "" && (await count(`SELECT count(*) AS n FROM ${S}.sales WHERE tx = '0xprepath-entry'`)) === 1, "an entry queued before the arrival path (twelve values) lands once, with no path");
     cutRelay();
     await sl.recordSale({ slug: "uid", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xuid-entry" });
-    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 12 && /^[0-9a-f-]{36}$/.test(e.payload[11])), "a new entry carries the sale's id as a twelfth value");
+    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 13 && /^[0-9a-f-]{36}$/.test(e.payload[11]) && e.payload[12] === null), "a new entry carries the sale's id as a twelfth value and its arrival path as a thirteenth");
     healRelay();
     await settle();
   }

@@ -34,6 +34,7 @@ import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentSta
 import { runAsJob, activeJobs } from "./active-jobs.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
+import { salePathOf } from "./sale-path.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
@@ -643,7 +644,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -2980,7 +2981,7 @@ try {
     // non-paying rail "card-prepaid" for reconciliation, so /revenue counts
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
-    onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
+    onDebit: ({ slug, priceUsd, keyId, via }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits", via }),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
@@ -4825,6 +4826,19 @@ app.get("/__operator/sales.json", (req, res) => {
     let mppAgentsThisWeek = null;
     try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
     res.json({ ...salesSummary({ detailed: true }), mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sweep and burst cohorts with an organic daily series beside the unadjusted
+// one (operator-only; see salesCohorts in sales-ledger.js). Public revenue
+// figures are never adjusted by it. ?days= (max 30), ?toolsPerDay=, ?callsPerHour=.
+app.get("/__operator/cohorts.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store");
+  try {
+    res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -9248,7 +9262,7 @@ const mcpMountOpts = {
   // synthetic, as its route booking would be.
   onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
     const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
-    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic }); } catch { /* bookkeeping only */ }
+    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic, path: "mcp" }); } catch { /* bookkeeping only */ }
     logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
   },
   onServed: (slug, meta = {}) => {
@@ -10497,6 +10511,9 @@ app.use((req, res, next) => {
             // sha256 of the JSON body served (dispatcher), so POST /api/attest
             // can bind a settlement to the bytes the buyer received.
             responseSha256: req.__responseSha256 || null,
+            // The arrival path (src/sale-path.js): the connector's loopback,
+            // one of our client packages by User-Agent token, or plain HTTP.
+            via: salePathOf(req),
           });
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
@@ -10740,7 +10757,7 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
   res.once("close", () => {
     try {
       const status = res.headersSent ? res.statusCode : 499;
-      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted });
+      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req) });
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
