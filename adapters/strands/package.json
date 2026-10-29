@@ -52,7 +52,7 @@
   },
   "homepage": "https://agent402.tools",
   "dependencies": {
-    "agent402-client": ">=0.6.0 <1.0.0"
+    "agent402-client": ">=0.8.21 <1.0.0"
   },
   "peerDependencies": {
     "@strands-agents/sdk": ">=1 <2",

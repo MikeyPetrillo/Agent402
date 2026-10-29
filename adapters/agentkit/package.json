@@ -45,7 +45,7 @@
   },
   "homepage": "https://agent402.tools",
   "dependencies": {
-    "agent402-client": ">=0.8.16 <1.0.0"
+    "agent402-client": ">=0.8.21 <1.0.0"
   },
   "peerDependencies": {
     "@coinbase/agentkit": ">=0.10.0",

@@ -144,6 +144,16 @@ for (const d of dirs) {
         `${name}: ${field}.${dep} "${range}" admits the version we ship (${current})${admits === null ? " [unparsed range - tighten this test]" : ""}`);
     }
   }
+
+  // --- a package that hands the client a userAgent needs a client that reads
+  // it: agent402-client takes the option from 0.8.21, so the range's floor
+  // must exclude every earlier client (one would silently drop the token).
+  const clientRange = pkg.dependencies?.["agent402-client"];
+  const passesUserAgent = existsSync(join(ROOT, d, main)) && /\buserAgent\s*:/.test(readFileSync(join(ROOT, d, main), "utf8"));
+  if (clientRange && passesUserAgent) {
+    ok(rangeAdmits(clientRange, "0.8.20") === false && rangeAdmits(clientRange, "0.8.21") === true,
+      `${name}: passes userAgent, so its agent402-client range "${clientRange}" starts at 0.8.21`);
+  }
 }
 
 // --- facilitator/ ALSO ships as a Docker image with its own, separate file
