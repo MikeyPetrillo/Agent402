@@ -15,6 +15,9 @@
 
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
+// ERC-20 decimals on a raw uint256 decimal string (raw "1500000000" with 6
+// decimals -> "1500"), trailing fractional zeros trimmed.
+import { formatUnits } from "./alchemy-data-kit.js";
 import sha3 from "js-sha3"; // CommonJS — default import, then destructure (same as b20-kit)
 const { keccak256 } = sha3;
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, upstreamDeadline, budgetSpent, currentBudget } from "../upstream-deadline.js";
@@ -118,19 +121,6 @@ async function dataApi(method, body) {
 function hexToDecString(hex) {
   if (typeof hex !== "string" || !HEX_RE.test(hex)) return "0";
   return BigInt(hex).toString(10);
-}
-
-// Apply ERC-20 decimals to a raw uint256 balance and return a human-readable
-// decimal string (e.g. raw "1500000000" with 6 decimals → "1500"). Trailing
-// zeros after the decimal point are trimmed.
-function formatUnits(rawDecimal, decimals) {
-  const d = parseInt(decimals, 10);
-  if (!Number.isFinite(d) || d < 0 || d > 36) return rawDecimal;
-  if (d === 0) return rawDecimal;
-  const padded = rawDecimal.padStart(d + 1, "0");
-  const whole = padded.slice(0, -d);
-  const frac = padded.slice(-d).replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : whole;
 }
 
 // JSON-RPC methods the eth-call passthrough will accept. Strictly read-only —
