@@ -10,6 +10,9 @@
 //   2. The caller path: a real FREE_MODE boot (port 0) with a secret and a
 //      database URL configured, and a tool (regex) whose error message quotes
 //      its input. The 400 body and every server log line carry neither value.
+//      A bespoke route (/api/dns, sendToolError) whose refusal text is a
+//      configured value answers and logs it scrubbed. The discovery, wish and
+//      memory catches are read from source.
 //
 //   node scripts/test-tool-error-redaction.js
 import { spawn } from "node:child_process";
@@ -29,6 +32,8 @@ const DB_URL = `postgres://agent:${DB_PASS}@db.internal.test:5432/state`;
 const REDIS_PASS = ["rd", "Canary", "Pass9"].join("");
 const REDIS_URL = `redis://default:${REDIS_PASS}@redis.internal.test:6379`;
 const FEED_KEY = ["feed", "Canary", "Key77"].join("");
+// /api/dns refuses a malformed name with exactly this text (src/tools/dns-name-filter.js).
+const ECHO_VALUE = "Invalid domain name";
 
 // --- 1. redactSecrets in process ---------------------------------------------
 {
@@ -58,6 +63,22 @@ const FEED_KEY = ["feed", "Canary", "Key77"].join("");
   Object.assign(process.env, saved);
 }
 
+// --- 1b. every other buyer-facing error responder scrubs too -------------------
+// The discovery routes (/api/find, /api/route) cannot be made to throw from
+// outside, so their catch is read from source, with the wish and memory ones.
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(join(ROOT, "src", "server.js"), "utf8");
+  const discovery = server.slice(server.indexOf("async function serveCachedDiscovery("), server.indexOf("async function serveCachedDiscovery(") + 8000);
+  ok(/const errorMessage = redactSecrets\(err\?\.message\);\s+logToolError\(analyticsSlug, status, errorMessage[^;]*;\s+res\.status\(status\)\.json\(\{ error: errorMessage \}\)/.test(discovery), "the discovery catch answers and logs the scrubbed message");
+  const send = server.slice(server.indexOf("function sendToolError("), server.indexOf("function sendToolError(") + 1500);
+  ok(/const errorMessage = redactSecrets\(err\?\.message\)/.test(send) && /error: errorMessage \|\| "request failed"/.test(send) && !/err\?\.message \|\| "request failed"/.test(send), "sendToolError answers the scrubbed message");
+  const wish = server.slice(server.indexOf('app.post("/api/wish"'), server.indexOf('app.post("/api/wish"') + 600);
+  ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(wish), "/api/wish answers the scrubbed message");
+  const mem = server.slice(server.indexOf("const memHandler = "), server.indexOf("const memHandler = ") + 2500);
+  ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
+}
+
 // --- 2. the caller path: route binder answer and log ---------------------------
 const TMP = mkdtempSync(join(tmpdir(), "a402-err-redact-"));
 const child = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
@@ -75,6 +96,9 @@ const child = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     // A credential-bearing database URL under a URL name the server does not
     // read (STATE_DATABASE_URL itself would switch the state store on).
     PROBE_DATABASE_URL: DB_URL,
+    // A configured value that a bespoke route's own refusal carries verbatim:
+    // the sendToolError answer must scrub it like any secret.
+    PROBE_ECHO_SECRET: ECHO_VALUE,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -103,7 +127,12 @@ try {
   ok(/Invalid regex/.test(body) && body.includes("[redacted]"), `the answer keeps the error and marks what it removed (${body.slice(0, 120)})`);
   ok(!body.includes(SECRET), "the answer carries no configured secret");
   ok(!body.includes(DB_PASS) && !body.includes(DB_URL), "the answer carries no database URL or its password");
+  // A bespoke route's error (sendToolError): the refusal text is a configured value.
+  const dns = await fetch(`http://127.0.0.1:${port}/api/dns?name=${encodeURIComponent("bad!name.example.com")}`);
+  const dnsBody = await dns.text();
+  ok(dns.status === 400 && /"error":"\[redacted\]"/.test(dnsBody) && !dnsBody.includes(ECHO_VALUE), `a bespoke route's error answer (sendToolError) is scrubbed (${dns.status} ${dnsBody.slice(0, 80)})`);
   await new Promise((r) => setTimeout(r, 300));
+  ok(!log.split("\n").some((l) => l.includes("[tool-error]") && l.includes("slug=dns") && l.includes(ECHO_VALUE)), "...and its [tool-error] line too");
   const errLine = log.split("\n").find((l) => l.includes("[tool-error]") && l.includes("slug=regex")) || "";
   ok(errLine.length > 0, "the error is logged under [tool-error]");
   ok(!log.includes(SECRET), "no log line carries the configured secret");

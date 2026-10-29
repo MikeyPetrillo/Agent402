@@ -7050,8 +7050,10 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   } catch (err) {
     errored = true;
     status = err.statusCode || 500;
-    logToolError(analyticsSlug, status, err.message, undefined, synthetic);
-    res.status(status).json({ error: err.message });
+    // Scrubbed like the route binder's answer (src/tools/redact.js).
+    const errorMessage = redactSecrets(err?.message);
+    logToolError(analyticsSlug, status, errorMessage, undefined, synthetic);
+    res.status(status).json({ error: errorMessage });
   } finally {
     const latencyMs = Date.now() - startedAt;
     if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
@@ -7109,7 +7111,7 @@ app.post("/api/wish", (req, res) => {
     res.json(result);
   } catch (err) {
     const status = err.statusCode || 500;
-    res.status(status).json({ error: err.message });
+    res.status(status).json({ error: redactSecrets(err?.message) });
   }
 });
 // PUBLIC BEACON: aggregate totals + qualified-cluster COUNT only — never the
@@ -10812,12 +10814,14 @@ function sendToolError(res, err, slug) {
   const status = err?.statusCode || 502;
   // Every tool error answer logs through the one function, so a bespoke route's
   // 5xx reads in "[tool-error]" like a generic one.
-  logToolError(slug || "unknown", status, err?.message, undefined, isSyntheticRequest(res.req));
+  // Scrubbed like the route binder's answer (src/tools/redact.js).
+  const errorMessage = redactSecrets(err?.message);
+  logToolError(slug || "unknown", status, errorMessage, undefined, isSyntheticRequest(res.req));
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
   return res.status(status).json({
-    error: err?.message || "request failed",
+    error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
     ...(upstreamStatus ? { upstreamStatus } : {}),
     ...(attribution ? { attribution } : {}),
@@ -10979,7 +10983,7 @@ const memHandler = (fn) => async (req, res) => {
   try {
     res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
   }
 };
 
