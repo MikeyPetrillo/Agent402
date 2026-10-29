@@ -885,5 +885,27 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   }
 }
 
+// decide-execute runs long (LONG_RUNNING_SLUGS), so the Tempo gate offers it
+// no credential (tempoOfferedFor) and no Tempo push transfer can arrive before
+// the call. Its not-charged sentence is therefore scoped to x402, never to the
+// push exception the Tempo-payable routes carry.
+{
+  const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
+  const { tempoOfferedFor } = await import("../src/mpp-tempo.js");
+  ok(isLongRunningSlug("decide-execute") && !tempoOfferedFor({ longRunning: isLongRunningSlug("decide-execute") }), "decide-execute is long-running, so no Tempo credential is offered for it");
+  const ROOT = new URL("..", import.meta.url).pathname;
+  const sites = ["src/tools/decide-kit.js", "README.md", "src/blog.js", "src/decide-page.js", "src/plan-sketch.js", "wiki/Decide.md"];
+  const bad = [];
+  for (const rel of sites) {
+    const text = readFileSync(join(ROOT, rel), "utf8");
+    for (const m of text.matchAll(/[^.\n]*(?:no step succeeds|the call is refused and nothing) is(?: not)? charged[^.]*\./g)) {
+      if (/Tempo transfer sent before the call/.test(m[0]) || !/charged on x402\./.test(m[0])) bad.push(`${rel}: ${m[0].trim().slice(0, 100)}`);
+    }
+  }
+  ok(bad.length === 0, `every decide-execute not-charged sentence is scoped to x402 and names no Tempo push exception${bad.length ? `:\n  ${bad.join("\n  ")}` : ""}`);
+  const exec = buildDecideTools({ getCatalog: () => ({}), ledger: openDecideLedger(join(mkdtempSync(join(tmpdir(), "decide-copy-")), "l.json")) }).find((t) => t.slug === "decide-execute");
+  ok(/not charged on x402\./.test(exec?.description || "") && !/Tempo/.test(exec?.description || ""), "the published decide-execute description reads the same");
+}
+
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
