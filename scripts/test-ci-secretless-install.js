@@ -93,7 +93,7 @@ ok(scriptSteps >= 4, `the scan found the package-code steps of the secret-holdin
 // credentials Railway issues and can regenerate, and a copy upserted from an
 // Actions secret would write the stale value back over the current one on
 // every deploy. Neither the job env nor the upsert step may name them.
-const RAILWAY_OWNED = ["BACKUP_S3_KEY_ID", "BACKUP_S3_SECRET"];
+const RAILWAY_OWNED = ["BACKUP_S3_KEY_ID", "BACKUP_S3_SECRET", "BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET"];
 const deployJob = jobs.find((j) => j.name === "deploy");
 ok(!!deployJob, "the scan found the deploy job");
 if (deployJob) {
