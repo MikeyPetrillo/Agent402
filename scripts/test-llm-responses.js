@@ -267,5 +267,33 @@ delete process.env.OPENROUTER_API_KEY;
   ok(refused({ model: "anthropic/claude-haiku-4.5", input: "hi", temperature: 0.2 }) === null && refused({ model: "openai/gpt-6-astra", input: "hi", temperature: 0.2 }, "v1-chat-premium")?.statusCode === 400, "Responses: Haiku 4.5 keeps temperature; GPT-6 Astra's sampling refusal now holds on this wire too");
 }
 
+// ---- a reasoning budget is checked against the cap, and follows the clamp ----
+// Chat-wire parity: a budget at or above max_output_tokens is a 400 before
+// any upstream call. Past that check the per-link clamp lowers the cap;
+// shape: a large prompt on premium, max_output_tokens 8192, reasoning 8000,
+// grown until the clamp binds (never sized by a typed figure).
+{
+  const { clampToMargin: clamp, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  const over = (() => { try { validateResponsesRequest({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, reasoning: { max_tokens: 64 } }, "v1-chat-nano"); return null; } catch (e) { return e; } })();
+  ok(over?.statusCode === 400 && /reasoning\.max_tokens/.test(over.message) && /max_output_tokens/.test(over.message), "Responses: reasoning.max_tokens at or above max_output_tokens is a 400 naming both fields");
+  ok(validateResponsesRequest({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, reasoning: { max_tokens: 63 } }, "v1-chat-nano").body.reasoning.max_tokens === 63, "Responses: a budget below the cap validates");
+  const premiumR = bySlug("v1-chat-premium-responses");
+  const MODEL = "anthropic/claude-opus-5";
+  const line = "Summarize the quarterly report line with its figures and risks. ";
+  let content = null;
+  for (let n = 400; n <= 4000 && !content; n += 100) {
+    const probe = { model: MODEL, messages: [{ role: "user", content: line.repeat(n) }], max_tokens: 8192 };
+    try { clamp(probe, T["v1-chat-premium"], 0); } catch { break; }
+    if (probe.max_tokens < 8000 && probe.max_tokens > 1024) content = line.repeat(n);
+  }
+  ok(!!premiumR && content !== null, "premium Responses tool found and a prompt the clamp caps under the budget located");
+  if (premiumR && content) {
+    seen = [];
+    globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+    await premiumR.handler({ model: MODEL, input: content, max_output_tokens: 8192, reasoning: { max_tokens: 8000 } }, fakeReq);
+    ok(seen[0]?.model === MODEL && seen[0].max_output_tokens < 8000 && seen[0].reasoning?.max_tokens === seen[0].max_output_tokens - 1, `Responses: the outbound reasoning budget sits one under the clamped cap (max_output_tokens ${seen[0]?.max_output_tokens}, reasoning ${seen[0]?.reasoning?.max_tokens})`);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

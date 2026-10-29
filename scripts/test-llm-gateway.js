@@ -1797,5 +1797,41 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(scheduled > 0, `the 30-day guard sees ${scheduled} default/fallback/rung slots naming a scheduled retirement (each fails CI from 30 days before its date)`);
 }
 
+// ---- a reasoning budget follows the margin clamp (fitReasoningToCap) ----
+// The validator's "budget below max_tokens" check reads the buyer's cap; the
+// clamp then lowers the cap, and the outbound used to carry a budget above
+// it. Shape: a large prompt on premium, max_tokens 8192, reasoning 8000. The
+// prompt is grown until the clamp binds, never sized by a typed figure.
+{
+  const { fitBudgetBelowCap, fitReasoningToCap, clampToMargin: clamp, LLM_GATEWAY_TOOLS: tools, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  ok(fitBudgetBelowCap(8000, 8192) === 8000 && fitBudgetBelowCap(8000, 2529) === 2528 && JSON.stringify(fitReasoningToCap({ effort: "high", max_tokens: 8000 }, 100)) === '{"effort":"high","max_tokens":99}' && fitReasoningToCap({ effort: "high" }, 100).max_tokens === undefined,
+    "fitBudgetBelowCap: a budget under the cap is kept, one at or above it becomes cap - 1, an object without a budget is untouched");
+  let floorErr = null; try { fitBudgetBelowCap(8000, 1024, { floor: 1024, field: "thinking.budget_tokens" }); } catch (x) { floorErr = x; }
+  ok(floorErr?.statusCode === 400 && /thinking\.budget_tokens/.test(floorErr.message), "a cap that leaves no room above the provider floor is a 400 naming the field");
+  const premium = tools.find((t) => t.slug === "v1-chat-premium");
+  const MODEL = "anthropic/claude-opus-5";
+  const line = "Summarize the quarterly report line with its figures and risks. ";
+  let content = null;
+  for (let n = 400; n <= 4000 && !content; n += 100) {
+    const probe = { model: MODEL, messages: [{ role: "user", content: line.repeat(n) }], max_tokens: 8192 };
+    try { clamp(probe, T["v1-chat-premium"], 0); } catch { break; }
+    if (probe.max_tokens < 8000 && probe.max_tokens > 1024) content = line.repeat(n);
+  }
+  ok(content !== null, "found a prompt the margin clamp caps under the reasoning budget");
+  if (content) {
+    const req = { header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ payload: { authorization: { from: "0xAbCdEf0000000000000000000000000000000009" } } })).toString("base64") : undefined) };
+    const got = [];
+    const realFetch = globalThis.fetch;
+    process.env.OPENROUTER_API_KEY = "test-key";
+    globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); got.push(b); return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) }; };
+    await premium.handler({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, req);
+    ok(got[0]?.model === MODEL && got[0].max_tokens < 8000 && got[0].reasoning?.max_tokens === got[0].max_tokens - 1, `chat: the outbound reasoning budget sits one under the clamped cap (max_tokens ${got[0]?.max_tokens}, reasoning ${got[0]?.reasoning?.max_tokens})`);
+    globalThis.fetch = realFetch;
+    delete process.env.OPENROUTER_API_KEY;
+    const v = validateRequest({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, "v1-chat-premium");
+    ok(v.max_tokens < 8000 && v.reasoning.max_tokens === v.max_tokens - 1, "validateRequest fits the budget pre-spend too (the normalized body never carries a budget above its cap)");
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

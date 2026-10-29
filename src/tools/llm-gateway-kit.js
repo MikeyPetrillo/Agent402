@@ -1554,6 +1554,31 @@ export function clampToMargin(body, tier, imageCount) {
   if (body.max_tokens > affordableOut) body.max_tokens = affordableOut;
 }
 
+/** A reasoning or thinking budget the buyer wrote against their own cap can
+ *  sit at or above the cap clampToMargin leaves. Reasoning tokens are output
+ *  tokens and the clamped cap is what the price covers, so the budget is
+ *  lowered with the cap to one token below it. When the provider's floor
+ *  leaves no room under the clamped cap the request is refused with a 400:
+ *  pre-spend in a validator, a skipped link in a chain walk. Returns the
+ *  budget to send. */
+export function fitBudgetBelowCap(budget, cap, { floor = 1, field = "reasoning.max_tokens", capField = "max_tokens" } = {}) {
+  const b = Number(budget);
+  if (!Number.isInteger(b) || !Number.isFinite(cap) || !(cap > 0)) return budget;
+  if (b < cap) return b;
+  const fitted = cap - 1;
+  if (fitted < floor) {
+    throw bad(`"${field}" (${b}) does not fit under the ${capField} this request's price affords (${cap}): shrink the input or the budget, or use a cheaper model - GET /v1/models lists every model and its tier`);
+  }
+  return fitted;
+}
+/** The reasoning object with `max_tokens` fitted under `cap` (see
+ *  fitBudgetBelowCap); unchanged when it carries no budget. */
+export function fitReasoningToCap(reasoning, cap) {
+  if (!reasoning || typeof reasoning !== "object" || reasoning.max_tokens === undefined) return reasoning;
+  const fitted = fitBudgetBelowCap(reasoning.max_tokens, cap);
+  return fitted === reasoning.max_tokens ? reasoning : { ...reasoning, max_tokens: fitted };
+}
+
 /** Per-block `cache_control` (Anthropic's explicit cache markers ride inside
  *  content blocks too): only the 5-minute ephemeral cache is priced - the 1h
  *  TTL writes above what the margin clamp assumes. The
@@ -1904,6 +1929,9 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   if (serviceTier) body.service_tier = serviceTier;
   cacheControlPref(input); // shape-validate only (400 on a bad value); the preference is call-time, not in the normalized body
   if (clamp) clampToMargin(body, tier, totalImages);
+  // The budget follows the clamped cap (fitBudgetBelowCap): the check above
+  // read the buyer's cap, and the clamp may have lowered it under the budget.
+  if (clamp && body.reasoning !== undefined) body.reasoning = fitReasoningToCap(body.reasoning, body.max_tokens);
   if (clamp && tier.metered) {
     // Refuse pre-spend anything the tier would quote above its per-call cap:
     // the 402 for such a body carries the cap (payments.js), the handler
@@ -3364,7 +3392,9 @@ function makeHandler(routeTier) {
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
+      // A buyer budget is fitted under THIS link's clamped cap (a pricier
+      // fallback clamps lower than the requested model did).
+      const reasoning = body.reasoning !== undefined ? fitReasoningToCap(body.reasoning, attempt.max_tokens) : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
       const plugins = [
         ...(TIERS[tierSlug].web ? [{ ...TIERS[tierSlug].web }] : []),
         ...(structured && body.stream !== true ? [{ id: "response-healing" }] : []),
