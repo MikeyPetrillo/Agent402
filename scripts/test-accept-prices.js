@@ -120,7 +120,7 @@ try {
   const llms = await (await fetch(`${base}/llms.txt`)).text();
   // Chain bullets stay bare (chain: asset (CAIP-2)); the premium and the floor are stated once in the x402 paragraph.
   if (!/on Optimism every call quotes \$0\.001 above its list price/.test(llms)) fail("/llms.txt", "the x402 paragraph does not name the Optimism premium");
-  if (!/Robinhood Chain[^\n]*every call costs at least \$/.test(llms) && !/every call costs at least \$[^\n]*Robinhood Chain/.test(llms)) fail("/llms.txt", "the x402 paragraph does not name the Robinhood Chain floor");
+  if (!/on Robinhood Chain every call costs at least \$/.test(llms)) fail("/llms.txt", "the chain note does not name the Robinhood Chain floor");
   if (/\[Optimism\]\([^)]*\): USDC \(`eip155:10`\);/.test(llms)) fail("/llms.txt", "a chain bullet carries a clause");
   const llmsFull = await (await fetch(`${base}/llms-full.txt`)).text();
   if (!/on Optimism every call quotes \$0\.001 above its list price/.test(llmsFull) || !/premiumUsdByNetwork/.test(llmsFull)) fail("/llms-full.txt", "does not name the Optimism premium and the /api/pricing field");
