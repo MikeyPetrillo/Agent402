@@ -1007,13 +1007,17 @@ const textTools = [
       // Letters NFKD cannot decompose (ß, æ, ø, œ, đ, ł, þ, ð) were DROPPED, so
       // "Straße" slugged to "stra-e" (corpus, 2026-09-06). Transliterate first.
       const TRANSLIT = { "ß": "ss", "æ": "ae", "Æ": "AE", "ø": "o", "Ø": "O", "œ": "oe", "Œ": "OE", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "TH", "ð": "d", "Ð": "D" };
-      const slug = text
+      let slug = text
         .replace(/[ßæÆøØœŒđĐłŁþÞðÐ]/g, (c) => TRANSLIT[c])
         .normalize("NFKD")
         .replace(/[̀-ͯ]/g, "")
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, sep)
-        .replace(new RegExp(`^\\${sep}+|\\${sep}+$`, "g"), "");
+        .replace(/[^a-z0-9]+/g, sep);
+      // Trim the separator by character, never by splicing it into a regex.
+      let a = 0, b = slug.length;
+      while (a < b && slug[a] === sep) a++;
+      while (b > a && slug[b - 1] === sep) b--;
+      slug = slug.slice(a, b);
       return { slug };
     },
   },
