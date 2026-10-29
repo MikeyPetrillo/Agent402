@@ -95,9 +95,9 @@ for (const dir of pkgDirs) {
 // --- 2b. signing libraries resolve to what was tested ---------------------------
 // A package that signs payments ships exact versions of the libraries that
 // sign, equal to the versions its lockfile was tested with: a range lets a
-// consumer's install take a newer patch nobody here ran. A package that takes
-// a payment library as a peer caps every peer below the next major, so a
-// major nobody here ran is never accepted unseen.
+// consumer's install take a newer patch nobody here ran. Every peer of a
+// published package is capped below the next major, so a major nobody here
+// ran is never accepted unseen.
 {
   const SIGNING = ["viem", "@solana/kit", "@modelcontextprotocol/sdk", "@x402/core", "@x402/evm", "@x402/fetch", "@x402/svm"];
   const pkg = JSON.parse(readFileSync(join(ROOT, "mcp/package.json"), "utf8"));
@@ -111,18 +111,16 @@ for (const dir of pkgDirs) {
     ok(lock.packages?.[""]?.dependencies?.[name] === spec, `${pkg.name}: the lockfile's root records ${name} as ${spec}`);
   }
   ok(lock.packages?.[""]?.version === pkg.version && lock.version === pkg.version, `${pkg.name}: the lockfile carries the package version (${pkg.version})`);
-  // Every peer of a package that takes a payment library as a peer (an
-  // @x402 package, @coinbase/x402 or viem) is capped below the next major.
-  const PAYMENT_PEER = /^(@x402\/|@coinbase\/x402$|viem$)/;
+  // Every peer of every package we publish is capped below its next major.
   let capped = 0;
   for (const dir of pkgDirs) {
     const p = JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8"));
     const peers = Object.entries(p.peerDependencies || {});
-    if (!peers.some(([name]) => PAYMENT_PEER.test(name))) continue;
+    if (!peers.length) continue;
     capped++;
     for (const [name, range] of peers) ok(/<\s*\d/.test(range), `${p.name}: peer ${name} carries an upper bound (${range})`);
   }
-  ok(capped >= 4, `peer caps checked on every package with a payment peer (${capped})`);
+  ok(capped >= 6, `peer caps checked on every published package with peers (${capped})`);
 }
 
 // --- 2c. the tollbooth Docker image installs exact versions ------------------

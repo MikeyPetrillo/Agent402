@@ -58,7 +58,8 @@ Packages:
   up to, not including, 3. agent402-openclaw 0.5.8, agent402-agentkit 0.1.10
   and elizaos-plugin-agent402 0.2.10 cap each optional peer below its next
   major (the x402 packages and viem below 3, @coinbase/agentkit below 1, zod
-  below 5).
+  below 5); agent402-ai-sdk 0.2.12 caps ai below 8 and agent402-llamaindex
+  0.1.13 caps llamaindex below 1.
 
 Operations:
 - Each sale records the path it arrived on: the hosted connector's loopback,

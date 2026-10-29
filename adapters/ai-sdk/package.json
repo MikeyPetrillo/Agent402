@@ -51,7 +51,7 @@
   },
   "homepage": "https://agent402.tools",
   "peerDependencies": {
-    "ai": ">=3",
+    "ai": ">=3 <8",
     "zod": ">=3 <5"
   },
   "peerDependenciesMeta": {

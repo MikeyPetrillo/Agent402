@@ -55,7 +55,7 @@
     "agent402-client": ">=0.8.21 <1.0.0"
   },
   "peerDependencies": {
-    "llamaindex": ">=0.12.0"
+    "llamaindex": ">=0.12.0 <1"
   },
   "peerDependenciesMeta": {
     "llamaindex": {
