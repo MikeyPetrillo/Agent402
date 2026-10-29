@@ -1,14 +1,14 @@
 {
   "client": {
     "version": "0.8.19",
-    "sha256": "116265765461f2feaab13c518e999f68ef3bdc34a7c976eeb84d2f3ba66e2c26"
+    "sha256": "7977f27dc1baa9dd6538203c76479a40ce7a76bee1f843d25b21033f8b2ff378"
   },
   "mcp": {
     "version": "0.13.22",
-    "sha256": "116265765461f2feaab13c518e999f68ef3bdc34a7c976eeb84d2f3ba66e2c26"
+    "sha256": "7977f27dc1baa9dd6538203c76479a40ce7a76bee1f843d25b21033f8b2ff378"
   },
   "openclaw": {
     "version": "0.5.7",
-    "sha256": "116265765461f2feaab13c518e999f68ef3bdc34a7c976eeb84d2f3ba66e2c26"
+    "sha256": "7977f27dc1baa9dd6538203c76479a40ce7a76bee1f843d25b21033f8b2ff378"
   }
 }
