@@ -236,5 +236,7 @@ console.log("model-backed pack derivation checked");
   }
   const ms = Date.now() - t;
   ok(ms < 100, `scenario parsers stay fast on long digit runs (${ms}ms)`);
+  const late = step("loan-comparison", "loan-payment").mapInput({ loanA: `${"x".repeat(600)} $300,000 at 6.5% for 30 years` });
+  ok(!(late.principal > 0) && !(late.termYears > 0), `the parsers read only the first 500 characters of a scenario (got principal ${late.principal}, term ${late.termYears})`);
 }
 console.log("finance scenario bounds checked");
