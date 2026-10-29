@@ -177,7 +177,20 @@ try {
   });
   const opBody = await op.text();
   ok(op.status === 400 && opBody.includes("[redacted]") && !opBody.includes(OP_ECHO_VALUE), `an operator route's error answer is scrubbed (${op.status} ${opBody.slice(0, 80)})`);
-  const errLine = log.split("\n").find((l) => l.includes("[tool-error]") && l.includes("slug=regex")) || "";
+  // The MCP connector's free path books a tool error through logToolError with
+  // the handler's own message, so the scrub inside logToolError is the only
+  // one between that message and the log.
+  const mcp = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "regex", params: { pattern: `(${SECRET} ${DB_URL}`, text: "a" } } } }),
+  });
+  const mcpBody = await mcp.text();
+  await new Promise((r) => setTimeout(r, 300));
+  const regexLines = log.split("\n").filter((l) => l.includes("[tool-error]") && l.includes("slug=regex"));
+  ok(regexLines.length >= 2 && /Invalid regex/.test(mcpBody), `an MCP catalog.call error is logged under [tool-error] too (${regexLines.length} regex lines)`);
+  ok(!regexLines.some((l) => l.includes(SECRET) || l.includes(DB_PASS)), "...and its log line is scrubbed");
+  const errLine = regexLines[0] || "";
   ok(errLine.length > 0, "the error is logged under [tool-error]");
   ok(!log.includes(SECRET), "no log line carries the configured secret");
   ok(!log.includes(DB_PASS), "no log line carries the database URL's password");
