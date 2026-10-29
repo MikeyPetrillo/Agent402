@@ -72,6 +72,11 @@ try {
     ok(r.status === 503 && body.reason === "replay-store-unavailable", `a paid call to ${slow.slug} is refused while the shared store is out (${r.status} ${body.reason || body.error || ""})`);
     ok(r.headers.get("retry-after") === "30", `and says when to retry (Retry-After ${r.headers.get("retry-after")})`);
     ok(verifies === v0 && settles === s0, `nothing was verified or settled for it (verify +${verifies - v0}, settle +${settles - s0})`);
+    // Routing ignores case and a trailing slash; so does the refusal.
+    const v1 = verifies, s1 = settles;
+    const upper = await fetch(`${B}${path.toUpperCase()}/`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
+    const ub = await upper.json().catch(() => ({}));
+    ok(upper.status === 503 && ub.reason === "replay-store-unavailable" && verifies === v1 && settles === s1, `the same call on ${path.toUpperCase()}/ is refused the same way (${upper.status} ${ub.reason || ub.error || ""})`);
   }
 
   // A fast route: served on the per-process fallback and settled.

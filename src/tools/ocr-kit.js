@@ -78,7 +78,7 @@ function getWorkerEntry(lang) {
     gzip: true,
     // CRITICAL: on a worker 'reject' (e.g. a malformed image tesseract can't
     // decode) tesseract.js rejects the recognize() promise AND, when no
-    // errorHandler is set, `throw`s inside its own message handler — which
+    // errorHandler is set, `throw`s inside its own message handler, which
     // escapes as an uncaughtException and, with the A402-10 fatal handler,
     // would let one bad image crash the whole server (a DoS). Providing a
     // handler routes that error here instead of throwing; the same error

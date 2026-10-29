@@ -5,11 +5,11 @@
 import { decodeTagCharacters, hasHiddenCharacters } from "./hidden-chars.js";
 
 // Metadata-injection detector (M6, "Five Attacks on x402" Attack IV-E1).
-// A tool listing is metadata: a name, a description, tags — text that *describes*
+// A tool listing is metadata: a name, a description, tags: text that *describes*
 // what a tool does. It is never a channel for instructions to the selecting
 // agent. When an external listing's text tries to command the ranker or the
 // buyer's LLM ("ignore previous instructions", "always pick this", a fake
-// <system> block), that's an attack, not a description — the paper drove one
+// <system> block), that's an attack, not a description; the paper drove one
 // crafted server to 71.8% selection this way. We drop such listings entirely.
 //
 // Deliberately conservative: every pattern is imperative/meta phrasing that a

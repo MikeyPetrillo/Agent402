@@ -148,7 +148,7 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
      *   "ok"       — first use; caller proceeds to the paywall
      *   "inflight" — an identical authorization is mid-settle (concurrent replay)
      *   "consumed" — this authorization already settled (sequential replay)
-     *   "unavailable" — only with `requireShared`: a shared store is
+     *   "unavailable": only with `requireShared`; a shared store is
      *                   configured and did not answer; the caller refuses
      */
     async begin(key, now = Date.now(), { requireShared = false } = {}) {
