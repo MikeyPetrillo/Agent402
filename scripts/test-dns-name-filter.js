@@ -91,7 +91,8 @@ await queries("asn-info", () => asn.handler({ host: "example.com" }));
     try { await fn(); } catch (e) { err = e; }
     ok(err?.statusCode === 400 && (!msg || msg.test(err.message)) && fetched + queried.length === before, `${label}: refused 400 before any request (status ${err?.statusCode}: ${err?.message})`);
   };
-  for (const h of badHosts) await refusesBeforeFetch(`cert-transparency refuses ${h.slice(0, 24)}`, () => ct.handler({ domain: h }), /^Missing "domain"/);
+  for (const h of badHosts) await refusesBeforeFetch(`cert-transparency refuses ${h.slice(0, 24)}`, () => ct.handler({ domain: h }), /^"domain" is not a valid host name/);
+  await refusesBeforeFetch("cert-transparency with no domain says it is missing", () => ct.handler({}), /^Missing "domain"/);
   await refusesBeforeFetch("cert-transparency refuses an internal zone", () => ct.handler({ domain: "corp.internal" }));
   await refusesBeforeFetch("cert-transparency refuses an internal URL host", () => ct.handler({ url: "https://db.internal/x" }));
   await refusesBeforeFetch("tech-stack with no url", () => tech.handler({}), /^Missing "url"/);

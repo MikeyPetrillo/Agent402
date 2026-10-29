@@ -27,15 +27,19 @@ function bad(message, statusCode = 400) {
 
 // network-kit.js's host normalizer, so an agent sending {url}, {host},
 // {hostname}, {domain}, or {email} is read, and refused, the same way across
-// the kit. The first key that holds a valid name wins; null when none does
-// (each handler words its own 400). A name that can only be internal is a 400.
+// the kit. The first key that holds a valid name wins; null when no key holds
+// any text (each handler words its own 400). Text that is not a host name, or
+// a name that can only be internal, is a 400 that says so.
 function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) {
+  let invalid = null;
   for (const k of keys) {
     if (input && typeof input[k] === "string") {
       const h = normalizeHost(input[k]);
       if (h) return assertQueryableName(h);
+      if (!invalid && input[k].trim()) invalid = k;
     }
   }
+  if (invalid) throw bad(`"${invalid}" is not a valid host name. Send a public name such as "example.com"`);
   return null;
 }
 
