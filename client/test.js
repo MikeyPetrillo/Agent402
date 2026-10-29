@@ -297,6 +297,21 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.006 && paid === 0, `payNetworks ${JSON.stringify(payNetworks)} with no option on those chains counts the dearest of all ($0.006) and is refused over a $0.004 cap`);
       }
     }
+    {
+      // A seller spelling Algorand by its legacy genesis-hash id: a buyer who
+      // pays on "algorand" counts that accept as the one they pay, so the
+      // dearer Base accept beside it does not refuse the call.
+      const legacyAlgo = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+        { scheme: "exact", network: "eip155:8453", amount: "6000", asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } },
+        { scheme: "exact", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", amount: "1000", asset: "31566704", payTo: "ALGOSELLER", extra: { name: "USDC" } } ] })).toString("base64");
+      let paid = 0;
+      const c = new Agent402({ baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.004, payNetworks: ["algorand"],
+        fetch: async () => { paid++; return okResp; },
+        fetchImpl: async () => ({ ok: false, status: 402, headers: new Headers({ "payment-required": legacyAlgo }), json: async () => ({}) }) });
+      c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.001" }]]);
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(!e && paid === 1, `payNetworks ["algorand"] counts an accept spelled with the legacy genesis-hash id ($0.001), not the dearest of all ($0.006) (${e?.message || "served"})`);
+    }
     for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"]]) {
       ok(NETWORK_CAIP2[name] === caip2, `NETWORK_CAIP2 maps ${name} -> ${caip2}`);
     }

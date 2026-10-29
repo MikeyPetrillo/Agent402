@@ -74,6 +74,9 @@ const CATALOG = {
   "POST /api/decide/execute": def("decide-execute", "POST /api/decide/execute", "$0.05", { asyncProfile: { slow: true, expectedSeconds: 60, maxSeconds: 240, basisSeconds: 60 } }),
   // A slow paid route that is NOT long-running: its 402 offers Tempo.
   "POST /api/slow-paid": def("slow-paid", "POST /api/slow-paid", "$0.10", { asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75, basisSeconds: 40 } }),
+  // An identity-bound route (src/payments.js isIdentityBoundRoute): its 402
+  // never offers Tempo, so no Tempo transfer can reach it.
+  "GET /api/my-usage": def("my-usage", "GET /api/my-usage", "$0.001"),
   // uuid is free AND deliberately slow: the free path must stay blocking
   // regardless of how long it runs.
   "GET /api/uuid": def("uuid", "GET /api/uuid", "$0.001", { handler: async () => { await new Promise((r) => setTimeout(r, 600)); return { ok: true, slug: "uuid", slow: true }; } }),
@@ -101,8 +104,8 @@ const jsonRes = (status, body, headers = {}) => ({
 // call records the abort signal so cancellation can be observed.
 const calls = [];
 let plan = {};
-async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey }) {
-  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey };
+async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader }) {
+  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader };
   calls.push(rec);
   const p = plan[d.slug] || { delayMs: 0, res: jsonRes(200, { ok: true, slug: d.slug }) };
   // What the real paid route does with the progress key: the middleware finds
@@ -312,6 +315,23 @@ ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that 
   const pushed = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "slow-paid", params: { prompt: "x" } }, _meta: pushMeta });
   ok(calls.length === nCalls + 3 && calls[calls.length - 1].slug === "slow-paid" && !/respond_async_required/.test(JSON.stringify(pushed)), "a blocking call carrying a Tempo push credential to a slow route is NOT refused: the loopback runs so the gate claims the transfer");
   ok(pushed.result?.isError !== true && pushed.result?.structuredContent?.result?.data?.[0]?.b64_json === "AA", "...and its answer comes back as the ordinary tool result");
+  const { pushHashOf } = await import("../src/mpp-tempo.js");
+  ok(pushHashOf(calls[calls.length - 1].credentialHeader) === `0x${"ab".repeat(32)}`, "the loopback received the push credential itself: a paid call let through, not an unpaid one reaching its 402");
+
+  // The "not charged" line of an HTTP >= 400 answer names the Tempo push
+  // exception only where the route's 402 offers Tempo: a slow route that does
+  // carries it (a push transfer can reach it), as does any Tempo-offered
+  // route's 5xx; an identity-bound route never does.
+  plan = { "slow-paid": { delayMs: 0, res: jsonRes(400, { error: "bad input" }) }, "my-usage": { delayMs: 0, res: jsonRes(400, { error: "bad input" }) }, whois: { delayMs: 0, res: jsonRes(503, { error: "upstream" }) } };
+  const pushedBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "slow-paid", params: { prompt: "x" } }, _meta: pushMeta });
+  const pushedBadText = String(pushedBad.result?.content?.[0]?.text || "");
+  ok(pushedBad.result?.isError === true && /HTTP 400 - not charged/.test(pushedBadText) && pushedBadText.includes(PUSH_EXCEPTION), `a 4xx from a slow route whose 402 offers Tempo carries the push exception (${pushedBadText.slice(0, 160)})`);
+  const whoisBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  const whoisBadText = String(whoisBad.result?.content?.[0]?.text || "");
+  ok(whoisBad.result?.isError === true && /HTTP 503 - not charged \(settlement runs only after a successful handler\)/.test(whoisBadText) && whoisBadText.includes(PUSH_EXCEPTION), `a 5xx from a route whose 402 offers Tempo carries it too (${whoisBadText.slice(0, 160)})`);
+  const usageBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "my-usage", params: {} }, _meta: paidMeta });
+  const usageBadText = String(usageBad.result?.content?.[0]?.text || "");
+  ok(usageBad.result?.isError === true && /HTTP 400 - not charged: /.test(usageBadText) && !usageBadText.includes(PUSH_EXCEPTION) && !/Tempo/.test(usageBadText), `a 4xx from an identity-bound route names no Tempo transfer (${usageBadText.slice(0, 160)})`);
 }
 
 // The outcomes no route books, because the loopback returned no answer, are
