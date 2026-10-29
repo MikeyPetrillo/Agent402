@@ -133,10 +133,20 @@ function onEvents(evs, { backfill = false } = {}) {
 }
 
 function send(res, event, data) { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+// The batches the stream sent, numbered, for /api/poll: a network that holds
+// an event stream back (a proxy that waits for a response to finish) gets the
+// same batches over short requests. The cursor names this process, so a
+// restart or another replica answers with a fresh hour instead of a gap.
+const BOOT = createHash("sha256").update(`${process.pid}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 8);
+const POLL_KEEP = Number(process.env.LIVE_POLL_KEEP_BATCHES || 300);
+let seq = 0;
+const batches = [];
 const flush = setInterval(() => {
   if (!pending.length) return;
   const batch = pending.map(toPublic);
   pending = [];
+  batches.push({ seq: ++seq, payments: batch });
+  if (batches.length > POLL_KEEP) batches.shift();
   for (const c of clients) send(c, "payments", batch);
 }, 1000);
 flush.unref?.();
@@ -144,6 +154,28 @@ const statsTick = setInterval(() => { const st = statsNow(); for (const c of cli
 statsTick.unref?.();
 const keepAlive = setInterval(() => { for (const c of clients) c.write(": ping\n\n"); }, 20_000);
 keepAlive.unref?.();
+
+// A poll answers from these copies when they are under a few seconds old, so
+// many polling pages cost one build of the hour and the stats.
+const POLL_CACHE_MS = 3000;
+let helloCache = null, statsCache = null;
+function cachedStats() {
+  if (!statsCache || Date.now() - statsCache.at > POLL_CACHE_MS) statsCache = { at: Date.now(), stats: statsNow() };
+  return statsCache.stats;
+}
+export function pollAnswer(cursor) {
+  const m = /^([0-9a-f]{8})\.(\d{1,12})$/.exec(String(cursor || ""));
+  const after = m && m[1] === BOOT ? Number(m[2]) : -1;
+  const oldest = batches.length ? batches[0].seq - 1 : seq;
+  const next = `${BOOT}.${seq}`;
+  if (after >= oldest && after <= seq) {
+    return { cursor: next, payments: batches.filter((b) => b.seq > after).flatMap((b) => b.payments), stats: cachedStats() };
+  }
+  if (!helloCache || helloCache.seq !== seq || Date.now() - helloCache.at > POLL_CACHE_MS) {
+    helloCache = { at: Date.now(), seq, payments: store.recent(4000).map(toPublic) };
+  }
+  return { cursor: `${BOOT}.${helloCache.seq}`, hello: true, now: Date.now(), payments: helloCache.payments, stats: cachedStats() };
+}
 
 function statsNow() {
   return { ...store.stats(sellerInfo), ingest: { base: pick(ingest.base?.status), tempo: pick(ingest.tempo?.status) } };
@@ -200,6 +232,12 @@ const server = http.createServer(async (req, res) => {
     const gz = wantsGzip(req);
     res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=10", "access-control-allow-origin": "*", vary: "accept-encoding", ...(gz ? { "content-encoding": "gzip" } : {}) });
     return res.end(gz ? gzipSync(body) : body);
+  }
+  if (path === "/api/poll") {
+    const body = Buffer.from(JSON.stringify(pollAnswer(url.searchParams.get("after"))));
+    const gz = wantsGzip(req);
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", vary: "accept-encoding", ...(gz ? { "content-encoding": "gzip" } : {}) });
+    return res.end(req.method === "HEAD" ? undefined : gz ? gzipSync(body) : body);
   }
   if (path === "/events") {
     if (clients.size >= MAX_CLIENTS) { res.writeHead(503, { "retry-after": "30" }); return res.end(); }

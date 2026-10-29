@@ -91,7 +91,7 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
 
 // --- HTTP surface, booted offline
 {
-  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1"; process.env.GA_MEASUREMENT_ID = "G-TEST12345";
+  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1"; process.env.LIVE_POLL_KEEP_BATCHES = "2"; process.env.GA_MEASUREMENT_ID = "G-TEST12345";
   const { server, onEvents } = await import("./server.js");
   await new Promise((r) => server.listening ? r() : server.once("listening", r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -141,6 +141,36 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
     ok(st.headers.get("content-encoding") === "gzip" && typeof (await st.json()) === "object", "compression: /api/stats is gzipped JSON");
     const loader = await fetch(base + "/ga-loader.js"), src = await loader.text();
     ok(loader.status === 200 && /javascript/.test(loader.headers.get("content-type")) && /https:\/\/agent402\.tools\/privacy/.test(src), "analytics: loader served, its privacy link points at agent402.tools");
+  }
+  {
+    // Polling fallback: the opening hour, then only the batches after the cursor.
+    const AG = "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0";
+    const pay = (tx) => ({ chain: "x402", tx, logIndex: 1, block: 1, payer: A, payTo: AG, amountUsd: 0.001, ts: Date.now() });
+    const poll = async (after) => { const r = await fetch(base + "/api/poll" + (after === undefined ? "" : `?after=${encodeURIComponent(after)}`), { headers: { "accept-encoding": "gzip" } }); return { r, d: await r.json() }; };
+    const flushed = () => new Promise((r) => setTimeout(r, 1200));
+    const first = await poll();
+    ok(first.r.status === 200 && first.r.headers.get("cache-control") === "no-store" && first.r.headers.get("content-encoding") === "gzip", "poll: no-store, gzipped JSON");
+    ok(first.d.hello === true && first.d.payments.some((x) => x.tx === "0xabc") && /^[0-9a-f]{8}\.\d+$/.test(first.d.cursor) && typeof first.d.stats === "object", "poll: without a cursor, the opening hour, stats and a cursor");
+    await flushed();
+    let cur = (await poll(first.d.cursor)).d.cursor;
+    onEvents([pay("0xp1")]); await flushed();
+    const next = await poll(cur);
+    ok(!next.d.hello && next.d.payments.length === 1 && next.d.payments[0].tx === "0xp1" && next.d.cursor !== cur, "poll: with a cursor, only the batch sent after it");
+    const again = await poll(next.d.cursor);
+    ok(!again.d.hello && again.d.payments.length === 0 && again.d.cursor === next.d.cursor, "poll: nothing new, an empty list and the same cursor");
+    const stale = next.d.cursor;
+    for (const tx of ["0xp2", "0xp3", "0xp4"]) { onEvents([pay(tx)]); await flushed(); }
+    const gap = await poll(stale);
+    ok(gap.d.hello === true && ["0xp2", "0xp3", "0xp4"].every((tx) => gap.d.payments.some((x) => x.tx === tx)), "poll: a cursor older than the kept batches gets the hour again, never a gap");
+    const [bootId, n] = gap.d.cursor.split(".");
+    const other = (bootId[0] === "0" ? "1" : "0") + bootId.slice(1);
+    ok((await poll(gap.d.cursor)).d.hello !== true && (await poll(`${other}.${n}`)).d.hello === true, "poll: another process's cursor gets the hour (restart or replica), a current one does not");
+    for (const bad of ["x", "", `${bootId}.99999999`, `${bootId}.-1`, "<script>"]) ok((await poll(bad)).d.hello === true, `poll: cursor ${JSON.stringify(bad)} gets the hour`);
+    ok((await fetch(base + "/api/poll", { method: "POST" })).status === 405, "poll: read-only");
+    const app = await (await fetch(base + "/app.js")).text();
+    ok(/STREAM_WAIT_MS = 8000/.test(app) && /if \(!heard\) \{ es\.close\(\); poll\(""\); \}/.test(app) && /fetch\(`\/api\/poll\?after=/.test(app), "page: with no opening hour on the stream in 8 s, it closes the stream and polls");
+    ok(/!seenIds\.has\(p\.id\)/.test(app), "page: a payment seen twice is taken once");
+    ok(/\$\("conn"\)\.textContent = link;/.test(app) && !/textContent = conn \|\|/.test(app), "page: the status label is the connection's state, not whether a payment arrived in the last 45 s");
   }
   server.close();
 }

@@ -1,6 +1,6 @@
 // Agent402 Live: little logo-headed walkers carry each settled payment from a
 // buyer's wallet into the gate for its price. One server-sent event stream
-// feeds it. Seller names and logos are third-party text and images: every
+// feeds it, or short polls where a network holds the stream back. Seller names and logos are third-party text and images: every
 // string is set with textContent (never innerHTML) and every image comes
 // from this origin.
 (() => {
@@ -17,6 +17,9 @@
   const walkers = [], puffs = [], floaters = [];
   const latest = [];              // newest first, <= 8
   let lastLive = 0, lastStats = null, replay = null;
+  // The connection's own state, apart from whether payments are arriving: a
+  // quiet minute on a working connection still reads "live".
+  let link = "connecting";
   const MAX_WALKERS = 160, MAX_FLOATERS = 14, REPLAY_SPEED = 10, QUIET_MS = 45_000;
 
   // ---- images, colors ------------------------------------------------------
@@ -241,12 +244,13 @@
     if (replay.i >= pool.length) replay = null;
     setMode();
   }, 250);
-  function setMode(conn) {
-    const live = Date.now() - lastLive < QUIET_MS;
-    $("mode").textContent = conn || (live ? "" : replay ? `replay ×${REPLAY_SPEED} · last hour` : "waiting for payments");
-    $("dot").className = "dot" + (live && !conn ? " live" : "");
-    $("conn").textContent = conn || (live ? "live" : "connecting");
+  function setMode() {
+    const live = Date.now() - lastLive < QUIET_MS, up = link === "live";
+    $("mode").textContent = !up ? link : live ? "" : replay ? `replay ×${REPLAY_SPEED} · last hour` : "waiting for payments";
+    $("dot").className = "dot" + (live && up ? " live" : "");
+    $("conn").textContent = link;
   }
+  function setLink(state) { link = state; setMode(); }
 
   // ---- stats, leaderboard, latest ---------------------------------------------
   const fmtUsd = (n) => "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -289,30 +293,52 @@
   }
 
   // ---- stream ------------------------------------------------------------------
+  // A payment can reach the page twice (in the opening hour and in the first
+  // batch after it), so each is taken once by id.
+  const seenIds = new Set();
   function ingest(list, live) {
-    for (const p of list) payments.push(p);
+    list = list.filter((p) => !seenIds.has(p.id));
+    for (const p of list) { seenIds.add(p.id); payments.push(p); }
     const cut = Date.now() - 3600_000;
-    while (payments.length && payments[0].ts < cut) payments.shift();
+    while (payments.length && payments[0].ts < cut) seenIds.delete(payments.shift().id);
     if (!live) return;
     layout();
     for (const p of list) { pushLatest(p); if (inRail(p)) { lastLive = Date.now(); replay = null; spawn(p); } }
     setMode();
   }
+  function hello(d) {
+    link = "live"; payments.length = 0; seenIds.clear(); ingest(d.payments, false);
+    const newest = payments.length ? payments[payments.length - 1].ts : 0;
+    lastLive = newest ? Date.now() - Math.max(0, (d.now || Date.now()) - newest) : 0;
+    payments.slice(-8).forEach(pushLatest);
+    lastStats = d.stats; layout(); renderStats(); setMode();
+    // a few walkers already on their way, so the stage never opens empty
+    const now = performance.now();
+    payments.filter(inRail).slice(-14).forEach((p, i) => { spawn(p); const w = walkers[walkers.length - 1]; if (w) { w.t0 = now - (i / 14) * w.dur * 0.8; w.seeded = true; } });
+  }
+  // Some company proxies hold an event stream until it ends, so the page would
+  // never hear its opening hour. With nothing after STREAM_WAIT_MS, the page
+  // closes the stream and polls /api/poll instead.
+  const STREAM_WAIT_MS = 8000, POLL_MS = 4000;
   function connect() {
     const es = new EventSource("/events");
-    es.addEventListener("hello", (e) => {
-      const d = JSON.parse(e.data); payments.length = 0; ingest(d.payments, false);
-      const newest = payments.length ? payments[payments.length - 1].ts : 0;
-      lastLive = newest ? Date.now() - Math.max(0, (d.now || Date.now()) - newest) : 0;
-      payments.slice(-8).forEach(pushLatest);
-      lastStats = d.stats; layout(); renderStats(); setMode();
-      // a few walkers already on their way, so the stage never opens empty
-      const now = performance.now();
-      payments.filter(inRail).slice(-14).forEach((p, i) => { spawn(p); const w = walkers[walkers.length - 1]; if (w) { w.t0 = now - (i / 14) * w.dur * 0.8; w.seeded = true; } });
-    });
+    let heard = false;
+    const fallback = setTimeout(() => { if (!heard) { es.close(); poll(""); } }, STREAM_WAIT_MS);
+    es.addEventListener("hello", (e) => { heard = true; clearTimeout(fallback); hello(JSON.parse(e.data)); });
     es.addEventListener("payments", (e) => ingest(JSON.parse(e.data), true));
     es.addEventListener("stats", (e) => { lastStats = JSON.parse(e.data); renderStats(); });
-    es.onerror = () => setMode("reconnecting");
+    es.onerror = () => { if (heard) setLink("reconnecting"); };
+  }
+  async function poll(cursor) {
+    try {
+      const r = await fetch(`/api/poll?after=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      if (d.hello) hello(d);
+      else { link = "live"; ingest(d.payments, true); lastStats = d.stats; renderStats(); setMode(); }
+      cursor = d.cursor;
+    } catch { setLink("reconnecting"); }
+    setTimeout(() => poll(cursor), POLL_MS);
   }
 
   // ---- controls, tooltip, resize, clock ------------------------------------------
