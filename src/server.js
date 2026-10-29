@@ -9793,7 +9793,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug) } : null;
     },
   });
   if (stripeGate) {
@@ -10351,7 +10351,18 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      const verdict = await replayGuard.begin(replayKey);
+      // A long-running or composite route needs the shared claim: with the
+      // shared store configured but unreachable it is refused here, before
+      // any payment is taken, rather than claimed on this replica alone.
+      const replayDef = CATALOG[`${req.method} ${req.path}`];
+      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      if (verdict === "unavailable") {
+        res.setHeader("Retry-After", "30");
+        return res.status(503).json({
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          reason: "replay-store-unavailable",
+        });
+      }
       if (verdict !== "ok") {
         res.setHeader("X-Payment-Replay", verdict); // "consumed" | "inflight"
         return res.status(409).json({
@@ -11062,7 +11073,7 @@ for (const tool of ALL_KIT) {
       // nonce - so a payer can make us spend then dodge settlement repeatedly.
       // Block a payer with too many recent spend-then-fail events BEFORE the next
       // run; record the outcome on finish (only a genuine spend counts as a fail,
-      // a paid 200 clears it). Registered before the handler so it fires even if
+      // a paid 200 is a settled outcome beside it). Registered before the handler so it fires even if
       // the handler throws. Same doctrine as the external-spend guard below.
       if (EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)) {
         // Belt for the global drain middleware: a composite that reaches the
@@ -11086,7 +11097,7 @@ for (const tool of ALL_KIT) {
           throw e;
         }
         if (await compositeGuardBlocked(guardKey)) {
-          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. A successful payment clears it.");
+          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
           throw e;
         }

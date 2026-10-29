@@ -1783,6 +1783,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         console.warn(`x402 upto: REFUSING ${caip2}, it carries a price floor and upto could settle below it.`);
         continue;
       }
+      // The metered settlement charges the usage under the quote without the
+      // chain's settlement premium, so a premium network is never offered
+      // upto either.
+      if (NETWORK_PREMIUMS.get(caip2) > 0) {
+        console.warn(`x402 upto: REFUSING ${caip2}, it carries a settlement premium and upto would settle without it.`);
+        continue;
+      }
       try {
         await withMoney(new UptoEvmScheme(), caip2).parsePrice(0.001, caip2);
         uptoCaip2.push(caip2);

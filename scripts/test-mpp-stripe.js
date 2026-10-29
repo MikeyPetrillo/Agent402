@@ -22,6 +22,8 @@ import {
   stripeEnabled, mintStripeChallenge, checkStripeCredentialBinding,
   createStripeGate, createStripeChallengeAppender, validateStripeCredential, checkGrantedToken,
 } from "../src/mpp-stripe.js";
+import { createReplayGuard } from "../src/replay-guard.js";
+import { __setTestClient } from "../src/shared-limit.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -29,7 +31,7 @@ const REALM = "agent402.tools";
 const PROFILE = process.env.STRIPE_PROFILE_ID;
 // The gate/binding default to the Stripe-derived signing secret; mirror it.
 const SECRET = createHmac("sha256", process.env.STRIPE_SECRET_KEY).update("mpp-challenge-signing").digest("base64");
-const priceFor = (m, p) => p === "/paid" ? { priceUsd: 0.50, identityBound: false } : p === "/premium" ? { priceUsd: 5.00, identityBound: false } : p === "/id" ? { priceUsd: 1.00, identityBound: true } : p === "/cheap" ? { priceUsd: 0.001, identityBound: false } : p === "/third" ? { priceUsd: 0.50, identityBound: false, paysThirdParty: true } : null;
+const priceFor = (m, p) => p === "/paid" ? { priceUsd: 0.50, identityBound: false } : p === "/premium" ? { priceUsd: 5.00, identityBound: false } : p === "/id" ? { priceUsd: 1.00, identityBound: true } : p === "/cheap" ? { priceUsd: 0.001, identityBound: false } : p === "/third" ? { priceUsd: 0.50, identityBound: false, paysThirdParty: true } : p === "/long" ? { priceUsd: 5.00, identityBound: false, longRunning: true } : null;
 
 // A stripe method purely for building test challenges (no API call in mint).
 const testMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"), networkId: PROFILE, paymentMethodTypes: ["card"], livemode: false });
@@ -193,6 +195,29 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor, checkToken: async () =
   s.close();
   _resetHangupForgiveness();
   if (savedKeyBudget === undefined) delete process.env.HANGUP_FORGIVE_KEY_USD; else process.env.HANGUP_FORGIVE_KEY_USD = savedKeyBudget;
+}
+
+// G) the shared replay store configured and not answering: a long-running
+// route is refused 503 with Retry-After before its handler runs and nothing is
+// captured; a fast route keeps the per-process claim and is served.
+{
+  const broken = { get: async () => { throw new Error("simulated outage"); }, set: async () => { throw new Error("simulated outage"); }, del: async () => { throw new Error("simulated outage"); }, expire: async () => { throw new Error("simulated outage"); } };
+  let captures = 0, runs = 0;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(), validate: async () => ({ ok: true, validation: {} }), settle: async () => { captures++; return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_test_outage_${captures}`, timestamp: new Date().toISOString() } }; } }));
+  app.post("/long", (req, res) => { runs++; res.json({ ok: true }); });
+  app.post("/paid", (req, res) => { runs++; res.json({ ok: true }); });
+  const { s, url } = await listen(app);
+  const e0 = console.error;
+  const quiet = async (fn) => { console.error = () => {}; try { return await fn(); } finally { console.error = e0; } };
+  __setTestClient(broken);
+  try {
+    const r = await quiet(() => fetch(`${url}/long`, { method: "POST", headers: { Authorization: credFor({ priceUsd: 5.00 }) } }));
+    const b = await r.json().catch(() => ({}));
+    ok(r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30" && runs === 0 && captures === 0, `gate G: a long-running route is refused while the shared store is out, before its handler, nothing captured (${r.status}, runs ${runs}, captures ${captures})`);
+    const f = await quiet(() => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } }));
+    ok(f.status === 200 && runs === 1 && captures === 1, `gate G: a fast route keeps the per-process claim and is served and captured (${f.status}, runs ${runs}, captures ${captures})`);
+  } finally { __setTestClient(null); s.close(); }
 }
 
 // ---- wiring pin: server.js MUST bypass the x402 paywall for a validated

@@ -105,6 +105,37 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   await guardA.settle(rk);
 }
 
+// --- 5b. A call that runs past the claim's TTL keeps its claim ---------------
+// The claim is renewed while the call is open, so a handler that outlives the
+// in-flight TTL cannot be run a second time on the same signed payment from
+// another replica; settle/release stop the renewal, and a holder that never
+// finishes stops renewing after maxHoldMs so its claim lapses.
+{
+  const opts = { inflightTtlSeconds: 1, renewMs: 300 };
+  const guardA = createReplayGuard(opts);
+  const guardB = createReplayGuard(opts);
+  const k = key("long-handler");
+  ok(await guardA.begin(k) === "ok", "long handler: replica A claims the nonce");
+  await new Promise((r) => setTimeout(r, 2_600)); // the handler runs past the 1 s TTL
+  const during = await guardB.begin(k);
+  ok(during === "inflight", `long handler: replica B still sees inflight past the claim's TTL while A runs (got "${during}")`);
+  ok(guardA._state().renewing === 1, "long handler: A renews its claim while the call is open");
+  await guardA.release(k);
+  ok(guardA._state().renewing === 0, "long handler: release stops the renewal");
+  ok(await guardB.begin(k) === "ok", "long handler: after A releases, B may claim the still-valid authorization");
+  await guardB.settle(k);
+  ok(guardB._state().renewing === 0, "long handler: settle stops the renewal");
+
+  const guardC = createReplayGuard({ ...opts, maxHoldMs: 600 });
+  const k2 = key("abandoned-holder");
+  await guardC.begin(k2);
+  await new Promise((r) => setTimeout(r, 2_600)); // renewal stops at 600 ms, the 1 s TTL then lapses
+  const lapsed = await guardB.begin(k2);
+  ok(lapsed === "ok", `a holder that never settles or releases stops renewing and its claim lapses (got "${lapsed}")`);
+  ok(guardC._state().renewing === 0, "the abandoned holder's renewal timer is gone");
+  await guardB.release(k2);
+}
+
 // --- 6. Fails OPEN to local state when Redis throws (not closed, not a crash) --
 // A rejected paid call over an optimization layer going dark would be the
 // wrong direction for THIS guard (see the fail-open rationale in

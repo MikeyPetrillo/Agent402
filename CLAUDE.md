@@ -246,12 +246,22 @@ heartbeat page on it under one issue that closes when nothing is owed.
   stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
   breakers and the composite guard, with a 429 that names it instead of the wallet.
+  The composite guard (`src/composite-spend-guard.js`) reads its window the same way: a settled
+  run stays as an outcome and never erases failures; a payer is blocked at
+  `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
+  (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
+  in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
+  route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
+  but unreachable, a long-running or composite route (`isLongRunningSlug`) is refused 503 with
+  `Retry-After` before any payment is taken (x402 dispatcher and card gate); fast routes fall back
+  to a per-process claim.
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
   can run through our own relayer; it is static so the paid retry re-derives the same amount.
-  A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
+  A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
   the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
   each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the

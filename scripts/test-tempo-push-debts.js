@@ -549,6 +549,20 @@ for (const [label, headers, status, error, tail] of [
   ok(rp.status === 402 && rp.body.details?.reason === "method-unsupported" && rp.body.details.transferClaimed === undefined && ledger.listRefunds({ status: "all", limit: 1000 }).length === rows0, "control: a pull credential at a long-running route is the plain refusal (nothing was sent), no row");
 }
 
+// A route refusal that throws after it claimed the credential ends its claim:
+// the same credential still pays on a route that offers Tempo.
+{
+  const h = hashFor(66);
+  const cred = pushCred(h);
+  validateNext = { get ok() { throw new Error("relay answer unreadable"); } };
+  const w0 = console.warn; console.warn = () => {};
+  let r;
+  try { r = await postTo("/long", cred, { text: "x" }); } finally { console.warn = w0; }
+  ok(r.status === 402 && rowsFor(h).length === 0, `a route refusal that throws after claiming books nothing (${r.status})`);
+  const served = await post(cred, { text: "x" });
+  ok(served.status === 200 && sales.filter((s) => s === h).length === 1, `...and releases its claim: the credential is then served on a Tempo route, not refused as a replay (${served.status} ${served.body.details?.reason || ""})`);
+}
+
 // Catalog state the paths above depend on: every slow route (run budget past
 // the advise bound, src/slow-routes.js) is long-running, so no slow route
 // offers Tempo and a push credential on one is refused at the binding check,
