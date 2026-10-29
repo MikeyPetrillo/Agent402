@@ -32,7 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   _setRouterReplicaObserver, _setRouterOffload, _routerStateVersion, _routerStateSnapshot,
-  _routerStoresForReplica, _routerReplicaEntryOf, routeQueryAsyncInThread,
+  _routerStoresForReplica, _routerReplicaEntryOf, _routerReplicaQualityOf, routeQueryAsyncInThread,
 } from "./x402-index.js";
 import { observationsVersion, observationsSnapshot } from "./response-observation.js";
 
@@ -158,7 +158,7 @@ function flushPending(w) {
     for (const k of p.keys) {
       const v = store.get(k);
       if (v === undefined) del.push(k);
-      else set.push([k, kind === "cache" ? _routerReplicaEntryOf(v) : v]);
+      else set.push([k, kind === "cache" ? _routerReplicaEntryOf(v) : kind === "bazaarQuality" ? _routerReplicaQualityOf(v) : v]);
     }
     const msg = { t: kind, clear: p.clear, del, set };
     p.clear = false; p.keys.clear();
@@ -226,7 +226,7 @@ async function resync(w) {
       const set = [];
       for (const k of keys.slice(i, i + SYNC_BATCH_ROWS)) {
         const v = stores[kind].get(k);
-        if (v !== undefined) set.push([k, v]);
+        if (v !== undefined) set.push([k, kind === "bazaarQuality" ? _routerReplicaQualityOf(v) : v]);
       }
       postStore(w, { t: kind, set });
       await yieldToLoop();

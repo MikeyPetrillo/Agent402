@@ -103,6 +103,25 @@ ok(busyCalls === compared && busyTotal > 0, `onBusy reported the worker's CPU fo
   _setBazaarQualityForTest(origin, { calls30d: 5, payers30d: 7, lastCalledAt: null });
   const row = (await routeQueryAsync({ query: "quinces", top: 10, include: "external", ...ctx })).results.find((r) => r.seller === origin);
   ok(row && row.why.bazaarPayers30d === 7, `a Bazaar quality change reaches the worker (payers30d ${row?.why?.bazaarPayers30d})`);
+  // The per-wallet split rides along (it is non-enumerable on the main
+  // thread): a count measured at a circular wallet breaks no tie in the
+  // worker either, the in-thread answer.
+  {
+    const { _setLeaderboardSnapshotForTests, _resetLeaderboardCacheForTests } = await import("../src/leaderboard.js");
+    const WC = "0x" + "c1".repeat(20), WO = "0x" + "c2".repeat(20);
+    const folded = new Map();
+    xi.foldBazaarQuality(folded, origin, { l30DaysTotalCalls: 50, l30DaysUniquePayers: 9 }, WC);
+    xi.foldBazaarQuality(folded, origin, { l30DaysTotalCalls: 5, l30DaysUniquePayers: 2 }, WO);
+    _setLeaderboardSnapshotForTests({ asOf: new Date().toISOString(), leaderboard: [], walletEvidence: { [WC]: { circular: true, callsSettled: 0, uniqueBuyers: 0 } } });
+    _setBazaarQualityForTest(origin, folded.get(origin));
+    const ask = { query: "quinces", top: 10, include: "external", ...ctx };
+    const here = routeQuery(ask).results.find((r) => r.seller === origin);
+    const there = (await routeQueryAsync(ask)).results.find((r) => r.seller === origin);
+    ok(here?.why?.bazaarPayers30d === 2, `in-thread: the circular wallet's payers are not read for the tie (payers30d ${here?.why?.bazaarPayers30d})`);
+    ok(there?.why?.bazaarPayers30d === 2, `the worker reads the same split and the same circular set (payers30d ${there?.why?.bazaarPayers30d})`);
+    ok(!("byPayTo" in (there?.bazaar || {})) && !("payersOffBase" in (there?.bazaar || {})), "the split stays off the served bazaar object");
+    _resetLeaderboardCacheForTests();
+  }
   cache.delete(origin);
   _setBazaarQualityForTest(origin, null);
   ok(!(await find("quinces")).length, "a deleted seller is gone from the worker's answers");
