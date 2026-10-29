@@ -656,11 +656,9 @@ export class Agent402 {
    *  "guarded" (the signing guard holds every signature to the caps, so the
    *  cheapest known accept is what can be paid, and unknown ones are dropped
    *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
-   *  one that can be priced counts, among the chains in `payNetworks` when
-   *  they are given; an accept in an asset this client cannot price is
-   *  skipped beside one it can, and refused here only when none can be
-   *  priced, since the cap is enforced on the accept the wallet chooses when
-   *  the guard is on), or "credits" (nothing is signed:
+   *  one counts, among the chains in `payNetworks` when they are given, and an
+   *  accept this client cannot price is refused here, since nothing stops the
+   *  wallet from signing it), or "credits" (nothing is signed:
    *  the credits gate debits the route's own quote, and no accept is below it,
    *  since a chain premium or price floor only raises an accept, so the
    *  cheapest known accept counts).
@@ -685,15 +683,19 @@ export class Agent402 {
       return listUsd; /* no readable 402: the advertised price */
     }
     if (!q) return listUsd;
-    // An option in an asset this client cannot price is skipped beside one it
-    // can (a seller adding a chain this table does not know yet must not
-    // refuse every capped buyer); only an offer with nothing priceable is
-    // refused, since no cap can be checked against it.
-    if (q.max == null) {
+    // An option in an asset this client cannot price: with no guard the wallet
+    // may sign it, for an amount no cap was checked against, so one such
+    // option refuses the call; the guard drops it before signing, so beside a
+    // priced option it is skipped there; a credits gate signs nothing, so it
+    // is ignored. An offer with nothing priceable is refused under a cap in
+    // either signing mode.
+    const unpriceable = q.max == null || (mode === "wallet" && q.unknown > 0);
+    if (unpriceable) {
       if (mode === "credits") return listUsd;
-      throw new SpendingLimitError(
-        `refusing to pay for "${slug}" - no payment option it offers is in an asset this client can price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
-        { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
+      throw new SpendingLimitError(q.max == null
+        ? `refusing to pay for "${slug}" - no payment option it offers is in an asset this client can price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`
+        : `refusing to pay for "${slug}" - ${q.unknown} of its ${q.total} payment options ${q.unknown === 1 ? "is" : "are"} in an asset this client cannot price, and without the signing guard the wallet may sign any of them (pass your x402Client to guard signing and pay the options it can price)`,
+      { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
     }
     const quoted = mode === "wallet" ? q.max : q.min;
     // Larger of the two: an understated catalog must not lower the ceiling
