@@ -23,11 +23,14 @@
 // means neither block can stand in for the other. An unsigned address only
 // ever refuses the request that carries it.
 //
-// NOT SCREENED HERE: Solana, Stellar and Algorand payments. Their payloads
-// carry a signed transaction, not an authorization naming the payer, and the
-// payer they settle from is read by the facilitator after this point; this
-// screen does not guess it. Their payloads name no EVM address, so they pass
-// through unchanged.
+// SOLANA, STELLAR AND ALGORAND payments carry a signed transaction, not an
+// authorization naming the payer: the signer is read from the transaction
+// itself (src/non-evm-payer.js, the reader the identity-bound routes use)
+// and looked up in the payout map (src/tools/sanctions-kit.js, the same list
+// the router screens a payee against, which holds every address OFAC lists,
+// not only EVM ones). The same verdicts as the EVM path: listed refuses 403
+// before the handler, no list loaded serves unscreened and counts it, an
+// unreadable signer passes.
 //
 // NO LIST LOADED (status missing). The request is served: the screen fails
 // open, logs one line per minute, counts it for the operator view, and
@@ -38,6 +41,8 @@
 // lookup per address. No network call.
 import { paymentHeaderOf } from "./payer.js";
 import { screenAddresses, maskAddress } from "./sanctions-screen.js";
+import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
+import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -76,12 +81,25 @@ export function x402PayerScreenView() {
   };
 }
 
+/** The non-EVM signer's verdict in the EVM screen's shape: { ok } clean,
+ *  { ok:false, reason:"unavailable" } no list, { ok:false, reason:"listed",
+ *  address }. Pure over the payout map; never throws. */
+async function screenNonEvmPayer(req, payerOf) {
+  let key = null;
+  try { key = await payerOf(req); } catch { key = null; }
+  const address = typeof key === "string" ? key.replace(/^(svm|avm|stellar):/, "") : "";
+  if (!address) return null;
+  try {
+    const hit = await screenAddressForPayment(address);
+    return hit ? { ok: false, reason: "listed", address } : { ok: true };
+  } catch (e) {
+    return /unreadable address/.test(String(e?.message || e)) ? null : { ok: false, reason: "unavailable" };
+  }
+}
+
 /** The middleware. Mounted as the x402 middleware's `next` (see above). */
-export function createX402PayerScreen({ log = console.warn } = {}) {
-  return function x402PayerScreen(req, res, next) {
-    const addresses = x402ScreenedAddressesOf(req);
-    if (!addresses.length) return next();
-    const v = screenAddresses(addresses);
+export function createX402PayerScreen({ log = console.warn, nonEvmPayerOf = nonEvmPayerFromRequest } = {}) {
+  const decide = (req, res, next, v) => {
     if (v.ok) { counts.screened++; return next(); }
     if (v.reason !== "listed") {
       // No list loaded: served unscreened (fail open), surfaced as status missing.
@@ -100,6 +118,15 @@ export function createX402PayerScreen({ log = console.warn } = {}) {
     res.status(403);
     res.setHeader("Cache-Control", "no-store");
     return res.json({ error: X402_PAYER_REFUSED_TEXT, reason: "payer-not-accepted", charged: false });
+  };
+  return function x402PayerScreen(req, res, next) {
+    const addresses = x402ScreenedAddressesOf(req);
+    if (addresses.length) return decide(req, res, next, screenAddresses(addresses));
+    if (!paymentHeaderOf(req)) return next();
+    // A non-EVM payment: the transaction's signer, read asynchronously.
+    screenNonEvmPayer(req, nonEvmPayerOf)
+      .then((v) => (v ? decide(req, res, next, v) : next()))
+      .catch(() => next());
   };
 }
 

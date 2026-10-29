@@ -53,7 +53,10 @@ const BUYER_C = "0xCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCc";
 const BUYER_D = "0xDdDdDdDdDdDdDdDdDdDdDdDdDdDdDdDdDdDdDdDd";
 const BUYER_E = "0xEeEeEeEeEeEeEeEeEeEeEeEeEeEeEeEeEeEeEeEe";
 const BUYER_F = "0xF0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0";
-const ALGO_NET = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+// The id our 402 carries, and the full-hash spelling an older debt row was
+// booked under: the run folds the row to the former before the accepts lookup.
+const ALGO_NET = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
+const ALGO_NET_LEGACY = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
 const TREASURY_ALGO = "TREASURYALGOTREASURYALGOTREASURYALGOTREASURYALGOTREASURYA";
 const SPEND_ALGO = "SPENDALGOSPENDALGOSPENDALGOSPENDALGOSPENDALGOSPENDALGOSPE"; // case preserved on this rail
 const BUYER_ALGO = "BUYERALGOBUYERALGOBUYERALGOBUYERALGOBUYERALGOBUYERALGOBUY";
@@ -79,7 +82,7 @@ const receipts = {
 
 const ROWS = [
   { id: 1, slug: "route-execute", network: "eip155:8453", payer: BUYER_A, priceUsd: 0.01, evidence: TX.reBase, status: "owed", synthetic: 0, createdAt: Date.now() - 60_000, httpStatus: 500 },
-  { id: 2, slug: "route-execute", network: ALGO_NET, payer: BUYER_ALGO, priceUsd: 0.01, evidence: ALGO_TXID, status: "owed", synthetic: 0, createdAt: Date.now() - 60_000 },
+  { id: 2, slug: "route-execute", network: ALGO_NET_LEGACY, payer: BUYER_ALGO, priceUsd: 0.01, evidence: ALGO_TXID, status: "owed", synthetic: 0, createdAt: Date.now() - 60_000 },
   { id: 3, slug: "hash", network: "eip155:8453", payer: BUYER_B, priceUsd: 0.001, evidence: TX.hash, status: "owed", synthetic: 0, createdAt: Date.now() - 60_000, httpStatus: 502 },
   { id: 4, slug: "route-execute", network: "eip155:8453", payer: BUYER_C, priceUsd: 0.01, evidence: TX.stranger, status: "owed", synthetic: 0, createdAt: Date.now() - 60_000 },
   // A disconnect on a router tier, paid to the spending wallet: held for review.

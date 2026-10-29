@@ -47,7 +47,7 @@ try {
   ok(!("flags" in pubBody) && !("checks" in pubBody), "public /health hides flags+checks (meta stays public)");
 
   // The full diagnostics require the operator token.
-  const res = await fetch(`${BASE}/health`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  const res = await fetch(`${BASE}/health`, { headers: { "X-Operator-Token": TOKEN } });
   ok(res.ok, `authed /health returns 200 in FREE_MODE (got ${res.status})`);
   const body = await res.json();
 

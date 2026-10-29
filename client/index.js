@@ -19,8 +19,8 @@
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { quoteOf, guardSigning } from "./known-assets.js";
-export { KNOWN_ASSETS, knownAsset, acceptUsd } from "./known-assets.js";
+import { quoteOf, guardSigning, networkIdsOf } from "./known-assets.js";
+export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
@@ -30,7 +30,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.18";
+const VERSION = "0.8.19";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -160,7 +160,7 @@ export class Agent402 {
     if (x402Client) this.guardX402Client(x402Client);
     // The chains a pre-wrapped fetch pays on, as CAIP-2 ids (null = unknown).
     this._payNetworks = Array.isArray(payNetworks) && payNetworks.length
-      ? new Set(payNetworks.map((n) => String(NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim()).toLowerCase()))
+      ? new Set(payNetworks.flatMap((n) => networkIdsOf(n)).map((id) => id.toLowerCase()))
       : null;
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
@@ -656,8 +656,9 @@ export class Agent402 {
    *  "guarded" (the signing guard holds every signature to the caps, so the
    *  cheapest known accept is what can be paid, and unknown ones are dropped
    *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
-   *  one counts, among the chains in `payNetworks` when they are given, and one
-   *  that cannot be priced is refused here), or "credits" (nothing is signed:
+   *  one counts, among the chains in `payNetworks` when they are given, and an
+   *  accept this client cannot price is refused here, since nothing stops the
+   *  wallet from signing it), or "credits" (nothing is signed:
    *  the credits gate debits the route's own quote, and no accept is below it,
    *  since a chain premium or price floor only raises an accept, so the
    *  cheapest known accept counts).
@@ -682,11 +683,19 @@ export class Agent402 {
       return listUsd; /* no readable 402: the advertised price */
     }
     if (!q) return listUsd;
-    if (q.max == null || (mode === "wallet" && q.unknown > 0)) {
+    // An option in an asset this client cannot price: with no guard the wallet
+    // may sign it, for an amount no cap was checked against, so one such
+    // option refuses the call; the guard drops it before signing, so beside a
+    // priced option it is skipped there; a credits gate signs nothing, so it
+    // is ignored. An offer with nothing priceable is refused under a cap in
+    // either signing mode.
+    const unpriceable = q.max == null || (mode === "wallet" && q.unknown > 0);
+    if (unpriceable) {
       if (mode === "credits") return listUsd;
-      throw new SpendingLimitError(
-        `refusing to pay for "${slug}" - ${q.max == null ? "no" : "a"} payment option it offers is in an asset this client cannot price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
-        { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
+      throw new SpendingLimitError(q.max == null
+        ? `refusing to pay for "${slug}" - no payment option it offers is in an asset this client can price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`
+        : `refusing to pay for "${slug}" - ${q.unknown} of its ${q.total} payment options ${q.unknown === 1 ? "is" : "are"} in an asset this client cannot price, and without the signing guard the wallet may sign any of them (pass your x402Client to guard signing and pay the options it can price)`,
+      { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
     }
     const quoted = mode === "wallet" ? q.max : q.min;
     // Larger of the two: an understated catalog must not lower the ceiling
@@ -961,9 +970,12 @@ function resultCacheKey(slug, params, validator) {
  *   withNetworkPreference(x402client, ["robinhood"]);       // or ["eip155:4663"]
  *   const payFetch = wrapFetchWithPayment(fetch, x402client);
  *
- * Short names map to CAIP-2; unknown entries pass through verbatim so future
- * chains work without a package update. Throws (before paying) when the
- * preference matches none of a seller's payment options.
+ * A name resolves through the known-asset table to every id that chain is
+ * spelled with on the wire (./known-assets.js NETWORK_NAMES), and an id to
+ * the ids of its chain, so either spelling of a chain matches the other;
+ * unknown entries pass through verbatim so future chains work without a
+ * package update. Throws (before paying) when the preference matches none of
+ * a seller's payment options.
  */
 export const NETWORK_CAIP2 = {
   base: "eip155:8453",
@@ -980,16 +992,17 @@ export const NETWORK_CAIP2 = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
   stellar: "stellar:pubnet",
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
 };
 
 export function withNetworkPreference(client, networks) {
-  const prefs = (networks || []).map((n) => NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim());
+  // Every id each preference names, in preference order, once each.
+  const prefs = [...new Set((networks || []).flatMap((n) => networkIdsOf(n)))];
   if (!prefs.length) return client;
   const orig = client.createPaymentPayload.bind(client);
   client.createPaymentPayload = (paymentRequired) => {
     const list = Array.isArray(paymentRequired?.accepts) ? paymentRequired.accepts : [];
-    const picked = prefs.flatMap((caip2) => list.filter((a) => String(a?.network || "").toLowerCase() === caip2.toLowerCase()));
+    const picked = prefs.flatMap((id) => list.filter((a) => String(a?.network || "").toLowerCase() === id.toLowerCase()));
     if (!picked.length) {
       const offered = [...new Set(list.map((a) => a?.network).filter(Boolean))];
       throw new Error(`network preference [${prefs.join(", ")}] matched none of the seller's payment options [${offered.join(", ")}]`);

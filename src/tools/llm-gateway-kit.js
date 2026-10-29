@@ -28,7 +28,7 @@
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { upstreamCosts, upstreamCostsLoaded, rowRateAt } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
-import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
+import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel, recordStreamedUsage } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
 import { createHash, createHmac } from "node:crypto";
 // Static import (not agent-kit's lazy pattern): validateRequest must stay
@@ -476,8 +476,9 @@ export const TIERS = {
       // ("openai/gpt-5" matches gpt-5-*, not gpt-5.6-*). claude-opus covers
       // claude-opus-5; the -fast ids left the catalog 2026-07-24.
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
-      // 2026-10-23 removal: o4-mini stays by its own id, gpt-5.6-terra is the successor.
-      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3", "openai/o4-mini",
+      // 2026-10-23 removal; o4-mini left the upstream catalog 2026-10-27 and a
+      // request naming it is served by gpt-5.6-terra (RETIRING_MODELS).
+      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
       // (REASONING_MODELS). gpt-6-astra also admits gpt-6-astra-pro under the
@@ -778,6 +779,10 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
   "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
   "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  // Gone from the upstream catalog 2026-10-27 (the live-catalog guard). Its
+  // family successor on premium, the one the /api/llm-premium proxy already
+  // serves for the retired o3-mini and o4-mini ids (llm-kit.js).
+  "openai/o4-mini": { until: "2026-10-27", use: "openai/gpt-5.6-terra" },
 });
 let retiringClock = () => Date.now();
 /** Tests only: read scheduled retirements against another clock (null resets). */
@@ -1554,6 +1559,31 @@ export function clampToMargin(body, tier, imageCount) {
   if (body.max_tokens > affordableOut) body.max_tokens = affordableOut;
 }
 
+/** A reasoning or thinking budget the buyer wrote against their own cap can
+ *  sit at or above the cap clampToMargin leaves. Reasoning tokens are output
+ *  tokens and the clamped cap is what the price covers, so the budget is
+ *  lowered with the cap to one token below it. When the provider's floor
+ *  leaves no room under the clamped cap the request is refused with a 400:
+ *  pre-spend in a validator, a skipped link in a chain walk. Returns the
+ *  budget to send. */
+export function fitBudgetBelowCap(budget, cap, { floor = 1, field = "reasoning.max_tokens", capField = "max_tokens" } = {}) {
+  const b = Number(budget);
+  if (!Number.isInteger(b) || !Number.isFinite(cap) || !(cap > 0)) return budget;
+  if (b < cap) return b;
+  const fitted = cap - 1;
+  if (fitted < floor) {
+    throw bad(`"${field}" (${b}) does not fit under the ${capField} this request's price affords (${cap}): shrink the input or the budget, or use a cheaper model - GET /v1/models lists every model and its tier`);
+  }
+  return fitted;
+}
+/** The reasoning object with `max_tokens` fitted under `cap` (see
+ *  fitBudgetBelowCap); unchanged when it carries no budget. */
+export function fitReasoningToCap(reasoning, cap) {
+  if (!reasoning || typeof reasoning !== "object" || reasoning.max_tokens === undefined) return reasoning;
+  const fitted = fitBudgetBelowCap(reasoning.max_tokens, cap);
+  return fitted === reasoning.max_tokens ? reasoning : { ...reasoning, max_tokens: fitted };
+}
+
 /** Per-block `cache_control` (Anthropic's explicit cache markers ride inside
  *  content blocks too): only the 5-minute ephemeral cache is priced - the 1h
  *  TTL writes above what the margin clamp assumes. The
@@ -1904,6 +1934,9 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   if (serviceTier) body.service_tier = serviceTier;
   cacheControlPref(input); // shape-validate only (400 on a bad value); the preference is call-time, not in the normalized body
   if (clamp) clampToMargin(body, tier, totalImages);
+  // The budget follows the clamped cap (fitBudgetBelowCap): the check above
+  // read the buyer's cap, and the clamp may have lowered it under the budget.
+  if (clamp && body.reasoning !== undefined) body.reasoning = fitReasoningToCap(body.reasoning, body.max_tokens);
   if (clamp && tier.metered) {
     // Refuse pre-spend anything the tier would quote above its per-call cap:
     // the 402 for such a body carries the cap (payments.js), the handler
@@ -2492,6 +2525,9 @@ export function isEmptyRefusal(data) {
  *  the stream. Output cost stays bounded: max_tokens was clamped server-side
  *  before the upstream call, so the provider stops the stream at the cap. */
 export const STREAM_TIMEOUT_MS = 180_000;
+/** The one SSE frame a committed stream ends with when upstream drops it
+ *  mid-answer: an error object on the wire every SSE client parses. */
+export const STREAM_DROPPED_FRAME = 'data: {"error":{"message":"upstream stream dropped"}}\n\n';
 export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
@@ -2523,7 +2559,14 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     // that into a 502 before any byte is sent, which the callers' chain walk
     // catches (`!res.headersSent`) and which cancels settlement end to end.
     // Comment-only prelude is bounded so a comment flood cannot buffer forever.
-    const scrub = createSseUsageScrubber({ onUsage });
+    // Billing fields are stripped in flight (see createSseUsageScrubber); the
+    // cost the usage frame carried is metered onto the request for a gate
+    // that debits on finish (a credits hold, src/gateway-meter.js), and
+    // handed to the caller's telemetry.
+    const scrub = createSseUsageScrubber({ onUsage: (usage, rawCost, frame) => {
+      if (typeof rawCost === "number") recordStreamedUsage({ req: res.req, upstreamUsd: rawCost });
+      onUsage?.(usage, rawCost, frame);
+    } });
     let pending = "";
     const commit = () => {
       res.writeHead(200, {
@@ -2561,6 +2604,11 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
         if (firstFrameTimedOut) err.upstreamTimeout = true;
         throw err;
       }
+      // The 200 is committed and settles; the buyer is told the stream was
+      // cut rather than handed a silent end that reads like a finished answer.
+      // Every wire that relays through here (chat, Messages, Responses) gets
+      // the same frame.
+      try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
     if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
     res.end();
@@ -3203,8 +3251,13 @@ async function speechHandler(input, req) {
   // never in a cache key - this route caches nothing (raw audio bytes).
   const user = upstreamUserId(req);
   let lastErr;
+  // An attempt our own timer ended may have generated, and been billed,
+  // upstream: the same timed-out budget as the chat wires bounds how many
+  // links a walk may leave that way before it ends.
+  const timeouts = timedOutBudget();
   for (const body of bodies) {
     const timeoutMs = paymentWindowTimeoutMs(req, SPEECH_TIMEOUT_MS);
+    const attemptStarted = Date.now();
     try {
       let res;
       try {
@@ -3219,7 +3272,9 @@ async function speechHandler(input, req) {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (e) {
-        throw bad(`Upstream request failed: ${e.message}`, 504);
+        const err = bad(`Upstream request failed: ${e.message}`, 504);
+        if (e?.name === "TimeoutError") err.upstreamTimeout = true;
+        throw err;
       }
       if (!res.ok) await throwUpstreamError(res);
       const buffer = Buffer.from(await res.arrayBuffer());
@@ -3240,6 +3295,8 @@ async function speechHandler(input, req) {
       // Our own validation 4xxs were thrown before the loop.
       if (![502, 503, 504].includes(e?.statusCode)) throw e;
       lastErr = e;
+      timeouts.note(e, attemptStarted, timeoutMs);
+      if (timeouts.spent()) throw e;
     }
   }
   throw lastErr;
@@ -3364,7 +3421,9 @@ function makeHandler(routeTier) {
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
+      // A buyer budget is fitted under THIS link's clamped cap (a pricier
+      // fallback clamps lower than the requested model did).
+      const reasoning = body.reasoning !== undefined ? fitReasoningToCap(body.reasoning, attempt.max_tokens) : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
       const plugins = [
         ...(TIERS[tierSlug].web ? [{ ...TIERS[tierSlug].web }] : []),
         ...(structured && body.stream !== true ? [{ id: "response-healing" }] : []),
@@ -3798,7 +3857,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.50",
     description:
-      "OpenAI-compatible chat completions, premium tier: gpt-5, gpt-6 astra, o3 and o4-mini, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
+      "OpenAI-compatible chat completions, premium tier: gpt-5, gpt-6 astra, o3, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5" } } },
     handler: makeHandler("v1-chat-premium"),

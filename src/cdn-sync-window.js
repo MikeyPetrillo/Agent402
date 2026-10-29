@@ -78,10 +78,16 @@ export function followsJobAnswer(req) {
  * @param {(req) => object|null} o.asyncRouteOf  the catalog def when this POST may run as a job
  * @param {(req) => boolean} o.wantsAsync        RFC 7240 respond-async check
  * @param {(req) => boolean} o.carriesPaymentAttempt
+ * @param {(req) => boolean} o.isInternal         our own loopback replays (an
+ *        async job's, the MCP connector's): mounted before the async marker
+ *        exists, so the predicate the slow window reads decides here too
  */
-export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, maxSeconds = cdnSyncMaxSeconds, log = console.log }) {
+export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal = () => false, maxSeconds = cdnSyncMaxSeconds, log = console.log }) {
   return function cdnSyncWindow(req, res, next) {
     if (req.viaCdn !== true || req.method !== "POST" || req.asyncJobLoopback) return next();
+    let internal = false;
+    try { internal = isInternal(req) === true; } catch { internal = false; }
+    if (internal) return next();
     if (wantsAsync(req)) return next();
     let def = null;
     try { def = asyncRouteOf(req); } catch { def = null; }

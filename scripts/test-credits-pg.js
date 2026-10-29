@@ -25,7 +25,7 @@ const until = async (fn, ms = 3000) => { const t0 = Date.now(); while (Date.now(
 // the session that bought it.
 const OLD_KEY = "a402_" + "o".repeat(40);
 const OLD_HASH = hashKey(OLD_KEY);
-writeFileSync(join(DIR, `k_${OLD_HASH}.json`), JSON.stringify({ keyId: OLD_HASH.slice(0, 12), balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, calls: 0, createdAt: "2026-01-01T00:00:00.000Z", email: null, sessions: ["cs_old"], paymentIntents: ["pi_old"], pack: "credits-20", lastUsedAt: null }));
+writeFileSync(join(DIR, `k_${OLD_HASH}.json`), JSON.stringify({ keyId: OLD_HASH.slice(0, 12), balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, calls: 0, createdAt: "2026-01-01T00:00:00.000Z", email: null, sessions: ["cs_old"], paymentIntents: ["pi_old", "pi_old_b"], pack: "credits-20", lastUsedAt: null }));
 writeFileSync(join(DIR, "_sessions.json"), JSON.stringify({ cs_old: OLD_HASH }));
 
 const sessions = {
@@ -102,6 +102,25 @@ try {
   ok((await A.setDisabled(minted.keyId, true)) === true && (await B.authorize(KEY, 0.001)).reason === "disabled", "setDisabled lands on the row: the other instance refuses the key");
   ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "refunded")) === minted.keyId && (await B.balance(KEY)).disabled === true, "a refunded pack payment disables its key");
   ok((await B.balanceById(minted.keyId)) === 19.995 && (await B.balanceById("nope")) === null, "balanceById reads the row by key id");
+  // A dispute disables the key; the dispute closing in our favor on the
+  // other container enables it again, and a key disabled for a refund stays
+  // disabled whatever a dispute on its payment did.
+  // Disable causes rank operator over refund over dispute on the row, so a
+  // dispute closing in our favor on the other container lifts a key only
+  // when that dispute was its sole cause; the operator view names the cause.
+  const reasonOf = async (inst) => (await inst.status()).rows.find((x) => x.keyId === minted.keyId)?.disabledReason;
+  ok((await A.enableByPaymentIntent("pi_new", "disputed")) === null && (await B.balance(KEY)).disabled === true && (await reasonOf(B)) === "refunded", "a dispute closing enables nothing on a key disabled because its payment was refunded");
+  ok((await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(B)) === "refunded" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "a dispute after a full refund keeps the refund as the cause: the win never re-enables");
+  ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(B)) === "disputed" && (await B.enableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await A.balance(KEY)).disabled === false, "dispute-disabled, then won on the other container: the key is enabled again");
+  ok((await A.setDisabled(minted.keyId, true)) === true && (await reasonOf(B)) === "operator" && (await B.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "operator-disabled, then disputed, then won: stays disabled for the operator");
+  ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await B.setDisabled(minted.keyId, true)) === true && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "disputed, then operator-disabled, then won: stays disabled (and the key is disabled for the sections below)");
+  // A key paid by two payments (the imported record lists both): a dispute on
+  // one marks the key with that payment; a win on the other, read on the
+  // other container, lifts nothing, and the disputed payment's own win does.
+  const OLD_ID = OLD_HASH.slice(0, 12);
+  ok((await A.disableByPaymentIntent("pi_old_b", "disputed")) === OLD_ID && (await B.balance(OLD_KEY)).disabled === true, "setup: a dispute on the imported key's second payment disables it");
+  ok((await B.enableByPaymentIntent("pi_old", "disputed")) === null && (await A.balance(OLD_KEY)).disabled === true, "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
+  ok((await B.enableByPaymentIntent("pi_old_b", "disputed")) === OLD_ID && (await A.balance(OLD_KEY)).disabled === false, "the disputed payment's own win lifts it on the other container");
 
   // ---- (6) roll-forward: files written in a rollback window win per id -----
   const keyFile = join(DIR, `k_${HASH}.json`);
@@ -168,9 +187,10 @@ try {
     const ls = {};
     const lstripe = {
       checkout: { sessions: { retrieve: async (id) => { await wait(5); if (!ls[id]) throw new Error("no"); return ls[id]; } } },
-      paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { payment_method_details: { card: { fingerprint: fps[id] || null } } } }) },
+      paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { amount_refunded: refundedCents[id] || 0, payment_method_details: { card: { fingerprint: fps[id] || null } } } }) },
       refunds: { create: async (x) => { refunds.push(x); return { id: "re_" + refunds.length }; } },
     };
+    const refundedCents = {};
     let t = Date.parse("2026-11-02T12:00:00Z");
     const A = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: DIR, now: () => t, log: quiet });
     const B = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: DIR, now: () => t, log: quiet });
@@ -193,6 +213,24 @@ try {
     await B.markRefusalRefunded("cs_pgtax");
     const after = await A.claim("cs_pgtax");
     ok(after.status === "tax_id_required" && after.refunded === true && !(await A.refusalsToRefund()).includes("cs_pgtax"), "pg: marking it refunded is seen by both instances");
+    // A payment Stripe refunded in full before its claim is claimed with its
+    // outcome in ONE statement (the claim-once insert carries the final
+    // marker), so no failure between two writes can leave it pending and
+    // listed as owed.
+    {
+      const { hookStatements } = await import("./lib/pg-statement-hook.js");
+      paid("cs_pgrf", "rf@x.com", "fp_rf");
+      refundedCents.pi_cs_pgrf = 2000;
+      const writes = [];
+      const unhook = hookStatements(await sdb.stateDb(), async (sql, values, run) => { if (/^\s*(INSERT|UPDATE)/i.test(sql) && values.includes("cs_pgrf")) writes.push(sql.replace(/\s+/g, " ").slice(0, 60)); return run(); });
+      const rf = await A.claim("cs_pgrf");
+      unhook();
+      const marker = ((await sdb.stateQuery(`SELECT body ->> 'cs_pgrf' AS m FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = '_sessions'`)).rows[0] || {}).m;
+      ok(rf.status === "refunded" && marker === "refused-refunded:refunded", `pg: a pack refunded before its claim is marked refunded, never pending (${marker})`);
+      ok(writes.length === 1 && /INSERT/i.test(writes[0]), `pg: the marker is written in one statement (${writes.length}: ${JSON.stringify(writes)})`);
+      t += 6 * 60_000;
+      ok(!(await B.refusalsToRefund()).includes("cs_pgrf") && (await B.claim("cs_pgrf")).status === "refunded", "pg: it is never listed as owed, and a re-claim answers the same");
+    }
     // A refusal left pending (a crash before the refund outcome) becomes owed after five minutes.
     ok(await A._internals.refuseSession("cs_pgstuck", "refused"), "pg: setup, a refusal left pending");
     ok(!(await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: a fresh pending refusal is not owed");

@@ -384,8 +384,29 @@ async function listen(app) {
   const R = (h) => ({ header: (n) => h[n.toLowerCase()] });
   ok(!carriesPaymentAttempt(R({})), "attempt: an unpaid request carries none");
   ok(!carriesPaymentAttempt(R({ authorization: "Bearer sk-something" })), "attempt: an unrelated bearer token is not a payment");
-  ok(carriesPaymentAttempt(R({ "payment-signature": "x" })) && carriesPaymentAttempt(R({ "x-payment": "x" })), "attempt: an x402 payment header is one");
-  ok(carriesPaymentAttempt(R({ authorization: "Payment id=\"a\"" })), "attempt: an MPP credential is one");
+  // A header is a payment attempt only when it DECODES to one: junk bytes
+  // (any length) buy neither a cache hit nor a limiter exemption.
+  const x402 = (over = {}) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {}, ...over })).toString("base64");
+  ok(carriesPaymentAttempt(R({ "payment-signature": x402() })) && carriesPaymentAttempt(R({ "x-payment": x402() })), "attempt: an x402 payment header that decodes to a scheme and network is one");
+  ok(carriesPaymentAttempt(R({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 1, scheme: "exact", network: "eip155:8453", payload: {} })).toString("base64") })), "attempt: the v1 top-level scheme/network shape is one too");
+  ok(!carriesPaymentAttempt(R({ "payment-signature": "x" })) && !carriesPaymentAttempt(R({ "x-payment": "A".repeat(40) })) && !carriesPaymentAttempt(R({ "payment-signature": Buffer.from("not json").toString("base64") })), "attempt: a junk payment header, however long, is NOT one");
+  ok(!carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact" } }) })) && !carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { network: "eip155:8453" } }) })) && !carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: "not a network" } }) })), "attempt: a payload missing its scheme or network, or naming a malformed one, is not one");
+  {
+    const { registerOfferedNetworks } = await import("../src/payment-attempt.js");
+    registerOfferedNetworks(["eip155:8453"]);
+    ok(carriesPaymentAttempt(R({ "payment-signature": x402() })) && !carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: "eip155:1" } }) })), "attempt: with the offer registered, a payload naming a network this server does not sell on is not one");
+    // The Algorand id has two spellings on the wire; the paywall folds the
+    // legacy one, so a header carrying it is an attempt on the offered chain.
+    const { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } = await import("../src/avm-network.js");
+    registerOfferedNetworks(["eip155:8453", ALGORAND_MAINNET_CAIP2]);
+    ok(carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_LEGACY_CAIP2 } }) })) && carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_CAIP2 } }) })), "attempt: with Algorand offered, a payload naming its legacy genesis-hash id is an attempt too");
+    registerOfferedNetworks(["eip155:8453"]);
+    ok(!carriesPaymentAttempt(R({ "payment-signature": x402({ accepted: { scheme: "exact", network: ALGORAND_MAINNET_LEGACY_CAIP2 } }) })), "attempt: the legacy spelling counts only when Algorand itself is offered");
+    registerOfferedNetworks([]);
+  }
+  const mpp = Credential.serialize({ challenge: Challenge.from({ realm: "test.local", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "1000", currency: "0x20c000000000000000000000000000000000000a", decimals: 6, recipient: "0x1111111111111111111111111111111111111111", methodDetails: { chainId: 4217 } }, secretKey: "attempt-secret" }), payload: { hash: "0x" + "1".repeat(64), type: "hash" } });
+  ok(carriesPaymentAttempt(R({ authorization: mpp })), "attempt: an MPP credential that decodes (challenge + payload) is one");
+  ok(!carriesPaymentAttempt(R({ authorization: "Payment id=\"a\"" })) && !carriesPaymentAttempt(R({ authorization: `Payment ${"A".repeat(40)}` })), "attempt: a Payment scheme with junk after it is not one");
   ok(carriesPaymentAttempt(R({ authorization: "Bearer a402_abcdef0123456789" })), "attempt: a prepaid credits key is one");
   ok(carriesPaymentAttempt(R({ "x-pow-solution": "abc" })), "attempt: a proof-of-work solution is one");
   const { readFileSync } = await import("node:fs");

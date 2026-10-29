@@ -27,7 +27,7 @@
 //     free surface keeps its own header.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
@@ -94,8 +94,10 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
     const base = `http://127.0.0.1:${srv.address().port}`;
     const cc = async (p, h = {}) => (await fetch(`${base}${p}`, { headers: h })).headers.get("cache-control");
     ok(await cc("/q402") === "no-store", "middleware: a 402 marked public goes out no-store");
-    ok(await cc("/paid", { "payment-signature": "x" }) === "private, no-store", "middleware: a paid answer marked public goes out private, no-store");
-    ok(await cc("/inline", { authorization: "Payment abc" }) === "private, no-store", "middleware: the writeHead(status, headers) form is covered");
+    const paidHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+    const mppHeader = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", realm: "t", method: "evm", intent: "charge", request: {} }, payload: {} })).toString("base64url")}`;
+    ok(await cc("/paid", { "payment-signature": paidHeader }) === "private, no-store", "middleware: a paid answer marked public goes out private, no-store");
+    ok(await cc("/inline", { authorization: mppHeader }) === "private, no-store", "middleware: the writeHead(status, headers) form is covered");
     ok(await cc("/free") === "public, max-age=600", "middleware: a free public answer keeps its header");
     ok(await cc("/__operator/x.json") === "private, no-store", "middleware: an operator answer is private, no-store");
     srv.close();
@@ -105,6 +107,21 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   let nexted = false;
   cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1 })({ viaCdn: false, method: "POST", headers: {} }, {}, () => { nexted = true; });
   ok(nexted, "the window middleware passes a direct request through");
+  // Our own loopback replay passes before the async marker exists: the same
+  // predicate the slow window reads decides here.
+  {
+    const mw = (isInternal) => cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1, isInternal });
+    const res = () => { const r = { code: null, body: null, setHeader() {}, set() { return r; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } }; return r; };
+    let passed = false; const r1 = res();
+    mw((req) => req.headers["x-loopback"] === "1")({ viaCdn: true, method: "POST", headers: { "x-loopback": "1", "user-agent": "curl/8" } }, r1, () => { passed = true; });
+    ok(passed && r1.code === null, "a loopback replay the predicate names passes the CDN window");
+    let passed2 = false; const r2 = res();
+    mw((req) => req.headers["x-loopback"] === "1")({ viaCdn: true, method: "POST", headers: { "user-agent": "curl/8" } }, r2, () => { passed2 = true; });
+    ok(!passed2 && r2.code === 504, `CONTROL: the same request without the marker is refused (${r2.code})`);
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    ok(/cdnSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay \}\)/.test(server) && /slowSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay \}\)/.test(server), "server.js hands both sync windows the one internal-replay predicate");
+    ok(server.indexOf("const isInternalReplay = ") < server.indexOf("app.use(cdnSyncWindowMiddleware("), "...defined before the CDN window is mounted");
+  }
 }
 
 requireUpstreamCosts("test-cdn-sync-window");

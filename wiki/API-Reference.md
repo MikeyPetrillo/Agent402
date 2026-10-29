@@ -279,14 +279,14 @@ All errors return a JSON body with an `error` string field.
 | `429` | Rate limited: retry after the `Retry-After` header value |
 | `500` | Internal server error |
 | `502` | Bad gateway: upstream dependency failed. On the chat wires, a model provider that refuses the request itself (for example a model with no endpoint for the request's tools) answers `400` with the reason instead, once failover has tried the next model |
-| `503` | Service unavailable: an upstream did not answer within the tool's deadline or could not be reached (the body names the upstream and the step, carries `attribution: "upstream"`, and nothing was charged), an upstream rate limit, or an optional integration that is unconfigured on this instance |
-| `504` | Gateway timeout: the work did not finish in time. The buyer's own payment window ran out before the work could finish and still settle (route-execute, seller-payability, flights), a model or media generation ran past its limit, or a URL the request named did not respond; nothing was charged. A data upstream behind a tool that is slow answers `503` |
+| `503` | Service unavailable: an upstream did not answer within the tool's deadline or could not be reached (the body names the upstream and the step, carries `attribution: "upstream"`, and nothing was charged, except a Tempo transfer sent before the call, which is recorded as owed), an upstream rate limit, or an optional integration that is unconfigured on this instance |
+| `504` | Gateway timeout: the work did not finish in time. The buyer's own payment window ran out before the work could finish and still settle (route-execute, seller-payability, flights), a model or media generation ran past its limit, or a URL the request named did not respond; nothing was charged, except a Tempo transfer sent before the call, which is recorded as owed. A data upstream behind a tool that is slow answers `503` |
 
 Handlers throw errors with `.statusCode` set; the server maps these to the appropriate HTTP response.
 
 **On x402, every code in the `4xx`/`5xx` rows above cancels settlement**, so none of them charge you. Only a `200` that then settles successfully is billed. The exceptions: a Tempo push transfer over MPP is final when sent, so a call that then fails is recorded as owed and repaid on-chain through the refund ledger; and a few tools charge a `200` that carries a partial result by design and say so in their description (a code run that hits its time limit answers `200` with `timedOut: true`). See [[Architecture]] for the ordering.
 
-A paid call sent with `Prefer: respond-async` to a slow route answers `202 Accepted` with a job link instead of the result; nothing is charged until the answer is ready (see Async jobs).
+A paid call sent with `Prefer: respond-async` to a slow route answers `202 Accepted` with a job link instead of the result; nothing is charged on x402 until the answer is ready (see Async jobs).
 
 ## See also
 

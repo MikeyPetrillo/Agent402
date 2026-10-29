@@ -36,7 +36,7 @@ export const BLOG_POSTS = [
 <h2>Paying from your agent</h2>
 
 <ul>
-  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.13.21</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
+  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.13.22</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
   <li><strong>SDK:</strong> <code>agent402-client</code> wraps <code>fetch</code>: it reads the 402, signs the offer on your chosen chain and retries. <code>arc</code> is a network name it accepts.</li>
   <li><strong>Any x402 client:</strong> the offer is a standard x402 v2 <code>exact</code> accept on <code>eip155:5042</code>, so a stock x402 client that signs EVM transfers pays it as is.</li>
 </ul>
@@ -78,7 +78,7 @@ export const BLOG_POSTS = [
   <li>The decision fee comes back as a credit worth all of it, valid for 24 hours, toward running that plan.</li>
   <li>Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed markup.</li>
   <li>Backups run in order. A backup that names an input differently gets it under its own name.</li>
-  <li>Spend stops at your budget, and a run where no step succeeds is not charged.</li>
+  <li>Spend stops at your budget, and a run where no step succeeds is not charged on x402.</li>
   <li>Every step comes back with its own receipt.</li>
 </ul>
 

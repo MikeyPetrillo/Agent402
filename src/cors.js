@@ -36,8 +36,10 @@
 // modules must not write the same headers; the connector owns its own.
 export const CORS_PREFIXES = ["/api/", "/v1/", "/.well-known/"];
 
-/** Exact machine surfaces outside those prefixes. */
-export const CORS_EXACT = new Set(["/openapi.json", "/llms.txt", "/api", "/v1"]);
+/** Exact machine surfaces outside those prefixes (`/health` is read by
+ *  monitors and dashboards like the rest; its public answer is `ok` and a
+ *  tool count). */
+export const CORS_EXACT = new Set(["/openapi.json", "/llms.txt", "/api", "/v1", "/health"]);
 
 /**
  * Denied whatever the prefixes say. `/__operator/*` is the operator's own

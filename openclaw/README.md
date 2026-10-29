@@ -107,7 +107,7 @@ of a cent and a long one pays for what it asks. `--flat` (or
 Either way OpenClaw's per-token cost fields stay zero; the price is per call. A model sent to another flat
 tier's route is priced at its home tier: the 402 quotes that tier's price, and the paid call is served under
 that tier's caps (the answer says so in `agent402_tier`). The router, grounded and stealth tiers still answer a
-400 naming the right route; nothing is charged. A client-supplied `Idempotency-Key`
+400 naming the right route; nothing is charged on x402. A client-supplied `Idempotency-Key`
 is passed through: on a credits key, a retry with the same key replays the paid
 answer; on a wallet, each forwarded call signs a fresh payment, which the server
 treats as a new purchase. Without a key, each call is its own payment.

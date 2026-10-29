@@ -80,6 +80,21 @@ try {
   ok((await s2.cancel(c.taskId)) === true, "the other container can cancel a task it does not run (the ack is spec'd)");
   ok((await s1.complete(c.taskId, { content: [] }, { receipt: { success: true } })) === false, "a late result cannot resurrect a cancelled task");
   ok((await s1.get(c.taskId))?.status === "cancelled", "the cancellation is what the row holds (the conditional write refused the completion)");
+  // (a2) a cancel written on the other container stops the owner's live run:
+  // on the run's next progress write, and on the owner's sweep.
+  {
+    const ctlA = new AbortController();
+    const a = await s1.create({ slug: "research", controller: ctlA });
+    ok((await s2.cancel(a.taskId)) === true && !ctlA.signal.aborted, "the other container cancels a run it does not hold; the owner's run is untouched until it reads the row");
+    ok((await s1.update(a.taskId, { stage: "render" })) === false && ctlA.signal.aborted === true, "the run's next progress write finds the cancel and stops the run");
+    const ctlB = new AbortController();
+    const b = await s1.create({ slug: "research", controller: ctlB });
+    await s2.cancel(b.taskId);
+    const sw = await s1.sweep();
+    ok(ctlB.signal.aborted === true && sw.cancelled === 1, `the owner's sweep stops a run cancelled elsewhere (${JSON.stringify(sw)})`);
+    ok(s1.activeCount() === 0, `a run stopped on a cancel leaves the owner's capacity view (${s1.activeCount()} active)`);
+    ok((await s1.complete(b.taskId, { content: [] }, { receipt: { success: true } })) === false && (await s1.get(b.taskId))?.status === "cancelled", "the row stays cancelled");
+  }
 
   // (b) an orphan is one whose owner's lease is gone: close the first store.
   const live = await s1.create({ slug: "research" });

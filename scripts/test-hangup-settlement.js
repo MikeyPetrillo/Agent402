@@ -378,7 +378,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     const r = {}; const t = reserveHangupForgiveness(r, { keys: ["ip:198.51.100.7"], priceUsd: 0.05, slug: "some-new-wallet-spender", spendsOwnWallet: true });
     ok(t.granted === false && t.reason === "lasting effect", "a def that spends our own wallet takes no ticket, even when its slug is not on the list");
     const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-    ok(/reserveHangupForgiveness\(req, \{[^}]*spendsOwnWallet: def\.spendsOwnWallet === true/.test(src), "the reservation passes the catalog def's spendsOwnWallet");
+    ok(/reserveHangupForgiveness\(req, \{ keys: hangupForgivenessKeys\(req\), priceUsd: ticketPriceUsd\(\{[^\n]*spendsOwnWallet: def\.spendsOwnWallet === true/.test(src), "the reservation passes the catalog def's spendsOwnWallet");
   }
   _resetHangupForgiveness();
 }
@@ -394,6 +394,8 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   const firstGate = Math.min(...["app.use(tempoGate)", "app.use(mppShim)", "app.use(stripeGate)", "app.use(_credits.gate("].map((s) => server.indexOf(s)).filter((i) => i >= 0));
   ok(hookAt > 0 && hookAt < firstGate, "server.js mounts the hang-up hook before every payment gate");
   ok(/app\.use\(createHangupSettlementHook\(\{ onUndelivered: recordHangupOutcome \}\)\)/.test(server), "the hook reports to recordHangupOutcome (debt or cancelled charge)");
+  ok(/priceUsd: ticketPriceUsd\(\{ basePriceUsd: quotedPriceUsd\(def, req\), paymentHeader: paymentHeaderOf\(req\) \}\)/.test(server), "a ticket is priced at the charge on the chain the verified header names (src/paid-price.js ticketPriceUsd)");
+  ok(/req\.__a402HangupDebt = row;/.test(server) && /onReplay: async \(req, \{ implicit, charged \}\)/.test(server) && /voided = \(await voidOwedOnClaim\(charged\.tx, "served on the resend of the same payment"\)\) === true/.test(server) && /return \{ serve: false, status: 402/.test(server), "the booked hang-up debt rides on the request for the idempotency commit; a replay voids the debt before it serves, and refuses when the debt was already refunded");
   ok(/registerWalletBlocklistHook\(server\);\s*\n\s*registerClientGoneSettleHook\(server\);/.test(payments), "payments.js registers the client-gone settle hook beside the wallet blocklist");
   ok(/transportContext\?\.request\?\.adapter\?\.req/.test(payments) && /if \(!req \|\| !chargeCancelledForClientGone\(req\)\) return;/.test(payments) && /reason: "client_disconnected"/.test(payments), "the x402 hook aborts only when the charge is cancelled (gone + ticket)");
   const belt = server.indexOf("if (clientGoneBeforeFirstByte(req)) throw clientGoneError(");
@@ -402,7 +404,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // One post-paywall middleware reserves the ticket for EVERY paid catalog
   // route: after the last gate (the x402 dispatcher) and before any handler -
   // the memory family, the hand-written URL tools and the generic binder.
-  const reserve = server.indexOf("reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });");
+  const reserve = server.indexOf("reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true });");
   const x402At = server.indexOf("x402mw(req, res, (...args) =>");
   const firstHandler = Math.min(...['app.post("/api/extract"', 'app.post("/api/memory"', "for (const tool of ALL_KIT) {\n  const [method, path] = tool.route.split"].map((s) => server.indexOf(s)).filter((i) => i >= 0));
   ok(reserve > 0 && x402At > 0 && reserve > x402At && reserve < firstHandler, "the ticket is reserved after every payment gate and before every paid handler");
@@ -640,9 +642,51 @@ try {
       `b. the debt carries the settle tx, rail and a 499 marker (${JSON.stringify(rows[0])})`);
     ok(rows[0].hangupReason === "settled in flight", `b. the debt records that a granted ticket lost the race to the settle (${rows[0].hangupReason})`);
     ok(/\[hangup\] CHARGED-BUT-NOT-SERVED/.test(logSince(logAt)), "b. the log says CHARGED-BUT-NOT-SERVED");
+    // The answer was charged and never delivered: the resend of the same
+    // payment is served from the stored answer (no handler, no second
+    // settle), and the debt booked for it is void.
     const again = await fetch(`${B}/api/uuid`, { headers: { [mintedHeader]: minted } });
-    ok(again.status !== 200 && fac.settle - settlesBefore === 1, `b. re-sending the spent credential is refused (${again.status}), no second settle`);
+    const againBody = await again.json().catch(() => null);
+    ok(again.status === 200 && again.headers.get("x-replayed-answer") === "1" && againBody && typeof againBody === "object" && fac.settle - settlesBefore === 1, `b. re-sending the same payment is served the answer it paid for (${again.status}, replayed ${again.headers.get("x-replayed-answer")}), no second settle`);
+    await sleep(400);
+    const voided = (await refunds()).filter((row) => row.slug === "uuid");
+    ok(voided.length === 1 && voided[0].status === "void", `b. ... and its debt is void: a buyer is served once, never both served and refunded (${JSON.stringify(voided.map((r) => r.status))})`);
     ok((await refunds()).length === 1, "b. and no second debt is minted");
+  }
+
+  // b2. The same race, but the owner's refund run repaid the debt before the
+  // buyer re-sent the payment: the stored answer is NOT served (the buyer
+  // would hold both the refund and the answer), the row stays paid, and
+  // nothing settles again.
+  {
+    const client = new x402Client();
+    registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+    let minted = null, mintedHeader = null;
+    const capturing = async (input, init) => {
+      const r = input instanceof Request ? input : new Request(input, init);
+      for (const name of ["payment-signature", "x-payment"]) { const v = r.headers.get(name); if (v) { minted = v; mintedHeader = name; } }
+      if (minted) return new Response("{}", { status: 402, headers: { "Content-Type": "application/json" } });
+      return fetch(input, init);
+    };
+    await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
+    ok(!!minted, "b2. captured a genuine signed payment header");
+    fac.settleDelayMs = 1_200;
+    const settlesBefore = fac.settle;
+    const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
+    await hangUp(`${B}/api/uuid`, { headers: { [mintedHeader]: minted, "x-forwarded-for": "10.0.0.22" }, abortWhen: settleSeen.then(() => sleep(100)) });
+    await sleep(1_800);
+    fac.settleDelayMs = 0;
+    const row = (await refunds()).find((r) => r.slug === "uuid" && r.evidence === fac.lastTx && r.status === "owed");
+    ok(!!row, "b2. the charge the buyer never received is owed");
+    const upd = await fetch(`${B}/__operator/refunds/update`, { method: "POST", headers: { Authorization: `Bearer ${OP}`, "Content-Type": "application/json", "x-forwarded-for": "10.253.1.2" }, body: JSON.stringify({ id: row.id, action: "paid", tx: "0x" + "ab".repeat(32), note: "repaid by hand" }) });
+    ok(upd.status === 200, `b2. the owner marks the debt paid (${upd.status})`);
+    const again = await fetch(`${B}/api/uuid`, { headers: { [mintedHeader]: minted } });
+    const againBody = await again.json().catch(() => null);
+    ok(again.status === 402 && !again.headers.get("x-replayed-answer") && !again.headers.get("x-idempotent-replay") && againBody?.error === "payment_refunded" && againBody?.refund?.status === "paid", `b2. a resend after the refund was paid is not served (${again.status} ${JSON.stringify(againBody)})`);
+    ok(fac.settle - settlesBefore === 1, "b2. nothing settles again");
+    await sleep(300);
+    const after = (await refunds()).filter((r) => r.evidence === fac.lastTx);
+    ok(after.length === 1 && after[0].status === "paid", `b2. the row stays paid (${JSON.stringify(after.map((r) => r.status))})`);
   }
 
   // c. The buyer leaves while the payment is being verified: the handler never
@@ -661,7 +705,7 @@ try {
     }
     fac.verifyDelayMs = 0;
     const after = (await refundsDoc()).hangupForgiveness;
-    ok((await refunds()).length === 1, "c. no debt for a payment that was never settled");
+    ok((await refunds()).length === 2, "c. no debt for a payment that was never settled");
     ok(after.abandonedInWindow === before.abandonedInWindow, `c. a run refused before its handler spends no forgiveness (${before.abandonedInWindow} -> ${after.abandonedInWindow})`);
     const s0 = fac.settle;
     const r = await pay(CHAT, W, "10.0.0.3");
@@ -680,7 +724,7 @@ try {
     await hangUp(`${B}${CHAT.path}`, { method: "POST", headers, body: CHAT.body, abortWhen: upstreamSeen.then(() => sleep(150)) });
     await sleep(2_000);
     ok(or.chat - c0 === 1 && fac.settle === s0, `d. gone mid-handler: the handler ran (chat stub +${or.chat - c0}), the payment was NOT settled (settles +${fac.settle - s0})`);
-    ok((await refunds()).length === 1, "d. a cancelled charge is not a refund-ledger debt: no row");
+    ok((await refunds()).length === 2, "d. a cancelled charge is not a refund-ledger debt: no row");
     const log = logSince(logAt);
     ok(/\[hangup\] NOT CHARGED: [^\n]*POST \/v1\/nano\/chat\/completions rail=x402[^\n]*within the hang-up forgiveness budget/.test(log) && !/CHARGED-BUT-NOT-SERVED/.test(log), "d. the log says NOT CHARGED within the forgiveness budget");
     const c1 = or.chat;
@@ -851,12 +895,12 @@ try {
   }
 
   // h. Rotating wallets AND IPs: bounded by the service-wide budget ($0.40).
-  // Forgiven so far: $0.001 (b) + $0.003 (d) + $0.10 (e) + $0.10 (f) + $0.10
-  // (g) + $0.001 (l0) = $0.305, so one more $0.05 run fits and the next does
-  // not. The lasting-effect hang-ups in l took no ticket and add nothing.
+  // Forgiven so far: $0.001 (b) + $0.001 (b2) + $0.003 (d) + $0.10 (e) + $0.10
+  // (f) + $0.10 (g) + $0.001 (l0) = $0.306, so one more $0.05 run fits and the
+  // next does not. The lasting-effect hang-ups in l took no ticket and add nothing.
   {
     const st = (await refundsDoc()).hangupForgiveness;
-    ok(Math.abs(st.abandonedUsdInWindow - 0.305) < 1e-9 && st.inflightUsd === 0 && st.perKeyBudgetUsd === 0.1 && st.globalBudgetUsd === 0.4, `h. the operator surface reports the budget in use (${JSON.stringify(st)})`);
+    ok(Math.abs(st.abandonedUsdInWindow - 0.306) < 1e-9 && st.inflightUsd === 0 && st.perKeyBudgetUsd === 0.1 && st.globalBudgetUsd === 0.4, `h. the operator surface reports the budget in use (${JSON.stringify(st)})`);
     or.imagesDelayMs = 1_500;
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly;
     await hangUpMidRun(PRO, wallet(0x71), "10.0.4.1"); await sleep(2_300);
@@ -875,7 +919,9 @@ try {
     const heldIds = new Set((plan.held[REPEAT_HANGUP_HOLD] || []).map((r) => r.id));
     const budgetRows = owedNow.filter((r) => ["payer budget", "ip budget", "global budget"].includes(r.hangupReason));
     ok(budgetRows.length >= 8 && budgetRows.every((r) => heldIds.has(r.id)), `h. the planner holds every budget-denied debt for review (${budgetRows.length} rows, ${heldIds.size} held)`);
-    ok(plan.send.some((r) => r.slug === "uuid" && r.hangupReason === "settled in flight"), "h. ... and still plans the in-flight race as an ordinary refund");
+    // The in-flight race (b) was served on its resend, so its debt is void and
+    // the planner has nothing to send for it: never both served and refunded.
+    ok(!plan.send.some((r) => r.slug === "uuid") && owedNow.some((r) => r.slug === "uuid" && r.hangupReason === "settled in flight" && r.status === "void"), "h. ... and the in-flight race, served on its resend, is void: nothing to plan for it");
     or.imagesDelayMs = 0;
     const r = await pay(PRO, wallet(0x73), "10.0.4.3");
     ok(r.status === 200, `h. and nobody is refused: a connected buyer is served (${r.status})`);

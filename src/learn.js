@@ -155,7 +155,7 @@ export const LEARN = [
         { code: X402_CLIENT },
       ]],
       ["What happens when a call fails", [
-        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged. Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
+        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
       ]],
     ],
     links: [["/what-is-x402", "What is x402? (the full explainer)"], ["/x402-test", "Test your x402 client against a real 402"], ["/guides/x402-in-5-minutes", "x402 in 5 minutes"], ["/integrations/client", "agent402-client"], ["/tools/hash", "hash, the tool in the example"]],
@@ -215,7 +215,7 @@ export const LEARN = [
         { code: MPP_CLIENT },
       ]],
       ["When a credential is refused", [
-        P(`A refused credential is answered with a 402, fresh challenges and an ${C("application/problem+json")} body in the RFC 9457 shape: a ${C("type")} URL naming the reason (for example verification-failed or payment-insufficient), a title and a ${C("detail")} sentence. Nothing is charged, and the client can retry with the new challenge.`),
+        P(`A refused credential is answered with a 402, fresh challenges and an ${C("application/problem+json")} body in the RFC 9457 shape: a ${C("type")} URL naming the reason (for example verification-failed or payment-insufficient), a title and a ${C("detail")} sentence. No payment is claimed, and the client can retry with the new challenge.`),
       ]],
     ],
     links: [["/what-is-mpp", "What is MPP? (the full explainer)"], ["/guides/x402-and-mpp", "x402 and MPP on one route"], ["/mpp-marketplace", "Sellers on the MPP wire"], ["/integrations/client", "agent402-client over MPP"], ["/learn/mcp-payments", "MPP over MCP"]],
@@ -265,7 +265,7 @@ export const LEARN = [
         P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a Permit2 allowance (or ${PREPAID}) settles at actual usage under that quote.`),
       ]],
       ["What is charged, and what is not", [
-        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged, because settlement runs after the tool and only on success.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
+        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged on x402, because settlement runs after the tool and only on success; a Tempo transfer sent before the call is recorded as owed.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
       ]],
       ["Paying at volume", [
         P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),
@@ -284,7 +284,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.21")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.22")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -292,7 +292,7 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }

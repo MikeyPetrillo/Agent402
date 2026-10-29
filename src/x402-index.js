@@ -255,6 +255,36 @@ const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-
 // The colon form is anchored to a whole segment (/:name) so an ordinary path
 // containing a colon, or a scheme, is not mistaken for a template.
 const SELF_BAZAAR_ORIGIN = "https://agent402.tools"; // the origin our Bazaar listing is keyed under
+const SELF_HOST = canonicalHost(SELF_BAZAAR_ORIGIN);
+// The canonical host of each string the self check has seen: every whole-cache
+// walk (the seller summaries, the snapshot, the route pool, the directory) asks
+// it once per entry, and parsing a URL per entry per walk is a cost that grows
+// with the whole cache, not with what changed. Cleared when it grows past the
+// cache's own scale, so unbounded input never holds memory.
+const selfCheckHostMemo = new Map(); // string -> canonical host or null
+const SELF_CHECK_HOST_MEMO_MAX = 50_000;
+function selfCheckHost(s) {
+  let h = selfCheckHostMemo.get(s);
+  if (h === undefined) {
+    if (selfCheckHostMemo.size >= SELF_CHECK_HOST_MEMO_MAX) selfCheckHostMemo.clear();
+    h = canonicalHost(s);
+    selfCheckHostMemo.set(s, h);
+  }
+  return h;
+}
+export function _selfCheckHostMemoForTest() { return selfCheckHostMemo; }
+/** True when `origin` is this catalog itself: the instance's own base URL or
+ *  the production domain, compared by canonical host (so a www. twin, a
+ *  trailing slash or letter case never makes our own catalog an outside
+ *  seller), or an entry whose manifest was permanently redirected onto one
+ *  of them (`redirectedTo`). A ported twin is another host. */
+export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {}) {
+  const base = baseUrl ? selfCheckHost(String(baseUrl)) : null;
+  const own = origin ? selfCheckHost(String(origin)) : null;
+  if (own && (own === SELF_HOST || own === base)) return true;
+  const landed = redirectedTo ? selfCheckHost(String(redirectedTo)) : null;
+  return !!(landed && (landed === SELF_HOST || landed === base));
+}
 // /index used to render every crawled seller server-side (~1,477 rows → a
 // 475KB response with no compression). Cap the default render to the top N
 // by whatever metric the page is currently sorted on; ?all=1 opts back into
@@ -1301,7 +1331,7 @@ export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {})
   if ((u.pathname && u.pathname !== "/") || u.search || u.hash) return { error: "submit the bare origin (no path or query)" };
   if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
   const origin = `https://${u.host.toLowerCase()}`;
-  if (selfOrigin && origin === String(selfOrigin).toLowerCase()) return { error: "this host is already the local catalog" };
+  if (isSelfSeller(origin, { baseUrl: selfOrigin || "" })) return { error: "this host is already the local catalog" };
   return { origin };
 }
 
@@ -1770,26 +1800,58 @@ export function _setBazaarQualityForTest(origin, q) { if (q) bazaarQualityByOrig
 export const BAZAAR_QUALITY_MAX_PAYTOS = 8;
 export function foldBazaarQuality(map, origin, q, basePayTo = null, { curated = false } = {}) {
   if (!q || typeof q !== "object") return;
-  const calls = Number(q.l30DaysTotalCalls) || 0, payers = Number(q.l30DaysUniquePayers) || 0;
+  const calls = Number(q.l30DaysTotalCalls) || 0;
+  // A payer figure is folded only when the item carries one: a measured zero
+  // is evidence (the binding refuses on it), an item with no payer field
+  // leaves the breadth unknown (src/evidence-binding.js put).
+  const measured = q.l30DaysUniquePayers !== undefined && q.l30DaysUniquePayers !== null && Number.isFinite(Number(q.l30DaysUniquePayers));
+  const payers = measured ? Number(q.l30DaysUniquePayers) : undefined;
   const last = typeof q.lastCalledAt === "string" ? q.lastCalledAt : null;
-  const cur = map.get(origin) || { calls30d: 0, payers30d: 0, lastCalledAt: null, payTos: [], curated: false };
+  const cur = map.get(origin) || { calls30d: 0, payers30d: undefined, lastCalledAt: null, payTos: [], curated: false };
   cur.curated = cur.curated === true || curated === true;
   if (!cur.byPayTo || typeof cur.byPayTo !== "object") Object.defineProperty(cur, "byPayTo", { value: {}, enumerable: false, writable: true, configurable: true });
   if (!Object.hasOwn(cur, "payersOffBase")) Object.defineProperty(cur, "payersOffBase", { value: 0, enumerable: false, writable: true, configurable: true });
   cur.calls30d += calls;
-  cur.payers30d = Math.max(cur.payers30d, payers);
+  // `payersMeasured` (and `measured` on a wallet split) says the figure was
+  // folded from a payer field, so a stored zero is told apart from the zero
+  // an older fold wrote for an item with no payer field (qualityFromStored).
+  if (measured) { cur.payers30d = Math.max(cur.payers30d ?? 0, payers); cur.payersMeasured = true; }
   if (last && (!cur.lastCalledAt || last > cur.lastCalledAt)) cur.lastCalledAt = last;
   const w = typeof basePayTo === "string" && /^0x[0-9a-f]{40}$/i.test(basePayTo) ? basePayTo.toLowerCase() : null;
-  if (!w) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
+  if (!w && measured) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
   if (!Array.isArray(cur.payTos)) cur.payTos = [];
   if (w && !cur.payTos.includes(w) && cur.payTos.length < BAZAAR_QUALITY_MAX_PAYTOS) cur.payTos.push(w);
   if (w && calls > 0 && (Object.hasOwn(cur.byPayTo, w) || Object.keys(cur.byPayTo).length < BAZAAR_QUALITY_MAX_PAYTOS)) {
-    const at = cur.byPayTo[w] || { calls: 0, payers: 0 };
+    const at = cur.byPayTo[w] || { calls: 0, payers: undefined };
     at.calls += calls;
-    at.payers = Math.max(at.payers, payers);
+    if (measured) { at.payers = Math.max(at.payers ?? 0, payers); at.measured = true; }
     cur.byPayTo[w] = at;
   }
   map.set(origin, cur);
+}
+
+/** A quality object read back from storage or a shipment, in the shape the
+ *  fold writes now: a payer figure of zero carries `payersMeasured` (or
+ *  `measured` on a wallet split) only when it was folded from a payer field.
+ *  A zero without the marker is what an older fold wrote for an item that had
+ *  no payer field, and reads as unknown (undefined), never as a measured
+ *  zero that would refuse at the breadth floor. Returns a new object. */
+export function qualityFromStored(q) {
+  if (!q || typeof q !== "object") return q;
+  const out = { ...q };
+  if (out.payersMeasured !== true && !(Number(out.payers30d) > 0)) delete out.payers30d;
+  const split = q.byPayTo && typeof q.byPayTo === "object" ? q.byPayTo : null;
+  if (split) {
+    const by = {};
+    for (const [w, at] of Object.entries(split)) {
+      if (!at || typeof at !== "object") continue;
+      const e = { ...at };
+      if (e.measured !== true && !(Number(e.payers) > 0)) delete e.payers;
+      by[w] = e;
+    }
+    out.byPayTo = by;
+  }
+  return out;
 }
 
 // Public x402 seller registries we crawl. Each exposes an unauthenticated
@@ -2425,8 +2487,10 @@ export function bazaarItemToTool(item, originUrl) {
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
+    // A payer figure rides only when the item carries one, marked as measured
+    // (qualityFromStored reads a stored zero without the marker as unknown).
     quality: item.quality && typeof item.quality === "object"
-      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, payers30d: Number(item.quality.l30DaysUniquePayers) || 0, lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
+      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, ...(item.quality.l30DaysUniquePayers !== undefined && item.quality.l30DaysUniquePayers !== null && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
       : null,
   };
 }
@@ -5313,6 +5377,14 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     if (sellerPrefixOf(originUrl) && res.finalUrl && !isUnderSeller(res.finalUrl, originUrl)) {
       throw new Error(`${path} was redirected outside the seller's path prefix`);
     }
+    // A document served from another host is that host's document. It is this
+    // seller's only when the landing host is its own (crossHostRedirectAccepted);
+    // otherwise a bare origin would list someone else's routes under its name
+    // by pointing its manifest or OpenAPI at them.
+    const landed = !sellerPrefixOf(originUrl) && res.finalUrl ? redirectedOriginOf(originUrl, res.finalUrl) : null;
+    if (landed && !crossHostRedirectAccepted(originUrl, landed)) {
+      throw new Error(`${path} was redirected to another host (${hostnameOf(landed) || "unreadable"}); that host's routes are not listed under this origin`);
+    }
     noteProbeOutcome(originUrl, path, true);
     if (res.notModified) {
       if (res.validators) rememberValidator(originUrl, path, res.validators);
@@ -5430,6 +5502,24 @@ async function previousManifestDoc(prev) {
   return null;
 }
 
+/** The hostname of an origin (no port), lowercased, or null. */
+function hostnameOf(origin) {
+  try { return new URL(String(origin || "")).hostname.toLowerCase() || null; } catch { return null; }
+}
+/** Whether a document that arrived from `landing` may stand for `key`'s: the
+ *  same hostname (a scheme or port move), a host under or over the key's own
+ *  (an api. or www. move inside the seller's domain), or a listed seller whose
+ *  own manifest is self-canonical, which computeAliasOrigins then folds the key
+ *  into. Anything else is another seller's document. */
+export function crossHostRedirectAccepted(key, landing) {
+  const a = hostnameOf(key), b = hostnameOf(landing);
+  if (!a || !b) return false;
+  if (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`)) return true;
+  const v = cache.get(String(landing).replace(/\/+$/, ""));
+  if (!v || typeof v !== "object" || v.error || v.redirectedTo) return false;
+  const home = canonicalHost(v.manifest?.homepage);
+  return !home || home === canonicalHost(landing);
+}
 /** The origin a document fetch was permanently redirected to, when it is a
  *  DIFFERENT origin than the one asked (another host, or the same host over
  *  another scheme); null otherwise. */
@@ -7167,7 +7257,10 @@ export function loadPersistedIndexCache(file = INDEX_CACHE_FILE) {
 /** One warm-started entry into the cache (shared by both loaders). */
 function foldWarmEntry(origin, v) {
   if (typeof origin !== "string" || !origin || cache.has(origin) || !v || typeof v !== "object") return false;
-  cache.set(origin, { ...v, warmStarted: true });
+  // A stored tool's Bazaar quality is read in the shape the fold writes now
+  // (a zero payer figure without the measured marker is unknown).
+  const tools = Array.isArray(v.tools) ? v.tools.map((t) => (t && typeof t === "object" && t.quality && typeof t.quality === "object" ? { ...t, quality: qualityFromStored(t.quality) } : t)) : v.tools;
+  cache.set(origin, { ...v, ...(Array.isArray(tools) ? { tools } : {}), warmStarted: true });
   // CRITICAL: re-seed the crawler with every warm-started origin (see the
   // legacy loader below for the incident that made this load-bearing).
   discoveredSeeds.add(origin);
@@ -7716,7 +7809,7 @@ function* routableSummarySteps() {
     // through this function's many call sites, so this checks the
     // well-known domain only (the scenario that's actually been observed),
     // not a dynamic instance-specific one.
-    if (origin.replace(/\/+$/, "").toLowerCase() === "https://agent402.tools") continue;
+    if (isSelfSeller(origin, { redirectedTo: v?.redirectedTo })) continue;
     const kept = v && typeof v === "object" ? routableRowByEntry.get(v) : undefined;
     if (kept && kept.origin === origin) { out.push(kept.row); continue; }
     let host = "";
@@ -8027,11 +8120,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   // Measured live: without the second check, /marketplace and
   // /marketplace/tools both listed agent402.tools as an unlabelled
   // "third-party" seller of its own tools on any non-production boot.
-  const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
-  const isSelfOrigin = (origin) => {
-    const o = String(origin).replace(/\/+$/, "").toLowerCase();
-    return (selfBase && o === selfBase) || o === "https://agent402.tools";
-  };
+  const isSelfOrigin = (origin, v = cache.get(origin)) => isSelfSeller(origin, { baseUrl, redirectedTo: v?.redirectedTo });
   // An alias origin (a retired hostname whose manifest now comes from, or whose
   // homepage names, another listed seller) was hidden from the route pool but
   // still rendered as its own seller on every listing - two rows for one
@@ -8040,7 +8129,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   yield;
   const remote = [];
   for (const [origin, v] of [...cache.entries()]) {
-    if (isSelfOrigin(origin) || aliasOrigins.has(origin)) continue;
+    if (isSelfOrigin(origin, v) || aliasOrigins.has(origin)) continue;
     if (remote.length % SNAPSHOT_YIELD_SELLERS === SNAPSHOT_YIELD_SELLERS - 1) yield;
     remote.push({
     origin,
@@ -8291,7 +8380,11 @@ function decorationContext(v) {
   // no accepts of its own reads the seller's (a wrong name is set once, in the
   // seller's middleware, so every route on the origin carries it).
   const sellerDomains = evmDomainUnion([...(v.tools || []), ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [])]);
-  return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home: v.manifest?.homepage, name: v.manifest?.name, health: healthScore(v) };
+  // The seller's own homepage and name are served the way /api/index serves
+  // them: only an http(s) homepage is a link, and the name is cleaned, capped
+  // and replaced by the bare host when it trips the listing screen.
+  const home = /^https?:\/\//i.test(String(v.manifest?.homepage || "")) ? String(v.manifest.homepage) : null;
+  return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home, name: sellerOrigin ? servedSellerNameOn(v, v.manifest?.name, sellerOrigin) : null, health: healthScore(v) };
 }
 function decorateRow(t, c) {
   return {
@@ -8802,7 +8895,7 @@ export function _routerReplicaApply(msg) {
     const m = msg.t === "bazaarTools" ? bazaarToolsByOrigin : bazaarQualityByOrigin;
     if (msg.clear) m.clear();
     for (const o of msg.del || []) m.delete(o);
-    for (const [o, v] of msg.set || []) m.set(o, v);
+    for (const [o, v] of msg.set || []) m.set(o, msg.t === "bazaarQuality" ? replicaQualityFromShipped(v) : v);
     return;
   }
   if (msg.t === "state") {
@@ -8820,6 +8913,24 @@ export function _routerReplicaEntryOf(v) {
   if (!v || typeof v !== "object") return v;
   const { openapiTools, openapiRoutes, openapiPacked, manifestBody, ...rest } = v;
   if (rest.manifest && typeof rest.manifest === "object") rest.manifest = slimManifestForPersist(rest.manifest);
+  return rest;
+}
+/** A Bazaar quality row as shipped to a worker: the per-wallet split and the
+ *  off-Base payer figure are non-enumerable on the main thread (never a
+ *  public column) and a structured clone drops them, so they ride as plain
+ *  fields and the replica (_routerReplicaApply) hides them again. */
+export function _routerReplicaQualityOf(q) {
+  if (!q || typeof q !== "object") return q;
+  const out = { ...q };
+  if (q.byPayTo && typeof q.byPayTo === "object") out.byPayTo = q.byPayTo;
+  if (Object.hasOwn(q, "payersOffBase")) out.payersOffBase = q.payersOffBase;
+  return out;
+}
+function replicaQualityFromShipped(q) {
+  if (!q || typeof q !== "object") return q;
+  const { byPayTo, payersOffBase, ...rest } = qualityFromStored(q);
+  if (byPayTo && typeof byPayTo === "object") Object.defineProperty(rest, "byPayTo", { value: byPayTo, enumerable: false, writable: true, configurable: true });
+  if (payersOffBase !== undefined) Object.defineProperty(rest, "payersOffBase", { value: payersOffBase, enumerable: false, writable: true, configurable: true });
   return rest;
 }
 
@@ -8901,11 +9012,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // duplicate "external" candidate, and a route-execute call against it
   // would pay our own wallet through the external-settlement path instead
   // of just running the local call directly.
-  const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
-  const isSelfOrigin = (origin) => {
-    const o = String(origin).replace(/\/+$/, "").toLowerCase();
-    return (selfBase && o === selfBase) || o === "https://agent402.tools";
-  };
+  const isSelfOrigin = (origin, v = cache.get(origin)) => isSelfSeller(origin, { baseUrl, redirectedTo: v?.redirectedTo });
   // The network filter is applied HERE, before scoring, so the k slots are
   // filled by rows that can actually settle on the wanted chain. Until
   // 2026-09-02 `wantNet` was computed, echoed in the response and never
@@ -9030,7 +9137,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       if (ok === undefined) {
         // The same seller filter the full scan applied; liveness is the
         // view above, so a stale posting (its entry replaced) is never served.
-        ok = live.has(v) && isRoutable(v) && !aliasOrigins.has(origin) && !isSelfOrigin(origin);
+        ok = live.has(v) && isRoutable(v) && !aliasOrigins.has(origin) && !isSelfOrigin(origin, v);
         entryOk.set(v, ok);
       }
       return ok;
@@ -9210,12 +9317,16 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // instruction. Our own local catalog is trusted and unmarked.
     const external = t.seller !== LOCAL_SELLER;
     if (external) anyExternal = true;
+    // An external row's name, description and tags are served screened, as
+    // the index rows are (screenToolForServe): hidden characters removed,
+    // capped, and withheld under the marker when the listing trips the screen.
+    const served = external ? screenToolForServe(t, t.category, t.route || null) : null;
     return {
       seller: t.seller,
       sellerHome: t.sellerHome,
       sellerName: t.sellerName,
       slug: t.slug,
-      name: t.name,
+      name: served ? served.name : t.name,
       method: t.method,
       route: t.route,
       // The joined text as written (a template keeps its {param}); sellerRouteUrl
@@ -9279,12 +9390,13 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         tiebreaks: routeTiebreakLabels(),
       },
       category: t.category,
-      description: t.description,
+      description: served ? served.description : t.description,
       // The same field a /api/find row carries: the catalog tool's tags for a
       // local row, the crawled listing's tags for an external one (text the
       // seller wrote, under the same untrustedContent marker as its
       // description), an empty array when the listing had none.
-      tags: Array.isArray(t.tags) ? t.tags.filter((x) => typeof x === "string") : [],
+      tags: (served ? served.tags : Array.isArray(t.tags) ? t.tags : []).filter((x) => typeof x === "string"),
+      ...(served?.finding ? untrustedMarker(served.finding) : {}),
       score,
       health: t.health,
       ...(Array.isArray(t.networks) && t.networks.length ? { networks: t.networks } : {}),
@@ -9538,13 +9650,8 @@ export function crawlToolsByOrigin() {
 export function* routableRemoteEntries({ baseUrl = "" } = {}) {
   if (!removalsKnown()) return; // fail closed until the removal list is read
   const aliases = computeAliasOrigins(cache);
-  const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
-  const isSelf = (origin) => {
-    const o = String(origin).replace(/\/+$/, "").toLowerCase();
-    return (selfBase && o === selfBase) || o === "https://agent402.tools";
-  };
   for (const [origin, v] of cache) {
-    if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelf(origin) || isRemovedOrigin(origin)) continue;
+    if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
     yield [origin, decoratedRemoteTools(v)];
   }
 }
@@ -9831,9 +9938,7 @@ function flatRowsForEntry(origin, v, self, seen, out) {
  *  bar flatRowsForEntry applies before it reads any tool). */
 function directoryListsEntry(origin, v, self) {
   if (!origin.startsWith("https:")) return false;
-  const normOrigin = origin.replace(/\/+$/, "").toLowerCase();
-  if (self && normOrigin === self) return false;
-  if (normOrigin === "https://agent402.tools") return false;
+  if (isSelfSeller(origin, { baseUrl: self || "", redirectedTo: v?.redirectedTo })) return false;
   if (v?.error) return false;
   return healthScore(v) > 0;
 }

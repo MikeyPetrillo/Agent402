@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
-  clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
+  clampToMargin, fitBudgetBelowCap, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
@@ -413,8 +413,14 @@ export function makeMessagesHandler(routeTier) {
       const effortForLink = body.effort !== undefined
         ? ((!linkProfile || !linkProfile.efforts.includes(body.effort)) ? undefined : body.effort)
         : (body.thinking === undefined ? (smallBudgetEffort(model, tierSlug, maxOut) ?? undefined) : undefined);
+      // A thinking budget follows the clamped cap (thinking tokens are output
+      // tokens); under Anthropic's 1024 floor the link is refused instead.
+      const thinking = body.thinking?.type === "enabled"
+        ? { ...body.thinking, budget_tokens: fitBudgetBelowCap(body.thinking.budget_tokens, maxOut, { floor: 1024, field: "thinking.budget_tokens" }) }
+        : body.thinking;
       return {
         ...body, model, max_tokens: maxOut, zdr: undefined, effort: effortForLink,
+        ...(thinking !== undefined ? { thinking } : {}),
         ...(provider ? { provider } : {}), ...(user ? { user, session_id: user } : {}),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
         service_tier: serviceTierFor(model, body, flex), // flex / priority / explicit default on :nitro

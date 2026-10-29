@@ -92,12 +92,15 @@ export function nettedAtWallet(walletEvidence, w) {
   return { calls, payers, usd: n(e.selfFundedUsd), calls30d: Math.max(calls, n(e.selfFundedCalls30d)), payers30d: Math.max(payers, n(e.selfFundedPayers30d)), refunded, refunded30d: Math.max(refunded, n(e.refundedCalls30d)), refundedPayers, refundedPayers30d: Math.max(refundedPayers, n(e.refundedPayers30d)) };
 }
 
-/** Fold one observation of wallet `w` into `map`: the larger count and the larger payer figure. */
+/** Fold one observation of wallet `w` into `map`: the larger count and the
+ *  larger payer figure. A payer figure that was MEASURED (a number, zero
+ *  included: every payer netted away) is evidence and folds as such; only
+ *  the absence of one (undefined/null) leaves the breadth unknown. */
 function put(map, w, settled, payers) {
   if (!(Number(settled) > 0) && !(Number(payers) > 0)) return;
   const cur = map.get(w) || { settled: 0, payers: undefined };
   cur.settled = Math.max(cur.settled, Number(settled) || 0);
-  if (Number(payers) > 0) cur.payers = Math.max(Number(cur.payers ?? 0), Number(payers));
+  if (payers !== undefined && payers !== null && Number.isFinite(Number(payers))) cur.payers = Math.max(Number(cur.payers ?? 0), Number(payers));
   map.set(w, cur);
 }
 
@@ -157,8 +160,10 @@ export function rowWalletFigures(row, walletEvidence = null) {
  * }
  *
  * `sharedWallets`, `circularWallets`: anything with has(wallet), or null.
+ * `routerPurchases`: origin -> wallet -> { calls, payers } the router itself
+ * bought over the Bazaar's window (src/router-purchases.js), or null.
  */
-export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = null, bazaarQuality = [], chainProven = null, sharedWallets = null, circularWallets = null, minSettled = 50, minPayers = 3 } = {}) {
+export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = null, bazaarQuality = [], chainProven = null, sharedWallets = null, circularWallets = null, routerPurchases = null, minSettled = 50, minPayers = 3 } = {}) {
   const m = new Map();
   const ent = (o) => {
     const k = norm(o);
@@ -200,21 +205,34 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
     const e = walletEvidence instanceof Map ? walletEvidence.get(w) : walletEvidence?.[w];
     return { calls: Math.max(0, Number(e?.callsSettled) || 0), payers: Math.max(0, Number(e?.uniqueBuyers) || 0) };
   };
+  // What the router itself bought at wallet w of origin o over the Bazaar's
+  // window (src/router-purchases.js): those payments are in the third
+  // party's count and are never the seller's proof.
+  const bought = (o, w) => {
+    const m = routerPurchases instanceof Map ? routerPurchases.get(norm(o)) : null;
+    const e = m instanceof Map ? m.get(w) : m && typeof m === "object" ? m[w] : null;
+    return { calls: Math.max(0, Number(e?.calls) || 0), payers: Math.max(0, Number(e?.payers) || 0) };
+  };
   // One origin's Bazaar figures at wallet w, reduced by what can be
-  // attributed to it of what w's own scan netted over the 30 days.
-  const bazaarNet = (w, calls, payers) => {
+  // attributed to it of what w's own scan netted over the 30 days, and by
+  // the router's own purchases there.
+  const bazaarNet = (o, w, calls, payers) => {
     const n = nettedAtWallet(walletEvidence, w);
     const c = Number(calls) || 0;
-    const dc = n ? n.calls30d + n.refunded30d : 0;
-    // Payers that were never buyers: paid only with the wallet's money, or
-    // had every payment refunded.
-    const dp = n ? n.payers30d + n.refundedPayers30d : 0;
-    if (!n || (!(dc > 0) && !(dp > 0))) return { settled: c, payers, reduced: false };
+    const b = bought(o, w);
+    const dn = n ? n.calls30d + n.refunded30d : 0;
+    // Payers that were never buyers: paid only with the wallet's money, had
+    // every payment refunded, or were our own spending wallets.
+    const dp = (n ? n.payers30d + n.refundedPayers30d : 0) + b.payers;
+    if (!(dn > 0) && !(b.calls > 0) && !(dp > 0)) return { settled: c, payers, reduced: false };
     const g = scanGenuine(w);
-    // Calls: the netted payments this origin must hold are those the other
-    // origins' calls at w cannot; never below the scan's own genuine count.
+    // Calls: the router's purchases were at this origin, so they come off
+    // its own count whole; the scan's netted payments this origin must hold
+    // are those the other origins' calls at w cannot; never below the scan's
+    // own genuine count.
+    const own = Math.max(0, c - b.calls);
     const total = Math.max(c, bazaarTotal.get(w) || 0);
-    const settled = Math.max(Math.min(c, Math.max(0, total - dc)), Math.min(c, g.calls));
+    const settled = Math.max(Math.min(own, Math.max(0, total - dn - b.calls)), Math.min(own, g.calls));
     // Payers: a MAX over this origin's resources, so which resource the
     // self-funded payers paid is unknowable and the worst case is deducted;
     // but never below the genuine payers the wallet's own scan measured.
@@ -248,7 +266,7 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
       const e = ent(o);
       noteNetted(e, w);
       if (isCircular(w)) { put(e.selfByWallet, w, v.calls, v.payers); continue; }
-      const net = bazaarNet(w, v.calls, v.payers);
+      const net = bazaarNet(o, w, v.calls, v.payers);
       put(e.byWallet, w, net.settled, net.payers);
       if (net.reduced) put(e.selfByWallet, w, v.calls, v.payers);
     }

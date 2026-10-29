@@ -54,6 +54,39 @@ for (const job of jobs) {
 ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
 
+// Package code in a job that holds a deploy-class secret (a job under the
+// production environment, or any job whose env names a Railway, MPP or
+// backup secret): every step that runs node on a repository script shadows
+// every job-level secret the same way, so the code the job runs after the
+// install never reads them either.
+const DEPLOY_CLASS = /RAILWAY|MPP_SECRET|BACKUP_S3/;
+const RUNS_PACKAGE_CODE = /\bnode (scripts\/|--input-type)/;
+let scriptSteps = 0;
+for (const job of jobs) {
+  const secrets = new Set();
+  const envAt = job.lines.indexOf("    env:");
+  if (envAt >= 0) {
+    for (let i = envAt + 1; i < job.lines.length && (/^ {6}\S/.test(job.lines[i]) || /^ {6}#/.test(job.lines[i])); i++) {
+      const kv = /^ {6}([A-Z0-9_]+): .*secrets\./.exec(job.lines[i]);
+      if (kv) secrets.add(kv[1]);
+    }
+  }
+  const gated = job.lines.some((l) => /^    environment:/.test(l)) || [...secrets].some((k) => DEPLOY_CLASS.test(k));
+  if (!gated || !secrets.size) continue;
+  // Steps: from each "      - " to the next.
+  const starts = job.lines.map((l, i) => (/^ {6}- /.test(l) ? i : -1)).filter((i) => i >= 0);
+  for (let si = 0; si < starts.length; si++) {
+    const step = job.lines.slice(starts[si], starts[si + 1] ?? job.lines.length);
+    const name = (step.find((l) => /^ {6}- name:/.test(l)) || step[0]).replace(/^ {6}- (name: )?/, "").trim();
+    if (!step.some((l) => RUNS_PACKAGE_CODE.test(l))) continue;
+    scriptSteps++;
+    const blanked = new Set(step.map((l) => /^\s+([A-Z0-9_]+): ""\s*$/.exec(l)?.[1]).filter(Boolean));
+    const missing = [...secrets].filter((k) => !blanked.has(k));
+    ok(missing.length === 0, `${job.name}: "${name.slice(0, 48)}" runs package code with every job-level secret shadowed${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+  }
+}
+ok(scriptSteps >= 4, `the scan found the package-code steps of the secret-holding jobs (${scriptSteps}) - zero would mean it is blind`);
+
 // Spending workflows: an install step runs dependency code with whatever its
 // environment holds, so no secret (nor the workflow token) may reach one.
 const SECRETISH = /secrets\.|github\.token|GITHUB_TOKEN/;

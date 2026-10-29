@@ -361,7 +361,7 @@ export const ALARMS = [
     title: "Upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyer?.status),
     body: () =>
-      "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
+      "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
   },
   {
     title: "Upstream buyer wallet is DRAINING (unexplained fall)",
@@ -377,13 +377,13 @@ export const ALARMS = [
     title: "Algorand upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerAvm?.status),
     body: () =>
-      "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default $0.50) - or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs).",
+      "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default $0.50) - or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs).",
   },
   {
     title: "Tempo upstream buyer wallet LOW (MPP)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerTempo?.status),
     body: () =>
-      "The Tempo (MPP) spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's Tempo external leg is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default $0.50). It is funded in USDC.e on Tempo. When it empties, MPP external routing goes dark (buyers are never charged). Top up with fund-tempo-fee-payer.yml (token=usdc) or directly.",
+      "The Tempo (MPP) spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's Tempo external leg is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default $0.50). It is funded in USDC.e on Tempo. When it empties, MPP external routing goes dark (a pull buyer is never charged; a push transfer sent before the call is recorded as owed). Top up with fund-tempo-fee-payer.yml (token=usdc) or directly.",
   },
   {
     title: "Subscription gas sponsor LOW (PathUSD)",
@@ -498,7 +498,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       const w = b.refundsOwed?.status === "stuck" ? "stuck" : b.refundsOwed?.status === "aging" ? "aging" : "owed";
       return `/api/gateway-status reports refundsOwed.status=${w}.
 
-- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note.
+- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for hang-up debts held for review). A debt that should not be paid is voided there with a note. A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.
 - aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
 - stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
 
@@ -646,13 +646,13 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "Solana upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerSvm?.status),
     body: () =>
-      "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
+      "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
   },
   {
     title: "Stellar facilitator fee account LOW (XLM)",
     verdict: ({ gateway: b }) => lowOk(b.stellarFacilitator?.status),
     body: () =>
-      "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
+      "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
   },
   {
     title: "Upstream call budget ELEVATED",
@@ -773,6 +773,19 @@ Check, in order: recent runs of \`paid-canary.yml\` and whether the \`canary\` j
 
 This observer cannot dispatch the canary itself (it holds an issues-only credential by design). To heal it: \`gh workflow run paid-canary.yml --repo MikeyPetrillo/Agent402 --ref main\` - a dispatch always buys, because the freshness gate applies to scheduled runs only.`;
     },
+  },
+  {
+    // CDN-range peers reaching the origin without the shared origin secret
+    // (cdnOrigin on /api/gateway-status, src/cdn-client-ip.js): each such
+    // request is keyed on the edge address, not its client. unauthenticated
+    // pages; ok and off clear; unknown or absent does neither.
+    title: "CDN origin secret: edge traffic reached the origin unauthenticated",
+    verdict: ({ gateway: b }) => {
+      const w = b.cdnOrigin?.status;
+      if (w === "unauthenticated") return "bad";
+      return w === "ok" || w === "off" ? "good" : "quiet";
+    },
+    body: () => `/api/gateway-status reports cdnOrigin.status=unauthenticated: requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok.`,
   },
 ];
 

@@ -132,7 +132,7 @@ export function humanReportsPage(baseUrl) {
   const body = `
 <div class="wrap">
   <div id="checkout-note" hidden class="note" style="margin:0 0 18px;padding:12px 16px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);">
-    Checkout canceled, nothing was charged. Pick a report below whenever you are ready. Every price is on its button.
+    Checkout canceled, the card was not charged. Pick a report below whenever you are ready. Every price is on its button.
   </div>
   <section class="hero">
     <div class="eyebrow eyebrow-tags"><span>Cited reports</span><span>one price per report</span><span>price on every button</span></div>

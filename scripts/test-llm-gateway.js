@@ -174,6 +174,38 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   delete process.env.OPENROUTER_API_KEY;
 }
 
+// A buyer's reasoning budget is fitted under EACH link's clamped cap: the
+// requested model's clamp left room for it, and a fallback that clamps lower
+// (pricier output at the same price) must not be sent a budget at or above
+// its own cap. Both caps are read from clampToMargin at the table's rates.
+{
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const { clampToMargin } = await import("../src/tools/llm-gateway-kit.js");
+  const tier = TIERS["v1-chat-nano"];
+  const capOf = (model) => { const b = { model, messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4 }; clampToMargin(b, tier, 0); return b.max_tokens; };
+  const capRequested = capOf("openai/gpt-5-nano"), capFallback = capOf("deepseek/deepseek-chat");
+  ok(capFallback < capRequested, `setup: at n=4 the fallback link clamps lower than the requested model (${capFallback} < ${capRequested})`);
+  const budget = capFallback; // under the requested model's cap, at the fallback's
+  const outbound = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); outbound.push(body);
+    if (body.model === "openai/gpt-5-nano") return { ok: false, status: 502, text: async () => JSON.stringify({ error: { message: "Provider returned error" } }) };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) };
+  };
+  const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
+  const res = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4, reasoning: { max_tokens: budget } });
+  const first = outbound[0], served = outbound.find((b) => b.model === "deepseek/deepseek-chat");
+  ok(res.model === "deepseek/deepseek-chat" && first?.model === "openai/gpt-5-nano" && first.reasoning?.max_tokens === budget && first.max_tokens === capRequested, `the requested link carries the buyer's budget under its own cap (${first?.reasoning?.max_tokens} under ${first?.max_tokens})`);
+  // The served body's own cap (its normalized input estimate may land a token
+  // off capOf's): lower than the requested link's, and at or under the budget,
+  // so a budget sent unfitted would sit at or above it.
+  ok(served && served.max_tokens < first.max_tokens && budget >= served.max_tokens, `setup: the fallback link was clamped lower than the requested one, to at most the budget (${served?.max_tokens} < ${first?.max_tokens}, budget ${budget})`);
+  ok(served && Number.isInteger(served.reasoning?.max_tokens) && served.reasoning.max_tokens < served.max_tokens, `the fallback link's budget is refitted under ITS clamped cap (reasoning.max_tokens ${served?.reasoning?.max_tokens} < max_tokens ${served?.max_tokens})`);
+  globalThis.fetch = realFetch;
+  delete process.env.OPENROUTER_API_KEY;
+}
+
 // Timed-out attempts may have generated (and billed) upstream on any rail, so
 // a chain walk stops after LLM_MAX_TIMED_OUT_ATTEMPTS of them (default 2)
 // instead of starting another; other failures still walk the whole chain.
@@ -1387,6 +1419,35 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     () => ok(false, "all links down must not serve"),
     (e) => ok(calls.length === 5 && [502, 503].includes(e.statusCode), "all five links tried before the buyer sees an error")
   );
+  // A link our own timer ended may have generated, and been billed, upstream:
+  // the chat wires' timed-out budget (LLM_MAX_TIMED_OUT_ATTEMPTS, default 2)
+  // ends the walk instead of trying every link that way.
+  calls = [];
+  globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; };
+  await speechTool.handler({ input: "hello" }).then(
+    () => ok(false, "timed-out links must not serve"),
+    (e) => ok(calls.length === 2 && e.statusCode === 504 && e.upstreamTimeout === true, `two timed-out links end the speech walk with a 504 (links tried: ${calls.length})`)
+  );
+  globalThis.fetch = realFetch;
+  delete process.env.OPENROUTER_API_KEY;
+}
+
+// ---- a stream dropped mid-answer ends with an error frame, not silence ----
+// Once the first data frame committed the 200 (and so the settlement), an
+// upstream drop used to end the response as if the answer were complete.
+{
+  const { streamOpenRouterTo: relay, STREAM_DROPPED_FRAME } = await import("../src/tools/llm-gateway-kit.js");
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: { get: () => "text/event-stream" },
+    body: { async *[Symbol.asyncIterator]() { yield Buffer.from('data: {"id":"g","choices":[{"delta":{"content":"par"}}]}\n\n'); throw new Error("socket hang up"); } },
+  });
+  const r = { headersSent: false, chunks: [], ended: false, writeHead() { r.headersSent = true; }, flushHeaders() {}, write(c) { r.chunks.push(String(c)); }, end() { r.ended = true; }, on() {}, once() {}, off() {} };
+  const warn = console.warn; console.warn = () => {};
+  await relay({ model: "deepseek/deepseek-chat", messages: msg1(), stream: true }, r, { onUsage: () => {} });
+  console.warn = warn;
+  ok(r.headersSent && r.ended && r.chunks.length === 2 && r.chunks[0].startsWith("data: ") && r.chunks[1] === STREAM_DROPPED_FRAME && /"error"/.test(STREAM_DROPPED_FRAME), "a committed stream that upstream drops ends with one SSE error frame after what was relayed");
   globalThis.fetch = realFetch;
   delete process.env.OPENROUTER_API_KEY;
 }
@@ -1795,6 +1856,42 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     if (days <= 30) ok(false, `${where}: ${m} retires ${r.until} (${Math.floor(days)} days left): replace it before 30 days remain`);
   }
   ok(scheduled > 0, `the 30-day guard sees ${scheduled} default/fallback/rung slots naming a scheduled retirement (each fails CI from 30 days before its date)`);
+}
+
+// ---- a reasoning budget follows the margin clamp (fitReasoningToCap) ----
+// The validator's "budget below max_tokens" check reads the buyer's cap; the
+// clamp then lowers the cap, and the outbound used to carry a budget above
+// it. Shape: a large prompt on premium, max_tokens 8192, reasoning 8000. The
+// prompt is grown until the clamp binds, never sized by a typed figure.
+{
+  const { fitBudgetBelowCap, fitReasoningToCap, clampToMargin: clamp, LLM_GATEWAY_TOOLS: tools, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  ok(fitBudgetBelowCap(8000, 8192) === 8000 && fitBudgetBelowCap(8000, 2529) === 2528 && JSON.stringify(fitReasoningToCap({ effort: "high", max_tokens: 8000 }, 100)) === '{"effort":"high","max_tokens":99}' && fitReasoningToCap({ effort: "high" }, 100).max_tokens === undefined,
+    "fitBudgetBelowCap: a budget under the cap is kept, one at or above it becomes cap - 1, an object without a budget is untouched");
+  let floorErr = null; try { fitBudgetBelowCap(8000, 1024, { floor: 1024, field: "thinking.budget_tokens" }); } catch (x) { floorErr = x; }
+  ok(floorErr?.statusCode === 400 && /thinking\.budget_tokens/.test(floorErr.message), "a cap that leaves no room above the provider floor is a 400 naming the field");
+  const premium = tools.find((t) => t.slug === "v1-chat-premium");
+  const MODEL = "anthropic/claude-opus-5";
+  const line = "Summarize the quarterly report line with its figures and risks. ";
+  let content = null;
+  for (let n = 400; n <= 4000 && !content; n += 100) {
+    const probe = { model: MODEL, messages: [{ role: "user", content: line.repeat(n) }], max_tokens: 8192 };
+    try { clamp(probe, T["v1-chat-premium"], 0); } catch { break; }
+    if (probe.max_tokens < 8000 && probe.max_tokens > 1024) content = line.repeat(n);
+  }
+  ok(content !== null, "found a prompt the margin clamp caps under the reasoning budget");
+  if (content) {
+    const req = { header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ payload: { authorization: { from: "0xAbCdEf0000000000000000000000000000000009" } } })).toString("base64") : undefined) };
+    const got = [];
+    const realFetch = globalThis.fetch;
+    process.env.OPENROUTER_API_KEY = "test-key";
+    globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); got.push(b); return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) }; };
+    await premium.handler({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, req);
+    ok(got[0]?.model === MODEL && got[0].max_tokens < 8000 && got[0].reasoning?.max_tokens === got[0].max_tokens - 1, `chat: the outbound reasoning budget sits one under the clamped cap (max_tokens ${got[0]?.max_tokens}, reasoning ${got[0]?.reasoning?.max_tokens})`);
+    globalThis.fetch = realFetch;
+    delete process.env.OPENROUTER_API_KEY;
+    const v = validateRequest({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, "v1-chat-premium");
+    ok(v.max_tokens < 8000 && v.reasoning.max_tokens === v.max_tokens - 1, "validateRequest fits the budget pre-spend too (the normalized body never carries a budget above its cap)");
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

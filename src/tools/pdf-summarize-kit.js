@@ -66,7 +66,7 @@ export const PDF_SUMMARIZE_TOOLS = [
           url: "https://agent402.tools/fixtures/sample-report.pdf",
           pages: 3,
           wordCount: 247,
-          summary: "The document outlines a system for agents to purchase single answers from a tool server. Agents can request information, receive a price, and then pay for the answer by signing a payment for that exact amount. Payment is processed only after the tool successfully completes its operation; if the tool fails, no charge is applied…",
+          summary: "The document outlines a system for agents to purchase single answers from a tool server. Agents can request information, receive a price, and then pay for the answer by signing a payment for that exact amount. Payment is processed only after the tool successfully completes its operation; if the tool fails, no x402 charge is applied…",
           summaryWordCount: 112,
           model: "openai/gpt-4o-mini",
           truncatedInput: false,

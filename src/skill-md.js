@@ -109,9 +109,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.13.21
+claude mcp add agent402 -- npx -y agent402-mcp@0.13.22
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.21
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.22
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -119,7 +119,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.21
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.21"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.22"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -202,7 +202,7 @@ header instead of a payment.
    tools with \`route\`, \`price\`, \`inputSchema\`, \`example\`.
 2. **Dry-run:** call the route with an empty or example body and read the 402:
    the \`accepts\` array (x402) and the \`Payment\` challenges (MPP) carry the
-   exact amount, asset and network. Nothing is charged on a 402.
+   exact amount, asset and network. An unpaid 402 charges nothing.
 3. **Call:** resend with payment (your client does this) and the same JSON body.
 4. **Retry safely:** send an \`Idempotency-Key\` header; a retry of an
    already-served paid call replays the result instead of charging again.
@@ -240,10 +240,10 @@ curl -s -X POST ${baseUrl}/v1/auto/chat/completions -H 'content-type: applicatio
 - **200 + JSON** - the result.
 - **402** - unpaid or payment rejected. Read the headers: no
   \`PAYMENT-RESPONSE\` means nothing settled and a retry is safe; a
-  \`PAYMENT-RESPONSE\` with \`success: false\` means settlement was refused, you
+  \`PAYMENT-RESPONSE\` with \`success: false\` means x402 settlement was refused, you
   were not charged, retry with a fresh authorization.
-- **400** - your input failed validation; the body says what to fix. Not charged.
-- **413** - wallet-keyed memory quota full. Not charged.
+- **400** - your input failed validation; the body says what to fix. Not charged on x402.
+- **413** - wallet-keyed memory quota full. Not charged on x402.
 - **502/503** - upstream or capacity failure. Not charged on x402 (settlement runs
   after the handler and only for a successful response). Retry later. Exception: a
   Tempo transfer sent before the call is final when sent; if the call then fails,
@@ -272,7 +272,7 @@ of the response you hold, without trusting this document.
 |-------|-------|-----|
 | 402 after paying with PoW | You sent the \`challenge\` instead of the \`token\`, or reused a solution | Submit \`<token>:<nonce>\`; each challenge is single-use and slug-scoped |
 | "no supported rail" from an MPP client | Client parsed \`WWW-Authenticate\` only and bailed | Both headers are always present; check \`PAYMENT-REQUIRED\` too, or use an x402 client |
-| 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged |
+| 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged on x402 |
 | Tool not found by \`/api/find\` | Wording too broad | Rephrase with the concrete input/output; browse ${baseUrl}/api/pricing; or request it via \`/api/wish\` |
 | 413 on \`/api/memory*\` | Namespace quota (10k keys / 32MB) | Delete keys or use another wallet namespace |
 | LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Use a higher tier (${tierFix || "see /api/pricing"}) or shorten the input |

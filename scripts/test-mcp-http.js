@@ -233,6 +233,7 @@ for (const aboutName of ["server.describe", "describe_server", "describe_agent40
   assert(aboutText.includes("500+"), `${aboutName} uses evergreen 500+ count`);
   assert(!aboutText.includes("generate_hash"), `${aboutName} does not advertise removed curated utilities`);
   assert(about.result?.structuredContent?.service, `${aboutName} returns structuredContent`);
+  assert(!aboutText.includes("clientsSeenSinceBoot"), `${aboutName} does not republish caller-chosen client names (operator surface only)`);
   // Regression: firstJob once named a real competitor ("Agent402 is the
   // tools layer beside LLM gateways") in this
   // live, agent-served response - a direct violation of the project's own

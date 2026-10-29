@@ -167,10 +167,51 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     const pub = await (await fetch(`${base}/api/gateway-status`)).json();
     ok(pub.operatorAuth && typeof pub.operatorAuth.status === "string" && !("failures1h" in pub.operatorAuth) && !("threshold" in pub.operatorAuth),
       `the PUBLIC status carries the verdict and neither the counter nor the threshold (${JSON.stringify(pub.operatorAuth)})`);
-    const gs = await (await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+    const gs = await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json();
     ok(gs.operatorAuth && typeof gs.operatorAuth.failures1h === "number" && gs.operatorAuth.failures1h >= 3 && gs.operatorAuth.status === "ok" && gs.operatorAuth.threshold >= 10,
       `wrong operator credentials are counted, visible to the OPERATOR (${gs.operatorAuth?.failures1h} in the hour, status ${gs.operatorAuth?.status})`);
     ok(!JSON.stringify(gs.operatorAuth).includes(TOKEN) && !/not-the-token/.test(JSON.stringify(gs.operatorAuth)), "the status carries counts only, never a credential");
+  }
+
+  // A buyer's credential on a PUBLIC surface is not an operator guess. A
+  // credits key (Bearer a402_...) or an MPP credential (Payment ...) rides on
+  // every request a paying client makes, and a client may attach some other
+  // service's Bearer to everything it sends; none of them is compared or
+  // counted on a public surface, where the operator branch reads
+  // X-Operator-Token only. A wrong X-Operator-Token there still counts, so the
+  // public surfaces are no better a place to guess from.
+  {
+    const failures = async () => (await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json()).operatorAuth.failures1h;
+    const before = await failures();
+    const creditsKey = `a402_${"k".repeat(40)}`;
+    for (const path of ["/health", "/api/gateway-status", "/api/index", "/api/solana-leaderboard", "/api/analytics", "/api/revenue/mpp", "/api/route?q=hash"]) {
+      await status(path, { headers: { Authorization: `Bearer ${creditsKey}` } });
+      await status(path, { headers: { Authorization: "Payment not-a-credential" } });
+      await status(path, { headers: { Authorization: "Bearer some-other-service-key" } });
+    }
+    const after = await failures();
+    ok(after === before, `a credits key, an MPP credential or a foreign Bearer on a public surface adds no operator failure (${before} before, ${after} after)`);
+    // The credits-key shape is never the operator token, so it is not a guess
+    // on the operator routes either.
+    await status("/__operator/stats", { headers: { Authorization: `Bearer ${creditsKey}` } });
+    ok((await failures()) === before, "a credits-shaped Bearer on an operator route is not a guess either");
+    await status("/health", { headers: { "X-Operator-Token": "not-the-token" } });
+    ok((await failures()) === before + 1, "a wrong X-Operator-Token on a public surface is counted");
+    const viaBearer = await (await fetch(`${base}/health`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+    ok(!("flags" in viaBearer), "the real token as a Bearer does not elevate a public surface (a Bearer is a buyer's credential there)");
+    const viaHeader = await (await fetch(`${base}/health`, { headers: { "X-Operator-Token": TOKEN } })).json();
+    ok("flags" in viaHeader, "...X-Operator-Token does");
+    ok((await failures()) === before + 1, "and neither read of the real token spent budget or counted");
+  }
+
+  // The operator no-store and session-sync middleware runs ahead of EVERY
+  // operator route, the ones registered early in the file included: each of
+  // these carries the Pragma only that middleware sets (a route may restate
+  // Cache-Control itself).
+  for (const p of ["/__operator/followups.json", "/__operator/tool-failures.json", "/__operator/revenue.json", "/__operator/monitors.json", "/__operator/sales.json", "/__operator/margin.json", "/__operator/stats"]) {
+    const r = await fetch(`${base}${p}`, { headers: bearer });
+    ok(r.status === 200 && r.headers.get("pragma") === "no-cache" && /no-store/.test(r.headers.get("cache-control") || ""),
+      `${p} answers through the operator middleware (${r.status}, cache-control "${r.headers.get("cache-control")}", pragma "${r.headers.get("pragma")}")`);
   }
 
   // /__operator/seller-evidence.json - "what settlement evidence do we hold for

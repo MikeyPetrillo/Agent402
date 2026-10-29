@@ -26,6 +26,7 @@ import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
+import { OUR_EVM_WALLETS } from "./revenue-live.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
 // every snapshot upserts its daily rows into the economy table (the state
@@ -271,8 +272,13 @@ WHERE address = '${USDC_BASE}'
   AND transaction_hash IN (SELECT transaction_hash FROM auth_txs)
 LIMIT 1`;
 
-// Top receiving wallets (merchants) over the last 7 days.
-const merchantsQuery = (since) => `
+// Top receiving wallets (merchants) over the last 7 days. These rows are the
+// router's chain join (src/settlement-proof.js provenByChain), so payments
+// from our own wallets (the router's purchases, the canaries) are left out:
+// what we paid a seller is never that seller's proof, the rule the
+// leaderboard fold applies (src/leaderboard.js ourWallets).
+const ourWalletsSql = (wallets = OUR_EVM_WALLETS) => [...wallets].map((a) => `'${String(a).toLowerCase().replace(/[^0-9a-fx]/g, "")}'`).join(",") || "''";
+export const merchantsQuery = (since, { ourWallets = OUR_EVM_WALLETS } = {}) => `
 WITH auth_txs AS (
   SELECT DISTINCT transaction_hash
   FROM base.events
@@ -290,6 +296,7 @@ WHERE address = '${USDC_BASE}'
   AND event_name = 'Transfer'
   AND block_timestamp >= '${since}'
   AND transaction_hash IN (SELECT transaction_hash FROM auth_txs)
+  AND (lower(toString(parameters['from'])) IN (${ourWalletsSql(ourWallets)})) = 0
 GROUP BY merchant
 ORDER BY payments DESC
 LIMIT 12`;

@@ -43,7 +43,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 ok(credentialHeaderFromMeta(null) === null && credentialHeaderFromMeta({}) === null && credentialHeaderFromMeta({ [MCP_CREDENTIAL_META]: { nope: 1 } }) === null, "credentialHeaderFromMeta: absent/unusable -> null (unpaid call)");
 ok(credentialHeaderFromMeta({ [MCP_CREDENTIAL_META]: "Payment abc" }) === "Payment abc" && credentialHeaderFromMeta({ [MCP_CREDENTIAL_META]: "abc" }) === "Payment abc", "credentialHeaderFromMeta: string forms normalise to an Authorization value");
 {
-  // Cut-off text: "nothing was charged" only when no credential rode along.
+  // Cut-off text: "nothing to charge" only when no credential rode along.
   const { connectorCutoffText } = await import("../src/mcp-http.js");
   const paid = connectorCutoffText({ label: "Agent402 (x)", seconds: 27, paid: true, route: "POST /v1/x" });
   const unpaid = connectorCutoffText({ label: "Agent402 (x)", seconds: 27, paid: false, route: "POST /v1/x" });
@@ -52,7 +52,7 @@ ok(credentialHeaderFromMeta({ [MCP_CREDENTIAL_META]: "Payment abc" }) === "Payme
   // Repayment on these rails runs through the reviewed refund job, so the text
   // must not promise that it happens by itself.
   ok(!/automatic|auto-refund/i.test(paid) && !/automatic|auto-refund/i.test(paidErr), "paid cut-off text says the charge is repaid after review, not automatically");
-  ok(/nothing was charged/.test(unpaid) && !/may still have/.test(unpaid) && /Retry/.test(unpaid), "unpaid cut-off text: nothing was charged, retry is fine");
+  ok(/No payment was presented, so there was nothing to charge/.test(unpaid) && !/may still have/.test(unpaid) && /Retry/.test(unpaid), "unpaid cut-off text: no payment presented, nothing to charge, retry is fine");
   ok(/could not be completed/.test(paidErr) && /may still have completed and been charged/.test(paidErr), "a paid loopback error is told the same money story");
 }
 {
@@ -152,11 +152,28 @@ try {
   const payer = await connect();
   McpClient.wrap(payer, { methods: [evm.charge({ account, currencies: [evm.assets.base.USDC], maxAmount: "1.00" })] });
   const before = { ...facCalls };
+  const served = async () => (await (await fetch(`${B}/api/stats`)).json()).toolCallsServed;
+  const servedBefore = await served();
   const paid = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-write", params: { key, value: { hello: "mpp" } } } });
   ok(!paid.isError, `mppx MCP client pays the challenge and the tool answers (isError=${paid.isError})`);
   ok(paid.structuredContent?.slug === "memory-write" && paid.structuredContent?.result, "result is the catalog.call envelope {slug, result}");
   ok(paid.receipt && paid._meta?.["org.paymentauth/receipt"], `receipt rides in _meta["org.paymentauth/receipt"] (and McpClient surfaces it as result.receipt: ${JSON.stringify(paid.receipt).slice(0, 80)})`);
   ok(facCalls.verify - before.verify === 1 && facCalls.settle - before.settle === 1, `the REAL gates settled it: facilitator verify +${facCalls.verify - before.verify}, settle +${facCalls.settle - before.settle} (loopback, settlement authority unchanged)`);
+  {
+    // One paid call is ONE served call on /api/stats, booked by the paid route
+    // the loopback reached, under its wire: the connector books nothing of its
+    // own for it (it used to add a second, proof-of-work, count).
+    const servedAfter = await served();
+    ok(servedAfter.total - servedBefore.total === 1 && servedAfter.viaProofOfWork === servedBefore.viaProofOfWork && servedAfter.viaMPPWire - servedBefore.viaMPPWire === 1,
+      `a paid MCP call is counted once, on the MPP wire (total +${servedAfter.total - servedBefore.total}, viaProofOfWork +${servedAfter.viaProofOfWork - servedBefore.viaProofOfWork}, viaMPPWire +${servedAfter.viaMPPWire - servedBefore.viaMPPWire})`);
+  }
+  {
+    // The client names sessions announce at initialize are operator-only.
+    const about = await payer.callTool({ name: "server.describe", arguments: {} });
+    ok(!JSON.stringify(about).includes("clientsSeenSinceBoot"), "server.describe does not republish the caller-chosen client names");
+    const opStats = await (await fetch(`${B}/__operator/stats`, { headers: { "X-Operator-Token": OP } })).json();
+    ok(opStats.mcpClientsSeenSinceBoot && Object.keys(opStats.mcpClientsSeenSinceBoot).some((k) => k.startsWith("test-mcp-mpp@")), `the operator surface carries them (${Object.keys(opStats.mcpClientsSeenSinceBoot || {}).join(", ")})`);
+  }
 
   // 3. Same wallet reads it back (payer attribution survived the loopback)
   const read = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
@@ -186,6 +203,10 @@ try {
   //    deadline, so the caller gets a tool RESULT that names what happened.
   slowVerifyMs = 5000;
   const settlesBeforeSlow = facCalls.settle;
+  // The connector books the cut-off itself (no route answered it): the
+  // failure monitor's row for the slug, read before and after.
+  const failureRow = async () => (await (await fetch(`${B}/__operator/tool-failures.json`, { headers: { Authorization: `Bearer ${OP}` } })).json()).tools.find((t) => t.slug === "memory-write") || null;
+  const rowBefore = await failureRow();
   let slow = null, slowErr = null;
   try { slow = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-write", params: { key: `${key}-slow`, value: 1 } } }); }
   catch (e) { slowErr = e; }
@@ -207,6 +228,12 @@ try {
   const owed = await (await fetch(`${B}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}` } })).json();
   const rows = (owed.refunds || []).filter((r) => r.slug === "memory-write");
   ok(rows.length === 0, `and nothing is owed for it, because nothing was charged (${JSON.stringify(rows)})`);
+  {
+    const rowAfter = await failureRow();
+    const timeouts = (r) => r?.hour?.outside?.timeout ?? 0;
+    ok(timeouts(rowAfter) === timeouts(rowBefore) + 1 && rowAfter?.lastError?.message === "paid loopback timed out" && rowAfter.lastError.status === 504,
+      `the cut-off is booked ONCE on the failure monitor, as the connector's own timeout class (timeouts ${timeouts(rowBefore)} -> ${timeouts(rowAfter)}, last ${JSON.stringify(rowAfter?.lastError)})`);
+  }
 
   // 7. The transport deadline itself, for a tools/call, is a result too. A
   //    second server whose deadline is shorter than the loopback bound makes

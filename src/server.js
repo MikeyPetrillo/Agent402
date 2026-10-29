@@ -2,23 +2,17 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
-import { carriesPaymentAttempt } from "./payment-attempt.js";
+import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
-import { onGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
-import { GATED_RAILS, railKey } from "./rails.js";
-// The networks a PUBLIC surface names: the configured ones, minus any gated
-// rail that is not in the live offer, and minus Arc unless it is: Arc is
-// configured by its key alone and offered only after its facilitator's
-// /supported check, so a key without that check never names it. Operator
-// views read the full configured list (enabledNetworks) so a dropped rail
-// stays visible there.
-const GATED_NETWORK_NAMES = new Map([...GATED_RAILS.map((r) => [railKey(r), r.caip2]), ["arc", "eip155:5042"]]);
-function publicNetworks() {
-  return enabledNetworks(NETWORK).filter((n) => !GATED_NETWORK_NAMES.has(n) || gatedRailOffered(GATED_NETWORK_NAMES.get(n)));
-}
+import { onGatedRailOffered } from "./gated-rails.js";
+// The networks a PUBLIC surface names (src/public-networks.js): the
+// configured ones minus any gated rail that is not in the live offer.
+// Operator views read the full configured list (enabledNetworks) so a
+// dropped rail stays visible there.
+import { publicNetworks, publicPremiumUsdByNetwork } from "./public-networks.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -61,7 +55,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
-import { paidPriceUsd, quotedOnNetworkUsd } from "./paid-price.js";
+import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -90,7 +84,7 @@ import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerSt
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
-import { applyMeteredSettlement } from "./gateway-meter.js";
+import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -123,11 +117,13 @@ function quotedPriceUsd(def, req) {
   } catch { return flat; }
 }
 // The USD a metered call was actually settled/held at, for the books: the upto
-// meter's override (settled actual x markup), else the per-request quote, else
-// the catalog price. Flat tiers fall through to the catalog price unchanged.
+// meter's override (settled actual x markup; a credits stream's amount rides
+// on the request instead, gateway-meter.js meteredUsdOf), else the
+// per-request quote, else the catalog price. Flat tiers fall through to the
+// catalog price unchanged.
 function settledPriceUsd(def, req, res) {
   const flat = Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
-  const metered = Number(res?.getHeader?.("X-Metered-Usd"));
+  const metered = meteredUsdOf(req, res);
   if (Number.isFinite(metered) && metered > 0) return metered;
   if (priceFnOf(def) && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   return flat;
@@ -137,7 +133,7 @@ function settledPriceUsd(def, req, res) {
 // the buyer signed on an EVM rail (src/paid-price.js). Books and debts read
 // this, so a chain priced above the list records what moved.
 function paidUsdOf(def, req, res, caip2) {
-  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: res?.getHeader?.("X-Metered-Usd"), paymentHeader: paymentHeaderOf(req) });
+  return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: meteredUsdOf(req, res), paymentHeader: paymentHeaderOf(req) });
 }
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
@@ -241,6 +237,9 @@ function recordHangupDebt(req, res) {
     };
   }
   if (!row) return null;
+  // The idempotency middleware commits the undelivered answer under this
+  // charge, so a resend of the same payment is served and the debt voided.
+  req.__a402HangupDebt = row;
   // Why it was not forgiven, when a ticket was refused ("lasting effect",
   // "payer budget", ...); nothing for the residual window, where it was.
   // Stored on the row: the refund planner holds a budget denial (a repeat
@@ -305,7 +304,7 @@ import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
-import { cdnClientIpMiddleware, cdnProxyEnabled } from "./cdn-client-ip.js";
+import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -593,7 +592,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
-import { mountMcp } from "./mcp-http.js";
+import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
@@ -623,6 +622,7 @@ import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamC
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
+import { routerPurchasesSnapshot, routerPurchaseStore } from "./router-purchases.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "./shared-paytos.js";
 import { paysThirdParty } from "./third-party-routes.js";
 import { ncTaxReport, NC_TAXABLE_SLUGS, monthBounds } from "./nc-sales-tax.js";
@@ -809,6 +809,9 @@ const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 // Display/branding only — the x402 payTo is always the resolved 0x address.
 const WALLET_ENS = process.env.WALLET_ENS || "agent402.base.eth";
 const NETWORK = process.env.NETWORK || "base";
+// A payment header counts as a payment attempt (the unpaid-quote limiters,
+// the gateway cache) only when it names a network this server sells on.
+registerOfferedNetworks(enabledNetworks(NETWORK).map((n) => PAY_NETWORKS[n]).filter(Boolean));
 const FREE_MODE = process.env.FREE_MODE === "true";
 // FR4-06: fail fast on a partial render-worker config (one of URL/token set).
 assertWorkerConfig();
@@ -1379,6 +1382,9 @@ configureSellerFunding({ cleared: selfFundingClearedStore(), skip: (w) => shared
 // (src/outbound-destinations.js): read at boot so the first word on
 // /api/gateway-status is the stored body, not an empty memory.
 outboundDestinationStore().load();
+// The router's own purchases (src/router-purchases.js): read at boot, so the
+// first evidence build after a deploy deducts what was bought before it.
+routerPurchaseStore().load();
 function buildChainProven() {
   const econ = economySnapshotCached();
   return econ?.topMerchants?.length ? provenByChain({ sellers: routableSellerSummaries(), merchants: econ.topMerchants }) : new Map();
@@ -1406,6 +1412,9 @@ function buildEvidenceBindingByOrigin({ chainProven }) {
     // chain-join figures count the same payments and are disregarded (at any
     // other wallet they are reduced by what its own scan netted).
     circularWallets: getLeaderboardCircularWallets().wallets,
+    // The router's own purchases at each origin's wallet come off its Bazaar
+    // figures: what we paid a seller is never that seller's proof.
+    routerPurchases: routerPurchasesSnapshot(),
     minSettled: SOR_MIN_SETTLED_TX,
     minPayers: SOR_MIN_DISTINCT_PAYERS,
   });
@@ -1670,7 +1679,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .map((r) => ({
         seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
         price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
-        networks: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="], settled: r.verifs,
+        networks: [PAY_NETWORKS.algorand], settled: r.verifs,
         // Only a row whose count we read from the chain ourselves. A
         // facilitator-witnessed row ("both"/undefined) keeps GoPlausible's
         // count, so comparing its advertised address against the live one
@@ -2435,12 +2444,24 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 // secret (CDN_ORIGIN_SECRET) for its CF-Connecting-IP to count.
 const CDN_PROXY_ON = cdnProxyEnabled();
 if (CDN_PROXY_ON) {
-  app.use(cdnClientIpMiddleware());
+  // The unauthenticated-peer count behind the cdnOrigin word spans the
+  // replicas through the shared limiter store, as the operator-auth
+  // failure count does (the store's own word reports a write that fails).
+  app.use(cdnClientIpMiddleware({
+    shared: sharedLimitsEnabled() ? {
+      windowAdd: (...a) => sharedLimitsWrite("cdn-origin", sharedLimits.windowAdd(...a)),
+      windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
+    } : null,
+  }));
   app.use(cdnSyncDeadlineMiddleware());
 }
 // Paid answers, every 402 and operator surfaces are never kept by a shared
 // cache (src/paid-no-store.js).
 app.use(paidNoStoreMiddleware());
+// Browser security headers on every answer, ahead of every route (the
+// email-link routes under /followups and /alerts are registered early; the
+// PostHog proxy sets its own nosniff as well).
+app.use(securityHeaders());
 // Server-side memo for public surfaces whose body is built from SQLite
 // aggregates (revenue, sales, status, proof). A Cache-Control header only
 // asks browsers to reuse a response; every crawler and bot hit still rebuilt
@@ -2787,6 +2808,22 @@ app.get("/followups/stop", async (req, res) => {
   res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
 });
 app.post("/followups/stop", async (req, res) => { const r = await _followups.stopAsync(String(req.query.id || ""), String(req.query.k || "")); if (r.reason === "unavailable") return emailLinkUnavailable(res, false); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+// Every /__operator answer: no-store (operator pages carry lead PII, revenue
+// figures and session state; no browser-history cache, shared proxy or CDN may
+// retain them), and the browser session read from the shared store (a cookie
+// minted on another container) before any gate looks at it. Registered ONCE,
+// ahead of the first operator route in this file: a route registered before
+// this middleware would answer 404 to a session the other container minted,
+// and each such refusal counts as a wrong credential. The names it reads
+// (OP_SESSION_SHARED, syncOperatorSession) are defined with the operator auth
+// below; the callback runs at request time, after they init.
+app.use("/__operator", (req, res, next) => {
+  res.set("Cache-Control", "no-store, private");
+  res.set("Pragma", "no-cache");
+  res.set("Vary", "Cookie, Authorization");
+  if (!OP_SESSION_SHARED) return next();
+  syncOperatorSession(req).then(() => next(), () => next());
+});
 app.get("/__operator/followups.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json(_followups.stats());
@@ -2880,6 +2917,7 @@ app.post("/__operator/alerts/run", async (req, res) => {
 const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
 
 let _subs = null;
+let _humanCheckout = null; // wired below (card report checkout); read by the webhook hook and the status word
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
     stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
@@ -2888,10 +2926,19 @@ try {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
     },
-    // Credit-pack sessions: mint + email the key from the webhook too (claim is
-    // idempotent; the thanks page then shows "claimed"). _credits is wired below.
-    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id) : null),
-    onChargeReversed: (paymentIntent, type) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded") : null),
+    // One-shot payment sessions are fulfilled from the webhook too, so a buyer
+    // whose success redirect never loaded still gets what they paid for:
+    // credit packs mint + email the key (claim is idempotent; the thanks page
+    // then shows "claimed"); card reports start their generation (fulfill is
+    // claim-guarded, so a later /r/ visit polls the same job). _credits and
+    // _humanCheckout are wired below.
+    onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id)
+      : session?.metadata?.product && _humanCheckout ? _humanCheckout.fulfill(session.id) : null),
+    // A refunded or disputed pack payment: the refunded amount leaves the key's
+    // balance; the key is disabled once the payment is fully reversed.
+    onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
+    // A dispute that closed in our favor gives the key it disabled back.
+    onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -3353,8 +3400,6 @@ app.use(rugcheckPauseMiddleware(
   Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
 ));
 
-app.use(securityHeaders());
-
 // Free, unauthenticated routes
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
 // the top nav doesn't re-render the world every time. stale-while-revalidate
@@ -3428,7 +3473,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorAuthed(req)) {
+  if (!operatorElevated(req)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3561,9 +3606,10 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorAuthed(req);
-  // The wrong-credential count every replica contributed to, when shared.
-  await refreshOperatorAuthShared();
+  const full = operatorElevated(req);
+  // The wrong-credential and unauthenticated-CDN-peer counts every replica
+  // contributed to, when shared.
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3664,12 +3710,25 @@ app.get("/api/gateway-status", async (req, res) => {
     // Money we owe a buyer (src/refund-ledger.js): "owed" once any buyer's
     // debt has stood past REFUND_OWED_NOTICE_MINUTES (default 15), "aging"
     // when one has waited past REFUND_OWED_ALARM_HOURS, "stuck" when a row
-    // sits mid-send.
+    // sits mid-send. A card report refund the store could not issue
+    // (src/human-checkout.js owedRefunds, listed on
+    // /__operator/human-checkout.json) is owed too, on the same notice and
+    // aging; "unknown" when that list cannot be read.
     // One word publicly, so the status Worker can page; counts for the operator.
-    refundsOwed: (() => {
+    refundsOwed: await (async () => {
       const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
-      const r = refundAlarmStatus({ owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48, noticeMinutes: Number.isFinite(notice) && notice >= 0 ? notice : 15 });
-      return full ? r : { status: r.status };
+      const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
+      const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
+      const r = refundAlarmStatus({ owedHours, noticeMinutes });
+      const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
+      const ages = (card || []).map((x) => Date.now() - Date.parse(x.at)).filter((a) => Number.isFinite(a));
+      const cardOwed = ages.filter((a) => a >= noticeMinutes * 60_000).length;
+      const cardAging = ages.filter((a) => a >= owedHours * 3600_000).length;
+      const status = r.status === "stuck" ? "stuck"
+        : r.status === "aging" || cardAging ? "aging"
+          : r.status === "owed" || cardOwed ? "owed"
+            : card === null ? "unknown" : r.status;
+      return full ? { ...r, status, cardOwedCount: card === null ? null : cardOwed, cardAgingCount: card === null ? null : cardAging } : { status };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a
@@ -3684,6 +3743,14 @@ app.get("/api/gateway-status", async (req, res) => {
     // POST /__operator/credits/refusal-refunded. A word only; the session ids
     // are on /__operator/credits.json.
     creditsRefunds: _credits ? await _credits.refusalsToRefund().then((l) => ({ status: l.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
+    // CDN-range peers that reached the origin without the shared origin
+    // secret (src/cdn-client-ip.js): with the resolver on, each such request
+    // is keyed on the edge address instead of its client, so a missing or
+    // rotated CDN_ORIGIN_SECRET folds the per-address controls onto a few
+    // addresses. ok / unauthenticated (past the alert count in the hour,
+    // counted across replicas) / off; the count, the threshold and whether
+    // a secret is configured for the operator.
+    cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
     // toolFailures and upstreamHealth read ok / degraded / failing over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
@@ -4146,9 +4213,9 @@ app.get("/api/revenue/mpp", (req, res) => {
   try {
     // Itemized rows (tool + price per settlement) are operator-only; everyone
     // else gets the adoption aggregate plus the tx hashes that prove it.
-    const authed = operatorAuthed(req);
+    const authed = operatorElevated(req);
     res.set("Cache-Control", authed ? "no-store, private" : "public, max-age=60")
-      .set("Vary", "Cookie, Authorization")
+      .set("Vary", "X-Operator-Token")
       .json(authed ? mppSales({ detailed: true }) : memoSurface("revenue:mpp", 60_000, () => mppSales({ detailed: false })));
   } catch (e) {
     res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
@@ -4389,7 +4456,6 @@ if (!humanCheckoutEnabled()) {
   app.post("/api/subscribe", (_req, res) => res.status(503).json({ error: "Subscriptions are not configured on this server." }));
 }
 if (humanCheckoutEnabled()) {
-  let _humanCheckout;
   try {
     _humanCheckout = createHumanCheckout({
       stripe: new Stripe(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
@@ -4684,7 +4750,10 @@ app.get("/__operator/monitors.json", async (req, res) => {
   // The wallet-billed subscribers carry billing state the scheduler never sees
   // (paid period, charge failures, next retry), so they get their own block.
   const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: String(e?.message || e).slice(0, 200) })) : { enabled: false };
-  res.set("Cache-Control", "no-store").json({ ...(_monitors ? _monitors.status() : { enabled: false }), mppSubscriptions: mpp });
+  // Card subscriptions a dispute holds out of fulfillment: Stripe may still
+  // bill one whose dispute ended, so the operator sees each with its outcome.
+  const disputed = _subs ? _subs.listDisputed() : [];
+  res.set("Cache-Control", "no-store").json({ ...(_monitors ? _monitors.status() : { enabled: false }), disputedSubscriptions: disputed, mppSubscriptions: mpp });
 });
 // Close stale rail-canary subscriptions now (the boot sweep's lever). Canary
 // product only; a real subscriber is never touched. Status writes only.
@@ -5140,14 +5209,16 @@ if (STATUS_PROBE_TOKEN) {
 function statusProbeAuthed(req) {
   // The narrow credential first, so an observer carrying only it never touches
   // the operator limiter or the guessing counter.
-  const presented = getOperatorToken(req);
+  // Both routes are public, so the credential is read from X-Operator-Token
+  // only (see operatorElevated).
+  const presented = getOperatorToken(req, { headerOnly: true });
   // An IP whose operator budget is spent gets no comparison at all, of either
   // token (a refused probe is a gap on /status, never a recorded outage).
   if (presented && operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return false;
   if (presented && statusProbeTokenOk(presented)) return true;
   // Otherwise the operator token still works, and a WRONG credential is
   // rate-limited and counted exactly as it was before.
-  return operatorAuthed(req);
+  return operatorElevated(req);
 }
 // The one other thing STATUS_PROBE_TOKEN does: on GET /api/pow/challenge for
 // PROBE_POW_SLUG it gets the status Worker a low-difficulty challenge it can
@@ -5173,11 +5244,19 @@ function statusProbeChallengeAuthed(req) {
   }
   return false;
 }
-const getOperatorToken = (req) => {
-  const auth = req.headers["authorization"];
-  if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+// A Bearer in the credits-key shape (src/credits.js KEY_RE) is a buyer's
+// credential, never an operator token: a credits client attaches it to every
+// request, and reading it here would count each read as a wrong operator
+// credential. An MPP credential uses the `Payment` scheme and is never read.
+// `headerOnly`: X-Operator-Token alone, for the public surfaces that carry an
+// operator branch (see operatorElevated).
+const CREDITS_KEY_PREFIX = "a402_";
+const getOperatorToken = (req, { headerOnly = false } = {}) => {
   const hdr = req.headers["x-operator-token"];
-  if (typeof hdr === "string") return hdr;
+  if (typeof hdr === "string" && hdr) return hdr;
+  if (headerOnly) return "";
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Bearer ") && !auth.slice(7).startsWith(CREDITS_KEY_PREFIX)) return auth.slice(7);
   return "";
 };
 // Opaque, revocable, expiring operator sessions (security audit R-12). The
@@ -5327,19 +5406,28 @@ export function operatorAuthStatus(full = false) {
     ? { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok", failures1h: n, threshold: OPERATOR_AUTH_FAIL_ALERT }
     : { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok" };
 }
-function operatorAuthed(req) {
-  const presented = Boolean(getOperatorToken(req)) || Boolean(readCookie(req, OPERATOR_COOKIE));
+function operatorAuthed(req, { headerOnly = false } = {}) {
+  const token = getOperatorToken(req, { headerOnly });
+  const presented = Boolean(token) || Boolean(readCookie(req, OPERATOR_COOKIE));
   if (!presented) return false;  // anonymous: nothing to brute-force, nothing to count
   const ip = operatorAttemptIp(req);
   // Budget already spent: refuse without looking at the credential at all.
   if (operatorAttemptLimiter.peek(ip).limited) return false;
-  if (operatorTokenOk(getOperatorToken(req))) return true;         // header token
+  if (operatorTokenOk(token)) return true;         // header token
   if (operatorSessionValid(readCookie(req, OPERATOR_COOKIE))) return true; // browser session
   // Only a WRONG credential consumes budget.
   operatorAttemptLimiter.check(ip);
   noteOperatorAuthFailure();
   return false;
 }
+// The operator branch of a PUBLIC surface (/health, /api/gateway-status,
+// /api/index, the leaderboards, /api/analytics, /api/revenue): read from
+// X-Operator-Token only. On these routes an Authorization header is a buyer's
+// credential (a credits key, an MPP credential, a key for another service a
+// client attaches everywhere), so it is neither compared nor counted; the
+// session cookie is scoped to /__operator and never arrives here. The
+// operator routes keep the Bearer form for curl.
+function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -5354,17 +5442,9 @@ const operatorLoginLimiter = createRateLimiter("operator-login", { perMin: 5, pe
 // Secure on HTTPS, and an 8h absolute expiry.
 // F20: operator pages carry lead PII, revenue figures, and session state.
 // Forbid any browser-history cache, shared proxy, or future CDN from retaining
-// them. Registered before the routes so it runs on every /__operator response
-// (login form, dashboard, stats, wishes, logout).
-app.use("/__operator", (req, res, next) => {
-  res.set("Cache-Control", "no-store, private");
-  res.set("Pragma", "no-cache");
-  res.set("Vary", "Cookie, Authorization");
-  // A browser session minted on another container: read it from the shared
-  // store before the gate below looks at the cookie.
-  if (!OP_SESSION_SHARED) return next();
-  syncOperatorSession(req).then(() => next(), () => next());
-});
+// them. The middleware that sets this and syncs the session cookie is
+// registered once, ahead of the FIRST operator route (see the
+// /__operator app.use above the followups route), not here.
 app.get("/__operator/login", (_req, res) => {
   res.type("html").send(operatorLoginPage(BASE_URL));
 });
@@ -5411,7 +5491,9 @@ app.get("/__operator/stats", (req, res) => {
   // PostHog. This is the number to compare against a provider's own dashboard.
   // `daily` is the deploy-proof series (stats DB, UTC day buckets): the number
   // to sum over a billing month; the in-memory fields reset on every redeploy.
-  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
+  // mcpClientsSeenSinceBoot: the client names MCP sessions announce at
+  // initialize (caller-chosen strings, so operator-only).
+  res.json({ ...getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) }), mcpClientsSeenSinceBoot: mcpClientsSeenSinceBoot(), upstreamCalls: { brave: { ...braveCallMeter(), daily: getDailyUpstreamCalls("brave") } } });
 });
 // The intent pass is OPT-IN (?intent=1) and never runs on a default load.
 // It is a PAID third-party call per uncached row, on a request path, and the
@@ -7886,7 +7968,7 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorAuthed(req) ? 1000 : 200);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
   res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
@@ -7987,7 +8069,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorAuthed(req)) {
+  if (operatorElevated(req)) {
     return res.set("Cache-Control", "no-store").json(snap);
   }
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
@@ -8324,7 +8406,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorAuthed(req) ? 500 : 50;
+  const topCeiling = operatorElevated(req) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -9096,7 +9178,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorAuthed(req)));
+  res.json(redactAnalytics(data, operatorElevated(req)));
 });
 
 let __analyticsSlugSet = null;
@@ -9111,7 +9193,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorAuthed(req)) return res.redirect(302, "/status");
+  if (!operatorElevated(req)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9119,7 +9201,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorAuthed(req)), {
+  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.
@@ -9152,11 +9234,23 @@ const mcpMountOpts = {
   getLeaderboard: getLeaderboardSnapshot,
   // The MPP counterpart (src/mpp-leaderboard.js) behind sellers.list wire=mpp.
   getMppLeaderboard: mppLeaderboardSnapshot,
-  // MCP-served calls land on the same accounting + analytics rails as
-  // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
-  // tier), so the served-call counter records under "pow". Analytics gets
-  // the full meta (latency, errored). Cache hits don't flow through MCP
-  // today — that path bypasses the central HTTP dispatcher.
+  // Free-tier MCP calls (the handler runs in this process, PoW is the gate,
+  // no x402 settlement) land on the same accounting + analytics rails as
+  // direct-HTTP ones, under "pow". A PAID call is replayed to its own HTTP
+  // route (src/mcp-mpp.js), which books its sale, analytics row and failure
+  // count itself, so the connector never calls this for a paid outcome.
+  // Cache hits don't flow through MCP today; that path bypasses the central
+  // HTTP dispatcher.
+  // The one paid outcome no route books: a loopback that returned no answer
+  // (timed out, failed, or a task run that was aborted). Counted once here,
+  // under the connector's own class, so a connector that cuts every paid
+  // call off shows on the failure monitor; a probe's own cut-off is
+  // synthetic, as its route booking would be.
+  onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
+    const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
+    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic }); } catch { /* bookkeeping only */ }
+    logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
+  },
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
     // MCP doesn't carry an HTTP status, so we synthesize one for the split:
@@ -9166,9 +9260,11 @@ const mcpMountOpts = {
     // Probe detection: a 4xx with zero input keys = scanning/discovery call.
     const isProbe = meta.errored && status >= 400 && status < 500
       && Array.isArray(meta.inputKeys) && meta.inputKeys.filter((k) => k !== "slug").length === 0;
-    // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
-    // ride along — synthetic is always false here. Pass explicitly so future
-    // refactors don't accidentally let a stray truthy value through.
+    // The free path books here without reading the heartbeat marker, so
+    // synthetic is false for these outcomes. (The marker IS forwarded on the
+    // paid loopback, and the paid route classifies its own booking.) Pass
+    // explicitly so future refactors don't accidentally let a stray truthy
+    // value through.
     if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false, isProbe);
     const latencyMs = meta.latencyMs | 0;
     const errored = !!meta.errored;
@@ -9284,6 +9380,12 @@ app.get("/api/pricing", (_req, res) => {
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
       ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // The settlement premium a chain adds to every price quoted on it (the
+      // same map the accepts builder prices through, src/payments.js), for the
+      // offered chains that carry one: a client capping a call at the list
+      // price is refused there otherwise. The same helper feeds openapi,
+      // llms.txt and the connector's payment.info.
+      ...(() => { const offered = publicPremiumUsdByNetwork(); return Object.keys(offered).length ? { premiumUsdByNetwork: offered } : {}; })(),
       // The accept kinds each network's 402 carries, read from the live offer
       // (exact everywhere; upto where it is on; the Circle Gateway batched
       // kind where that option is on). Absent before the paywall is built.
@@ -9422,27 +9524,31 @@ const asyncJobs = createAsyncJobs({
   port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
+  // A job's debt books what the buyer paid: the gated price (list or the
+  // request's quote) on the chain the receipt names, or the meter's amount.
+  quoteOf: quotedPriceUsd,
+  paidOf: ({ basePriceUsd, receipt, meteredUsd, req }) => paidPriceUsd({ basePriceUsd, caip2: receipt?.network ?? null, meteredUsd, paymentHeader: paymentHeaderOf(req) }),
 });
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
+// Our own loopbacks pass both sync windows below: an async job's replay (its
+// marker, from a local socket; the async middleware below verifies it) and
+// the MCP connector's paid replay. Both windows are mounted before the async
+// marker exists, so this predicate is what decides for them.
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const isInternalReplay = (req) => isMcpLoopback(req)
+  || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOOPBACK_ADDRESSES.has(String(req.socket?.remoteAddress || "")));
 // Through the CDN proxy, a paid call to a route that can outlast the proxy's
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
-if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
+if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay }));
 // A paid call to a slow route sent without Prefer: respond-async (or a Prefer:
 // wait that covers the run budget) runs as a job when the client follows a 202
 // on its own, and is refused before any gate otherwise, so a client that gives
 // up early is never charged for an answer it cannot collect
-// (src/slow-sync-window.js). Our own loopbacks pass: an async job's replay
-// (its marker, from a local socket; the async middleware below verifies it)
-// and the MCP connector's paid replay.
-{
-  const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-  const isInternalReplay = (req) => isMcpLoopback(req)
-    || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOCAL.has(String(req.socket?.remoteAddress || "")));
-  app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
-}
+// (src/slow-sync-window.js).
+app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
@@ -9676,9 +9782,28 @@ app.use(createIdempotency({
   isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
   freeMode: FREE_MODE,
   implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
-  onReplay: (req, { implicit }) => {
+  onReplay: async (req, { implicit, charged }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
+    // The stored answer was charged but never delivered (the buyer left while
+    // it settled). Its debt is voided BEFORE the answer goes out, like the
+    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
+    // has already claimed or paid is not voided, and then the answer is not
+    // served either, so a buyer is served once, never both served and
+    // refunded. No row, or one already void, serves.
+    let voided = false;
+    try { voided = (await voidOwedOnClaim(charged.tx, "served on the resend of the same payment")) === true; } catch { voided = false; }
+    if (voided) { console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); return; }
+    let row = null;
+    try { row = await refundByEvidenceFresh(charged.tx); } catch { row = null; }
+    if (!row || row.status === "void") return;
+    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+    } };
   },
 }));
 
@@ -10549,7 +10674,10 @@ if (!FREE_MODE) {
     let closed = false, reserved = false;
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
-    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
+    // Priced at what this chain charges (the signed amount, or the gated
+    // price through the chain's premium and floor), so a ticket holds the
+    // charge it may forgive.
+    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
     if (closed || res.destroyed) {

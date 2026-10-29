@@ -42,6 +42,18 @@ const advisoryWarnings = [];
   const untouched = { createPaymentPayload: (pr) => pr.accepts.length };
   withNetworkPreference(untouched, []);
   ok(untouched.createPaymentPayload({ accepts }) === 2, "empty preference leaves the client untouched");
+  // Algorand mainnet is spelled two ways on the wire: the 32-character CAIP-2
+  // reference and the full base64 genesis hash. One preference matches both.
+  const algoAccepts = [{ network: "eip155:8453", a: "base" }, { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", a: "caip2" }, { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", a: "hash" }];
+  const algoSeen = [];
+  const algo = { createPaymentPayload: (pr) => { algoSeen.push(pr.accepts.map((x) => x.a)); return "ok"; } };
+  withNetworkPreference(algo, ["algorand"]);
+  algo.createPaymentPayload({ accepts: algoAccepts });
+  ok(JSON.stringify(algoSeen[0]) === '["caip2","hash"]', "an algorand preference matches the CAIP-2 id and the full-hash spelling");
+  const byHash = { createPaymentPayload: (pr) => { algoSeen.push(pr.accepts.map((x) => x.a)); return "ok"; } };
+  withNetworkPreference(byHash, ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]);
+  byHash.createPaymentPayload({ accepts: algoAccepts.slice(0, 2) });
+  ok(JSON.stringify(algoSeen[1]) === '["caip2"]', "a preference typed as the full hash still matches a seller's CAIP-2 accept");
 }
 
 // Offline: withPayeeAllowlist refuses a 402 whose payTo is not allowlisted -
@@ -285,7 +297,22 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.006 && paid === 0, `payNetworks ${JSON.stringify(payNetworks)} with no option on those chains counts the dearest of all ($0.006) and is refused over a $0.004 cap`);
       }
     }
-    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]]) {
+    {
+      // A seller spelling Algorand by its legacy genesis-hash id: a buyer who
+      // pays on "algorand" counts that accept as the one they pay, so the
+      // dearer Base accept beside it does not refuse the call.
+      const legacyAlgo = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
+        { scheme: "exact", network: "eip155:8453", amount: "6000", asset: BASE_USDC, payTo: "0xdead", extra: { name: "USD Coin" } },
+        { scheme: "exact", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", amount: "1000", asset: "31566704", payTo: "ALGOSELLER", extra: { name: "USDC" } } ] })).toString("base64");
+      let paid = 0;
+      const c = new Agent402({ baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.004, payNetworks: ["algorand"],
+        fetch: async () => { paid++; return okResp; },
+        fetchImpl: async () => ({ ok: false, status: 402, headers: new Headers({ "payment-required": legacyAlgo }), json: async () => ({}) }) });
+      c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.001" }]]);
+      let e = null; try { await c.call("cheap", {}); } catch (err) { e = err; }
+      ok(!e && paid === 1, `payNetworks ["algorand"] counts an accept spelled with the legacy genesis-hash id ($0.001), not the dearest of all ($0.006) (${e?.message || "served"})`);
+    }
+    for (const [name, caip2] of [["optimism", "eip155:10"], ["monad", "eip155:143"], ["celo", "eip155:42220"], ["avalanche", "eip155:43114"], ["sei", "eip155:1329"], ["stellar", "stellar:pubnet"], ["algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"]]) {
       ok(NETWORK_CAIP2[name] === caip2, `NETWORK_CAIP2 maps ${name} -> ${caip2}`);
     }
   }
@@ -310,24 +337,64 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "1e6" }) === null, "an amount that is not whole base units cannot be priced");
   }
 
-  // wallet, no signing guard: a capped wallet may sign any accept, so one it
-  // cannot price is refused before anything is signed
+  // wallet, no signing guard: the wallet may sign any accept, so an accept in
+  // an asset this client cannot price refuses the call before the wallet runs,
+  // whatever else the 402 offers; an offer priced in full pays at its dearest.
   {
-    const counters = { paid: 0, preflights: 0 };
-    const unknownOffer = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [
-      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead" },
-      { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } },
-    ] })).toString("base64");
-    const c = new Agent402({
-      baseUrl: "https://seller.example", cache: false, maxPerCallUsd: 0.1,
-      fetch: async () => { counters.paid++; return okResp; },
-      fetchImpl: async () => { counters.preflights++; return { ok: false, status: 402, headers: new Headers({ "payment-required": unknownOffer }), json: async () => ({}) }; },
-    });
-    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
-    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
-    ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset", `an accept in an unknown asset is refused under a cap (${e?.message})`);
-    ok(counters.paid === 0, "nothing was signed for it");
+    const mkOffer = (accepts) => Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64");
+    const unknown = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } };
+    const build = (offer, caps = { maxPerCallUsd: 0.1 }) => {
+      const counters = { paid: 0, preflights: 0 };
+      const c = new Agent402({
+        baseUrl: "https://seller.example", cache: false, ...caps,
+        fetch: async () => { counters.paid++; return okResp; },
+        fetchImpl: async () => { counters.preflights++; return { ok: false, status: 402, headers: new Headers({ "payment-required": offer }), json: async () => ({}) }; },
+      });
+      c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
+      return { c, counters };
+    };
+    const priced = (network, asset, amount) => ({ scheme: "exact", network, amount, asset, payTo: "0xdead" });
+    {
+      // The unknown accept listed FIRST is the one a stock x402 client picks.
+      const { c, counters } = build(mkOffer([unknown, priced("eip155:8453", BASE_USDC, "1000")]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 1, `an unknown-asset accept ahead of a priced Base accept refuses the call with no guard on the wallet (${e?.message})`);
+      ok(counters.preflights === 1 && counters.paid === 0, "refused on the preflight: the wallet fetch never ran");
+      ok(c.spendingSummary().calls === 0, "nothing was booked as spent");
+    }
+    {
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "1000"), unknown]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && counters.paid === 0, "the order does not matter: an unknown-asset accept behind the priced one refuses too");
+    }
+    {
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "1000"), priced("eip155:137", POLYGON_USDC, "2000")]));
+      const r = await c.call("chat", {});
+      ok(r && counters.paid === 1 && counters.preflights === 1, "an offer priced in full is paid under the cap");
+      ok(c.spendingSummary().dailyUsd === 0.002, `the ledger books the dearest accept, the one the wallet may sign (${c.spendingSummary().dailyUsd})`);
+    }
+    {
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "5000000"), priced("eip155:137", POLYGON_USDC, "1000")]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && counters.paid === 0, `the cap is checked against the dearest priced accept ($5 over $0.1: ${e?.limit})`);
+    }
+    {
+      const { c, counters } = build(mkOffer([unknown, { ...unknown, network: "eip155:999" }]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 2, `an offer with no priceable accept is refused under a cap (${e?.message})`);
+      ok(counters.paid === 0, "nothing was signed for it");
+    }
   }
+}
+
+// Offline: a chain name resolves through the known-asset table to every id
+// the chain is spelled with; the short-name map agrees with it.
+{
+  const { NETWORK_NAMES, networkIdsOf, KNOWN_ASSETS } = await import("./index.js");
+  const listed = new Set(Object.values(NETWORK_NAMES).flat());
+  ok(Object.keys(KNOWN_ASSETS).every((id) => listed.has(id)), "every network in the known-asset table belongs to a named chain");
+  ok(Object.entries(NETWORK_CAIP2).every(([name, id]) => NETWORK_NAMES[name]?.[0] === id), "NETWORK_CAIP2 names each chain's canonical id");
+  ok(JSON.stringify(networkIdsOf("Algorand")) === JSON.stringify(NETWORK_NAMES.algorand) && networkIdsOf("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=").length === 2 && JSON.stringify(networkIdsOf("eip155:1")) === '["eip155:1"]' && networkIdsOf("").length === 0, "a name, either spelling of a chain, an unknown id and an empty preference resolve as expected");
 }
 
 // Offline: the caps hold on the payment that is SIGNED. A real @x402/core
@@ -417,11 +484,36 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", "5000000 base units of USDC declared as 18 decimals is still $5, and is refused");
   }
   // An unknown asset is never signed under the guard.
+  const odd = [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1", extra: { name: "Odd", version: "1", decimals: 18 } }];
   {
-    const odd = [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1", extra: { name: "Odd", version: "1", decimals: 18 } }];
     const { c, seen } = build({ preflight: cheap, paid: odd, maxPerCallUsd: 0.1 });
     let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
     ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", `an accept in an unknown asset is not signed (${e?.message})`);
+  }
+  // An unknown asset listed FIRST beside a priced accept. Control: with no cap
+  // and no guard the stock client signs the first accept its scheme serves,
+  // the unknown one, for an amount this client never priced.
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].amount === "1", "control: a stock x402 client signs the unknown-asset accept when it is listed first");
+  }
+  // So a capped wallet with no guard is refused before its fetch runs ...
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false, maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 1, `without the guard, a priced accept behind an unknown one does not make the 402 payable (${e?.message})`);
+    ok(seen.preflights === 1 && seen.unpaid === 0 && seen.signed.length === 0, "refused on the preflight: the wallet fetch never ran and nothing was signed");
+  }
+  // ... and the same 402 under the guard pays the accept that can be priced.
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].network === "eip155:8453" && seen.signed[0].amount === "10000", "with the guard, the unknown-asset accept is dropped and the priced one is signed");
+    ok(c.spendingSummary().dailyUsd === 0.01, `the ledger books the signed amount (${c.spendingSummary().dailyUsd})`);
   }
   // The rolling cap is checked at signing against what is left.
   {

@@ -100,7 +100,7 @@ let out;
 try { out = await buyOnce(); }
 catch (e) {
   if (!/HTTP 5\d\d/.test(String(e?.message))) throw e;
-  console.warn(`first buy failed (${e.message}) - not charged, retrying once in 5 s`);
+  console.warn(`first buy failed (${e.message}) - not charged on x402, retrying once in 5 s`);
   await new Promise((r) => setTimeout(r, 5000));
   out = await buyOnce();
 }

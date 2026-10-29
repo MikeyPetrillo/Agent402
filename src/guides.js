@@ -157,7 +157,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.13.21\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.13.22\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -297,8 +297,8 @@ quote yourself: \`curl -i -X POST http://localhost:3000/api/summarize\` answers
 
 1. **x402 settles after your handler runs, and only on success.**
    \`@x402/express\` verifies the payment, runs the handler, and settles only a
-   response below 400; an error answer cancels settlement, so the buyer is not
-   charged. You still paid for any upstream work that failed, so anything that
+   response below 400; an error answer cancels settlement, so the buyer is
+   not charged on x402. You still paid for any upstream work that failed, so anything that
    can't be served reliably (upstreams that block datacenter IPs, flaky APIs)
    should be removed, not monetized.
 2. **Discovery is half the product.** Publish a machine-readable catalog
@@ -670,8 +670,8 @@ pays Base sellers, and the same holds for its **Solana**, **Algorand** and
 **Tempo** (MPP) legs, each paid from this server's spending wallet on that
 chain. The buyer's settlement funds the float on the same rail - and if
 you pay on a chain without a spending wallet behind it, you get an honest 409
-naming the supported chains, and **you are not charged** (a rejected request
-cancels x402 settlement by design).
+naming the supported chains, and **you are not charged on x402** (a rejected
+request cancels settlement by design).
 
 ## A receipt
 
@@ -685,7 +685,7 @@ A router receipt looks like this (the seller and transaction are placeholders):
   "seller": "https://seller.example",
   "external": true,
   "settleTx": "<algorand transaction id>",
-  "settleNetwork": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  "settleNetwork": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
   "resolvedBy": "task-external"
 }
 \`\`\`
@@ -696,8 +696,9 @@ provenance stays explicit.
 
 ## Why this is safe to build on
 
-- **Failures are not charged.** Any 4xx/5xx - no match, over-cap, seller
-  down - cancels your settlement. You pay only for delivered results.
+- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
+  down - cancels your settlement, and a Tempo transfer sent before the call is
+  recorded as owed. You pay only for delivered results.
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
@@ -1220,7 +1221,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.21
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.22
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -1232,7 +1233,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -1255,7 +1256,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -1414,7 +1415,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -1440,7 +1441,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -1467,7 +1468,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -1505,7 +1506,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -1529,7 +1530,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.13.21"]
+args = ["-y", "agent402-mcp@0.13.22"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -1573,7 +1574,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.21"],
+      "args": ["-y", "agent402-mcp@0.13.22"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }

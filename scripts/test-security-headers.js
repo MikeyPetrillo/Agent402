@@ -111,6 +111,14 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   const exp = (txt.match(/^Expires:\s*(.+)$/m) || [])[1];
   ok(exp && new Date(exp).getTime() > Date.now(), "security.txt Expires is in the future");
 
+  // The email-link routes are registered ahead of most of the file; the
+  // security headers are mounted ahead of them too, so an HTML answer there
+  // carries the full set.
+  for (const p of ["/followups/stop?id=x&k=y", "/alerts/unsubscribe?id=x&k=y"]) {
+    const r = await fetch(`${base}${p}`);
+    ok(ALWAYS.every((h) => r.headers.get(h)) && DOC.every((h) => r.headers.get(h)), `${p}: an email-link page carries every security header (${r.status})`);
+  }
+
   // A402-11: public /health hides internal wiring.
   const health = await (await fetch(`${base}/health`)).json();
   ok(health.ok === true, "public /health still reports ok");

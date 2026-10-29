@@ -6,7 +6,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.21`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.22`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -122,8 +122,8 @@ https://agent402.tools/mcp
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.13.21
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.21
+npx -y agent402-mcp@0.13.22
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.22
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -227,7 +227,7 @@ also works, see [For humans](#for-humans-reports-and-monitors)):
 | `POST /v1/auto/chat/completions` | $0.01 | **no model needed** - deterministic eval-ranked routing (code / reasoning / long / general), optional `quality: fast \| balanced \| best` at the same price, decision disclosed via `agent402_router` |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama…) |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet, gemini pro, grok) |
-| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus and claude fable 5.1) |
+| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3, claude opus and claude fable 5.1) |
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
@@ -322,7 +322,7 @@ curl -X POST https://agent402.tools/api/decide \
 - **The fee comes back.** A decision paid with a wallet returns its fee as a 24-hour credit toward
   `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps bought from the
   seller and resold at the seller's price plus a disclosed 5% markup. Spend stops at the budget,
-  fallbacks are tried in order, and a run where no step succeeds is not charged. Because it can
+  fallbacks are tried in order, and a run where no step succeeds is not charged on x402. Because it can
   buy from outside sellers, execute is paid from a wallet (x402, or MPP on a chain).
 - **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
   whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).

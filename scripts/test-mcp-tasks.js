@@ -24,12 +24,15 @@ process.env.AGENT402_MCP_REQ_PER_MIN = "1000000";
 process.env.AGENT402_MCP_REQ_PER_HOUR = "1000000";
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_SYNC_ON_START = "false";
+// Small enough that one test's result cannot be retained (every other result
+// here is a few hundred bytes).
+process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES = "4096";
 
 import express from "express";
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Challenge } from "mppx";
+import { Challenge, Receipt } from "mppx";
 
 const TMP = mkdtempSync(join(tmpdir(), "a402-mcp-tasks-"));
 process.env.REFUND_DB_DIR = TMP;
@@ -65,6 +68,15 @@ const CATALOG = {
   // A slow paid route that is NOT a composite (src/slow-routes.js): it runs
   // as a task too, and reports its own stage.
   "POST /api/image-gen-premium": def("image-gen-premium", "POST /api/image-gen-premium", "$0.12", { asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75, basisSeconds: 40 } }),
+  // A long-running slug (src/composite-spend-guard.js LONG_RUNNING_SLUGS, as
+  // image-gen-premium is): its 402 never offers Tempo, so no Tempo transfer
+  // can reach it.
+  "POST /api/decide/execute": def("decide-execute", "POST /api/decide/execute", "$0.05", { asyncProfile: { slow: true, expectedSeconds: 60, maxSeconds: 240, basisSeconds: 60 } }),
+  // A slow paid route that is NOT long-running: its 402 offers Tempo.
+  "POST /api/slow-paid": def("slow-paid", "POST /api/slow-paid", "$0.10", { asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75, basisSeconds: 40 } }),
+  // An identity-bound route (src/payments.js isIdentityBoundRoute): its 402
+  // never offers Tempo, so no Tempo transfer can reach it.
+  "GET /api/my-usage": def("my-usage", "GET /api/my-usage", "$0.001"),
   // uuid is free AND deliberately slow: the free path must stay blocking
   // regardless of how long it runs.
   "GET /api/uuid": def("uuid", "GET /api/uuid", "$0.001", { handler: async () => { await new Promise((r) => setTimeout(r, 600)); return { ok: true, slug: "uuid", slow: true }; } }),
@@ -92,8 +104,8 @@ const jsonRes = (status, body, headers = {}) => ({
 // call records the abort signal so cancellation can be observed.
 const calls = [];
 let plan = {};
-async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey }) {
-  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey };
+async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader }) {
+  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader };
   calls.push(rec);
   const p = plan[d.slug] || { delayMs: 0, res: jsonRes(200, { ok: true, slug: d.slug }) };
   // What the real paid route does with the progress key: the middleware finds
@@ -118,9 +130,13 @@ async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey }) 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 const STORE_DIR = join(TMP, "store");
+// What the connector books on its own: a paid loopback that returned no
+// answer (server.js feeds this to the failure monitor).
+const cutoffs = [];
 mountMcp(app, CATALOG, {
   baseUrl: "http://localhost", isComputePayable: (d) => d.slug === "uuid",
   mppLoopback: stubLoopback, taskStoreDir: STORE_DIR,
+  onPaidCutoff: (slug, info) => cutoffs.push({ slug, ...info }),
 });
 const server = app.listen(0);
 await new Promise((r) => server.once("listening", r));
@@ -249,6 +265,126 @@ ok(unpaid.error?.code === -32042, "an unpaid composite gets the normal -32042 pa
 ok(Array.isArray(unpaid.error?.data?.challenges) && unpaid.error.data.challenges.length > 0, "that ask carries live challenges");
 ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that has not cleared the paywall");
 
+// A PAID blocking call to a slow route from a client that did not declare the
+// tasks extension is refused BEFORE the loopback: served blocking, the run
+// would be cut after the gate passed and its charge owed. The refusal carries
+// the HTTP route's own code and names both ways forward. Unpaid, the same call
+// still reaches the loopback for its 402; a route without a run budget past
+// the connector's wait is served blocking as before.
+{
+  plan = { "image-gen-premium": { delayMs: 0, res: jsonRes(200, { never: true }) } };
+  const nCalls = calls.length;
+  const paidMeta = { "org.paymentauth/credential": "Payment not-a-real-credential" };
+  const refused = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } }, _meta: paidMeta });
+  const text = String(refused.result?.content?.[0]?.text || "");
+  ok(refused.result?.isError === true && /^respond_async_required:/.test(text) && /refused before any payment was taken/.test(text), `a paid blocking call to a slow route without the tasks extension is refused as respond_async_required (${text.slice(0, 80)})`);
+  ok(calls.length === nCalls, "...before any loopback ran (nothing was verified, run or charged)");
+  ok(text.includes(TASKS_EXTENSION) && /Prefer: respond-async/.test(text) && /POST \/api\/image-gen-premium/.test(text), "the refusal names the tasks extension, the HTTP header and the route");
+  const unpaid = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "image-gen-premium", params: { prompt: "x" } } });
+  ok(calls.length === nCalls + 1 && !/respond_async_required/.test(JSON.stringify(unpaid)), "an unpaid blocking call to the same route still reaches the loopback (for its 402)");
+  const quick = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  ok(calls.length === nCalls + 2 && !/respond_async_required/.test(JSON.stringify(quick)), "a paid blocking call to a route without a long run budget is served through the loopback as before");
+
+  // The "no payment was taken" line names the Tempo push exception only
+  // where the route's 402 offers Tempo at all (src/mpp-tempo.js
+  // tempoOfferedFor): a long-running slug never does, so its refusal
+  // mentions no Tempo transfer.
+  const { PUSH_EXCEPTION } = await import("../src/mcp-http.js");
+  const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
+  ok(isLongRunningSlug("image-gen-premium") && isLongRunningSlug("decide-execute") && !isLongRunningSlug("slow-paid"), "image-gen-premium and decide-execute are long-running (no Tempo offer); slow-paid is not");
+  ok(/refused before any payment was taken\.$/.test(text) && !/Tempo/.test(text), `the refusal for a long-running slug names no Tempo transfer (${text.slice(-80)})`);
+  const lr = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "decide-execute", params: { q: "x" } }, _meta: paidMeta });
+  const lrText = String(lr.result?.content?.[0]?.text || "");
+  ok(/^respond_async_required:/.test(lrText) && /refused before any payment was taken\.$/.test(lrText) && !/Tempo/.test(lrText), `decide-execute's refusal names no Tempo transfer either (${lrText.slice(-80)})`);
+  const offered = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "slow-paid", params: { q: "x" } }, _meta: paidMeta });
+  const offeredText = String(offered.result?.content?.[0]?.text || "");
+  ok(/^respond_async_required:/.test(offeredText) && offeredText.endsWith(`refused before any payment was taken${PUSH_EXCEPTION}.`), `the refusal for a slow route whose 402 offers Tempo carries the push exception (${offeredText.slice(-120)})`);
+  ok(calls.length === nCalls + 2, "...and both were refused before any loopback ran");
+
+  // A Tempo PUSH credential names a transfer that is already final on chain.
+  // Refused here it would stay unclaimed and unbooked, so it is let through
+  // to the loopback, where the gate claims it (and an answer the connector
+  // stops waiting for is booked as owed by the route).
+  plan = { "slow-paid": { delayMs: 0, res: jsonRes(200, { data: [{ b64_json: "AA" }] }) } };
+  const pushChallenge = JSON.parse(JSON.stringify(Challenge.from({
+    realm: "agent402.tools", method: "tempo", intent: "charge", expires: new Date(Date.now() + 300_000),
+    request: { amount: "120000", currency: "0x20C000000000000000000000b9537d11c60E8b50", decimals: 6, recipient: "0x0000000000000000000000000000000000000001", methodDetails: { chainId: 4217, credentialTypes: ["hash"] } },
+    secretKey: "test-secret-key-for-offline-tasks",
+  })));
+  const pushMeta = { "org.paymentauth/credential": { challenge: pushChallenge, payload: { type: "hash", hash: `0x${"ab".repeat(32)}` } } };
+  const pushed = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "slow-paid", params: { prompt: "x" } }, _meta: pushMeta });
+  ok(calls.length === nCalls + 3 && calls[calls.length - 1].slug === "slow-paid" && !/respond_async_required/.test(JSON.stringify(pushed)), "a blocking call carrying a Tempo push credential to a slow route is NOT refused: the loopback runs so the gate claims the transfer");
+  ok(pushed.result?.isError !== true && pushed.result?.structuredContent?.result?.data?.[0]?.b64_json === "AA", "...and its answer comes back as the ordinary tool result");
+  const { pushHashOf } = await import("../src/mpp-tempo.js");
+  ok(pushHashOf(calls[calls.length - 1].credentialHeader) === `0x${"ab".repeat(32)}`, "the loopback received the push credential itself: a paid call let through, not an unpaid one reaching its 402");
+
+  // The "not charged" line of an HTTP >= 400 answer names the Tempo push
+  // exception only where the route's 402 offers Tempo: a slow route that does
+  // carries it (a push transfer can reach it), as does any Tempo-offered
+  // route's 5xx; an identity-bound route never does.
+  plan = { "slow-paid": { delayMs: 0, res: jsonRes(400, { error: "bad input" }) }, "my-usage": { delayMs: 0, res: jsonRes(400, { error: "bad input" }) }, whois: { delayMs: 0, res: jsonRes(503, { error: "upstream" }) } };
+  const pushedBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "slow-paid", params: { prompt: "x" } }, _meta: pushMeta });
+  const pushedBadText = String(pushedBad.result?.content?.[0]?.text || "");
+  ok(pushedBad.result?.isError === true && /HTTP 400 - not charged/.test(pushedBadText) && pushedBadText.includes(PUSH_EXCEPTION), `a 4xx from a slow route whose 402 offers Tempo carries the push exception (${pushedBadText.slice(0, 160)})`);
+  const whoisBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  const whoisBadText = String(whoisBad.result?.content?.[0]?.text || "");
+  ok(whoisBad.result?.isError === true && /HTTP 503 - not charged \(settlement runs only after a successful handler\)/.test(whoisBadText) && whoisBadText.includes(PUSH_EXCEPTION), `a 5xx from a route whose 402 offers Tempo carries it too (${whoisBadText.slice(0, 160)})`);
+  const usageBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "my-usage", params: {} }, _meta: paidMeta });
+  const usageBadText = String(usageBad.result?.content?.[0]?.text || "");
+  ok(usageBad.result?.isError === true && /HTTP 400 - not charged: /.test(usageBadText) && !usageBadText.includes(PUSH_EXCEPTION) && !/Tempo/.test(usageBadText), `a 4xx from an identity-bound route names no Tempo transfer (${usageBadText.slice(0, 160)})`);
+}
+
+// The outcomes no route books, because the loopback returned no answer, are
+// booked by the connector once each: a blocking loopback that timed out, and
+// a task run the connector stopped waiting on. Every answered call, and a
+// cancel the buyer asked for, books nothing here.
+{
+  const paidMeta = { "org.paymentauth/credential": "Payment not-a-real-credential" };
+  cutoffs.length = 0;
+  plan = { whois: { delayMs: 0, throw: Object.assign(new Error("the loopback timed out"), { name: "TimeoutError" }) } };
+  const timedOut = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  ok(timedOut.result?.isError === true && /did not finish within \d+s/.test(String(timedOut.result?.content?.[0]?.text || "")), "a blocking paid loopback that timed out is told so");
+  ok(cutoffs.length === 1 && cutoffs[0].slug === "whois" && cutoffs[0].statusCode === 504 && cutoffs[0].errorMessage === "paid loopback timed out", `...and is booked once as a connector timeout (${JSON.stringify(cutoffs)})`);
+  cutoffs.length = 0;
+  plan = { whois: { delayMs: 0, res: jsonRes(200, { who: true }) } };
+  await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  plan = { whois: { delayMs: 0, res: jsonRes(400, { error: "bad input" }) } };
+  await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  ok(cutoffs.length === 0, "an answered paid call (200 or 4xx) is booked by the route it reached, never here");
+  // A task run the connector stopped waiting on (not a cancel): aborted
+  // after the gate window, with no answer.
+  plan = { research: { delayMs: TASK_GATE_MS_TEST * 2, throw: Object.assign(new Error("run cut"), { name: "AbortError" }) } };
+  const cut = await callComposite("research");
+  ok(cut.result?.resultType === "task", "a run that the connector will stop waiting on is handed back as a task first");
+  await sleep(TASK_GATE_MS_TEST * 2 + 200);
+  const cutRec = await rpc("tasks/get", { taskId: cut.result.taskId, _meta: CLIENT_CAPS });
+  ok(cutRec.result?.status === "failed", "the aborted run ends the task failed");
+  ok(cutoffs.length === 1 && cutoffs[0].slug === "research" && cutoffs[0].statusCode === 504 && cutoffs[0].errorMessage === "task run aborted", `...and is booked once as an aborted task run (${JSON.stringify(cutoffs)})`);
+  cutoffs.length = 0;
+}
+
+// A throw inside the completion path itself (after the run answered: reading
+// its headers, booking it, writing the record) ends the task FAILED with a
+// short reason, never a handle that polls "working" until its TTL, and the
+// fault stays out of the buyer-visible text.
+{
+  let reads = 0;
+  const brokenHeaders = { get: () => { if (++reads > 1) throw new Error("header store broke: internal detail"); return null; } };
+  plan = { research: { delayMs: TASK_GATE_MS_TEST * 2, res: { status: 200, headers: brokenHeaders, contentType: "application/json", json: { report: "fine" } } } };
+  cutoffs.length = 0;
+  const broke = await callComposite("research");
+  ok(broke.result?.resultType === "task", "the run that will break the completion path is handed back as a task first");
+  await sleep(TASK_GATE_MS_TEST * 2 + 300);
+  const brokeRec = await rpc("tasks/get", { taskId: broke.result.taskId, _meta: CLIENT_CAPS });
+  ok(reads > 1, "the completion path threw after the answer was translated (test harness sanity)");
+  ok(brokeRec.result?.status === "failed", `a throw inside the completion path ends the task failed, not working (${brokeRec.result?.status})`);
+  const brokeMsg = String(brokeRec.result?.statusMessage || "");
+  ok(/could not be recorded/.test(brokeMsg) && /may still have completed and been charged/.test(brokeMsg) && !/header store broke|internal detail/.test(brokeMsg), `the reason is short and carries the money story, never the fault's own text (${brokeMsg.slice(0, 100)})`);
+  ok(cutoffs.length === 0, "the run answered, so it is not booked as a connector cut-off");
+  await sleep(200);
+  ok((await rpc("tasks/get", { taskId: broke.result.taskId, _meta: CLIENT_CAPS })).result?.status === "failed", "...and the record stays failed");
+}
+
 // A fast success inside the gate window is answered synchronously, unchanged.
 plan = { research: { delayMs: 0, res: jsonRes(200, { quick: true }) } };
 const beforeFast = readdirSync(STORE_DIR).length;
@@ -274,6 +410,62 @@ ok(/recorded as owed in our refund ledger and repaid after review/.test(String(c
 await sleep(300);
 const stillCancelled = await rpc("tasks/get", { taskId: toCancel.result.taskId, _meta: CLIENT_CAPS });
 ok(stillCancelled.result?.status === "cancelled", "a terminal task never transitions again, even if the run reports back late");
+ok(cutoffs.length === 0, "a cancel the buyer asked for is not a connector cut-off: nothing is booked for it");
+
+// ------------------------------------------- 5b. a lost result's debt
+// A task whose settled 200 cannot be retained books the debt with the x402
+// settle receipt the loopback's 200 carries (proof of charge, chain, payer),
+// at what the credential signed on that chain (the quote its 402 minted,
+// premium and floor included), never the list price.
+{
+  const { listRefunds, refundLedgerFlush } = await import("../src/refund-ledger.js");
+  const payer = `0x${"ab".repeat(20)}`;
+  const tx = `0x${"cd".repeat(32)}`;
+  const challenge = JSON.parse(JSON.stringify(Challenge.from({
+    realm: "agent402.tools", method: "evm", intent: "charge", expires: new Date(Date.now() + 300_000),
+    request: { amount: "1001000", currency: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", recipient: "0x0000000000000000000000000000000000000001", methodDetails: { chainId: 10, credentialTypes: ["authorization"], decimals: 6 } },
+    secretKey: "test-secret-key-for-offline-tasks",
+  })));
+  const credential = { challenge, payload: { from: payer, to: "0x0000000000000000000000000000000000000001", value: "1001000", validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce: `0x${"77".repeat(32)}`, signature: `0x${"11".repeat(65)}`, type: "authorization" } };
+  const settle = Buffer.from(JSON.stringify({ success: true, transaction: tx, network: "eip155:10", payer })).toString("base64");
+  const mppReceipt = Receipt.serialize({ method: "evm", status: "success", reference: tx, timestamp: new Date().toISOString() });
+  plan = { research: { delayMs: 700, res: jsonRes(200, { report: "x".repeat(5_000) }, { "payment-response": settle, "payment-receipt": mppReceipt }) } };
+  const lost = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: { ...CLIENT_CAPS, "org.paymentauth/credential": credential } });
+  ok(lost.result?.resultType === "task", "the paid run is handed back as a task");
+  await sleep(900);
+  const got = await rpc("tasks/get", { taskId: lost.result.taskId, _meta: CLIENT_CAPS });
+  ok(got.result?.status === "failed", "its result could not be retained, so the task is failed");
+  await refundLedgerFlush();
+  const row = listRefunds({ status: "owed", limit: 50 }).find((r) => r.slug === "research");
+  ok(row && row.priceUsd === 1.001 && row.network === "eip155:10" && row.payer === payer,
+    `the debt is booked at the chain-priced amount the credential signed, on its chain and to its payer (${JSON.stringify(row && { priceUsd: row.priceUsd, network: row.network, payer: row.payer })})`);
+
+  // A Tempo-paid run carries no x402 settle receipt: the proof is built from
+  // the Tempo receipt (src/mcp-mpp.js tempoSettleProof), at the challenge
+  // amount the credential paid. A push credential proves no sender, so the
+  // row names the transfer and nobody (a refund reads the payer off it).
+  const tempoTx = `0x${"ef".repeat(32)}`;
+  const tempoChallenge = JSON.parse(JSON.stringify(Challenge.from({
+    realm: "agent402.tools", method: "tempo", intent: "charge", expires: new Date(Date.now() + 300_000),
+    request: { amount: "15000000", currency: "0x20C000000000000000000000b9537d11c60E8b50", decimals: 6, recipient: "0x0000000000000000000000000000000000000001", methodDetails: { chainId: 4217, credentialTypes: ["hash"] } },
+    secretKey: "test-secret-key-for-offline-tasks",
+  })));
+  const tempoCredential = { challenge: tempoChallenge, payload: { type: "hash", hash: tempoTx } };
+  const tempoReceipt = Receipt.serialize({ method: "tempo", status: "success", reference: tempoTx, timestamp: new Date().toISOString() });
+  plan = { "market-brief": { delayMs: 700, res: jsonRes(200, { report: "x".repeat(5_000) }, { "payment-receipt": tempoReceipt }) } };
+  const lostTempo = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "market-brief", params: { q: "hello" } }, _meta: { ...CLIENT_CAPS, "org.paymentauth/credential": tempoCredential } });
+  ok(lostTempo.result?.resultType === "task", "the Tempo-paid run is handed back as a task");
+  await sleep(900);
+  const gotTempo = await rpc("tasks/get", { taskId: lostTempo.result.taskId, _meta: CLIENT_CAPS });
+  ok(gotTempo.result?.status === "failed", "its result could not be retained, so the task is failed");
+  await refundLedgerFlush();
+  const tempoRow = listRefunds({ status: "owed", limit: 50 }).find((r) => r.slug === "market-brief");
+  ok(tempoRow && tempoRow.priceUsd === 15 && tempoRow.network === "tempo" && tempoRow.evidence === tempoTx && tempoRow.payer === null,
+    `a Tempo-paid lost result books its debt on tempo, keyed on the transfer, at the challenge amount (${JSON.stringify(tempoRow && { priceUsd: tempoRow.priceUsd, network: tempoRow.network, evidence: tempoRow.evidence, payer: tempoRow.payer })})`);
+  const { tempoSettleProof } = await import("../src/mcp-mpp.js");
+  ok(tempoSettleProof({ method: "evm", status: "success", reference: tempoTx }) === null && tempoSettleProof({ method: "tempo", status: "failed", reference: tempoTx }) === null && tempoSettleProof({ method: "tempo", status: "success", reference: "abc" }) === null && tempoSettleProof(null) === null,
+    "an evm receipt, a failed Tempo receipt or one without a transfer hash proves nothing");
+}
 
 // ------------------------------------------------------- 6. protocol errors
 

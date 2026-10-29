@@ -151,6 +151,11 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
     "the hosted connector stops telling an agent to reshape its input when a third party refused us - same envelope, same defect, one surface over from the HTTP binder");
   ok(/retry the SAME call later; changing the input will not help/.test(mcp),
     "...and names the next step, because an agent reading a schema hint retries into the host that is throttling us");
+  // The free (proof-of-work) path carries no credential, so its envelope
+  // names no Tempo transfer; the push exception belongs to the paid path.
+  const whoseFault = /whoseFault: "([^"]*)"/.exec(mcp)?.[1] || "";
+  ok(whoseFault.length > 0 && !/Tempo/.test(whoseFault) && /nothing to charge/.test(whoseFault),
+    `the free-tier envelope says nothing was presented to charge and names no Tempo transfer (${whoseFault.slice(-80)})`);
 
   const kit = readFileSync(join(ROOT, "src/tools/x402-kit.js"), "utf8");
   ok(/freshness: \{/.test(kit) && /staleFromDisk: !!snap\?\.staleFromDisk/.test(kit) && /refreshFailing: !!snap\?\.cache\?\.lastError/.test(kit),

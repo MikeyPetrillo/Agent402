@@ -289,7 +289,7 @@ async function verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network, f
   try { t = JSON.parse(text); } catch { return fail("Circle Gateway transfer record is not JSON"); }
   if (!t || typeof t !== "object" || String(t.id || "").toLowerCase() !== id) return fail("Circle Gateway answered a different transfer");
   const status = String(t.status || "");
-  if (status === "failed") return fail("Circle Gateway reports the transfer failed - it was never charged, nothing to repay (void with a note)");
+  if (status === "failed") return fail("Circle Gateway reports the transfer failed - no charge landed, nothing to repay (void with a note)");
   if (status !== "confirmed" && status !== "completed") return fail(`Circle Gateway transfer not settled yet (status ${/^[a-z_]{1,20}$/.test(status) ? status : "unknown"}) - held until it is confirmed`);
   if (t.token !== undefined && t.token !== "USDC") return fail("Circle Gateway transfer is not USDC");
   if (String(t.fromAddress || "").toLowerCase() !== String(payer).toLowerCase()) return fail("Circle Gateway transfer is from a different payer");

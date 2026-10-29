@@ -32,9 +32,45 @@ export const KNOWN_ASSETS = Object.freeze({
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": [{ asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, symbol: "USDC" }], // devnet
   // Stellar: the USDC Stellar Asset Contract (7 decimals on Stellar).
   "stellar:pubnet": [{ asset: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", decimals: 7, symbol: "USDC" }],
-  // Algorand: USDC is ASA 31566704.
+  // Algorand: USDC is ASA 31566704. Mainnet is named by its CAIP-2 id (the
+  // first 32 characters of the base64 genesis hash) and, by sellers that
+  // predate it, by the full hash.
+  "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k": [{ asset: "31566704", decimals: 6, symbol: "USDC" }],
   "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": [{ asset: "31566704", decimals: 6, symbol: "USDC" }],
 });
+
+/** Chain name -> every network id in the table that names that chain. A
+ *  chain spelled two ways on the wire lists both, so a buyer's preference by
+ *  name, or by either spelling, matches a seller's accept in the other. */
+export const NETWORK_NAMES = Object.freeze({
+  base: ["eip155:8453"],
+  "base-sepolia": ["eip155:84532"],
+  polygon: ["eip155:137"],
+  arbitrum: ["eip155:42161"],
+  monad: ["eip155:143"],
+  celo: ["eip155:42220"],
+  avalanche: ["eip155:43114"],
+  sei: ["eip155:1329"],
+  optimism: ["eip155:10"],
+  arc: ["eip155:5042"],
+  robinhood: ["eip155:4663"],
+  solana: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"],
+  "solana-devnet": ["solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"],
+  stellar: ["stellar:pubnet"],
+  algorand: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="],
+});
+
+/** The network ids a preference names: a chain name's ids; for an id, every
+ *  id of the chain it belongs to (so either spelling matches the other); an
+ *  id the table does not know passes through as itself. */
+export function networkIdsOf(pref) {
+  const p = String(pref || "").trim();
+  if (!p) return [];
+  const byName = NETWORK_NAMES[p.toLowerCase()];
+  if (byName) return [...byName];
+  for (const ids of Object.values(NETWORK_NAMES)) if (ids.some((id) => id.toLowerCase() === p.toLowerCase())) return [...ids];
+  return [p];
+}
 
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 // EVM addresses compare without case (checksum casing is presentation);

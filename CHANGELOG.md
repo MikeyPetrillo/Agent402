@@ -6,6 +6,84 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-29 (payments, gateway, router, connector)
+Payments and refunds:
+- A card report bought at checkout is generated from the Stripe webhook as
+  well as from the success page, so a buyer who closes the tab still gets it.
+- An async job or MCP task whose settled answer was lost is booked as a debt
+  at the price the buyer paid on its chain (premium and floor included, or the
+  metered amount), with the x402 settle receipt as proof.
+- A streamed metered call paid with prepaid credits is debited at the usage
+  its last frame reports, not at the quote held when it started.
+- A card report refund that could not be sent is read on the refundsOwed word
+  of /api/gateway-status, so the status probe and the heartbeat page on it.
+- A buyer that leaves while its payment settles is charged; a resend of the
+  same payment voids the debt and is served the answer, and a resend after
+  the refund was paid is refused. A hang-up forgiveness ticket is priced on
+  the chain the verified header names.
+- A refusal on a Tempo push payment says the transfer was claimed and a refund
+  is owed; copy that says a refusal is not charged names x402, the rail that
+  holds on.
+- A credits pack refunded in full before its claim mints no key; a partial
+  refund mints net of it; after minting, a refund takes its amount off the
+  balance and a full refund or a dispute disables the key. A disputed
+  subscription payment drops the subscription from the active list until the
+  dispute is won, which also re-enables a key the dispute disabled.
+- The unpaid-quote limiters and the gateway cache count a payment header only
+  when it decodes to a payment on a chain this server sells on.
+
+LLM gateway:
+- A reasoning or thinking budget is fitted under the output cap the price
+  covers on the chat, Messages and Responses wires, or refused with a 400
+  when the provider's floor leaves no room.
+- /v1/audio/speech stops walking links once its timed-out budget is spent,
+  and a stream the upstream dropped after its first frame ends with an SSE
+  error frame instead of silence.
+- o4-mini is served by gpt-5.6-terra and the answer says so in
+  agent402_model_substituted; the premium tier no longer lists it.
+
+Router and index:
+- A Solana, Stellar or Algorand x402 payer is screened against the sanctions
+  list after its payment verifies, as an EVM payer already was; a listed
+  signer is refused before the tool runs.
+- A Solana payer's route-execute leg runs under a time budget, as the
+  Algorand and Tempo legs do; a resolve that used it up is refused before
+  anything is signed.
+- Purchases the router makes with our own wallets never count toward a
+  seller's settlement proof, on every source the floor reads.
+- /api/route serves a seller's name, homepage, description and tags through
+  the same listing screen as the index, and our own catalog is recognized by
+  canonical host, a redirected manifest included.
+
+MCP connector:
+- server.describe no longer lists the client names seen since boot.
+- A paid call is booked once, by the route it reaches.
+- A paid blocking call to a slow route from a client without the tasks
+  extension is refused before any payment, with the guidance the HTTP route
+  gives; the free-tier limit copy says the figure is shared across replicas.
+- tasks/cancel reaches a task running on another replica.
+
+Surfaces:
+- Each chain's settlement premium is published as payment.premiumUsdByNetwork
+  on /api/pricing, in /llms.txt, in the openapi guidance and on the
+  connector's payment.info, beside the per-chain floors.
+- Algorand mainnet is offered under its 32-character CAIP-2 id; a payment
+  naming the older full-hash id still settles. agent402-client 0.8.19,
+  agent402-mcp 0.13.22 and agent402-openclaw 0.5.7 read both spellings; the
+  earlier client matches only the old id.
+- /health answers cross-origin requests, and a cdnOrigin word on
+  /api/gateway-status reports whether a CDN-range peer reached the origin
+  without its edge secret.
+
+Operations:
+- The operator view of a public surface reads X-Operator-Token only; an
+  Authorization header there is a buyer's credential. An operator session is
+  known on every operator route across containers.
+- The nightly backup runs once a night across replicas.
+- Deploy and probe steps that run package code see no job secret.
+- @hono/node-server 2.1.3 in the root and mcp overrides; the agentkit-live
+  lockfile installs again.
+
 ### 2026-10-28 (credits)
 - Prepaid credits are a prepayment for Agent402's own services, for business
   and developer use: not cash, not transferable, never expiring, with no fees.

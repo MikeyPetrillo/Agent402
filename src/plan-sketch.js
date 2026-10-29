@@ -88,7 +88,7 @@ export function buildPlanSketch(query, { rank, weakScore = 3, upgrade = null, ex
     route: "POST /api/decide/execute",
     body: { steps: out.map((s) => s.tool.slug), params: { 1: Object.fromEntries((out[0].tool.required || []).map((k) => [k, `<${k}>`])) } },
     priceUsd: priced ? Math.round(out.reduce((a, s) => a + (s.tool.priceUsd || 0), 0) * 1e6) / 1e6 : null,
-    note: "Agent402 runs each step once the steps it takes input from have finished (steps that share nothing run side by side, a few at a time; a step that saves state keeps plan order), at each tool's list price (the proof-of-work free tier applies to direct calls only); a later step takes its one required input from the step before, or pass params for it. A run where no step succeeds is not charged.",
+    note: "Agent402 runs each step once the steps it takes input from have finished (steps that share nothing run side by side, a few at a time; a step that saves state keeps plan order), at each tool's list price (the proof-of-work free tier applies to direct calls only); a later step takes its one required input from the step before, or pass params for it. A run where no step succeeds is not charged on x402.",
   } : null;
   return {
     kind: "sketch",

@@ -30,7 +30,7 @@ import {
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
-  defaultReasoningFor, validateReasoning,
+  defaultReasoningFor, validateReasoning, fitReasoningToCap,
   refuseCostVariants, refuseUnsupportedParams,
   assertUpstreamBody,
 } from "./llm-gateway-kit.js";
@@ -222,6 +222,11 @@ export function validateResponsesRequest(input, tierSlug) {
     body.tools = flat;
   }
   const reasoning = validateReasoning(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}, tier);
+  // Chat-wire parity: the reasoning budget must be strictly below the output
+  // cap, because the cap is the whole output the price covers.
+  if (reasoning?.max_tokens !== undefined && reasoning.max_tokens >= maxOut) {
+    throw bad(`"reasoning.max_tokens" (${reasoning.max_tokens}) must be below "max_output_tokens" (${maxOut}) - reasoning tokens are output tokens and the whole output is what is priced`);
+  }
   if (reasoning !== undefined) body.reasoning = reasoning;
   if (input.stream === true) body.stream = true;
   if (input.zdr === true || input.provider?.zdr === true) body.zdr = true;
@@ -312,7 +317,8 @@ export function makeResponsesHandler(routeTier) {
       const p = { ...probe, model };
       clampToMargin(p, tier, imageCount); // max_tokens in the probe IS max_output_tokens
       const maxOut = Math.min(body.max_output_tokens, p.max_tokens);
-      const reasoning = body.reasoning !== undefined ? body.reasoning : defaultReasoningFor(model, tierSlug, maxOut);
+      // A buyer budget follows this link's clamped cap (fitReasoningToCap).
+      const reasoning = body.reasoning !== undefined ? fitReasoningToCap(body.reasoning, maxOut) : defaultReasoningFor(model, tierSlug, maxOut);
       return {
         ...body, model, max_output_tokens: maxOut, zdr: undefined,
         ...(reasoning ? { reasoning } : {}),

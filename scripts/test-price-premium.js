@@ -125,5 +125,56 @@ await (async () => {
   check("tierQuote(): an unreadable body falls back to the route's catalog price, never throws", () => assert.equal(junk, "$0.02"));
 })();
 
+// The public premium surfaces (/api/pricing, openapi x-payment-info,
+// llms-full.txt, the connector's payment.info) read one helper over the
+// OFFERED networks (src/public-networks.js), so a boot offering fewer rails
+// quotes the same premiums on every surface: none for a chain it does not
+// offer, the premium everywhere for one it does.
+await (async () => {
+  console.log("public premium surfaces");
+  process.env.NETWORK_PRICE_PREMIUMS = "eip155:10=0.001";
+  const { premiumUsdByNetworkName, premiumClause } = await import("../src/payments.js");
+  const { publicNetworks, publicPremiumUsdByNetwork, publicPremiumClause } = await import("../src/public-networks.js");
+  const { llmsFullTxt } = await import("../src/seo.js");
+  const { openapiSpec } = await import("../src/pages.js");
+  const { readFileSync } = await import("node:fs");
+  const catalog = { "GET /api/uuid": { route: "GET /api/uuid", slug: "uuid", name: "uuid", category: "util", price: "$0.001", description: "d", tags: [], discovery: { inputSchema: {}, example: {} }, handler: async () => ({}) } };
+  const premium = () => openapiSpec("http://x", catalog).paths["/api/uuid"]?.get?.["x-payment-info"]?.premiumUsdByNetwork;
+  check("premiumUsdByNetworkName / premiumClause take the network names to keep", () => {
+    const p = parseNetworkPremiums("eip155:10=0.001");
+    assert.deepEqual(premiumUsdByNetworkName(p), { optimism: 0.001 });
+    assert.deepEqual(premiumUsdByNetworkName(p, ["base"]), {});
+    assert.deepEqual(premiumUsdByNetworkName(p, ["base", "optimism"]), { optimism: 0.001 });
+    assert.equal(premiumClause(p, ["base"]), "");
+    assert.match(premiumClause(p, ["optimism"]), /Optimism/);
+  });
+  process.env.PAYMENT_NETWORKS = "base";
+  check("a boot offering Base alone quotes no premium on any surface", () => {
+    assert.deepEqual(publicNetworks(), ["base"]);
+    assert.deepEqual(publicPremiumUsdByNetwork(), {});
+    assert.equal(publicPremiumClause(), "");
+    assert.equal(premium(), undefined, "openapi x-payment-info");
+    assert.ok(!/payment\.premiumUsdByNetwork/.test(llmsFullTxt("http://x", catalog)), "llms-full.txt");
+  });
+  process.env.PAYMENT_NETWORKS = "base,optimism";
+  check("a boot offering Optimism quotes its premium on every surface, from the one helper", () => {
+    assert.deepEqual(publicPremiumUsdByNetwork(), { optimism: 0.001 });
+    assert.match(publicPremiumClause(), /on Optimism every call quotes \$0\.001 above its list price/);
+    assert.deepEqual(premium(), { optimism: 0.001 }, "openapi x-payment-info");
+    assert.match(llmsFullTxt("http://x", catalog), /payment\.premiumUsdByNetwork[^\n]*on Optimism every call quotes \$0\.001/, "llms-full.txt");
+  });
+  check("/api/pricing and the connector's payment.info read the same helper", () => {
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
+    assert.match(server, /premiumUsdByNetwork: offered/);
+    assert.match(server, /const offered = publicPremiumUsdByNetwork\(\)/);
+    assert.ok(!/premiumUsdByNetworkName\(\)/.test(server), "/api/pricing no longer filters a full map by hand");
+    assert.match(mcp, /import \{ publicPremiumClause as premiumClause \} from "\.\/public-networks\.js"/);
+    assert.ok(!/import \{[^}]*\b(premiumClause|premiumUsdByNetworkName|parseNetworkPremiums)\b[^}]*\} from "\.\/payments\.js"/.test(mcp), "the connector reads no unfiltered premium helper");
+  });
+  delete process.env.NETWORK_PRICE_PREMIUMS;
+  delete process.env.PAYMENT_NETWORKS;
+})();
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);

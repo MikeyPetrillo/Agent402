@@ -28,6 +28,7 @@
 // Keyless: both registries are public reads, and nothing here pays.
 import { pathToFileURL } from "node:url";
 import { requestExampleOf, isMultipartOperation } from "../src/openapi-request.js";
+import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 import { walkRegistry, routeKey, originKey, DEFAULT_REGISTRY_URL as PAYAI_REGISTRY_URL } from "./payai-solana-sweep.js";
 
 export const BAZAAR_REGISTRY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
@@ -45,13 +46,13 @@ export const CHAINS = {
   celo: "eip155:42220",
   robinhood: "eip155:4663",
   stellar: "stellar:pubnet",
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  algorand: ALGORAND_MAINNET_CAIP2,
 };
 export const DEFAULT_CHAINS = ["base", "solana"];
 
-/** A chain name or CAIP-2 id -> { name, caip2 }, or null when unknown. */
+/** A chain name or CAIP-2 id (either Algorand spelling) -> { name, caip2 }, or null when unknown. */
 export function chainOf(nameOrCaip2) {
-  const s = String(nameOrCaip2 || "").trim();
+  const s = canonicalAvmNetwork(String(nameOrCaip2 || "").trim());
   if (!s) return null;
   const lower = s.toLowerCase();
   if (CHAINS[lower]) return { name: lower, caip2: CHAINS[lower] };

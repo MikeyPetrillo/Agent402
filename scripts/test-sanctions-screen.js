@@ -346,7 +346,7 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
     return base;
   };
   const tempoOffered = async (base) => { const r = await realFetch(`${base}/api/uuid`); const h = r.headers.get("www-authenticate") || ""; if (process.env.DEBUG_SCREEN) console.log("WWW", r.status, h.slice(0, 300)); return /method="tempo"/.test(h); };
-  const status = async (base, auth) => (await (await realFetch(`${base}/api/gateway-status`, auth ? { headers: { Authorization: `Bearer ${TOKEN}` } } : {})).json()).sanctionsScreen;
+  const status = async (base, auth) => (await (await realFetch(`${base}/api/gateway-status`, auth ? { headers: { "X-Operator-Token": TOKEN } } : {})).json()).sanctionsScreen;
   try {
     let base = await boot();
     const pub = await status(base);

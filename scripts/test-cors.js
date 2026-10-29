@@ -14,7 +14,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; } else { fail++; console.error(`FAIL: ${m}`); } };
 
 // --- decision -------------------------------------------------------------
-for (const p of ["/api/hash", "/api/find", "/v1/chat/completions", "/.well-known/x402", "/openapi.json", "/llms.txt"])
+for (const p of ["/api/hash", "/api/find", "/v1/chat/completions", "/.well-known/x402", "/openapi.json", "/llms.txt", "/health"])
   ok(corsAllowsPath(p), `machine surface allowed: ${p}`);
 // HTML pages are read on our own origin; nothing cross-origin needs them, and
 // they render third-party seller text.

@@ -356,8 +356,11 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     st.lastErrorAt = new Date(now()).toISOString();
     // A target we keep failing on is not "retry quietly forever while billing":
     // tell the subscriber ONCE (with the manage link) and flag it for the
-    // operator; retries continue at the 24h backoff in case it recovers.
-    if (rec && st.failures === PERMANENT_FAIL_NOTICE_AT && !st.problemNotifiedAt) {
+    // operator; retries continue at the 24h backoff in case it recovers. A
+    // welcome run that fails is told at its first failure: the subscriber was
+    // promised a first report within minutes, and the retry is an hour out.
+    const welcomeFailed = !st.lastFullAt && st.failures === 1;
+    if (rec && !st.problemNotifiedAt && (welcomeFailed || st.failures === PERMANENT_FAIL_NOTICE_AT)) {
       st.problemNotifiedAt = new Date(now()).toISOString();
       const p = MONITOR_PRODUCTS[rec.product];
       if (rec.email) notify({ to: rec.email, reason: "problem", label: p?.label || "monitor", target: rec.target, changes: [`We have not been able to complete a report for this target (${st.lastError}).`], reportUrl: st.lastReportId ? `${baseUrl}/m/${st.lastReportId}` : `${baseUrl}/monitors`, manageUrl: st.lastReportId ? manageUrlFor(st.lastReportId) : `${baseUrl}/monitors` }).catch(() => {});

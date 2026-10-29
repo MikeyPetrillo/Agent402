@@ -86,6 +86,17 @@ export function renewalCheckoutMessage(baseUrl) {
 // Statuses a subscriber can still manage in the portal (change the card, or
 // cancel). A canceled or expired subscription has nothing left to manage.
 const MANAGEABLE = new Set(["active", "trialing", "past_due", "unpaid"]);
+// The billing period lives on the subscription item (older API versions put
+// it on the subscription itself).
+const periodEndOf = (sub) => sub?.items?.data?.[0]?.current_period_end ?? sub?.current_period_end ?? null;
+// The PaymentIntent an invoice was paid with (on the invoice, or under its
+// payments list on newer API versions).
+const invoicePaymentIntentOf = (inv) => {
+  const direct = inv?.payment_intent;
+  if (direct) return typeof direct === "string" ? direct : direct.id || null;
+  const p = inv?.payments?.data?.[0]?.payment?.payment_intent;
+  return p ? (typeof p === "string" ? p : p.id || null) : null;
+};
 const normEmail = (e) => String(e ?? "").trim().toLowerCase();
 
 export function subscriptionsEnabled() {
@@ -128,7 +139,7 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  * @param {string} deps.baseUrl
  * @param {string} [deps.storePath]  override for tests
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -431,7 +442,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           customer: sub.customer, status: sub.status,
           product: sub.metadata?.product || store.get(sub.id)?.product || null,
           target: sub.metadata?.target || store.get(sub.id)?.target || null,
-          currentPeriodEnd: sub.current_period_end || null,
+          currentPeriodEnd: periodEndOf(sub),
           cancelAtPeriodEnd: !!sub.cancel_at_period_end,
         });
         break;
@@ -453,7 +464,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // The record first: an event answered 503 (its record not stored) is
         // delivered again, so the sale is booked on the delivery that stores
         // it, never once per delivery.
-        if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaidAt: new Date().toISOString() });
+        if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaymentIntent: invoicePaymentIntentOf(inv) || rec.lastPaymentIntent || null, lastPaidAt: new Date().toISOString() });
         if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
           let first;
           try { first = await claimInvoiceSale(inv.id, seenOnRecord); } catch { first = null; }
@@ -466,10 +477,42 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }
       case "charge.refunded":
       case "charge.dispute.created": {
-        // Money went back (or is contested): let the credits store claw back.
+        // Money went back (or is contested): let the credits store claw back
+        // (a charge says how much of it was refunded, and whether all of it).
         const obj = event.data.object;
         const pi = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id || null;
-        if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type); } catch { /* never fail the webhook on a hook */ } }
+        const reversal = event.type === "charge.refunded"
+          ? { amountRefundedCents: Number.isFinite(Number(obj?.amount_refunded)) ? Number(obj.amount_refunded) : null, fullyRefunded: obj?.refunded === true }
+          : { amountRefundedCents: null, fullyRefunded: true };
+        if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type, reversal); } catch { /* never fail the webhook on a hook */ } }
+        // A disputed subscription payment stops its fulfillment: the record
+        // is marked (its status still follows Stripe) and listActive drops it.
+        if (event.type === "charge.dispute.created") {
+          const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
+          for (const [subId, rec] of store) {
+            if (rec?.disputed) continue;
+            if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) stored = stored && await upsert(subId, { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null });
+          }
+        }
+        break;
+      }
+      case "charge.dispute.closed": {
+        // The dispute ended. Won, or an inquiry closed without a chargeback
+        // (warning_closed): the money stayed, so the hold on fulfillment ends
+        // and the credits key the dispute disabled is enabled again (the
+        // hook). Lost: the record stays disputed and the outcome is noted.
+        const obj = event.data.object;
+        const pi = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id || null;
+        const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
+        const won = outcome === "won" || outcome === "warning_closed";
+        if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome }); } catch { /* never fail the webhook on a hook */ } }
+        const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
+        for (const [subId, rec] of store) {
+          if (!rec?.disputed) continue;
+          if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) {
+            stored = stored && await upsert(subId, won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() });
+          }
+        }
         break;
       }
       default: break; // ignore unrelated events
@@ -494,7 +537,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!subId) return null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { await upsert(subId, { status: sub.status, currentPeriodEnd: sub.current_period_end || null, cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
+      if (sub?.status) { await upsert(subId, { status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
     } catch { /* unreadable */ }
     return null;
   }
@@ -510,9 +553,20 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   function listActive(kind) {
     const out = [];
     for (const rec of store.values()) {
-      if (rec.status === "active" && (!kind || MONITOR_PRODUCTS_ALL[rec.product]?.kind === kind)) out.push(rec);
+      if (rec.status === "active" && !rec.disputed && (!kind || MONITOR_PRODUCTS_ALL[rec.product]?.kind === kind)) out.push(rec);
     }
     return out;
+  }
+  // Subscriptions a dispute holds out of fulfillment (the operator view):
+  // Stripe may still bill one whose dispute ended without the closed event
+  // reaching us, so each is listed with what is known of the dispute.
+  function listDisputed() {
+    const out = [];
+    for (const rec of store.values()) {
+      if (rec?.disputed !== true) continue;
+      out.push({ subId: rec.subId, product: rec.product || null, target: rec.target || null, status: rec.status || null, disputedAt: rec.disputedAt || null, disputeOutcome: rec.disputeOutcome || null, lastPaymentIntent: rec.lastPaymentIntent || null, lastInvoiceId: rec.lastInvoiceId || null });
+    }
+    return out.sort((a, b) => String(b.disputedAt || "").localeCompare(String(a.disputedAt || "")));
   }
   const get = (subId) => store.get(subId) || null;
   // Card subscriptions a checkout email can still manage (the "Already
@@ -536,5 +590,5 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return { ...tally, byType: { ...tally.byType }, configured: Boolean(webhookSecret()) };
   }
 
-  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, findManageableByEmail, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
+  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, listDisputed, get, findManageableByEmail, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
 }

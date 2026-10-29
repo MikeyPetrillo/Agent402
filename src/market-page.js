@@ -19,6 +19,7 @@ import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
 import { hostCardHtml } from "./host-entry.js";
 import { standingCountsExcludingHost } from "./standing.js";
+import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 
 // Seller-roster row styles hoisted to classes. A busy chain (e.g. Base) renders
 // 1000+ roster rows; when each row carried its 6 styles inline the page ballooned
@@ -278,16 +279,17 @@ export const CHAIN_PAGES = {
     chainName: "Algorand",
     ticker: "ALGO",
     tickerLabel: "ALGORAND · MAINNET",
-    caip2: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+    caip2: ALGORAND_MAINNET_CAIP2,
     asset: "USDC",
     settledBy: "an x402 facilitator",
     explorerUrl: "allo.info",
     explorerWalletUrl: (wallet) => `https://allo.info/account/${wallet}`,
     networkParam: "algorand",
     sellNetworkHtml: "the Algorand mainnet CAIP-2 network",
-    acceptNetwork: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+    acceptNetwork: ALGORAND_MAINNET_CAIP2,
     wallet: "C7IIHG7SPLPZ5H7ZT6HW3UV2OQMQQE6Y2HBNGZXSLRJULE42BEE2OY2XIE",
-    // Algorand mainnet CAIP-2 is `algorand:wGHE2Pwd…kit8=`; testnet starts
+    // Algorand mainnet is `algorand:wGHE2Pwd…` in both the CAIP-2 and the
+    // full-hash spelling (src/avm-network.js); testnet starts
     // `algorand:SGO1GKSz…`. An exact-prefix match on the mainnet genesis
     // hash (rather than excluding the substring "test") can't be fooled by
     // a testnet id that happens not to contain "test".

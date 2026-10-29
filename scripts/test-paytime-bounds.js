@@ -38,7 +38,7 @@ import { evmCredentialExpiry, requiredEvmSecondsFor, evmValidityShortfall, asser
 import { coverTermsOf, admitCoveredRun, inflightCoverStatus, markCoveredRunSettled, _setBalanceReaderForTest, _resetInflightCoverForTest } from "../src/inflight-cover.js";
 import { registerInflightCoverSettleHook, registerFacilitatorFailureHooks } from "../src/payments.js";
 import { x402ResourceServer } from "@x402/core/server";
-import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
+import { buildRouteExecuteTool, SVM_BUDGET_MS_DEFAULT } from "../src/tools/route-execute.js";
 import { getFreePorts } from "./lib/free-port.js";
 
 let pass = 0, proc = null, facilitator = null, orStub = null;
@@ -559,12 +559,13 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   const unpaid = await run({});
   ok(!unpaid.err && calls.length === 1 && calls[0].timeoutMs === undefined && calls[0].refusalMaxWaitMs > 200_000, "control: a request with no payment header is unchanged");
 
-  // Controls on the other rails: Solana keeps the defaults; Tempo keeps its
+  // Controls on the other rails: a Solana payment is signed against a recent
+  // blockhash, so its seller call and wait are budgeted under that life; Tempo keeps its
   // own 16 s budget for both the seller call and the wait.
   reset({ list: [seller("sol", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")] });
   const solReq = { ip: "203.0.113.9", header: (n) => (String(n).toLowerCase() === "payment-signature" ? b64({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: "AAAA" } }) : undefined) };
   const sol = await run(solReq, toolFor(["solana"]));
-  ok(!sol.err && calls.length === 1 && calls[0].timeoutMs === undefined && calls[0].refusalMaxWaitMs > 200_000, `control: a Solana buyer keeps the default seller timeout and wait (${sol.err?.message || "ok"})`);
+  ok(!sol.err && calls.length === 1 && Number.isFinite(calls[0].timeoutMs) && calls[0].timeoutMs <= SVM_BUDGET_MS_DEFAULT && calls[0].refusalMaxWaitMs > 0 && calls[0].refusalMaxWaitMs <= SVM_BUDGET_MS_DEFAULT, `control: a Solana buyer keeps the blockhash budget for the seller call and the wait (timeout ${calls[0]?.timeoutMs} ms, wait ${calls[0]?.refusalMaxWaitMs} ms; ${sol.err?.message || "ok"})`);
   reset({ list: [seller("mpp", "eip155:4217")], resolve: 2000 });
   const tempo = await run({ ip: "203.0.113.9", mppTempoCredential: { challenge: {} }, mppTempoSender: "0x" + "ee".repeat(20), header: () => undefined }, toolFor(["tempo"]));
   ok(!tempo.err && calls.length === 1 && calls[0].timeoutMs > 13_000 && calls[0].timeoutMs <= 14_000 && calls[0].refusalMaxWaitMs > 13_000 && calls[0].refusalMaxWaitMs <= 14_000, `control: a Tempo buyer keeps its 16 s budget for the seller call and the wait (timeout ${calls[0]?.timeoutMs} ms, wait ${calls[0]?.refusalMaxWaitMs} ms; ${tempo.err?.message || "ok"})`);

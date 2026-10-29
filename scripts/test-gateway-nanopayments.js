@@ -909,7 +909,7 @@ await check("a gateway-batched debt is proven by Gateway's transfer record and r
   assert.equal(out.ok, 1); assert.equal(out.unverified, 4);
   const why = (id) => warned.find((m) => m.startsWith(`HOLD  #${id} `)) || "";
   assert.match(why(2), /not settled yet \(status received\)/);
-  assert.match(why(3), /failed - it was never charged/);
+  assert.match(why(3), /transfer failed - no charge landed, nothing to repay/);
   assert.match(why(4), /different payer/);
   assert.match(why(5), /short/);
   assert.ok(gw.calls.some((c) => c.url === `${GATEWAY_API_BASE}/v1/x402/transfers/${rows[0].evidence}` && c.init.headers.Authorization === undefined), "proven by the keyless transfer lookup");
@@ -1392,7 +1392,7 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     assert.deepEqual(pub.gatewayPending, { status: "ok" });
     assert.ok(["unknown", "ok", "withdraw"].includes(pub.gatewayBalance?.status) && Object.keys(pub.gatewayBalance).join(",") === "status", `gatewayBalance publishes its word only (${JSON.stringify(pub.gatewayBalance)})`);
     await sleep(2000);
-    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { Authorization: `Bearer ${OP}` } })).json();
+    const op = await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": OP } })).json();
     assert.equal(op.gatewayBalance.status, "withdraw", `30.5 is past the default alert (${JSON.stringify(op.gatewayBalance)})`);
     assert.equal(op.gatewayBalance.usd, 30.5, "the figure is on the operator view");
     const pub2 = await (await fetch(`${base}/api/gateway-status`)).json();

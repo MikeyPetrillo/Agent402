@@ -22,8 +22,9 @@
 //   - a malformed CF-Connecting-IP from a CDN peer falls back to the peer;
 //   - the same holds for an IPv6 CDN peer.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";
-import { buildCdnRanges, resolveClientIp, inCdnRanges, normalizeIp, cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginSecret, originAuthOk, ORIGIN_AUTH_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "../src/cdn-client-ip.js";
+import { buildCdnRanges, resolveClientIp, inCdnRanges, normalizeIp, cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginSecret, originAuthOk, cdnOriginStatus, refreshCdnOriginShared, __resetCdnOriginStatus, CDN_ORIGIN_UNAUTH_ALERT, ORIGIN_AUTH_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "../src/cdn-client-ip.js";
 
 let pass = 0;
 let proc = null;
@@ -87,6 +88,50 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(d.req.ip === "104.16.0.5" && d.req.viaCdn === false && !(ORIGIN_AUTH_HEADER in d.req.headers), "middleware on: a wrong secret is ignored and removed");
   const e = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "" }, { enabled: true, secret: "" });
   ok(e.req.ip === "104.16.0.5" && e.req.viaCdn === false, "middleware on with no secret configured: the header is never trusted");
+  // The status word: CDN-range peers without a valid secret read
+  // unauthenticated for an hour once they reach the alert count; a direct
+  // peer without one, or a CDN peer with it, does not count; off while the
+  // resolver is off.
+  __resetCdnOriginStatus();
+  ok(CDN_ORIGIN_UNAUTH_ALERT >= 1 && cdnOriginStatus({ enabled: false }).status === "off" && cdnOriginStatus({ enabled: true, secret: SECRET }).status === "ok", "cdnOrigin reads off while the resolver is off and ok with nothing counted");
+  run("203.0.113.7", { "cf-connecting-ip": "198.51.100.9" }, { enabled: true, secret: SECRET });
+  run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: SECRET }, { enabled: true, secret: SECRET });
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 1 }).status === "ok", "a direct peer without the secret and a CDN peer with it do not count");
+  run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9" }, { enabled: true, secret: SECRET });
+  const w = cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 1 });
+  ok(w.status === "unauthenticated" && w.unauthenticatedInWindow === 1 && w.threshold === 1 && w.scope === "instance" && w.secretConfigured === true && Object.keys(cdnOriginStatus({ enabled: true, secret: SECRET })).join(",") === "status", `a CDN-range peer without the secret reads unauthenticated at the count; the public word carries no count (${JSON.stringify(w)})`);
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 2 }).status === "ok" && cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 2 }).unauthenticatedInWindow === 1, "below the alert count the word stays ok (a probe reaching the origin host directly is not a lost secret); the operator still sees the count");
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 1, now: Date.now() + 61 * 60_000 }).status === "ok", "...and the word clears once the hour has passed");
+  run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "x" }, { enabled: true, secret: "" });
+  ok(cdnOriginStatus({ enabled: true, secret: "", full: true }).secretConfigured === false, "with no secret configured the operator view says so");
+  __resetCdnOriginStatus();
+
+  // Two replicas behind one proxy: the count is kept in a shared hour window
+  // (src/shared-limits.js) and the word reads it, so a replica that served
+  // none of the unauthenticated requests still answers the same word.
+  const { createMemoryLimits } = await import("../src/shared-limits.js");
+  const store = createMemoryLimits();
+  const SHARED = { enabled: true, secret: SECRET, shared: store };
+  for (let i = 0; i < 3; i++) run("104.16.0.5", { "cf-connecting-ip": `198.51.100.${10 + i}` }, SHARED);
+  await sleep(20);
+  ok((await store.windowRead("cdn-origin-unauth", "all", { windowMs: 3_600_000 })).count === 3, "each unauthenticated CDN-range request is one entry in the shared hour window");
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 3 }).status === "unauthenticated" && cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 3 }).scope === "shared", "the replica that served them reads unauthenticated at the count");
+  __resetCdnOriginStatus(); // the sibling replica: nothing counted here
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 3 }).status === "ok", "a replica that served none of them, before it reads the window, counts nothing");
+  await refreshCdnOriginShared();
+  const shared = cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 3 });
+  ok(shared.status === "unauthenticated" && shared.unauthenticatedInWindow === 3, `...and reads the same word once it has read the shared window (${JSON.stringify(shared)})`);
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 3, now: Date.now() + 6 * 60_000 }).status === "ok", "a shared reading older than a few minutes is not reused");
+  __resetCdnOriginStatus();
+  cdnClientIpMiddleware({ ranges: R, log: () => {}, enabled: true, secret: SECRET }); // detach the store
+}
+
+// The mount in server.js hands the middleware the shared limiter store, so
+// the count behind the word spans the replicas (the "shared" scope above).
+{
+  const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/cdnClientIpMiddleware\(\{\s*shared: sharedLimitsEnabled\(\) \? \{[\s\S]{0,400}?sharedLimits\.windowAdd\([\s\S]{0,400}?sharedLimits\.windowRead\(/.test(serverSrc),
+    "server.js mounts the resolver with the shared limiter store's window, so the count spans replicas");
 }
 
 // ---- end to end ----
@@ -103,9 +148,10 @@ const boot = async (extraEnv) => {
   ok(up, `server booted (${JSON.stringify(extraEnv)})`);
   const buy = (headers) => fetch(`${B}/api/buy`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: "{" })
     .then((r) => r.status).catch(() => 0);
+  const cdnWord = async () => (await (await fetch(`${B}/api/gateway-status`)).json()).cdnOrigin?.status;
   const burst = async (n, headersOf) => { const out = []; for (let i = 0; i < n; i++) out.push(await buy(headersOf(i))); return out; };
   const challenges = async (n, headersOf) => { const out = []; for (let i = 0; i < n; i++) out.push(await fetch(`${B}/api/pow/challenge?slug=hash`, { headers: headersOf(i) }).then((r) => r.status).catch(() => 0)); return out; };
-  return { buy, burst, challenges };
+  return { buy, burst, challenges, cdnWord };
 };
 const limited7 = (s) => s.slice(0, 6).every((x) => x !== 429) && s[6] === 429;
 const auth = { [ORIGIN_AUTH_HEADER]: SECRET };
@@ -113,17 +159,18 @@ const auth = { [ORIGIN_AUTH_HEADER]: SECRET };
 try {
   // ---- CDN_PROXY off (the default): main's behavior ----
   {
-    const { burst, challenges } = await boot({});
+    const { burst, challenges, cdnWord } = await boot({});
     const s0 = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.5", "cf-connecting-ip": `198.51.100.${i + 1}`, ...auth }));
     ok(limited7(s0), `off: a CDN-range peer with a rotating CF-Connecting-IP keeps its own checkout bucket (${s0.join(",")})`);
     const p0 = await challenges(140, (i) => ({ "x-forwarded-for": "104.16.0.7", "cf-connecting-ip": `198.51.${Math.floor(i / 250)}.${(i % 250) + 1}`, ...auth }));
     const p429 = p0.filter((x) => x === 429).length;
     ok(p0.slice(0, 120).every((x) => x !== 429) && p429 === 20, `off: 140 challenge calls from one CDN-range peer with rotating CF-Connecting-IP are limited on the peer (${p429} of 140 got 429)`);
+    ok((await cdnWord()) === "off", "off: /api/gateway-status reads cdnOrigin off");
     proc.kill("SIGKILL"); proc = null;
   }
 
-  // ---- CDN_PROXY on, with the origin secret ----
-  const { buy, burst, challenges } = await boot({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET });
+  // ---- CDN_PROXY on, with the origin secret (the word turns at 5 unauthenticated requests an hour) ----
+  const { buy, burst, challenges, cdnWord } = await boot({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET, CDN_ORIGIN_UNAUTH_ALERT: "5" });
 
   // 1. Direct (peer 203.0.113.7), a different forged CF-Connecting-IP on every
   //    call (and the secret): one bucket, the 7th is limited.
@@ -141,10 +188,18 @@ try {
   const s2c = await buy({ "x-forwarded-for": "198.51.100.200" });
   ok(s2c === 429, `the resolved client address is the bucket (direct call from it: ${s2c})`);
 
+  // So far every CDN-range peer carried the secret: the status word is ok.
+  ok((await cdnWord()) === "ok", "on: with every CDN peer authenticated, /api/gateway-status reads cdnOrigin ok");
+
   // 2b. A CDN-range peer without the secret, or with a wrong one, is not
-  //     trusted: it keeps its own bucket.
+  //     trusted: it keeps its own bucket. One such request (a probe calling
+  //     the origin host directly) leaves the word ok; past the alert count
+  //     it turns.
+  const s2pre = await buy({ "x-forwarded-for": "104.16.0.12", "cf-connecting-ip": "198.51.100.149" });
+  ok(s2pre !== 429 && (await cdnWord()) === "ok", `on, no secret: one unauthenticated CDN-range request leaves the public word ok (${s2pre})`);
   const s2d = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.8", "cf-connecting-ip": `198.51.100.${150 + i}` }));
   ok(limited7(s2d), `on, no secret: a CDN-range peer's CF-Connecting-IP is ignored (${s2d.join(",")})`);
+  ok((await cdnWord()) === "unauthenticated", "on: CDN-range peers without the secret past the alert count turn the public word unauthenticated (the heartbeat and the status Worker page on it)");
   const s2e = await burst(7, (i) => ({ "x-forwarded-for": "104.16.0.9", "cf-connecting-ip": `198.51.100.${160 + i}`, [ORIGIN_AUTH_HEADER]: SECRET.slice(0, -1) + "x" }));
   ok(limited7(s2e), `on, wrong secret: a CDN-range peer's CF-Connecting-IP is ignored (${s2e.join(",")})`);
   const p1 = await challenges(140, (i) => ({ "x-forwarded-for": "104.16.0.10", "cf-connecting-ip": `198.52.${Math.floor(i / 250)}.${(i % 250) + 1}` }));

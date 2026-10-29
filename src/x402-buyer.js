@@ -11,6 +11,7 @@
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 
 // What a seller sees in their logs when our router buys from them. Points at
 // the same page as the crawler's string: one place that says who we are.
@@ -47,8 +48,10 @@ export const BUYER_CHAINS = {
     asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
   },
   algorand: {
-    caip2: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
-    networkLabels: new Set(["algorand:wghe2pwdvd7s12bl5faop20egyesn73ktic1qzkkit8=", "algorand", "algorand-mainnet"]),
+    caip2: ALGORAND_MAINNET_CAIP2,
+    // A seller may spell mainnet as the CAIP-2 id or the full genesis hash
+    // (src/avm-network.js); the signer accepts either (`algorand:*`).
+    networkLabels: new Set([ALGORAND_MAINNET_CAIP2.toLowerCase(), ALGORAND_MAINNET_LEGACY_CAIP2.toLowerCase(), "algorand", "algorand-mainnet"]),
     asset: "31566704", // USDC ASA on Algorand mainnet
   },
   solana: {

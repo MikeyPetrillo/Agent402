@@ -80,6 +80,16 @@ const read = (rel) => { try { return readFileSync(join(root, rel), "utf8"); } ca
 // every chain including Robinhood's USDG, eleven carry USDC.
 const USDC_RAILS = RAILS.filter((r) => r.asset === "USDC").length;
 const ALL_RAILS = RAILS.length;
+// A sentence about charging names the rail it holds on (x402, MPP evm, card,
+// credits), or the push exception. A bare "MPP" is not a rail: MPP carries
+// the Tempo push method the claim is false for. "Owed" beside the claim is
+// not the exception either, and a free tier (proof-of-work) says nothing
+// about what a paid rail charges.
+const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP evm\b|\bpush\b|\bunpaid\b/i;
+// Copy surfaces: every tracked text file outside src, every markdown file,
+// and the src modules that render pages or documents rather than answer a
+// paid request (their names say so). Pinned below against the known ones.
+const COPY_SURFACES = /\.md$|^(?!src\/)|^src\/[\w-]*(?:page|pages|guides?|learn|seo|blog|skill-md|how-to-pay|what-is-x402|webhooks|terms|privacy|company|glossary|faq|why|docs|integration)[\w-]*\.js$/;
 const FORBIDDEN = [
   {
     // "Never charged" is true of x402 (settlement runs after the handler) and
@@ -100,6 +110,42 @@ const FORBIDDEN = [
     why: "unscoped: a Tempo push payment is final before the call runs; name the rail where it holds (x402, card, credits)",
     scopedBy: /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b/i,
     scopeSentence: true,
+  },
+  {
+    // The noun forms the two rules above missed: "Failures are not charged",
+    // "a run where no step succeeds is not charged", "a 4xx or 5xx is never
+    // charged", "answers 422 and is not charged", "so nothing is charged",
+    // and the bare sentences "Nothing was charged" / "You were not charged" /
+    // "Not charged" with no rail named beside them. A Tempo push transfer is
+    // final before the call and a failure on it is booked as owed, so the
+    // claim holds only with its rail (x402, MPP evm, card, credits) or the
+    // push exception in the same line or the next. A handler's refusal line
+    // (bad(...), throw, res.status(n).json) is not copy: the Tempo push gate
+    // restates it for that payer at send (src/push-refusal-body.js), which
+    // the block below proves against every such phrasing in the tree.
+    re: /\b(?:failures?|errors?|refusals?|timeouts?|(?:a |an |any |every |each |the )?(?:failed|failing|errored|timed-out|refused|cancell?ed|rejected|unsuccessful)(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job|step|attempt|buy|purchase)s?|(?:a |any |every |the )?(?:call|run|request|job|step|attempt|generation)s? (?:that|which|where) (?:fails?|errors?|times? out|no step succeeds)|a 4xx or 5xx|4xx\S*\s*(?:or|\/)\s*5xx\S*|[45]xx(?:es)?)\b[^.;]{0,40}?\b(?:is|are|was|were|get|gets) (?:not|never) charged\b|\b(?:fails?|failing|errors?|times? out|is refused|refused|cancels? settlement|answers? (?:a |an )?\S*[45]\d\d\S*)[^.;]{0,30}?\b(?:so |and |[-:,] )?(?:nothing|no charge|not|never)\s*(?:is|was|has been)?\s*charged\b|\bnothing is charged\b[^.]{0,30}\b(?:fail|error|[45]xx)|\bno charge is applied\b/i,
+    why: "unscoped: a Tempo push transfer is final before the call and a failure on it is recorded as owed; name the rail (x402, MPP evm, card, credits) or the push exception in the same sentence",
+    scopedBy: NOT_CHARGED_SCOPE,
+    scopeWindow: 0,
+    skipComments: true,
+    skipLine: /\bbad\(|\bthrow\b|new Error\(|\.status\(\d{3}\)\.json\(|mppProblem\(/,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // The bare sentence forms ("Nothing was charged.", "You were not
+    // charged.", "Not charged.") on a COPY surface: a page, a guide, a wiki
+    // page, a README, an example. In a served module that answers requests
+    // the same sentence is a refusal body, and the Tempo push gate restates
+    // it for that payer at send (proven below), so those modules are read by
+    // the handler-line rule above, not this one.
+    re: /\b(?:nothing (?:was|is|has been) charged|you (?:were|are) not charged|not charged)\b(?! (?:on|over) x402)/i,
+    why: "unscoped on a copy surface: name the rail (x402, MPP evm, card, credits) or the push exception in the same sentence",
+    scopedBy: NOT_CHARGED_SCOPE,
+    scopeWindow: 0,
+    skipComments: true,
+    skipLine: /\bbad\(|\bthrow\b|new Error\(|\.status\(\d{3}\)\.json\(|mppProblem\(/,
+    only: COPY_SURFACES,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
   },
   {
     // A rating or an assurance someone could rely on, not evidence: a token
@@ -303,12 +349,13 @@ function sweep(entries) {
   for (const [rel, text] of entries) {
     if (text == null) continue;
     const lines = text.split("\n");
-    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false, only = null, skipComments = false } of FORBIDDEN) {
+    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false, only = null, skipComments = false, skipLine = null } of FORBIDDEN) {
       if (exempt?.has(rel)) continue;
       if (only && !only.test(rel)) continue;
       for (let i = 0; i < lines.length; i++) {
         const isComment = (l) => skipComments && /^\s*(?:\/\/|\*|\/\*)/.test(l || "");
         if (isComment(lines[i])) continue;
+        if (skipLine && skipLine.test(lines[i])) continue;
         const sentence = `${lines[i]} ${isComment(lines[i + 1]) ? "" : lines[i + 1] || ""}`;
         const m = sentence.match(re);
         if (!m) continue;
@@ -333,6 +380,13 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Agent402 never holds funds."],
                        ["<control>", "The agent signs - Agent402 never touches funds."],
                        ["<control>", "A failed call is never charged."],
+                       ["<control>", "- **Failures are not charged.** Any 4xx/5xx - no match, over-cap, seller down - cancels your settlement."],
+                       ["<control>", "Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged."],
+                       ["<control>", "The decision could not be made. Nothing was charged."],
+                       ["<control>", "A run where no step succeeds is not charged over MPP."],
+                       ["<control>", "A 4xx is never charged, nothing owed."],
+                       ["<control>", "Any failed call is not charged (we accept proof-of-work)."],
+                       ["<control>", "If the seller does not answer, nothing is charged."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -347,8 +401,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 20;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 17 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 33;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 24 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -359,6 +413,8 @@ ok((read("src/why.js") || "").length > 500 && (read("adapters/agentkit/README.md
 // loudly is to name the class here.
 ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
    "...and the card generators, which render public submission and announcement artifacts");
+ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md.js", "src/decide-page.js", "src/integration-pages.js", "src/human-reports-page.js", "wiki/FAQ.md", "README.md", "mcp/README.md"].every((f) => COPY_SURFACES.test(f)) && !COPY_SURFACES.test("src/tools/decide-kit.js") && !COPY_SURFACES.test("src/server.js"),
+   "the copy-surface pattern reaches the page modules, the wiki, the READMEs, and not the modules that answer paid requests");
 
 // --- the routing sentence is derived, and honest in BOTH directions --------
 {
@@ -567,6 +623,13 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "A charge that reached no answer is automatically refunded to the paying wallet.",
     "Undelivered calls are auto-refunded on chain.",
     "Refunds for a failed paid call are automatic.",
+    // The noun forms of the not-charged claim, each as it shipped.
+    "A 4xx or 5xx is never charged.",
+    "one whose duration cannot be read answers `422` and is not charged.",
+    "a request whose quote would exceed the cap is refused with a `400` naming the cap (a `4xx` cancels settlement, so nothing is charged)",
+    "A run that fails is not charged, and the job says so.",
+    "whoseFault: \"not your input - a third party this tool depends on refused or failed our request, and you were not charged\"",
+    "- **400** - your input failed validation; the body says what to fix. Not charged.",
     // The catalog-wide determinism claim as it shipped on /101, /agentic-finance,
     // SKILL.md and /terms.
     "Every one deterministic, priced, tested, settled on chain over x402 or MPP.",
@@ -615,12 +678,44 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     `USDC on Base + ${USDC_RAILS - 1} more chains, or USDG on Robinhood Chain`,
     "500+ pay-per-call tools and skill packs",
     "the 150+ pure-CPU tools are free via proof-of-work",
+    // The same claims with their rail, or the push exception, beside them.
+    "- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller\n  down - cancels your settlement, and a Tempo transfer sent before the call is recorded as owed.",
+    "and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed.",
+    "A 4xx/5xx is not charged on x402: settlement runs after the handler and only on a response under 400.",
+    "A paid call that ends in any status of 400 or above is not charged over x402, MPP and a prepaid credits key: settlement is canceled when the tool fails.",
+    "An unpaid 402 charges nothing.",
+    // A handler's refusal is restated per rail at send, so its line is not copy.
+    "    throw bad(\"The decision service failed - not charged; retry shortly\", 502);",
   ];
   const hits = (t) => sweep([["<case>", t]]).length;
   const missed = MUST_FAIL.filter((t) => hits(t) === 0);
   const wrong = MUST_PASS.filter((t) => hits(t) > 0);
   ok(missed.length === 0, `every known phrasing of the class is caught${missed.length ? ` - MISSED: ${missed.join(" | ")}` : ""}`);
   ok(wrong.length === 0, `honest, scoped phrasings are NOT caught${wrong.length ? ` - FALSE POSITIVE: ${wrong.join(" | ")}` : ""}`);
+}
+
+// --- a handler's "not charged" is restated for a Tempo push payer at send -----
+// The rule above leaves a handler's refusal line alone because the Tempo push
+// gate rewrites that sentence for the one rail it is false on. That holds only
+// while the rewriter recognizes every phrasing the tree actually throws, so
+// each unscoped one in a served module is run through it here.
+{
+  const { rewriteNotChargedForPush } = await import("../src/push-refusal-body.js");
+  const PHRASE = /\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b|\bno charge\b/i;
+  const SCOPED = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP\b|\bpush\b|\bowed\b|\bunpaid\b/i;
+  const unhandled = [];
+  let checked = 0;
+  for (const rel of files.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/push-refusal-body.js")) {
+    const text = read(rel) || "";
+    for (const line of text.split("\n")) {
+      if (/^\s*(?:\/\/|\*|\/\*)/.test(line) || !PHRASE.test(line) || SCOPED.test(line)) continue;
+      checked++;
+      if (rewriteNotChargedForPush(line) === line) unhandled.push(`${rel}: ${line.trim().slice(0, 100)}`);
+    }
+  }
+  ok(rewriteNotChargedForPush("Bad input. Nothing was charged.") !== "Bad input. Nothing was charged." && rewriteNotChargedForPush("This call is not charged on x402.") === "This call is not charged on x402.", "control: the push rewriter restates an unscoped sentence and keeps a scoped one");
+  ok(checked >= 40, `the push rewriter was run against ${checked} unscoped handler phrasings (a collapsed count must fail)`);
+  ok(unhandled.length === 0, `every unscoped "not charged" a served module throws is one the push gate restates${unhandled.length ? ` - UNHANDLED: ${unhandled.join(" | ")}` : ""}`);
 }
 
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);

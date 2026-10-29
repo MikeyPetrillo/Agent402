@@ -658,7 +658,7 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
     ALL_STATUS.push(pubText);
     ok(JSON.stringify(JSON.parse(pubText).tweetQueue) === '{"status":"ok"}', "control: /api/gateway-status publishes the word ok and nothing else");
     ok(!pubText.includes("boot-1") && !pubText.includes("boot-2"), "the public status never names a queue id");
-    const opText = await (await fetch(`${ctl.base}/api/gateway-status`, { headers: { authorization: `Bearer ${TOKEN}` } })).text();
+    const opText = await (await fetch(`${ctl.base}/api/gateway-status`, { headers: { "x-operator-token": TOKEN } })).text();
     ALL_STATUS.push(opText);
     const op = JSON.parse(opText).tweetQueue;
     ok(op.status === "ok" && op.mode === "posting" && op.inDoubt === 0, "the operator's gateway status adds the mode and counts");

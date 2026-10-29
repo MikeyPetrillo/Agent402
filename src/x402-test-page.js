@@ -23,7 +23,7 @@ export function x402TestPage(baseUrl) {
   const canonical = `${baseUrl}/x402-test`;
   const title = "Test your x402 client";
   const description =
-    "Point any x402 or MPP client at a real paid endpoint and get told exactly why it was refused: which field differs, which scheme and network are offered, whether the signature recovered. Free, because a refusal is never charged.";
+    "Point any x402 or MPP client at a real paid endpoint and get told exactly why it was refused: which field differs, which scheme and network are offered, whether the signature recovered. Free, because a refused payment is never settled on x402.";
 
   const mono = "font-family:var(--font-mono);font-size:var(--fs-sm);";
   const pre = (s) => `<pre style="background:var(--panel);color:var(--on-panel);padding:18px 20px;overflow-x:auto;${mono}line-height:1.6;margin:0 0 18px;">${esc(s)}</pre>`;

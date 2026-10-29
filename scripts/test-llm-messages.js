@@ -383,5 +383,39 @@ delete process.env.OPENROUTER_API_KEY;
   ok(v4.body.temperature === 0.2 && v4.body.thinking?.budget_tokens === 1024, "Messages: Haiku 4.5 keeps temperature, prefill and budget_tokens");
 }
 
+// ---- a thinking budget follows the margin clamp (fitBudgetBelowCap) ----
+// The validator's "budget below max_tokens" check reads the buyer's cap; the
+// per-link clamp then lowers the cap. Shape: a large prompt on premium,
+// max_tokens 8192, thinking budget 8000. The prompt is grown until the clamp
+// binds (never sized by a typed figure): once between the 1024 floor and the
+// budget (fitted to cap - 1), once at or under the floor (the link is
+// refused, so no upstream call ever carries a budget the cap cannot hold).
+{
+  const { clampToMargin: clamp, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  const premiumM = bySlug("v1-chat-premium-messages");
+  const MODEL = "anthropic/claude-opus-5";
+  const line = "Summarize the quarterly report line with its figures and risks. ";
+  let fitContent = null, floorContent = null;
+  for (let n = 400; n <= 6000 && !(fitContent && floorContent); n += 50) {
+    const probe = { model: MODEL, messages: [{ role: "user", content: line.repeat(n) }], max_tokens: 8192 };
+    try { clamp(probe, T["v1-chat-premium"], 0); } catch { break; }
+    if (!fitContent && probe.max_tokens < 8000 && probe.max_tokens > 1025) fitContent = line.repeat(n);
+    if (!floorContent && probe.max_tokens <= 1024) floorContent = line.repeat(n);
+  }
+  ok(!!premiumM && fitContent !== null && floorContent !== null, "premium Messages tool found and both prompt sizes located");
+  if (premiumM && fitContent && floorContent) {
+    seen = [];
+    globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+    await premiumM.handler({ model: MODEL, max_tokens: 8192, messages: msg(fitContent), thinking: { type: "enabled", budget_tokens: 8000 } }, fakeReq);
+    ok(seen[0]?.model === MODEL && seen[0].max_tokens < 8000 && seen[0].thinking?.budget_tokens === seen[0].max_tokens - 1 && seen[0].thinking.type === "enabled", `Messages: the outbound thinking budget sits one under the clamped cap (max_tokens ${seen[0]?.max_tokens}, budget ${seen[0]?.thinking?.budget_tokens})`);
+    seen = [];
+    let err = null;
+    try { await premiumM.handler({ model: MODEL, max_tokens: 8192, messages: msg(floorContent), thinking: { type: "enabled", budget_tokens: 8000 } }, fakeReq); } catch (e) { err = e; }
+    const unfitted = seen.filter((b) => b.thinking?.type === "enabled" && !(b.thinking.budget_tokens >= 1024 && b.thinking.budget_tokens < b.max_tokens));
+    ok(unfitted.length === 0 && !seen.some((b) => b.model === MODEL), `Messages: a cap at or under the 1024 floor never reaches upstream with that budget (the link is skipped; ${seen.length} other link(s) tried${err ? `, ended ${err.statusCode}` : ""})`);
+    if (err) ok(err.statusCode === 400 && /thinking\.budget_tokens/.test(err.message), "...and a walk with no fitting link ends as a 400 naming thinking.budget_tokens (nobody charged)");
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

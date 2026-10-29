@@ -8,7 +8,7 @@
 // premium still only adds, and every surface that states the floor reads it.
 import { strict as assert } from "node:assert";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, ROBINHOOD_CAIP2, ROBINHOOD_MIN_PRICE_DEFAULT_USD } from "../src/network-floors.js";
-import { acceptsForItem, priceForNetwork, parseNetworkPremiums } from "../src/payments.js";
+import { acceptsForItem, priceForNetwork, parseNetworkPremiums, premiumUsdByNetworkName, premiumClause } from "../src/payments.js";
 
 let failures = 0;
 const check = async (name, fn) => {
@@ -81,11 +81,41 @@ await check("every surface that states the floor reads the same constant", async
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
   assert.match(src("server.js"), /minPriceUsdByNetwork: \{ robinhood: networkFloorUsd\(RH_FLOOR_CAIP2\) \}/, "/api/pricing");
   assert.match(src("server.js"), /floorUsd: caip2 \? networkFloorUsd\(caip2\) : 0/, "chain page extras");
-  assert.match(src("seo.js"), /\$\{networkFloorUsd\(ROBINHOOD_CAIP2\)\}/, "llms.txt");
+  // llms.txt states every floor once, in the x402 paragraph, from the floors
+  // map; the chain list stays chain: asset (CAIP-2) only (test-legal-claims
+  // pins that shape).
+  const { floorClause, llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  assert.equal(floorClause(new Map()), "", "no floor, no clause");
+  assert.match(floorClause(new Map([[RH, 2000], [OP, 1500]])), /^on Robinhood Chain every call costs at least \$0\.002, the floor its 402 quotes; on Optimism every call costs at least \$0\.0015, the floor its 402 quotes$/, "each floored chain is named from the rails list");
+  const llms = llmsFullTxt("https://agent402.tools", {});
+  assert.ok(llms.includes(`hold the stablecoin (on Robinhood Chain every call costs at least $${ROBINHOOD_MIN_PRICE_DEFAULT_USD}, the floor its 402 quotes)`), "llms.txt x402 paragraph states the floor");
+  for (const t of [llms, llmsTxt("https://agent402.tools", {})]) assert.ok(!/^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\).+$/m.test(t), "no llms.txt chain line carries a floor or premium clause");
   assert.ok((src("guides.js").match(/\$\{networkFloorUsd\(ROBINHOOD_CAIP2\)\}/g) || []).length >= 2, "guides");
   const { guidePage } = await import("../src/guides.js");
   const g = guidePage("https://agent402.tools", "usdg-payments-robinhood-chain");
   assert.ok(String(g?.html ?? g).includes(`$${ROBINHOOD_MIN_PRICE_DEFAULT_USD}`), "the USDG guide prints the floor");
+});
+
+// The settlement premium a chain adds is on the machine price surfaces too,
+// keyed by the chain's public name and derived from the same map the accepts
+// builder prices through (scripts/test-accept-prices.js reads the booted
+// surfaces; this pins the derivation and that every surface reads it).
+await check("the premium map and clause derive from NETWORK_PRICE_PREMIUMS, by public network name", async () => {
+  assert.deepEqual(premiumUsdByNetworkName(parseNetworkPremiums("")), {});
+  assert.equal(premiumClause(parseNetworkPremiums("")), "");
+  const p = parseNetworkPremiums("eip155:10=0.001,eip155:4663=0.002,eip155:999999=0.5");
+  assert.deepEqual(premiumUsdByNetworkName(p), { optimism: 0.001, robinhood: 0.002 }, "a chain no network is named for is left out");
+  const clause = premiumClause(p);
+  assert.match(clause, /on Optimism every call quotes \$0\.001 above its list price/);
+  assert.match(clause, /on Robinhood Chain every call quotes \$0\.002 above its list price/);
+  const { readFileSync } = await import("node:fs");
+  const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+  assert.match(src("server.js"), /premiumUsdByNetwork: offered/, "/api/pricing publishes premiumUsdByNetwork beside minPriceUsdByNetwork");
+  assert.match(src("seo.js"), /\$\{premiumClause\(\)\}/, "llms-full.txt");
+  assert.doesNotMatch(src("seo.js"), /premiums\.get\(c\.caip2\)/, "the chain bullets stay bare; the premium is stated in the x402 paragraph");
+  assert.match(src("pages.js"), /premiumUsdByNetwork: premium/, "openapi x-payment-info");
+  assert.match(src("pages.js"), /payment\.premiumUsdByNetwork/, "openapi guidance names the field");
+  assert.match(src("mcp-http.js"), /\$\{premiumClause\(\)\}/, "MCP payment.info");
 });
 
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");

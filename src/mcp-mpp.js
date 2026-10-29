@@ -25,6 +25,7 @@
 // not 127.0.0.1 (trust proxy is 1 hop).
 import { Challenge, Credential, Receipt } from "mppx";
 import { PROGRESS_HEADER } from "./job-progress.js";
+import { tempoSenderOf } from "./mpp-tempo.js";
 
 export const MCP_PAYMENT_REQUIRED_CODE = -32042;
 // mppx 0.9.1+ ("Fixed MCP payment errors to use the specification-defined
@@ -61,6 +62,52 @@ export function challengesFromHeader(wwwAuth) {
 export function receiptFromHeader(h) {
   if (!h) return null;
   try { return JSON.parse(JSON.stringify(Receipt.deserialize(String(h)))); } catch { return null; }
+}
+
+/** The x402 settle receipt ({success, transaction, network, payer}) the paid
+ *  route's 200 carries beside the MPP receipt (the shim mirrors PAYMENT-RESPONSE
+ *  and leaves it in place); null when absent or unreadable. It is the ledger's
+ *  proof of a charge, and names the chain and the payer a debt is repaid on. */
+export function settleReceiptFromHeader(h) {
+  if (typeof h !== "string" || !h) return null;
+  try {
+    const r = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+    return r && typeof r === "object" && !Array.isArray(r) ? r : null;
+  } catch { return null; }
+}
+
+/** A Tempo receipt ({method:"tempo", status:"success", reference}) restated
+ *  as the proof row the refund ledger demands (receiptProvesCharge): success,
+ *  the chain, the transfer hash, and the sender when the credential's own
+ *  signature proves one (a push credential or a keychain sender names
+ *  nobody; a manual refund reads the payer off the transaction). null for
+ *  anything else, so an unreadable receipt still records nothing. */
+export function tempoSettleProof(receipt, credentialHeader) {
+  if (!receipt || receipt.method !== "tempo" || receipt.status !== "success") return null;
+  const tx = String(receipt.reference || "").toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(tx)) return null;
+  return { success: true, network: "tempo", transaction: tx, payer: credentialHeader ? tempoSenderOf(credentialHeader) : null };
+}
+
+/** What an evm/charge credential signed for (its EIP-3009 value, in the
+ *  challenge's token units) and the chain its challenge names; null when
+ *  unreadable. The signed value is the quote the task's 402 minted on that
+ *  chain (list or per-request quote, premium and floor included), which is
+ *  what a lost result is owed at. */
+export function credentialSignedUsd(credentialHeader) {
+  if (!credentialHeader) return null;
+  try {
+    const c = Credential.deserialize(String(credentialHeader));
+    const request = c?.challenge?.request || {};
+    const details = request.methodDetails || {};
+    const raw = String(c?.payload?.value ?? request.amount ?? "");
+    if (!/^[0-9]{1,30}$/.test(raw)) return null;
+    const decimals = Number.isInteger(details.decimals) ? details.decimals : 6;
+    const usd = Number(BigInt(raw)) / 10 ** decimals;
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+    const chainId = Number(details.chainId);
+    return { usd, caip2: Number.isInteger(chainId) && chainId > 0 ? `eip155:${chainId}` : null, payer: typeof c?.payload?.from === "string" ? c.payload.from : null };
+  } catch { return null; }
 }
 
 /** challengeId of the credential the client sent (for the receipt meta). */

@@ -380,9 +380,9 @@ export function adoptNewerStatus(saved) {
   if (saved.encrypted !== undefined) status.encrypted = saved.encrypted;
   return true;
 }
-function refreshStatus(now = Date.now()) {
+function refreshStatus(now = Date.now(), { force = false } = {}) {
   const d = statusStore();
-  if (d.backend !== "pg" || statusRefreshing || now - statusRefreshedAt < STATUS_REFRESH_MS) return statusRefreshing;
+  if (d.backend !== "pg" || statusRefreshing || (!force && now - statusRefreshedAt < STATUS_REFRESH_MS)) return statusRefreshing;
   statusRefreshedAt = now;
   statusRefreshing = d.read({ quiet: true })
     .then((r) => { if (r?.ok && r.exists) adoptNewerStatus(r.body); }, () => {})
@@ -752,9 +752,15 @@ async function stageCopy(src, name, gzPath, tmp) {
 
 // ---------------------------------------------------------------------------
 // Nightly scheduler: a 10-minute tick that fires once per UTC day inside the
-// configured hour. In-memory lastDay means a restart can re-run the same
-// day, which is safe: date-keyed objects overwrite, they never accumulate.
+// configured hour. The day is taken from the STORED status, read under the
+// lease: lastDay alone is per process, and with two replicas each one would
+// run the same night's backup. A restart inside the hour reads the stored
+// attempt the same way. (A second run would be safe, date-keyed objects
+// overwrite, so the stored read only saves the duplicate work.)
 let lastDay = null;
+let scheduledTick = null;
+/** Run one scheduler tick now (tests): the same function the interval calls. */
+export const backupNightlyTick = () => (scheduledTick ? scheduledTick() : Promise.resolve({ skipped: "no scheduler" }));
 export function startBackupScheduler({ log = console.log } = {}) {
   // Read the persisted status now, not at the first operator read: on the
   // database the first synchronous read is only the fallback (null).
@@ -769,10 +775,19 @@ export function startBackupScheduler({ log = console.log } = {}) {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
     if (now.getUTCHours() !== cfg().utcHour || lastDay === day) return;
+    // Under the lease: the other replica may have taken this day already.
+    // lastAttempt is written when a run STARTS (runBackup), so a run that
+    // then fails still counts as the day's attempt and no sibling replica
+    // retries it: one attempt per day, success or not, and a failed night
+    // reads as failed on the status surfaces rather than being retried
+    // against the same fault.
+    try { await refreshStatus(now.getTime(), { force: true }); } catch { /* the stored status is advisory here */ }
     lastDay = day;
+    if (String(status.lastAttempt || "").slice(0, 10) === day) return { skipped: "already attempted today" };
     await runBackup({ log }).catch((e) => log(`[backup] scheduler run threw: ${e.message}`));
   });
-  const timer = setInterval(() => { refreshStatus(); nightly().catch(() => {}); }, 10 * 60 * 1000);
+  scheduledTick = () => { refreshStatus(); return nightly().catch(() => {}); };
+  const timer = setInterval(scheduledTick, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
   log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;

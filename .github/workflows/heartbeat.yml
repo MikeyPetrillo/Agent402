@@ -754,7 +754,7 @@ jobs:
         env:
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          GW=$(curl -s --max-time 15 -H "X-Operator-Token: $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
           WORD=$(printf '%s' "$GW" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|aging|stuck|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "refunds owed: $WORD"
@@ -763,7 +763,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed|aging|stuck)
-              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
+              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
               # A debt can stay owed for days (held for review), so an open
               # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
@@ -788,7 +788,7 @@ jobs:
         env:
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
-          GW=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
+          GW=$(curl -s --max-time 15 -H "X-Operator-Token: $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
           WORD=$(printf '%s' "$GW" | jq -r '.creditsRefunds.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "credits refunds: $WORD"
@@ -804,6 +804,37 @@ jobs:
             ok)
               if [ -n "$OPEN" ]; then
                 gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: credits refunds reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # CDN-range peers reaching the origin without the shared origin secret
+      # (src/cdn-client-ip.js): one word on /api/gateway-status. unauthenticated
+      # pages; ok and off close; unknown does neither. The count and whether a
+      # secret is configured stay on the operator view. The status Worker runs
+      # the same check every five minutes under the same title.
+      - name: CDN origin secret check (alarm when edge traffic reaches the origin unauthenticated)
+        if: always()
+        continue-on-error: true
+        run: |
+          GW=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          WORD=$(printf '%s' "$GW" | jq -r '.cdnOrigin.status // "unknown"' 2>/dev/null || echo unknown)
+          case "$WORD" in unauthenticated|ok|off|unknown) ;; *) WORD=unknown ;; esac
+          echo "cdn origin: $WORD"
+          TITLE="CDN origin secret: edge traffic reached the origin unauthenticated"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unauthenticated)
+              BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unauthenticated at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: cdnOrigin reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
               ;;
           esac

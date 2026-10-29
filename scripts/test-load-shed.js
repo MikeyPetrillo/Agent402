@@ -90,16 +90,18 @@ try {
   ok(ready.status === 200 && readyQ.status === 200, `the readiness check (/health/ready, /health?ready=1) is never shed (${ready.status}, ${readyQ.status})`);
   const free = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5"));
   ok(free.status === 503 && free.headers.get("retry-after") === "2" && /paid calls keep flowing/.test((await free.json()).error), `a free request past the ceiling is shed with 503 + Retry-After (${free.status})`);
-  const paid = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", "payment-signature": "x".repeat(40) }), body: JSON.stringify({ text: "a" }) });
+  // A payment header counts only when it decodes to a payload naming an offered network.
+  const PAID_HEADER = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+  const paid = await fetch(`${base}/api/hash`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", "payment-signature": PAID_HEADER }), body: JSON.stringify({ text: "a" }) });
   ok(paid.status !== 503, `a priced route carrying a payment credential is not shed (${paid.status})`);
-  const alias = await fetch(`${base}/api/hash`, { ...from("203.0.113.5", { "payment-signature": "x".repeat(40) }) });
+  const alias = await fetch(`${base}/api/hash`, { ...from("203.0.113.5", { "payment-signature": PAID_HEADER }) });
   ok(alias.status !== 503, `...through the method alias too (GET on a POST tool: ${alias.status})`);
   const gw = await fetch(`${base}/v1/metered/v1/messages`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", authorization: "Bearer a402_" + "k".repeat(24) }), body: "{}" });
   // Without the private cost table the metered tier itself answers 503
   // (src/upstream-costs.js); that is a refusal by the route, not a shed.
   const gwBody = gw.status === 503 ? await gw.text() : "";
   ok(gw.status !== 503 || /metered tier is temporarily unavailable/.test(gwBody), `a payment-bearing /v1 gateway call (SDK path alias) is not shed (${gw.status})`);
-  const forgedFree = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5", { "payment-signature": "x".repeat(40) }));
+  const forgedFree = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5", { "payment-signature": PAID_HEADER }));
   ok(forgedFree.status === 503, "a payment header on a FREE route buys nothing: still shed");
   const chainAlias = await fetch(`${base}/api/chain/eth_blocknumber`, from("203.0.113.5"));
   ok(chainAlias.status !== 503, `an /api/chain/<verb> alias of a priced tool is not shed (${chainAlias.status})`);

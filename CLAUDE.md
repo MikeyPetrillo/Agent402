@@ -30,7 +30,8 @@ LLC: credit the entity, never a personal name.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
-  (`src/x402-buyer.js`, `src/solana-buyer.js`, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
+  (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
+  inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`: the state database (Postgres, schema `state`): documents, records, log
@@ -115,7 +116,8 @@ LLC: credit the entity, never a personal name.
 `/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/stats`,
 `/api/status`, `/api/gateway-status` (bucketed status words only, never numbers), `/robots.txt`,
 `/sitemap.xml`, `/.well-known/glama.json`, `/x402-test` (payment-refusal diagnostics).
-Operator-only surfaces live under `/__operator/*` (token-authed).
+Operator-only surfaces live under `/__operator/*` (token-authed); the operator view of a public
+surface reads `X-Operator-Token` only, since `Authorization` there is a buyer's credential.
 
 ## Dev / CI / deploy workflow
 - **Develop on branch `claude/sweet-brown-i99jl3`.** `main` is protected: PR required, never
@@ -202,13 +204,15 @@ whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the m
 A payer's first hang-up in the window is forgiven at any price under the service-wide budget
 when its payer and IP keys hold nothing in flight or abandoned; later ones meet the per-key
 budget. Refunds stay human-run (`refund.yml`, dry run first); any buyer's owed row reads
-`refundsOwed=owed` on `/api/gateway-status` past a short grace, and the status Worker and
+`refundsOwed=owed` on `/api/gateway-status` past a short grace (a card report refund that could
+not be sent, `owedRefunds` in `src/human-checkout.js`, folds into the same word), and the status Worker and
 heartbeat page on it under one issue that closes when nothing is owed.
 
 ## Subsystem pointers
 - **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it. Jobs report progress: `status` keeps working/completed/failed, `state` is queued/running/succeeded/failed with `stage`, `progress`, `etaSeconds` and `Retry-After` (`src/job-progress.js`); which routes are slow, and what the 402, /api/pricing, /openapi.json and /llms-full.txt say about them, comes from `src/slow-routes.js`.
   Through the CDN proxy (`req.viaCdn`), a paid call without the header to a route whose run budget is past `CDN_SYNC_MAX_SECONDS` (default 90) runs as a job only for a client that follows a 202 on its own (agent402-client 0.8.16+) and is otherwise refused with a 504 before any gate, while LLM attempts, image fallback links and route-execute's seller waits are bounded by `cdnSyncLeftMs(req)` (`src/cdn-sync-window.js`).
 - **Client address:** `src/cdn-client-ip.js` redefines `req.ip` right after `trust proxy`: CF-Connecting-IP is the client only when the edge-reported peer is inside the embedded CDN ranges (plus `CF_IP_RANGES_EXTRA`) and the header parses as an address; from any other peer it is ignored. `CDN_PROXY` (`cloudflare` or `on`, default off) turns the resolver and the CDN sync window on, and while on a peer's CF-Connecting-IP counts (and the request is `req.viaCdn`) only when it also carries `CDN_ORIGIN_SECRET` in `X-Origin-Auth` (constant-time compare, stripped before handlers), so off or without the secret `req.ip` is the trust-proxy address. Read the client address only through `req.ip`.
+  `cdnOrigin` on `/api/gateway-status` reads `unauthenticated` while a CDN-range peer reached the origin without the secret inside the window.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + query + body, committed only after a settled 200. With no explicit key, an
   x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the
@@ -221,6 +225,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
   (Anthropic Messages), `llm-responses-kit.js` (OpenAI Responses); flat tiers plus a metered
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving. Streams commit 200 only on the first `data:` frame.
+  `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
+  stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
   per wallet on other wallet-only tools). A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
@@ -239,7 +245,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
   can run through our own relayer; it is static so the paid retry re-derives the same amount.
   A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
-  the chain page and the guides read the same floor. Sales, hang-up debts and charged-failure
+  the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
+  each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
   amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
   reads the premium and the floor and a refund repays what was paid.
@@ -253,7 +260,9 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer
   (each payer's history read once when it first pays, then incremental; state on `/data`);
-  `src/shared-paytos.js` lists shared settlement contracts.
+  `src/shared-paytos.js` lists shared settlement contracts. `src/router-purchases.js` records
+  the router's own buys per origin, payTo and chain for 30 days (`SOR_ROUTER_PURCHASES_FILE`),
+  and the evidence rule deducts them from an origin's Bazaar counts: a router buy never proves a seller.
   The funding reader can be switched off (`LEADERBOARD_FUNDING_SCAN=off`); off, the router reads
   gross per-wallet evidence with no netting and no verdict.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
@@ -294,7 +303,9 @@ heartbeat page on it under one issue that closes when nothing is owed.
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
-- **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads.
+- **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
+  payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
+  network or an MPP credential; bytes that do not decode are an unpaid read.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer
   can echo back; `scripts/test-bazaar-contracts.js` validates every 402 against the protocol's
@@ -305,6 +316,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
   no `error`, so `error`-first clients read the explanation. Keyed on the header, so
   settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
   is mounted before the MPP shim and the Tempo/Stripe gates.
+- **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
+  restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
+- **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
+  carries; the genesis-hash spelling is folded on the paid path (`src/x402-v1-accepts.js`) and read
+  as an alias in seller rows and the buyer.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 

@@ -9,8 +9,10 @@
 // the root's declared version (caret stripped). Standalone package.json files
 // that ship examples (scripts/agentkit-live, examples/*) must not name an
 // OLDER @x402 major.minor than the root either. Offline, fast.
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, mkdtempSync, copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(import.meta.url), "..", "..");
@@ -58,6 +60,34 @@ for (const p of standalone) {
 }
 ok(standalone.length >= 2, `checked ${standalone.length} standalone package.json files`);
 ok(behind.length === 0, `no standalone example pins an @x402 minor behind the root${behind.length ? `:\n    ${behind.join("\n    ")}` : ""}`);
+
+// Standalone lockfiles: every one `npm ci` can install from its package.json.
+// agentkit-live.yml copies its pair into a scratch dir and runs `npm ci`, and
+// a reader installs an example the same way; npm refuses a lockfile whose
+// entries do not cover every declared dependency, so a lock edited by hand or
+// by a bot that drops a nested copy breaks at install. An offline dry run on
+// a scratch copy of the pair (no node_modules, no registry, no audit) makes
+// the same check here; it needs the pair only, never the tree.
+const desynced = [];
+let locked = 0;
+for (const p of standalone) {
+  const lock = join(p, "..", "package-lock.json");
+  if (!existsSync(lock)) continue;
+  locked++;
+  const dir = mkdtempSync(join(tmpdir(), "lock-sync-"));
+  try {
+    copyFileSync(p, join(dir, "package.json"));
+    copyFileSync(lock, join(dir, "package-lock.json"));
+    // A dry run reads the registry only for metadata a lock entry does not carry
+    // (a peer range, for one), so it is not run offline; a desynced lock still fails.
+    const r = spawnSync("npm", ["ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, encoding: "utf8", timeout: 60_000 });
+    if (r.status !== 0) desynced.push(`${lock.replace(root + "/", "")}: ${(r.stderr || "").split("\n").filter((l) => /Missing|Invalid|in sync/.test(l)).slice(0, 4).join(" | ") || `exit ${r.status}`}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+ok(locked >= 2, `checked ${locked} standalone lockfiles against their package.json`);
+ok(desynced.length === 0, `every standalone lockfile installs with npm ci${desynced.length ? `:\n    ${desynced.join("\n    ")}` : ""}`);
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -15,6 +15,7 @@ import { installSettlePreference, registerSettlePreference } from "./settle-pref
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
+import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
 import { confirmStellarTransfer, settlePayerOf, settleWithStellarFallback } from "./stellar-confirm.js";
 import { clarifySvmSettleFailure } from "./svm-clarify.js";
@@ -30,7 +31,7 @@ import {
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
-import { x402EvmOnly } from "./rails.js";
+import { x402EvmOnly, RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
@@ -112,11 +113,13 @@ const STELLAR_NETWORKS = {
   stellar: "stellar:pubnet",
 };
 const AVM_NETWORKS = {
-  // Algorand mainnet (genesis-hash CAIP-2). USDC is ASA 31566704 — resolved by
-  // @x402/avm's built-in asset config, so no custom money parser. Settlement
-  // via the GoPlausible-operated facilitator (keyless /supported verified
-  // 2026-07-10); fee-sponsored, so buyers don't need ALGO for gas.
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  // Algorand mainnet (CAIP-2: the first 32 characters of the base64 genesis
+  // hash, src/avm-network.js; the full-hash spelling is read as an alias).
+  // USDC is ASA 31566704, resolved by @x402/avm's built-in asset config, so
+  // no custom money parser. Settlement via the GoPlausible-operated
+  // facilitator (keyless /supported verified 2026-07-10); fee-sponsored, so
+  // buyers don't need ALGO for gas.
+  algorand: ALGORAND_MAINNET_CAIP2,
 };
 // Exported for scripts/test-rails.js: the copy layer (src/rails.js) must
 // advertise every mainnet rail this file can settle — the test cross-checks.
@@ -544,6 +547,35 @@ export function parseNetworkPremiums(raw = process.env.NETWORK_PRICE_PREMIUMS ||
   return out;
 }
 const NETWORK_PREMIUMS = parseNetworkPremiums();
+
+/** The configured settlement premium per network, keyed by the network's
+ *  public name ({ optimism: 0.001 }): every price quoted on that chain is the
+ *  list (or per-request) price plus this, raised to the chain's floor. Read
+ *  by the machine price surfaces (/api/pricing, openapi, llms.txt,
+ *  payment.info) through src/public-networks.js, from the same map the
+ *  accepts builder prices through, so a client budgeting from a surface
+ *  meets the amount the 402 asks. `names` limits the answer to those network
+ *  names (the offered ones); null means every configured premium. Empty when
+ *  no premium is set. */
+export function premiumUsdByNetworkName(premiums = parseNetworkPremiums(), names = null) {
+  const out = {};
+  for (const [name, caip2] of Object.entries(NETWORKS)) {
+    if (names && !names.includes(name)) continue;
+    const micro = premiums.get(caip2);
+    if (micro > 0) out[name] = micro / 1e6;
+  }
+  return out;
+}
+/** The premiums as one clause for prose ("on Optimism every call quotes
+ *  $0.001 above its list price, the settlement premium its 402 carries");
+ *  "" when none is set. `names` as above. */
+export function premiumClause(premiums = parseNetworkPremiums(), names = null) {
+  const parts = Object.entries(premiumUsdByNetworkName(premiums, names)).map(([name, usd]) => {
+    const rail = RAILS.find((r) => r.caip2 === NETWORKS[name]);
+    return `on ${rail ? rail.name : name} every call quotes $${usd} above its list price (the settlement premium its 402 carries)`;
+  });
+  return parts.join("; ");
+}
 
 // Per-chain price floors (src/network-floors.js): on a chain whose settlement
 // we may pay for ourselves the accept quotes at least the floor. Applied after

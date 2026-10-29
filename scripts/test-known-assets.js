@@ -53,13 +53,34 @@ const pkgText = (name) => {
 const svm = pkgText("@x402/svm"), stellar = pkgText("@x402/stellar"), avm = pkgText("@x402/avm");
 ok(svm.includes(`USDC_MAINNET_ADDRESS = "${KNOWN_ASSETS["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"][0].asset}"`), "Solana USDC mint matches @x402/svm");
 ok(stellar.includes(`USDC_PUBNET_ADDRESS = "${KNOWN_ASSETS["stellar:pubnet"][0].asset}"`) && /DEFAULT_TOKEN_DECIMALS = 7;/.test(stellar) && KNOWN_ASSETS["stellar:pubnet"][0].decimals === 7, "Stellar USDC contract and its 7 decimals match @x402/stellar");
-ok(avm.includes(`USDC_MAINNET_ASA_ID = "${KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="][0].asset}"`), "Algorand USDC ASA matches @x402/avm");
+ok(avm.includes(`USDC_MAINNET_ASA_ID = "${KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"][0].asset}"`), "Algorand USDC ASA matches @x402/avm");
+ok(avm.includes(`ALGORAND_MAINNET_CAIP2 = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"`), "the Algorand mainnet key is the CAIP-2 id @x402/avm names");
+ok(JSON.stringify(KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="]) === JSON.stringify(KNOWN_ASSETS["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k"]), "the full-hash spelling of Algorand mainnet prices the same asset");
 
 // The pricing contract itself.
 const BASE = KNOWN_ASSETS["eip155:8453"][0].asset;
 ok(acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1500000", extra: { decimals: 18 } }) === 1.5, "a decimals hint in the accept is ignored");
 ok(acceptUsd({ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1" }) === null, "an unknown asset cannot be priced");
 ok(knownAsset("eip155:8453", BASE.toLowerCase()) && !knownAsset("stellar:pubnet", KNOWN_ASSETS["stellar:pubnet"][0].asset.toLowerCase()), "EVM addresses match without case; Stellar ones exactly");
+
+// A table change ships only with a version bump: scripts/known-assets-pins.json
+// holds the table's sha256 at the package version it was pinned at (no
+// network: the published tarball is not read). A table that differs from its
+// pin needs a version past the pinned one, then
+// `node scripts/test-known-assets.js --write` to re-pin; a bump alone re-pins nothing.
+{
+  const { createHash } = await import("node:crypto");
+  const { writeFileSync } = await import("node:fs");
+  const PINS = join(ROOT, "scripts/known-assets-pins.json");
+  const pins = JSON.parse(readFileSync(PINS, "utf8"));
+  const current = Object.fromEntries(COPIES.map((p, i) => [p.split("/")[0], { version: JSON.parse(readFileSync(join(ROOT, p.split("/")[0], "package.json"), "utf8")).version, sha256: createHash("sha256").update(texts[i]).digest("hex") }]));
+  if (process.argv.includes("--write")) { writeFileSync(PINS, JSON.stringify(current, null, 2) + "\n"); Object.assign(pins, current); console.log(`wrote ${PINS}`); }
+  for (const [dir, now] of Object.entries(current)) {
+    const pin = pins[dir] || {};
+    ok(now.sha256 === pin.sha256 || now.version !== pin.version, `${dir}/known-assets.js changed since ${pin.version || "?"}, so ${dir}/package.json must bump its version`);
+    ok(now.sha256 === pin.sha256, `${dir} pin records its table at ${pin.version || "?"} (after the bump, run with --write)`);
+  }
+}
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -959,6 +959,11 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (USE_PG) return (async () => issuesOf(await readIndex(INFLIGHT), await readIndex(ISSUES)))();
     return issuesOf(readIndex(INFLIGHT), readIndex(ISSUES));
   }
+  // The owed card refunds (a refund Stripe refused, retried on the buyer's
+  // polls and then left for the operator), each with when it was recorded:
+  // the refundsOwed word on /api/gateway-status applies its notice and aging
+  // to them beside the refund ledger's rows.
+  async function owedRefunds() { return (await listIssues()).refundOwed; }
 
   function peek(sessionId) {
     const valid = SESSION_RE.test(String(sessionId));
@@ -1013,5 +1018,5 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (USE_PG) return (async () => { await readyP(); await pgClear(); pub.idx = {}; pub.recs = new Map(); })();
   }
 
-  return { createSession, fulfill, peek, recoverAbandoned, listIssues, setPublic, _count, _reset, ready: () => readyP(), backend: USE_PG ? "pg" : "file" };
+  return { createSession, fulfill, peek, recoverAbandoned, listIssues, owedRefunds, setPublic, _count, _reset, ready: () => readyP(), backend: USE_PG ? "pg" : "file" };
 }

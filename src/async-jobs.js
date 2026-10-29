@@ -82,13 +82,22 @@ export function publicJob(rec, { basePath = "/api/jobs", profile = null, now = D
   };
 }
 
+// What a catalog def lists ("$0.005"), the price a job books without a quote.
+const listPriceUsd = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+
 /**
  * @param {object} o
  * @param {number} o.port            this server's port (the loopback target)
  * @param {(req) => object|null} o.asyncRouteOf  the catalog def when this POST may run async
  * @param {object} o.store           createTaskStore() instance for these jobs
+ * @param {(def, req) => number} [o.quoteOf]  the USD the gate will hold for this
+ *   request (a per-request quote, else the list price), read when the job is
+ *   made, so the booked debt is the price the buyer paid, not the catalog's.
+ * @param {(o) => number} [o.paidOf]  the USD that quote came to on the chain
+ *   the receipt names (premium, floor) or that the meter settled.
  */
-export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null }) {
+export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null,
+  quoteOf = listPriceUsd, paidOf = ({ basePriceUsd, meteredUsd }) => (Number(meteredUsd) > 0 ? Number(meteredUsd) : basePriceUsd) }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
   const perIp = new Map();
@@ -139,6 +148,11 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     headers[PROGRESS_HEADER] = progressSink.key;
     const body = JSON.stringify(req.body ?? {});
     const url = `http://${host}:${port}${req.originalUrl}`;
+    // The price this request is gated at, read now: the replay is priced the
+    // same way, and a debt for a lost answer books what was paid.
+    let quotedUsd;
+    try { quotedUsd = Number(quoteOf(def, req)) || 0; } catch { quotedUsd = listPriceUsd(def); }
+    const paidUsd = (receipt, meteredUsd) => { try { return paidOf({ basePriceUsd: quotedUsd, receipt, meteredUsd, req }); } catch { return quotedUsd; } };
 
     (async () => {
       let r = null;
@@ -156,7 +170,8 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
         for (const h of KEEP) { const v = r.headers.get(h); if (v) kept[h] = v; }
         endProgress();
         if (r.status === 200) {
-          await store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt: decodeReceipt(kept["payment-response"]), priceUsd: def.priceUsd ?? null });
+          const receipt = decodeReceipt(kept["payment-response"]);
+          await store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt, priceUsd: paidUsd(receipt, kept["x-metered-usd"]) });
         } else {
           await store.fail(rec.taskId, { httpStatus: r.status, body: payload, ...(Object.keys(kept).length ? { headers: kept } : {}) },
             r.status === 402 ? "The payment was not accepted, so the call did not run and nothing was charged. The 402 is in error.body." : `The call ended with HTTP ${r.status} and nothing was charged.`);
@@ -171,7 +186,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
         if (r && r.status === 200) {
           const receipt = decodeReceipt(r.headers.get("payment-response"));
           if (receipt && receipt.success === true && typeof onChargedFailure === "function") {
-            try { booked = (await onChargedFailure({ slug: def.slug, receipt, priceUsd: def.priceUsd ?? null })) !== false; } catch { booked = false; }
+            try { booked = (await onChargedFailure({ slug: def.slug, receipt, priceUsd: paidUsd(receipt, r.headers.get("x-metered-usd")) })) !== false; } catch { booked = false; }
           }
         }
         const message = !r || r.status !== 200
