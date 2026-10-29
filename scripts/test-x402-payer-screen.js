@@ -21,7 +21,7 @@
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
@@ -57,6 +57,46 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ x402Version: 2, accepted: { network: "algorand:mainnet" }, payload: { paymentGroup: ["gqNzaWc="], paymentIndex: 0 } }) })).length === 0, "an Algorand payload names no EVM address");
   ok(x402ScreenedAddressesOf(req({})).length === 0 && x402ScreenedAddressesOf(req({ "payment-signature": "not-json!" })).length === 0, "no header, or an unreadable one: nothing to screen");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ payload: { authorization: { from: "0xNOTHEX" } }, from: LISTED }) })).length === 0, "a malformed from, or an address outside the payload, is not read");
+}
+
+// ---------------------------------------------------------------------------
+// 1b. A non-EVM payment: the transaction's signer, read from the payload the
+//     facilitator verifies, against the payout map (every address OFAC lists).
+{
+  const kit = await import("@solana/kit");
+  const { createX402PayerScreen, __resetX402PayerScreenForTests, x402PayerScreenView } = await import("../src/x402-payer-screen.js");
+  const K = await import("../src/tools/sanctions-kit.js");
+  const feePayer = await kit.generateKeyPairSigner(), buyer = await kit.generateKeyPairSigner();
+  const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
+  const ix = { programAddress: kit.address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), accounts: [{ address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer }], data: new TextEncoder().encode("screen") };
+  const msg = kit.pipe(kit.createTransactionMessage({ version: 0 }), (m) => kit.setTransactionMessageFeePayer(feePayer.address, m), (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m), (m) => kit.appendTransactionMessageInstruction(ix, m));
+  const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransactionMessageWithSigners(msg));
+  const SOLANA = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const svmHeader = b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLANA, extra: { feePayer: feePayer.address } }, payload: { transaction: tx } });
+  const mw = createX402PayerScreen({ log: () => {} });
+  const run = (headers) => new Promise((resolve) => {
+    const out = { next: false, code: null, body: null };
+    const req = { method: "POST", path: "/api/hash", header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
+    mw(req, res, () => { out.next = true; resolve(out); });
+  });
+  K.__seedPayoutListForTests([{ address: buyer.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "7" }]);
+  __resetX402PayerScreenForTests();
+  const listed = await run({ "payment-signature": svmHeader });
+  ok(!listed.next && listed.code === 403 && listed.body?.reason === "payer-not-accepted" && listed.body?.charged === false, `a listed Solana signer is refused 403 before the handler (${listed.code}, next ${listed.next})`);
+  ok(!JSON.stringify(listed.body).includes(buyer.address), "the refusal never echoes the address");
+  ok(x402PayerScreenView().refused === 1 && x402PayerScreenView().screened === 1, "counted as screened and refused");
+  K.__seedPayoutListForTests([{ address: feePayer.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "8" }]);
+  const clean = await run({ "payment-signature": svmHeader });
+  ok(clean.next && clean.code === null, "CONTROL: a signer not on the list passes (the fee payer's listing is not the buyer's)");
+  K.__resetPayoutListForTests();
+  const noList = await run({ "payment-signature": svmHeader });
+  ok(noList.next && x402PayerScreenView().servedUnscreened === 1, "no payout list loaded: served unscreened and counted, as the EVM path does");
+  const none = await run({});
+  ok(none.next && x402PayerScreenView().screened === 2, "no payment header: passes without a screen");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/const x402PayerScreen = createX402PayerScreen\(\);/.test(server), "server.js mounts the screen with its real signer reader");
+  __resetX402PayerScreenForTests();
 }
 
 // ---------------------------------------------------------------------------

@@ -171,6 +171,36 @@ const crawl = async (origin) => { asked.length = 0; __resetRobotsCacheForTest();
   ok(asked.every((u) => u.startsWith(`${servedFrom}/`)), "every probe for the registered seller went to the served-from origin");
 }
 
+// 6. A document served from ANOTHER host is that host's document. A bare
+//    origin whose manifest lands on an unrelated host that is not a listed
+//    seller gets no rows from it; the seller's own subdomain, or a listed
+//    self-canonical seller, is accepted as before.
+{
+  const { crossHostRedirectAccepted } = idx;
+  __resetRobotsCacheForTest();
+  // Every live probe lands on the paywall listener, whatever host it names.
+  __setProbeFetchForTest((url, opts) => { asked.push(url); return fetch(url.replace(/^https?:\/\/[^/]+/, live.origin), { ...opts, redirect: "manual" }); });
+  const bare = "https://bare.test", victim = "https://victim.test", own = "https://api.bare.test";
+  served.set(`${bare}/.well-known/x402`, { body: manifestFor(bare), finalUrl: `${victim}/.well-known/x402` });
+  served.set(`${bare}/openapi.json`, { body: { openapi: "3.0.0", paths: { "/v1/quote": { get: { summary: "One quote", "x-price": "$0.005" } } } }, finalUrl: `${victim}/openapi.json` });
+  const v = await crawl(bare);
+  ok(crossHostRedirectAccepted(bare, victim) === false, "an unrelated host that is not a listed seller is not this seller's");
+  ok(!(v?.tools || []).length && !v?.redirectedTo, `no row is listed under the bare origin from the other host's documents (tools ${(v?.tools || []).length}, redirectedTo ${v?.redirectedTo})`);
+  ok(/redirected to another host/.test(String(v?.error || "")) || (v?.fallbackErrors || []).some((f) => /redirected to another host/.test(f.error)), `the record says why (${String(v?.error || "").slice(0, 80)})`);
+  // The seller's own subdomain: accepted, recorded, probed there.
+  served.set(`${bare}/.well-known/x402`, { body: manifestFor(bare), finalUrl: `${own}/.well-known/x402` });
+  served.delete(`${bare}/openapi.json`);
+  const o = await crawl(bare);
+  ok(crossHostRedirectAccepted(bare, own) && crossHostRedirectAccepted(own, bare) && o?.redirectedTo === own && (o?.tools || []).length > 0, `a move inside the seller's own domain is accepted and recorded (${o?.redirectedTo}, ${(o?.tools || []).length} rows)`);
+  // A listed, self-canonical seller: accepted (computeAliasOrigins then folds the key into it).
+  _cacheForTests().set(victim, { manifest: { name: "Victim", homepage: victim }, tools: [{ seller: victim, method: "GET", route: "/v1/quote", price: "$0.005", networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, originResponded: true, history: [1, 1, 1] });
+  ok(crossHostRedirectAccepted(bare, victim) === true, "a listed seller whose own manifest is self-canonical is accepted");
+  _cacheForTests().set(victim, { manifest: { name: "Victim", homepage: "https://elsewhere.test" }, tools: [], fetchedAt: Date.now(), error: null, history: [1] });
+  ok(crossHostRedirectAccepted(bare, victim) === false, "...but not one whose own manifest points at a third host");
+  _cacheForTests().delete(victim);
+  _cacheForTests().delete(bare);
+}
+
 __setProbeFetchForTest(null);
 __setCrawlFetchForTest(null);
 for (const s of servers) s.server.close();

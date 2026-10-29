@@ -286,6 +286,10 @@ export function makeAttestHandler(deps = {}) {
     const allowed = await reserve(null, MAX_GAS_USD(), { chain: "base" });
     if (!allowed.ok) throw bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503);
     const handle = allowed.handle ?? null;
+    // server.js resolves this on the post-settlement finish hook (the
+    // seller-payability rule); without it the booking stands for the whole
+    // window whatever happened.
+    if (handle && req && typeof req === "object") req.__externalSpend = handle;
     // Where the call failed decides the booking: before the attest send no
     // transaction of ours exists, so the booking is released. A schema step
     // may have sent its own registration, so it keeps the booking.

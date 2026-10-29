@@ -5325,6 +5325,14 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     if (sellerPrefixOf(originUrl) && res.finalUrl && !isUnderSeller(res.finalUrl, originUrl)) {
       throw new Error(`${path} was redirected outside the seller's path prefix`);
     }
+    // A document served from another host is that host's document. It is this
+    // seller's only when the landing host is its own (crossHostRedirectAccepted);
+    // otherwise a bare origin would list someone else's routes under its name
+    // by pointing its manifest or OpenAPI at them.
+    const landed = !sellerPrefixOf(originUrl) && res.finalUrl ? redirectedOriginOf(originUrl, res.finalUrl) : null;
+    if (landed && !crossHostRedirectAccepted(originUrl, landed)) {
+      throw new Error(`${path} was redirected to another host (${hostnameOf(landed) || "unreadable"}); that host's routes are not listed under this origin`);
+    }
     noteProbeOutcome(originUrl, path, true);
     if (res.notModified) {
       if (res.validators) rememberValidator(originUrl, path, res.validators);
@@ -5442,6 +5450,24 @@ async function previousManifestDoc(prev) {
   return null;
 }
 
+/** The hostname of an origin (no port), lowercased, or null. */
+function hostnameOf(origin) {
+  try { return new URL(String(origin || "")).hostname.toLowerCase() || null; } catch { return null; }
+}
+/** Whether a document that arrived from `landing` may stand for `key`'s: the
+ *  same hostname (a scheme or port move), a host under or over the key's own
+ *  (an api. or www. move inside the seller's domain), or a listed seller whose
+ *  own manifest is self-canonical, which computeAliasOrigins then folds the key
+ *  into. Anything else is another seller's document. */
+export function crossHostRedirectAccepted(key, landing) {
+  const a = hostnameOf(key), b = hostnameOf(landing);
+  if (!a || !b) return false;
+  if (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`)) return true;
+  const v = cache.get(String(landing).replace(/\/+$/, ""));
+  if (!v || typeof v !== "object" || v.error || v.redirectedTo) return false;
+  const home = canonicalHost(v.manifest?.homepage);
+  return !home || home === canonicalHost(landing);
+}
 /** The origin a document fetch was permanently redirected to, when it is a
  *  DIFFERENT origin than the one asked (another host, or the same host over
  *  another scheme); null otherwise. */

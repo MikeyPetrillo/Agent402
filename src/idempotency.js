@@ -5,6 +5,14 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
+import { onResponseEnd } from "./hangup-settlement.js";
+
+// A stored answer is the body as served, or, when it was charged but never
+// delivered (the buyer left while the payment settled), the body under this
+// marker with the charge the server booked for it, so the replay can name it.
+const STORED = "__a402Stored";
+const wrapStored = (body, charged) => ({ [STORED]: 1, body, charged });
+const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(hit) && hit[STORED] === 1 ? { body: hit.body, charged: hit.charged || null } : { body: hit, charged: null });
 
 /** Whether a re-sent x402 payment on `def`'s route may replay its first
  *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
@@ -18,7 +26,9 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
  *  implicitReplay(req): true when a re-sent x402 payment on this route may be
  *  answered from its first answer (the server excludes routes with a lasting
  *  effect and streamed calls); absent, no implicit key is derived.
- *  onReplay(req, { implicit, key }): called once per answer served from the store. */
+ *  onReplay(req, { implicit, key, charged }): called once per answer served from
+ *  the store; `charged` names the charge ({ tx, network, wire }) when the stored
+ *  answer was charged and never delivered (see below), else null. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -117,10 +127,11 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       // Answered here, before the paywall and the dispatcher: no handler, no
       // settlement, and none of the finish-time bookkeeping behind the gates
       // (the sale, the served-call tally, the tool-answer classes) sees it.
+      const { body, charged } = unwrapStored(hit);
       res.setHeader("X-Idempotent-Replay", "true");
       if (implicit) res.setHeader("X-Replayed-Answer", "1");
-      if (typeof onReplay === "function") { try { onReplay(req, { implicit, key }); } catch { /* counting only */ } }
-      return res.status(200).json(hit);
+      if (typeof onReplay === "function") { try { onReplay(req, { implicit, key, charged }); } catch { /* counting only */ } }
+      return res.status(200).json(body);
     }
     // The same keyed call is still running (a client that timed out and retried
     // before the first answer finished). A single-use credential (an x402
@@ -155,8 +166,10 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     let captured;
     const origJson = res.json.bind(res);
     res.json = (body) => { captured = body; return origJson(body); };
-    res.on("finish", () => {
-      if (res.statusCode !== 200 || captured === undefined) return;
+    let committed = false;
+    const commit = (charged = null) => {
+      if (committed || res.statusCode !== 200 || captured === undefined) return;
+      committed = true;
       // Only a credential the server actually VERIFIED may seed the cache.
       //
       // idemHashKey binds the entry to `x-pow-solution` as presented, and this
@@ -182,10 +195,31 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       if (powVerified && kind !== "pow") return;
       const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true || req.tempoSettled === true;
       if (!freeMode && !paid && !powVerified) return;
+      const stored = charged ? wrapStored(captured, charged) : captured;
       let bytes = 0;
-      try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
+      try { bytes = Buffer.byteLength(JSON.stringify(stored), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
-      store.set(key, captured, bytes).catch(() => {});
+      store.set(key, stored, bytes).catch(() => {});
+    };
+    res.on("finish", () => commit());
+    // CHARGED BUT NEVER DELIVERED. A buyer that leaves before the first byte
+    // while its payment settles is charged (no ticket, or the close landed
+    // inside the settle call) and Node emits no "finish" for the response the
+    // gate then ends, so the answer was dropped and the resend ran the
+    // handler again against a used nonce: a 402 for a call already paid. The
+    // hang-up recorder books that charge as a debt on the request before the
+    // outcome runs (server.js recordHangupDebt, on the receipt's proof only);
+    // the answer is committed under it, so the resend of the same payment is
+    // served from here and the replay names the charge for the server to
+    // void the debt. Registered on every end, not the settle outcome: a close
+    // that lands during the settle call holds a granted ticket and reads as
+    // forgiven, yet the money moved, and the booked debt is what says so. A
+    // hang-up that was not charged books no debt and commits nothing.
+    onResponseEnd(req, res, (info) => {
+      if (info?.via !== "undelivered") return;
+      const debt = Object.hasOwn(req, "__a402HangupDebt") ? req.__a402HangupDebt : null;
+      if (!debt || typeof debt !== "object" || typeof debt.tx !== "string" || !debt.tx) return;
+      commit({ tx: debt.tx, network: debt.network ?? null, wire: debt.wire ?? null });
     });
     next();
   };

@@ -54,6 +54,25 @@ export function paidPriceUsd({ basePriceUsd, caip2 = null, meteredUsd = null, pa
   return Number.isFinite(priced) && priced > 0 ? priced : base;
 }
 
+/** The network a payment header pays on (v2 `accepted.network`, v1
+ *  `network`), lowercased, or null. Read after the gate verified the header,
+ *  so it is the network the facilitator verified. */
+export function paymentHeaderNetwork(paymentHeader) {
+  if (typeof paymentHeader !== "string" || !paymentHeader || paymentHeader.length > 65536) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf8"));
+    const network = payload?.accepted?.network ?? payload?.network ?? payload?.payload?.network;
+    return typeof network === "string" && network ? network.toLowerCase() : null;
+  } catch { return null; }
+}
+
+/** What a hang-up forgiveness ticket holds: the charge this request would
+ *  settle on its own chain (the signed amount on an EVM rail, else the gated
+ *  price through that chain's premium and floor), never the list price. */
+export function ticketPriceUsd({ basePriceUsd, paymentHeader = null, priceFor = priceForNetwork } = {}) {
+  return paidPriceUsd({ basePriceUsd, caip2: paymentHeaderNetwork(paymentHeader), paymentHeader, priceFor });
+}
+
 /** The metered quote the buyer saw on `caip2`: the request's quote through the
  *  same chain premium and floor that priced that accept, so a settled amount
  *  is compared against the ceiling that chain actually offered. */

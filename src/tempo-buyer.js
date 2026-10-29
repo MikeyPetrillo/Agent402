@@ -310,6 +310,10 @@ export async function payTempo(url, {
   try {
     const sentAt = Date.now();
     const paid = await fetch(url, init({ Authorization: credential }));
+    // A redirect on the paid leg is never followed off the validated host
+    // (the payX402 rule): the answer is not delivered, and the credential is
+    // already out, so the catch below stamps the throw committed.
+    if (paid.status >= 300 && paid.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502);
     const receiptHdr = paid.headers.get("payment-receipt");
     // DELIVERY MEMO, the payX402 rule on this rail (2026-09-28). Only the
     // router's own purchase writes it (memoizeDelivery, default false). Two

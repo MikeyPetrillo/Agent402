@@ -61,7 +61,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
-import { paidPriceUsd, quotedOnNetworkUsd } from "./paid-price.js";
+import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
@@ -241,6 +241,9 @@ function recordHangupDebt(req, res) {
     };
   }
   if (!row) return null;
+  // The idempotency middleware commits the undelivered answer under this
+  // charge, so a resend of the same payment is served and the debt voided.
+  req.__a402HangupDebt = row;
   // Why it was not forgiven, when a ticket was refused ("lasting effect",
   // "payer budget", ...); nothing for the residual window, where it was.
   // Stored on the row: the refund planner holds a budget denial (a repeat
@@ -9430,23 +9433,23 @@ const asyncJobs = createAsyncJobs({
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
+// Our own loopbacks pass both sync windows below: an async job's replay (its
+// marker, from a local socket; the async middleware below verifies it) and
+// the MCP connector's paid replay. Both windows are mounted before the async
+// marker exists, so this predicate is what decides for them.
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const isInternalReplay = (req) => isMcpLoopback(req)
+  || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOOPBACK_ADDRESSES.has(String(req.socket?.remoteAddress || "")));
 // Through the CDN proxy, a paid call to a route that can outlast the proxy's
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
-if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt }));
+if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay }));
 // A paid call to a slow route sent without Prefer: respond-async (or a Prefer:
 // wait that covers the run budget) runs as a job when the client follows a 202
 // on its own, and is refused before any gate otherwise, so a client that gives
 // up early is never charged for an answer it cannot collect
-// (src/slow-sync-window.js). Our own loopbacks pass: an async job's replay
-// (its marker, from a local socket; the async middleware below verifies it)
-// and the MCP connector's paid replay.
-{
-  const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-  const isInternalReplay = (req) => isMcpLoopback(req)
-    || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOCAL.has(String(req.socket?.remoteAddress || "")));
-  app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
-}
+// (src/slow-sync-window.js).
+app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
 
@@ -9680,9 +9683,17 @@ app.use(createIdempotency({
   isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
   freeMode: FREE_MODE,
   implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
-  onReplay: (req, { implicit }) => {
+  onReplay: (req, { implicit, charged }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+    // The stored answer was charged but never delivered (the buyer left while
+    // it settled); it is delivered now, so the debt booked for it is void: a
+    // buyer is served once, never both served and refunded.
+    if (charged && typeof charged.tx === "string" && charged.tx) {
+      Promise.resolve(voidOwedOnClaim(charged.tx, "served on the resend of the same payment"))
+        .then((voided) => { if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); })
+        .catch(() => { /* the row stays owed and is reviewed by hand */ });
+    }
   },
 }));
 
@@ -10553,7 +10564,10 @@ if (!FREE_MODE) {
     let closed = false, reserved = false;
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
-    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: quotedPriceUsd(def, req), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
+    // Priced at what this chain charges (the signed amount, or the gated
+    // price through the chain's premium and floor), so a ticket holds the
+    // charge it may forgive.
+    try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
     if (closed || res.destroyed) {
