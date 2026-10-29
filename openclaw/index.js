@@ -130,7 +130,7 @@ let registeredOnce = false;
 const plugin = {
   id: PLUGIN_ID,
   name: "Agent402",
-  description: "Agent402 model provider: routed + explicit models at a flat per-call price, paid by card or USDC.",
+  description: "Agent402 model provider: routed + explicit models at a flat per-call price, paid in USDC from a wallet, or with a credits key already issued.",
   register(api) {
     const cfg = api.pluginConfig || {};
     const port = Number(cfg.port) || DEFAULT_PORT;
@@ -149,7 +149,7 @@ const plugin = {
           try { setCachedRoutes(await loadRoutes(upstream, fetch, { pricing })); } catch (e) { log(`[agent402-openclaw] could not read ${upstream}/v1/models yet: ${e?.message || e}`); }
           started = await startProxy({ upstream, creditsKey, payFetch, port, pricing, log });
           setActiveProxy(started);
-          if (started.mode === "unpaid") log("[agent402-openclaw] no payment configured: run `agent402-openclaw setup` (card credits key) - paid calls will answer 402 until then");
+          if (started.mode === "unpaid") log("[agent402-openclaw] no payment configured: run `agent402-openclaw setup` (a wallet key, or a credits key already issued) - paid calls will answer 402 until then");
         },
         stop: async () => { if (started) { await started.close(); started = null; setActiveProxy(null); } },
       });
