@@ -136,6 +136,19 @@ async function boot(query = { range: "7d" }) {
     await tick();
     assert.match(text('[data-rv-live="head"]'), /\b12\b external payments/);
   });
+  await check("a section with text selected in it waits", async () => {
+    const head = w.document.querySelector('[data-rv-live="head"]');
+    const sel = w.getSelection();
+    sel.selectAllChildren(head.querySelector("h1"));
+    assert.equal(sel.isCollapsed, false);
+    const before = head.textContent;
+    env.page = pageAt(NOW, { range: "7d" }, 15);
+    await tick();
+    assert.equal(head.textContent, before, "selected section untouched");
+    sel.removeAllRanges();
+    await tick();
+    assert.match(head.textContent, /\b15\b external payments/);
+  });
   await check("a preset range rolls over when the server's day moves on", async () => {
     env.page = pageAt(NOW + DAY_MS, { range: "7d" }, 12);
     env.fetched.length = 0;
