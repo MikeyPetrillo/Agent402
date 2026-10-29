@@ -39,6 +39,7 @@ import {
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, smallBudgetEffort,
+  stripBilling,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
@@ -338,13 +339,6 @@ export function isEmptyMaxTokens(data) {
   if (!data || data.stop_reason !== "max_tokens") return false;
   const blocks = Array.isArray(data.content) ? data.content : [];
   return !blocks.some((b) => (b?.type === "text" && typeof b.text === "string" && b.text.trim() !== "") || b?.type === "tool_use");
-}
-
-function stripBilling(usage) {
-  if (!usage || typeof usage !== "object") return null;
-  const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
-  delete usage.cost; delete usage.cost_details; delete usage.is_byok; delete usage.cache_discount;
-  return upstreamUsd;
 }
 
 export function makeMessagesHandler(routeTier) {

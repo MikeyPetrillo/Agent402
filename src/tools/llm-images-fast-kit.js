@@ -45,7 +45,7 @@
 // would expose our job ids.
 import { parseMultipartFile } from "../multipart.js";
 import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
-import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE } from "./llm-gateway-kit.js";
+import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE, stripBilling } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { createHash } from "node:crypto";
@@ -377,8 +377,7 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {
 
       const usage = parsed.usage && typeof parsed.usage === "object" ? parsed.usage : null;
       if (usage) {
-        const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
-        delete usage.cost; delete usage.cost_details; delete usage.is_byok; delete usage.cache_discount;
+        const upstreamUsd = stripBilling(usage);
         if (upstreamUsd != null && upstreamUsd > (linkBounds(link)?.worstCaseUsd ?? Infinity) + 1e-9) {
           console.warn(`[images-fast] ${link.model} billed above its bound on ${tierSlug}`);
         }
