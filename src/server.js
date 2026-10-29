@@ -2,6 +2,7 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
+import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
@@ -3019,7 +3020,7 @@ if (_subs) {
   });
 }
 
-app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (req, res) => {
+app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: false }), async (req, res) => {
   // Mounted ahead of the security headers, so it sets its own: the browser
   // never sniffs a relayed body into another type.
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3216,6 +3217,28 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   sharedSettled: redisSharedSettled(),
 }) : null;
 if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
+// Every route below that takes more than the global 100 KB first passes the
+// large-body gate (src/large-body-gate.js): no Content-Encoding, no body over
+// 100 KB read for an unpaid call whose price does not depend on it, a
+// per-client bound on the unpaid ones that are read, and one in-flight byte
+// budget for every parse. The parsers run with inflate off and skip a body
+// the gate left unread.
+const MB = 1024 * 1024;
+const LARGE_BODY_ROUTES = [
+  ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
+  ["/v1/judge/vision", 23 * MB], ["/v1/judge/locate", 6 * MB], ["/v1/judge/long", 2 * MB],
+  ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
+];
+const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
+app.use(createLargeBodyGate({
+  routes: LARGE_BODY_ROUTES,
+  isPaid: (req) => looksLikePayment(req.headers),
+  bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`])),
+  freeMode: FREE_MODE,
+  unpaidLimiter: largeBodyUnpaidLimiter,
+  clientKey: clientIp,
+  maxInflightBytes: largeBodyInflightMaxBytes(),
+}));
 // The metered tier prices every request from its body, so a big body is a big
 // quote, never an unpriced cost - it can take real agent-host turns. A Claude
 // Code turn is ~110 KB (system prompt + 22 tool schemas, measured 2026-08-27)
@@ -3229,22 +3252,31 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // unparsed stream. 26 MB matches the tool's own 25 MB file cap plus the
 // multipart envelope; anything larger is refused by the parser, not by us
 // reading it into memory twice.
-app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], express.raw({ type: "multipart/form-data", limit: "26mb" }));
+app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "26mb", inflate: false })));
 app.use("/v1/metered", express.json({ limit: "1mb" }));
 // The Jev preview routes carry images (base64 in JSON) or a long document, so
 // they take a larger body than the global 100 kb. Each limit is the route's own
 // cap plus the JSON envelope; the handler checks every image and byte again.
-app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
-app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
-app.use("/v1/judge/long", express.json({ limit: "2mb" }));
+app.use("/v1/judge/vision", unlessBodyUnread(express.json({ limit: "23mb", inflate: false })));
+app.use("/v1/judge/locate", unlessBodyUnread(express.json({ limit: "6mb", inflate: false })));
+app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // html-frames carries a whole HTML document (512 KB cap, checked by the
 // handler) and, for a frame check, up to 8 MB of baseline PNG as base64
 // (the handler's cap); the limit leaves room for the JSON escaping.
-app.use("/api/html-frames", express.json({ limit: "12mb" }));
+app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
-app.use("/v1/images/edits", express.json({ limit: "34mb" }));
-app.use("/v1/images/edits", express.raw({ type: "multipart/form-data", limit: "7mb" }));
+app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
+app.use("/v1/images/edits", unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "7mb", inflate: false })));
+// The seller sweep posts its observations here (up to 8 MB). The operator
+// check runs before a byte of the body is read, and ahead of the global
+// parser, which would otherwise refuse the body at 100 KB.
+const sellerVerificationJson = express.json({ limit: "8mb", inflate: false });
+app.use("/__operator/seller-verification", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  return sellerVerificationJson(req, res, next);
+});
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
@@ -3296,7 +3328,7 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
     : res.status(429).json({ error: "Too many requests", detail: "The transaction surfaces are cached 30-300s; poll no faster than that.", retryAfterSeconds: 60 });
 });
 
-app.use(express.json({ limit: "100kb" }));
+app.use(unlessBodyUnread(express.json({ limit: "100kb" })));
 // Decide execute is quoted from the decision and the caller's credit, read
 // synchronously from the ledger's mirror when the 402 is priced. Before any
 // gate runs, both are read fresh from the database, so a plan made or a
@@ -4891,7 +4923,7 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
 // the WORKFLOW never touches the bucket - its own credentials are a funded
 // spending key, and widening that job's reach to our dataset storage would buy
 // nothing. Same split as POST /api/status/probe.
-app.post("/__operator/seller-verification", express.json({ limit: "8mb" }), async (req, res) => {
+app.post("/__operator/seller-verification", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   try {
     const out = await recordSellerVerification(req.body);
