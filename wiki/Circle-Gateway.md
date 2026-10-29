@@ -47,7 +47,9 @@ The plain accept stays first in `accepts`, so a client that ignores
 Since 0.8.20 the buyer SDK pays the batched accept when the `gateway` option is
 set. `signer` is an EIP-712 signer (a viem account: `address` and
 `signTypedData`) whose address holds a USDC deposit in Circle Gateway. Off by
-default.
+default. agent402-client has no dependencies: install viem for
+`privateKeyToAccount`, or pass any EIP-712 signer with `address` and
+`signTypedData`.
 
 ```js
 import { Agent402 } from "agent402-client";

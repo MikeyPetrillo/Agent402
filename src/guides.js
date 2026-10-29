@@ -148,6 +148,8 @@ const a = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGEN
 const out = await a.call("extract", { url: "https://example.com/article" });
 \`\`\`
 
+agent402-client has no dependencies: install viem for \`privateKeyToAccount\`, or pass any EIP-712 signer with \`address\` and \`signTypedData\`.
+
 Off by default; a 402 with no batched accept falls back to the plain payment
 fetch. The mechanism, the pending-settlement resend and the signing helpers:
 [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).

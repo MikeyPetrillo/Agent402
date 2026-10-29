@@ -435,6 +435,8 @@ const b = new Agent402({ creditsKey: "a402_..." });
 const c = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGENT_KEY) } });
 ```
 
+`agent402-client` has no dependencies: install `viem` for `privateKeyToAccount`, or pass any EIP-712 signer with `address` and `signTypedData`.
+
 ## Live payments view (`services/live`)
 
 A separate, read-only service that draws x402 payments on Base and MPP payments on Tempo as they settle. It reads public chain RPCs and public discovery listings, holds the last hour in memory, and fans out to browsers over one server-sent event stream; it shares no process, database or key with the API. Hosted at https://live.agent402.tools.

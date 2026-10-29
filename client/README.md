@@ -105,7 +105,9 @@ withdraws) pays each call by signing the same EIP-3009 authorization under the
 Gateway domain the accept carries instead of the USDC contract's; Gateway
 verifies it against the deposit, settles it off chain and lands the batch on
 chain later. Pass the signer as the `gateway` option. Off by default: without it
-nothing changes.
+nothing changes. The SDK has no dependencies: install `viem` for
+`privateKeyToAccount`, or pass any EIP-712 signer with `address` and
+`signTypedData`.
 
 ```js
 import { Agent402 } from "agent402-client";
