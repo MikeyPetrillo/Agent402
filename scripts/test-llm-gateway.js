@@ -1387,6 +1387,35 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     () => ok(false, "all links down must not serve"),
     (e) => ok(calls.length === 5 && [502, 503].includes(e.statusCode), "all five links tried before the buyer sees an error")
   );
+  // A link our own timer ended may have generated, and been billed, upstream:
+  // the chat wires' timed-out budget (LLM_MAX_TIMED_OUT_ATTEMPTS, default 2)
+  // ends the walk instead of trying every link that way.
+  calls = [];
+  globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; };
+  await speechTool.handler({ input: "hello" }).then(
+    () => ok(false, "timed-out links must not serve"),
+    (e) => ok(calls.length === 2 && e.statusCode === 504 && e.upstreamTimeout === true, `two timed-out links end the speech walk with a 504 (links tried: ${calls.length})`)
+  );
+  globalThis.fetch = realFetch;
+  delete process.env.OPENROUTER_API_KEY;
+}
+
+// ---- a stream dropped mid-answer ends with an error frame, not silence ----
+// Once the first data frame committed the 200 (and so the settlement), an
+// upstream drop used to end the response as if the answer were complete.
+{
+  const { streamOpenRouterTo: relay, STREAM_DROPPED_FRAME } = await import("../src/tools/llm-gateway-kit.js");
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: { get: () => "text/event-stream" },
+    body: { async *[Symbol.asyncIterator]() { yield Buffer.from('data: {"id":"g","choices":[{"delta":{"content":"par"}}]}\n\n'); throw new Error("socket hang up"); } },
+  });
+  const r = { headersSent: false, chunks: [], ended: false, writeHead() { r.headersSent = true; }, flushHeaders() {}, write(c) { r.chunks.push(String(c)); }, end() { r.ended = true; }, on() {}, once() {}, off() {} };
+  const warn = console.warn; console.warn = () => {};
+  await relay({ model: "deepseek/deepseek-chat", messages: msg1(), stream: true }, r, { onUsage: () => {} });
+  console.warn = warn;
+  ok(r.headersSent && r.ended && r.chunks.length === 2 && r.chunks[0].startsWith("data: ") && r.chunks[1] === STREAM_DROPPED_FRAME && /"error"/.test(STREAM_DROPPED_FRAME), "a committed stream that upstream drops ends with one SSE error frame after what was relayed");
   globalThis.fetch = realFetch;
   delete process.env.OPENROUTER_API_KEY;
 }

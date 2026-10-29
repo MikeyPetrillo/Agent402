@@ -2520,6 +2520,9 @@ export function isEmptyRefusal(data) {
  *  the stream. Output cost stays bounded: max_tokens was clamped server-side
  *  before the upstream call, so the provider stops the stream at the cap. */
 export const STREAM_TIMEOUT_MS = 180_000;
+/** The one SSE frame a committed stream ends with when upstream drops it
+ *  mid-answer: an error object on the wire every SSE client parses. */
+export const STREAM_DROPPED_FRAME = 'data: {"error":{"message":"upstream stream dropped"}}\n\n';
 export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
@@ -2589,6 +2592,11 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
         if (firstFrameTimedOut) err.upstreamTimeout = true;
         throw err;
       }
+      // The 200 is committed and settles; the buyer is told the stream was
+      // cut rather than handed a silent end that reads like a finished answer.
+      // Every wire that relays through here (chat, Messages, Responses) gets
+      // the same frame.
+      try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
     if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
     res.end();
@@ -3231,8 +3239,13 @@ async function speechHandler(input, req) {
   // never in a cache key - this route caches nothing (raw audio bytes).
   const user = upstreamUserId(req);
   let lastErr;
+  // An attempt our own timer ended may have generated, and been billed,
+  // upstream: the same timed-out budget as the chat wires bounds how many
+  // links a walk may leave that way before it ends.
+  const timeouts = timedOutBudget();
   for (const body of bodies) {
     const timeoutMs = paymentWindowTimeoutMs(req, SPEECH_TIMEOUT_MS);
+    const attemptStarted = Date.now();
     try {
       let res;
       try {
@@ -3247,7 +3260,9 @@ async function speechHandler(input, req) {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (e) {
-        throw bad(`Upstream request failed: ${e.message}`, 504);
+        const err = bad(`Upstream request failed: ${e.message}`, 504);
+        if (e?.name === "TimeoutError") err.upstreamTimeout = true;
+        throw err;
       }
       if (!res.ok) await throwUpstreamError(res);
       const buffer = Buffer.from(await res.arrayBuffer());
@@ -3268,6 +3283,8 @@ async function speechHandler(input, req) {
       // Our own validation 4xxs were thrown before the loop.
       if (![502, 503, 504].includes(e?.statusCode)) throw e;
       lastErr = e;
+      timeouts.note(e, attemptStarted, timeoutMs);
+      if (timeouts.spent()) throw e;
     }
   }
   throw lastErr;
