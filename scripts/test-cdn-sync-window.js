@@ -27,7 +27,7 @@
 //     free surface keeps its own header.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
@@ -107,6 +107,21 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   let nexted = false;
   cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1 })({ viaCdn: false, method: "POST", headers: {} }, {}, () => { nexted = true; });
   ok(nexted, "the window middleware passes a direct request through");
+  // Our own loopback replay passes before the async marker exists: the same
+  // predicate the slow window reads decides here.
+  {
+    const mw = (isInternal) => cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1, isInternal });
+    const res = () => { const r = { code: null, body: null, setHeader() {}, set() { return r; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } }; return r; };
+    let passed = false; const r1 = res();
+    mw((req) => req.headers["x-loopback"] === "1")({ viaCdn: true, method: "POST", headers: { "x-loopback": "1", "user-agent": "curl/8" } }, r1, () => { passed = true; });
+    ok(passed && r1.code === null, "a loopback replay the predicate names passes the CDN window");
+    let passed2 = false; const r2 = res();
+    mw((req) => req.headers["x-loopback"] === "1")({ viaCdn: true, method: "POST", headers: { "user-agent": "curl/8" } }, r2, () => { passed2 = true; });
+    ok(!passed2 && r2.code === 504, `CONTROL: the same request without the marker is refused (${r2.code})`);
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    ok(/cdnSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay \}\)/.test(server) && /slowSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay \}\)/.test(server), "server.js hands both sync windows the one internal-replay predicate");
+    ok(server.indexOf("const isInternalReplay = ") < server.indexOf("app.use(cdnSyncWindowMiddleware("), "...defined before the CDN window is mounted");
+  }
 }
 
 requireUpstreamCosts("test-cdn-sync-window");

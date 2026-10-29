@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 
 process.env.ROBINHOOD_MIN_PRICE_USD = "0.005";
 process.env.NETWORK_PRICE_PREMIUMS = "eip155:10=0.001";
-const { paidPriceUsd, signedEvmAmountUsd, quotedOnNetworkUsd } = await import("../src/paid-price.js");
+const { paidPriceUsd, signedEvmAmountUsd, quotedOnNetworkUsd, ticketPriceUsd, paymentHeaderNetwork } = await import("../src/paid-price.js");
 const { readFileSync } = await import("node:fs");
 
 const RH = "eip155:4663", BASE = "eip155:8453", OP = "eip155:10", SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -73,6 +73,19 @@ check("a metered sale's quote is the one its chain offered, so it never reads ov
 check("the sale row books its metered quote through the chain's premium and floor", () => {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   assert.equal((src.match(/quotedOnNetworkUsd\(req\.__meteredQuoteUsd, decodeSettleReceipt\(settleReceipt\)\?\.network\)/g) || []).length, 1);
+});
+
+check("a forgiveness ticket holds the charge on the chain the verified header names, never the list price", () => {
+  assert.equal(paymentHeaderNetwork(header(RH, 5000)), RH);
+  assert.equal(paymentHeaderNetwork(Buffer.from(JSON.stringify({ x402Version: 1, network: "Base", payload: {} })).toString("base64")), "base");
+  assert.equal(paymentHeaderNetwork("not base64 json"), null);
+  assert.equal(paymentHeaderNetwork(null), null);
+  assert.equal(ticketPriceUsd({ basePriceUsd: 0.001, paymentHeader: header(RH, 6000) }), 0.006);
+  assert.equal(ticketPriceUsd({ basePriceUsd: 0.001, paymentHeader: header(OP, 2000) }), 0.002);
+  assert.equal(ticketPriceUsd({ basePriceUsd: 0.001, paymentHeader: header(BASE, 1000) }), 0.001);
+  assert.equal(ticketPriceUsd({ basePriceUsd: 0.001, paymentHeader: null }), 0.001);
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  assert.equal((src.match(/priceUsd: ticketPriceUsd\(\{ basePriceUsd: quotedPriceUsd\(def, req\), paymentHeader: paymentHeaderOf\(req\) \}\)/g) || []).length, 1);
 });
 
 console.log(failures ? `\ntest-paid-price: FAILED (${failures})` : "\ntest-paid-price: all passed");

@@ -1,6 +1,7 @@
 // Offline unit tests for self-serve listing: origin validation + the
 // registerOrigin flow with an injected fake crawler. No network, no /data.
-import { validateOriginInput, registerOrigin, __testResetSubmitted, __testSetSubmittedCap, __resetForcedCrawlForTest } from "../src/x402-index.js";
+import { readFileSync } from "node:fs";
+import { validateOriginInput, registerOrigin, isSelfSeller, __testResetSubmitted, __testSetSubmittedCap, __resetForcedCrawlForTest } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -29,6 +30,25 @@ ok(validateOriginInput("http://example.com:8443").error != null, "http is still 
 ok(validateOriginInput("https://localhost").error != null, "dotless host rejected");
 ok(validateOriginInput("not a url").error != null, "garbage rejected");
 ok(validateOriginInput("https://agent402.tools", { selfOrigin: "https://agent402.tools" }).error != null, "own origin rejected");
+// Our own catalog under another spelling is still our own catalog: compared
+// by canonical host, so a www. twin, letter case or a trailing slash never
+// registers it as an outside seller, on any instance's base URL.
+ok(validateOriginInput("https://www.agent402.tools", { selfOrigin: "https://agent402.tools" }).error != null, "the www twin of our own host is rejected");
+ok(validateOriginInput("https://WWW.Agent402.tools/", { selfOrigin: "https://agent402.tools" }).error != null, "...whatever its case or trailing slash");
+ok(validateOriginInput("https://www.agent402.tools", { selfOrigin: "http://localhost:3000" }).error != null, "the production domain is never an outside seller of this catalog, whatever this instance's base URL");
+ok(validateOriginInput("https://www.example.com", { selfOrigin: "https://example.com" }).error != null && validateOriginInput("https://example.com", { selfOrigin: "https://www.example.com" }).error != null, "the instance's own base URL is compared the same way, in both directions");
+ok(validateOriginInput("https://www.other.example", { selfOrigin: "https://example.com" }).origin === "https://www.other.example", "CONTROL: another host registers");
+ok(isSelfSeller("https://old.seller.test", { redirectedTo: "https://www.agent402.tools" }) && !isSelfSeller("https://old.seller.test", { redirectedTo: "https://new.seller.test" }), "an entry whose manifest was redirected onto our own host is self; onto another host it is not");
+ok(isSelfSeller("https://agent402.tools:8443") === false && isSelfSeller("not a url") === false, "a ported twin and junk are not self");
+{
+  const src = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  ok(!/=== "https:\/\/agent402\.tools"/.test(src) && !/o === selfBase/.test(src), "no exact-string self compare is left in the index");
+  for (const fn of ["function validateOriginInput(", "function directoryListsEntry(", "function* routableRemoteEntries("]) {
+    const at = src.indexOf(fn);
+    ok(at > 0 && /isSelfSeller\(/.test(src.slice(at, src.indexOf("\n}\n", at))), `${fn.replace("function* ", "").replace("function ", "")}) reads the one self rule`);
+  }
+  ok((src.match(/const isSelfOrigin = \(origin, v = cache\.get\(origin\)\) => isSelfSeller\(origin, \{ baseUrl, redirectedTo: v\?\.redirectedTo \}\);/g) || []).length === 2, "the index snapshot and the route query read the one self rule with the entry's redirect");
+}
 
 // --- registerOrigin with injected crawler ---
 __testResetSubmitted();

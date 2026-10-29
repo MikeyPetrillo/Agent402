@@ -132,6 +132,20 @@ guard.__reset();
 await handler({ tx: "0x" + "ee".repeat(32) });
 const spent = guard.walletDailySpentUsd("base");
 ok(spent > 0 && spent <= 0.0021, `base wallet booked the estimate (${spent})`);
+// The booking is handed to the dispatcher on the request, so a settled 200
+// resolves it instead of leaving the exposure row for the whole window.
+{
+  guard.__reset();
+  const TXH = "0x" + "e7".repeat(32);
+  ledger.recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: BUYER, tx: TXH, wire: "x402", responseSha256: responseDigest({ u: 7 }) });
+  const req = {};
+  await handler({ tx: TXH }, req);
+  ok(req.__externalSpend && typeof req.__externalSpend === "object" && guard.globalExposureUsd() > 0, `the spend handle rides on the request (exposure ${guard.globalExposureUsd()})`);
+  guard.resolveSpend(req.__externalSpend, true);
+  ok(guard.globalExposureUsd() === 0, "...and resolving it on a settled answer clears the exposure");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/if \(req\.__externalSpend\) \{[\s\S]{0,400}resolveExternalSpend\(handle, res\.statusCode === 200\)/.test(server), "server.js resolves req.__externalSpend on the finish hook by the final status");
+}
 
 // --- 7a. a failure before any attest transaction exists releases the booking;
 // one after the send keeps it.

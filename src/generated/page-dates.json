@@ -47,7 +47,7 @@
     "src/tools/agent-kit.js": "2026-10-06",
     "src/tools/alchemy-data-kit.js": "2026-10-19",
     "src/tools/api-kit.js": "2026-09-10",
-    "src/tools/attest-kit.js": "2026-10-15",
+    "src/tools/attest-kit.js": "2026-10-28",
     "src/tools/b20-kit.js": "2026-10-14",
     "src/tools/b2b-enrich-kit.js": "2026-10-28",
     "src/tools/barcode-kit.js": "2026-10-13",

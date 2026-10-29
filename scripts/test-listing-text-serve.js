@@ -78,6 +78,30 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
   ok(sellers.has(CLEAN) && !sellers.has(BAD) && !sellers.has(HIDE), `the router still ranks the clean row and drops both flagged ones (${[...sellers].join(", ")})`);
 }
 
+// ---- /api/route rows: seller name, homepage and listing text served screened
+{
+  const PHRASED = "https://phrased.example", JS = "https://jshome.example", SELF_WWW = "https://www.agent402.tools";
+  const home = (name, homepage, tools) => ({ ...entry(name, tools), manifest: { name, homepage } });
+  cache.set(PHRASED, home(PHRASE, "https://phrased.example/about", [row(PHRASED)]));
+  cache.set(JS, home(`JS${ZW} Home`, "javascript:alert(1)", [row(JS, { name: "Thing\u0007" })]));
+  cache.set(SELF_WWW, home("Our own catalog", SELF_WWW, [row(SELF_WWW)]));
+  _resetFlatCacheForTest(); _resetIndexRowsForTest();
+  const q = { query: "converts currency amounts", top: 10, include: "external", baseUrl: "http://127.0.0.1:1", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "" };
+  const routed = routeQuery(q).results || [];
+  const by = (o) => routed.find((r) => r.seller === o);
+  const c = by(CLEAN), p = by(PHRASED), j = by(JS);
+  ok(c && c.name.length === LISTING_NAME_MAX && c.sellerName.length === LISTING_NAME_MAX, `route rows cap the tool name and the seller name at ${LISTING_NAME_MAX} (${c?.name?.length}, ${c?.sellerName?.length})`);
+  ok(p && p.sellerName === "phrased.example" && p.sellerHome === "https://phrased.example/about", `a seller name that trips the screen is served as the bare host, its http(s) homepage kept (${p?.sellerName}, ${p?.sellerHome})`);
+  ok(j && j.sellerHome === JS && j.sellerName === "JS Home" && j.name === "Thing", `a non-http homepage falls back to the seller origin; a hidden character in the seller name and a control character in the tool name are stripped (${j?.sellerHome}, ${j?.sellerName}, ${JSON.stringify(j?.name)})`);
+  ok(!JSON.stringify(routed).includes(ZW) && !JSON.stringify(routed).toLowerCase().includes("ignore previous") && !JSON.stringify(routed).includes("javascript:"), "no hidden character, instruction phrase or script URL reaches a route row");
+  ok(!by(SELF_WWW), "our own catalog under a www. spelling is never an outside seller on /api/route");
+  const dir = allIndexedTools({ ourTools: [], excludeOrigin: "http://127.0.0.1:1", limit: 50 });
+  ok(!dir.results.some((r) => r.seller === SELF_WWW) && dir.results.some((r) => r.seller === PHRASED), "...nor in the third-party directory (control: the phrased seller is listed)");
+  ok(cache.get(JS).manifest.homepage === "javascript:alert(1)" && cache.get(PHRASED).manifest.name === PHRASE, "the crawled entries are unchanged");
+  for (const o of [PHRASED, JS, SELF_WWW]) cache.delete(o);
+  _resetFlatCacheForTest(); _resetIndexRowsForTest();
+}
+
 // ---- /api/index?seller= ----------------------------------------------------
 {
   const raw = sellerDetail("bad.example");

@@ -449,11 +449,11 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const cand = (host, networks = ["eip155:8453"]) => ({ seller: `https://${host}`, slug: host, url: `https://${host}/x`, method: "POST", price: "$0.001", networks });
   const reqOn = (network) => ({ ip: "198.51.100.77", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
-  const run = async ({ list, pay, chains = ["base"], network = "eip155:8453", wallet = () => null }) => {
+  const run = async ({ list, pay, chains = ["base"], network = "eip155:8453", wallet = () => null, resolve = null }) => {
     guard.__reset();
     const calls = [];
     const exec = buildRouteExecuteTool({
-      getCatalog: () => ({}), tier: PRO, resolveExternal: async () => list,
+      getCatalog: () => ({}), tier: PRO, resolveExternal: resolve || (async () => list),
       payExternal: async (url, opts) => { calls.push(url); return pay(url, opts); },
       externalEnabled: () => true, externalChains: () => chains, spendingWalletStatus: wallet,
     });
@@ -511,6 +511,25 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     let base = null;
     await run({ list: [cand("h.example")], pay: async (url, opts) => { base = opts; return good(); } });
     ok(base && base.timeoutMs === undefined, "CONTROL: a Base payer keeps the payer's own timeout");
+  }
+  // Solana: the same budget, inside the credential's blockhash life. A resolve
+  // that used it up is refused 504 before anything is signed (uncharged: a
+  // 4xx/5xx cancels settlement), the Algorand shape.
+  {
+    const { SVM_BUDGET_MS_DEFAULT } = await import("../src/tools/route-execute.js");
+    let seen = null;
+    const c = await run({ list: [cand("sv.example", [SOL])], pay: async (url, opts) => { seen = opts; return good(); }, chains: ["solana"], network: SOL });
+    ok(c.r?.receipt?.external === true && Number.isFinite(seen?.timeoutMs) && seen.timeoutMs <= SVM_BUDGET_MS_DEFAULT && SVM_BUDGET_MS_DEFAULT < 60_000, `Solana payer: the seller call is budgeted under the blockhash life (timeoutMs ${seen?.timeoutMs})`);
+    ok(Number.isFinite(seen?.refusalMaxWaitMs) && seen.refusalMaxWaitMs <= SVM_BUDGET_MS_DEFAULT, `Solana payer: the refusal wait is bounded by the same budget (${seen?.refusalMaxWaitMs})`);
+    process.env.SOR_SVM_BUDGET_MS = "4500";
+    try {
+      const slow = (nets) => async () => { await new Promise((r) => setTimeout(r, 700)); return [cand("sv.example", nets)]; };
+      const { e, calls } = await run({ list: [], resolve: slow([SOL]), pay: good, chains: ["solana"], network: SOL });
+      ok(e?.statusCode === 504 && /nothing is charged/.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+      ok(guard.walletDailySpentUsd("solana") === 0, "Solana payer: the refusal books nothing on the chain's day");
+      const b = await run({ list: [], resolve: slow(["eip155:8453"]), pay: good });
+      ok(b.r?.receipt?.external === true && b.calls.length === 1, "CONTROL: the same slow resolve on a Base payer still pays");
+    } finally { delete process.env.SOR_SVM_BUDGET_MS; }
   }
   // A payer 402 (quote over the cap) or 400 (seller address not public) is
   // never relayed to a paying buyer as is.

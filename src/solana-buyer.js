@@ -17,6 +17,7 @@
 
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertSigningAllowed } from "./signing-halt.js";
+import { OUR_SOLANA_WALLETS } from "./revenue-live.js";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const SOLANA_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -146,7 +147,7 @@ export async function solanaInboundCount(payTo, { windowMs = SVM_WINDOW_MS(), li
 /** The credit rule, PURE and shared with the Solana leaderboard's incremental
  *  scan: a transaction credits the seller when its USDC balance ROSE and some
  *  account other than the seller's was debited (self-funding excluded). */
-export function creditFromTx(meta, payTo) {
+export function creditFromTx(meta, payTo, ours = OUR_SOLANA_WALLETS) {
   if (!meta || meta.err) return { credited: false, funder: null };
   const pre = (meta.preTokenBalances || []).find((b) => b?.mint === USDC_MINT && b?.owner === payTo);
   const post = (meta.postTokenBalances || []).find((b) => b?.mint === USDC_MINT && b?.owner === payTo);
@@ -164,9 +165,13 @@ export function creditFromTx(meta, payTo) {
     // real money per fake and is bounded downstream by cap + the per-payer
     // spend ceiling. Closing it fully needs parsing the x402 buyer identity
     // from the payment instruction, deferred.
+  // A debit from one of OUR wallets (the router's own purchase, a canary) is
+  // not the seller's proof either: the leaderboard fold and the chain join
+  // leave those payments out, and this rule is the Solana half of it.
+  const isOurs = (owner) => !!(ours && typeof ours.has === "function" && typeof owner === "string" && ours.has(owner));
   let funder = null;
   const fundedByOther = (meta.preTokenBalances || []).some((b) => {
-    if (b?.mint !== USDC_MINT || b?.owner === payTo) return false;
+    if (b?.mint !== USDC_MINT || b?.owner === payTo || isOurs(b?.owner)) return false;
     const p2 = (meta.postTokenBalances || []).find((x) => x?.accountIndex === b.accountIndex);
     const debited = Number(b?.uiTokenAmount?.amount || 0) > Number(p2?.uiTokenAmount?.amount || 0);
     if (debited && !funder) funder = b.owner || null;

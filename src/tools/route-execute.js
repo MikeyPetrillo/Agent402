@@ -28,6 +28,13 @@ import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
+import { recordRouterPurchase } from "../router-purchases.js";
+
+// The external leg's default budget for a Solana payer: the short end of a
+// recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
+// out) less a settle margin, so the facilitator's broadcast after the handler
+// still lands inside it. SOR_SVM_BUDGET_MS overrides it.
+export const SVM_BUDGET_MS_DEFAULT = 40_000;
 
 // Two execution tiers, both from buildRouteExecuteTool. The tier a buyer needs
 // is quoted by /api/route (routeExecuteHint below), so there's no guessing:
@@ -210,7 +217,7 @@ export function externalChainsFor(payNet, supported, { tempoFromBase = process.e
 }
 const EXTERNAL_CHAIN_CAIP2 = Object.fromEntries(Object.entries(EXTERNAL_CHAIN_BY_NETWORK).map(([k, v]) => [v, k]));
 
-export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus }) {
+export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
   const UNDERLYING_MAX_USD = tier.underlyingMaxUsd;
   const routeSuffix = tier.slug.replace("route-execute", "");
@@ -355,7 +362,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // AVM payments are signed for a short round window by default, so the
           // external leg runs under a budget there too.
           const avmBudgetMs = tempoBudgetMs == null && String(payNet || "").startsWith("algorand:") ? (Number(process.env.SOR_AVM_BUDGET_MS) || 16000) : null;
-          const windowBudgetMs = tempoBudgetMs ?? avmBudgetMs;
+          // An SVM payment is a transaction signed against a recent blockhash,
+          // which lives about a minute (the life the buyer path waits out in
+          // src/solana-buyer.js confirmSvmNotDebited), and the facilitator
+          // broadcasts it after the handler: the leg keeps a settle margin
+          // inside the short end of that life, the same rule as above.
+          const svmBudgetMs = tempoBudgetMs == null && String(payNet || "").startsWith("solana:") ? (Number(process.env.SOR_SVM_BUDGET_MS) || SVM_BUDGET_MS_DEFAULT) : null;
+          const windowBudgetMs = tempoBudgetMs ?? avmBudgetMs ?? svmBudgetMs;
           const startedAt = Date.now();
           const remainingMs = () => (windowBudgetMs == null ? null : windowBudgetMs - (Date.now() - startedAt));
           // REQUEST-SCOPED BOUND for the buyer's refusal wait. After a refused
@@ -363,7 +376,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // it will treat "no debit" as proof and fall through to the next
           // seller (up to ~90 s on Solana, the refusal window on Base). That
           // wait must never outlive this request: every chain gets a deadline
-          // (the Tempo budget where one exists, else SOR_EXTERNAL_DEADLINE_MS,
+          // (a short rail's budget where one exists, else SOR_EXTERNAL_DEADLINE_MS,
           // under the 300 s our own 402 advertises), and the remaining budget
           // rides into payExternal as refusalMaxWaitMs. A wait cut short keeps
           // the hold (nothing falls through), so the bound is money-safe. An
@@ -417,7 +430,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
             if (list.length) { candidateList = list; chain = c; break; }
           }
-          if (avmBudgetMs != null && remainingMs() < 4000) {
+          if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used this payment's time budget; nothing was spent and nothing is charged. Retry with a fresh payment, or pay this route over an EVM rail.`, 504);
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
@@ -622,6 +635,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // it would let two cheap misses starve a legitimate retry. `committed`
             // is payX402's own stamp for "the authorization left".
             const spentMaybe = e?.committed === true;
+            // A payment that left is the router's purchase whatever the seller
+            // answered: recorded against the seller's wallet so its
+            // third-party counts are reduced by it (src/router-purchases.js).
+            if (spentMaybe) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
             // A paid request that got no answer is never followed by another
             // seller in the same request, even once the chain shows it unused.
             // "No answer" is the outcome a caller's own params can produce (a
@@ -676,6 +693,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // paid (no quote, no receipt): nothing left the wallet, so nothing is
           // booked against it.
           const servedUnpaid = !paid.quote && !paid.receipt;
+          // The router's own purchase, recorded against the wallet it paid so
+          // the seller's third-party counts are reduced by it.
+          if (!servedUnpaid) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
           const underlyingUsd = servedUnpaid ? 0 : (paid.quote ? paid.quote.usd : extUsd);
           // Now the real figure is known, so the ceiling stops counting the
           // worst case against this payer.

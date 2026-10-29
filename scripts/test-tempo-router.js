@@ -125,6 +125,7 @@ const seller = createServer((req, res) => {
       if (sellerMode === "reject-paid") { res.writeHead(402, { "www-authenticate": challengeHeader() }); return res.end("{}"); }
       const rcpt = Buffer.from(JSON.stringify({ method: "tempo", status: "success", reference: "0xbeef", timestamp: new Date().toISOString() })).toString("base64url");
       if (sellerMode === "fail-500") { res.writeHead(500, { "content-type": "text/plain" }); return res.end("boom"); }
+      if (sellerMode === "redirect-paid") { res.writeHead(302, { location: "https://elsewhere.test/x" }); return res.end(); }
       if (sellerMode === "fail-400") { res.writeHead(400, { "content-type": "application/json" }); return res.end("{}"); }
       // A paid 200 whose body breaks off mid-read.
       if (sellerMode === "broken-body") { res.writeHead(200, { "content-type": "application/json", "content-length": "5000" }); res.write('{"partial":'); return setTimeout(() => res.destroy(), 20); }
@@ -224,6 +225,17 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
     globalThis.fetch = realFetch;
     if (savedKey === undefined) delete process.env.TEMPO_UPSTREAM_BUYER_KEY; else process.env.TEMPO_UPSTREAM_BUYER_KEY = savedKey;
   }
+}
+
+// ---- a redirect on the paid leg is never delivered (the payX402 rule) ----
+{
+  sellerMode = "redirect-paid";
+  const hits = paidHits;
+  let e = null, r = null;
+  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
+  ok(!r && e?.statusCode === 502 && /redirect/.test(String(e?.message)) && paidHits === hits + 1, `a 3xx on the paid leg is a 502, never a delivered answer (${e ? `${e.statusCode}: ${String(e.message).slice(0, 60)}` : "resolved"})`);
+  ok(e?.committed === true && e?.signedUsd === 0.002, "...stamped committed with the credential's amount: the credential was handed over");
+  sellerMode = "ok";
 }
 
 // ---- a paid 200 whose body cannot be read is relayed, never a 502 ----
