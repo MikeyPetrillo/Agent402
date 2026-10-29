@@ -30,16 +30,17 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, credentialSignedUsd, challengeIdFromMeta,
+  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
 } from "./mcp-mpp.js";
 import {
   TASKS_EXTENSION, CLIENT_CAPABILITIES_META, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
   mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
 } from "./mcp-tasks.js";
-import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
+import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
-import { tempoEnabled } from "./mpp-tempo.js";
+import { tempoEnabled, pushHashOf, tempoOfferedFor } from "./mpp-tempo.js";
+import { isIdentityBoundRoute } from "./payments.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
@@ -55,7 +56,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } fr
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
-import { premiumClause } from "./payments.js";
+import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import {
@@ -173,6 +174,8 @@ export function problemOf(j) {
  *  `paid` = a payment credential rode along on the call; only without one is
  *  "nothing was charged" certain. */
 export function connectorCutoffText({ label, seconds, paid, route = null, error = null }) {
+  // The unpaid text's "nothing to charge" holds only because no credential
+  // was presented; a paid cut-off never says it.
   const money = paid ? PAID_CUTOFF_TEXT : UNPAID_CUTOFF_TEXT;
   const where = route ? `${route} over HTTP` : "the tool's HTTP route directly";
   if (error != null) return `${label}: the call could not be completed (${String(error).slice(0, 120)}). ${money}${paid ? "" : " Retry shortly."}`;
@@ -191,7 +194,11 @@ let mcpInFlight = 0;
  * Mount the MCP endpoint on the express app.
  * `catalog` is the CATALOG map (route -> tool def), `opts.isComputePayable`
  * decides the free set. `opts.onServed(slug, { latencyMs, errored })` feeds
- * both the stats counters and the analytics dashboard with full per-call meta.
+ * both the stats counters and the analytics dashboard with full per-call meta
+ * for the free path. `opts.onPaidCutoff(slug, { statusCode, errorMessage,
+ * latencyMs, heartbeatToken })` books the one paid outcome no route sees: a
+ * loopback that returned no answer (timed out, failed, or a task run that
+ * was aborted); every answered paid call is booked by the route it reached.
  */
 // `path` + `profile` (2026-09-10): a SECOND mount of the same connector at
 // another path, serving ONE product. `profile = { serverName, instructions,
@@ -212,7 +219,7 @@ export function mcpPaymentMethods() {
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
   // sellers.list is listed and answered only when the connector opts in (AGENT402_SHOW_ROUTER=1).
   const sellersListed = Boolean(getLeaderboard) && process.env.AGENT402_SHOW_ROUTER === "1";
   const scoped = profile?.metaTools === false;
@@ -666,14 +673,19 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (handle) return handle;
         // Fell through: the run finished (or was refused) inside the gate window,
         // so answer synchronously exactly as a blocking call would.
-      } else if (credentialHeader && needsAsyncOrWait(entry.def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+      } else if (credentialHeader && !pushHashOf(credentialHeader) && needsAsyncOrWait(entry.def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
         // A paid run whose budget outlasts this connector's blocking wait
         // cannot be served blocking: the loopback would be cut after the gate
         // passed, the run would settle, and the answer would be owed. The HTTP
         // route refuses the same shape before any gate
         // (src/slow-sync-window.js); so does this, before the loopback, for a
         // client that did not declare the tasks extension on this request.
-        // An unpaid call still gets its 402 from the loopback.
+        // An unpaid call still gets its 402 from the loopback. A Tempo PUSH
+        // credential names a transfer that is already final on chain:
+        // refused here it would stay unclaimed and unbooked, so it goes to
+        // the loopback, where the gate claims it and an answer this
+        // connector stops waiting for is booked as owed by the route
+        // (src/hangup-settlement.js).
         return { content: [{ type: "text", text: slowCallRefusalText(entry.def) }], isError: true };
       }
 
@@ -688,6 +700,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} tool=${entry.def.slug} after=${Date.now() - startedAt}ms`);
+        // The loopback returned no answer, so no route booked this outcome:
+        // the connector books it (the one failure class that is its own).
+        onPaidCutoff(entry.def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken });
         // "Not charged" is only true when no payment credential rode along:
         // with one, the server-side request may have settled after this
         // connector stopped waiting.
@@ -712,12 +727,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return paidPriceUsd({ basePriceUsd: toolPriceUsd(def.slug), caip2: settle?.network ?? null });
     }
 
+    /** The push exception a "not charged" line carries for this route: only
+     *  where the 402 offers Tempo at all (src/mpp-tempo.js tempoOfferedFor:
+     *  not an identity-bound route, not a long-running one), since no other
+     *  route can be reached with a Tempo transfer sent before the call. */
+    function pushClause(def) {
+      return tempoOfferedFor({ identityBound: Boolean(def.identityBound) || isIdentityBoundRoute(def), longRunning: isLongRunningSlug(def.slug) }) ? PUSH_EXCEPTION : "";
+    }
+
     /** The refusal a blocking paid call to a slow route gets ahead of the
      *  loopback (the HTTP route's respond_async_required, in this wire's terms). */
     function slowCallRefusalText(def) {
       const budget = Number(def.asyncProfile?.maxSeconds);
       const wait = Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000);
-      return `respond_async_required: ${def.slug} can take up to ${budget} s, longer than this connector waits for a blocking call (${wait} s). Call it again declaring the MCP tasks extension on the request (_meta["${CLIENT_CAPABILITIES_META}"].extensions["${TASKS_EXTENSION}"]) and the run is handed back as a task handle to poll, or call the HTTP route ${def.route} with the header Prefer: respond-async, which answers 202 with a job link. This call was refused before any payment was taken.`;
+      return `respond_async_required: ${def.slug} can take up to ${budget} s, longer than this connector waits for a blocking call (${wait} s). Call it again declaring the MCP tasks extension on the request (_meta["${CLIENT_CAPABILITIES_META}"].extensions["${TASKS_EXTENSION}"]) and the run is handed back as a task handle to poll, or call the HTTP route ${def.route} with the header Prefer: respond-async, which answers 202 with a job link. This call was refused before any payment was taken${pushClause(def)}.`;
     }
 
     /** Turn a completed loopback response into the MCP answer. Shared by the
@@ -766,7 +789,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${PUSH_EXCEPTION}` : ` - not charged (settlement runs only after a successful handler)${PUSH_EXCEPTION}`}: ${detail}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : ` - not charged (settlement runs only after a successful handler)${pushClause(entry.def)}`}: ${detail}` }], isError: true };
       }
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};
@@ -872,6 +895,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           let current = null;
           try { current = await tasks.get(rec.taskId); } catch { current = null; }
           if (aborted && current?.status === "cancelled") return; // cancel() already wrote the terminal state
+          // No answer came back from the loopback, so no route booked this
+          // run's outcome: the connector books it.
+          onPaidCutoff(entry.def.slug, { statusCode: 504, errorMessage: aborted ? "task run aborted" : "task run failed", latencyMs: Date.now() - startedAt, heartbeatToken });
           // Never relay an upstream/internal error body to the buyer.
           await tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The connector stopped waiting for the run." : "The run did not complete." },
             `The run's result did not reach this connector. ${PAID_CUTOFF_TEXT}`);
@@ -895,9 +921,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // A result that cannot be retained books a debt: the x402 settle
         // receipt the 200 carries is the proof (success, chain, payer; the
         // MPP receipt names none of these), at what the credential signed on
-        // that chain, never the list price.
-        const settle = settleReceiptFromHeader(r.headers?.get?.("payment-response"));
-        await tasks.complete(rec.taskId, out, { receipt: settle || receiptFromHeader(r.headers?.get?.("payment-receipt")), priceUsd: taskPaidUsd(entry.def, credentialHeader, settle) });
+        // that chain, never the list price. A Tempo-paid run carries no x402
+        // receipt: its proof is built from the Tempo receipt (the transfer
+        // hash, the chain) and the sender the credential's own signature
+        // proves (src/mcp-mpp.js tempoSettleProof).
+        const mppReceipt = receiptFromHeader(r.headers?.get?.("payment-receipt"));
+        const settle = settleReceiptFromHeader(r.headers?.get?.("payment-response")) || tempoSettleProof(mppReceipt, credentialHeader);
+        await tasks.complete(rec.taskId, out, { receipt: settle || mppReceipt, priceUsd: taskPaidUsd(entry.def, credentialHeader, settle) });
       }).catch(() => { /* settled never rejects; belt and braces */ });
 
       return createTaskResult(rec);
@@ -1360,7 +1390,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             ...(Number.isInteger(handlerErr?.retryAfter) ? { retryAfterSeconds: handlerErr.retryAfter } : {}),
             ...(fromUpstream || status >= 500
               ? {
-                whoseFault: "not your input - a third party this tool depends on refused or failed our request, and you were not charged, except a Tempo transfer sent before the call, which is recorded as owed",
+                // The free tier: no credential rides along here, so there is
+                // nothing a push exception could apply to.
+                whoseFault: "not your input - a third party this tool depends on refused or failed our request; this free call presented no payment, so there was nothing to charge",
                 nextStep: attribution === "upstream"
                   ? "retry the SAME call later; changing the input will not help"
                   : "this resource is not reachable by this server; a different source may be, but the same call will keep failing",

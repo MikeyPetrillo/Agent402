@@ -9233,6 +9233,16 @@ const mcpMountOpts = {
   // count itself, so the connector never calls this for a paid outcome.
   // Cache hits don't flow through MCP today — that path bypasses the central
   // HTTP dispatcher.
+  // The one paid outcome no route books: a loopback that returned no answer
+  // (timed out, failed, or a task run that was aborted). Counted once here,
+  // under the connector's own class, so a connector that cuts every paid
+  // call off shows on the failure monitor; a probe's own cut-off is
+  // synthetic, as its route booking would be.
+  onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
+    const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
+    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic }); } catch { /* bookkeeping only */ }
+    logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
+  },
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
     // MCP doesn't carry an HTTP status, so we synthesize one for the split:
