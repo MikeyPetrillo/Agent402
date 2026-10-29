@@ -9,9 +9,9 @@
 // layer on top. This page is the OPERATOR's full view of the same data — every cluster, ranked, with the qualification verdict spelled
 // out — so it lives behind the token, not on a public route.
 //
-// aggregate is the getWishesAggregate() output. Its `text` field is already
-// esc()'d at the source, so it is inserted here without re-escaping (double-
-// escaping would mangle the &amp; etc.). Every other value is numeric/ISO.
+// aggregate is the getWishesAggregate() output. Its `text` field is raw
+// buyer-supplied text and is escaped here, where it is rendered. Every other
+// value is numeric/ISO.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const fmt = (iso) => String(iso || "").replace("T", " ").slice(0, 16) + "Z";
@@ -87,7 +87,7 @@ export function operatorWishesPage(baseUrl, aggregate) {
       <td>${rerankCell(c)}</td>
       <td class="ow-mono ow-faint" title="api / mcp / find-miss">${esc(src)}</td>
       <td class="ow-mono ow-small ow-faint">${esc(fmt(c.firstSeen))}<br>${esc(fmt(c.lastSeen))}</td>
-      <td class="ow-text">${c.text}</td>
+      <td class="ow-text">${esc(c.text)}</td>
     </tr>`;
   }).join("");
 

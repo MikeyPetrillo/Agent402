@@ -25,8 +25,8 @@ const aggregate = {
     // below threshold
     { text: "solidity auditor", count: 2, qualified: false,
       sources: { api: 0, mcp: 0, "find-miss": 2 }, firstSeen: "2026-07-13T10:00:00.000Z", lastSeen: "2026-07-13T10:05:00.000Z" },
-    // an entity with HTML-significant chars already esc()'d by getWishesAggregate
-    { text: "handle &lt;script&gt; safely", count: 1, qualified: false,
+    // hostile raw text: the aggregate carries buyer text as written
+    { text: "<script>alert(1)</script><img src=x onerror=alert(2)> &lt;kept&gt; \"q\" 'a'", count: 1, qualified: false,
       sources: { api: 1, mcp: 0, "find-miss": 0 }, firstSeen: "2026-07-16T00:00:00.000Z", lastSeen: "2026-07-16T00:00:00.000Z" },
   ],
 };
@@ -49,9 +49,10 @@ ok(html.includes("synthora mesh 962 m2m"), "single-source spam is still visible 
 ok(html.includes("convert heic to png batch"), "qualified demand is visible");
 ok(html.includes("solidity auditor"), "below-threshold demand is visible");
 
-// --- already-escaped text is not double-escaped ---
-ok(html.includes("&lt;script&gt;") && !html.includes("<script>alert"), "pre-escaped text passes through without double-encoding");
-ok(!html.includes("&amp;lt;"), "no double-escaping of &lt; into &amp;lt;");
+// --- raw text is escaped where it is rendered ---
+ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;") && !html.includes("<script>alert") && !html.includes("<img src=x"), "hostile wish text renders as inert text");
+ok(html.includes("&amp;lt;kept&amp;gt;"), "an entity the buyer typed is shown as typed, not decoded");
+ok(html.includes("&quot;q&quot;") && html.includes("&#39;a&#39;"), "quotes are escaped too");
 
 // --- privacy: gated + advertised as non-public, kept out of robots ---
 ok(html.includes("AGENT402_OPERATOR_TOKEN"), "page states it is token-gated");
