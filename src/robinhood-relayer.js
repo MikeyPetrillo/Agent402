@@ -33,10 +33,10 @@ import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, is
 const AUTH_STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
 import { privateKeyToAccount } from "viem/accounts";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { positiveNum as num } from "./env-num.js";
 
 export const OWN_RELAYER_NAME = "own relayer";
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 /** Caps, env-tunable: the fee per gas (gwei), the gas limit, the receipt wait,
  *  and how long a submission waits for the relayer lock. */
 export function relayerSettings(env = process.env) {

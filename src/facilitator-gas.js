@@ -18,10 +18,10 @@
 // watch is not a failure, so it is logged once and never pages. Readings feed the facilitatorFunds
 // word through the tool-failure monitor (noteRelayerGas), which shares them
 // across replicas.
+import { positiveNum as num } from "./env-num.js";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const MAX_SIGNERS = 5;
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** Defaults, env-tunable: the runway that reads low, the gas one settlement is
  *  budgeted at, consecutive failed reads before a signer reads unread, and

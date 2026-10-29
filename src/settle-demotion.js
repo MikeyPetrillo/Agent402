@@ -27,8 +27,8 @@
 // Per process: each replica demotes on its own refusals, which a refusal
 // streak reaches on every replica within a few calls.
 import { isFacilitatorBillingRefusal } from "./payment-reject.js";
+import { positiveNum as num } from "./env-num.js";
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 const AFTER = () => num(process.env.SETTLE_DEMOTE_AFTER, 3);
 const COOLDOWN_MS = () => num(process.env.SETTLE_DEMOTE_COOLDOWN_MS, 15 * 60_000);
 // The sub-cent quota refusal has its own gate (src/avm-sponsorship.js), which

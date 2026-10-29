@@ -49,6 +49,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
+import { envPositive as envMs } from "./env-num.js";
 
 /** Returned by an update() mutator to leave the stored body unchanged. */
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
@@ -94,7 +95,6 @@ export async function flushJsonDocuments({ timeoutMs = 5_000 } = {}) {
   await Promise.race([Promise.allSettled(docs.map((d) => d.flush())), deadline]).finally(() => clearTimeout(timer));
   return unsavedDocuments();
 }
-const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** The volume's own name for a document: the file's basename. */
 export function documentNameOf(file) {

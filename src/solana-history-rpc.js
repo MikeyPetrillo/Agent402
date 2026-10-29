@@ -38,6 +38,7 @@
 //   3. the remaining SOLANA_RPCS entries (fallback only).
 import { redactSecrets } from "./tools/redact.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { positiveNum as num } from "./env-num.js";
 
 const PUBLIC_MAINNET = "https://api.mainnet-beta.solana.com";
 
@@ -51,7 +52,6 @@ export const SOLANA_RPCS = (process.env.SOLANA_RPCS || [
 ].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 
 const list = (v) => String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 const isKeyedUrl = (u) => /alchemy\.com/i.test(u);
 const onFlag = (v) => /^(1|on|true|yes)$/i.test(String(v || "").trim());
 

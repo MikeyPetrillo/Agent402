@@ -36,12 +36,12 @@
 // all, is a format change, not an empty list: loadSdnList throws and keeps
 // nothing, and each reader keeps its previous good copy.
 import { registerMemoryStore } from "./memory-stores.js";
+import { envAtLeast as envMs } from "./env-num.js";
 
 export const SDN_LIST_DEFAULT_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML";
 export const SDN_MAX_BYTES = 96 * 1024 * 1024; // the export is ~30 MB; far past that is a surprise worth refusing
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
-const envMs = (k, d, min = 1) => { const n = Number(process.env[k]); return Number.isFinite(n) && n >= min ? n : d; };
 /** The download timeout: the whole export over a slow link takes minutes. */
 export function sdnFetchTimeoutMs() { return envMs("SANCTIONS_LIST_TIMEOUT_MS", 10 * 60_000, 1000); }
 export function sdnListUrl() { return String(process.env.SANCTIONS_LIST_URL || "").trim() || SDN_LIST_DEFAULT_URL; }

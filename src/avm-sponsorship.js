@@ -63,6 +63,7 @@
 import { isPaymentVerdictReason } from "./payment-reject.js";
 import { paymentHeaderOf } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite } from "./shared-limits.js";
+import { positiveNum as num } from "./env-num.js";
 
 const PATCHED = Symbol.for("agent402.avmSubcentGate");
 export const ALGORAND_PREFIX = "algorand:";
@@ -70,7 +71,6 @@ export const ALGORAND_PREFIX = "algorand:";
 const USDC_ASA_IDS = new Set(["31566704", "10458941"]);
 export const SUBCENT_ATOMIC = 10000n;
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 /** How often the boot timer re-reads the facilitator's sponsorship status. */
 export const REFRESH_MS = num(process.env.AVM_SPONSORSHIP_REFRESH_MS, 90_000);
 /** Evidence older than this no longer pauses anything (fail open). */

@@ -18,8 +18,8 @@
 // runs at once (and starts its backoff over), so a store does not stay
 // unloaded for up to a minute after the outage ends.
 import { onStateDbRecovered } from "./state-db.js";
+import { envPositive as envMs } from "./env-num.js";
 
-const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
 
 const unloaded = new Set();
 // The wake-ups of the loads waiting on a backoff timer.

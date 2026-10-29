@@ -70,6 +70,7 @@ import { randomUUID } from "node:crypto";
 import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { salePathGroup } from "./sale-path.js";
+import { positiveNum as num } from "./env-num.js";
 
 export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
@@ -97,7 +98,6 @@ const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
 const REMOTE_MAX_AGE_MS = 30_000;
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 export function thresholds(env = process.env) {
   return {
     // degraded: one tool answered at least this many outside-buyer 5xx in 1 h.

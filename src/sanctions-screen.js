@@ -38,10 +38,10 @@ import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { parseSdnXml, sdnEvmAddresses, loadSdnList } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { envAtLeast as envMs } from "./env-num.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
-const envMs = (k, d, min = 1) => { const n = Number(process.env[k]); return Number.isFinite(n) && n >= min ? n : d; };
 export function sanctionsListRefreshMs() { return envMs("SANCTIONS_LIST_REFRESH_MS", 6 * 3600_000, 1000); }
 function retryMs() { return envMs("SANCTIONS_LIST_RETRY_MS", 5 * 60_000, 1000); }
 
