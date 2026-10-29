@@ -90,5 +90,16 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
     "rule with 4 wildcards (over the cap) is skipped, so an otherwise-matching path is allowed");
 }
 
+// 2. One group keeps at most 2,000 rules, so a robots.txt of thousands of
+// rules costs a bounded scan per path; the first 2,000 still apply.
+{
+  const lines = ["User-agent: *"];
+  for (let i = 0; i < 4500; i++) lines.push(`Disallow: /p${i}/`);
+  const groups = parseRobots(lines.join("\n"));
+  ok(groups.length === 1 && groups[0].rules.length === 2000, `a group keeps at most 2,000 rules (got ${groups[0]?.rules.length})`);
+  ok(robotsAllows(groups, "test-agent", "/p1999/x").allowed === false && robotsAllows(groups, "test-agent", "/p2000/x").allowed === true,
+    "the rules inside the cap apply; the ones past it are not read");
+}
+
 console.log(`\n${pass} passed`);
 process.exit(0);
