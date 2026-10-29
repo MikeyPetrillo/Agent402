@@ -47,6 +47,7 @@ import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imp
 import { getSharedRedisClient } from "./shared-limit.js";
 import { sharedLimitsEnabled } from "./shared-limits.js";
 import { retryingLoad } from "./store-retry.js";
+import { salePathOf } from "./sale-path.js";
 
 // A hold whose buyer left before the first byte is decided when the response
 // ends; one that nothing ends within this long is released (call-time read,
@@ -206,6 +207,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // and logs it. Held micro-dollars with no entry (holds placed by a build
   // without entries) are returned the same way once the row has been quiet
   // for that long. A settle that arrives for a swept hold takes nothing.
+  // A hold marked settling (its call answered a final 200, marked as the
+  // response ends with the amount the debit takes) is never returned: the
+  // sweep turns it into spend and books the sale, and a settle that lands
+  // later moves nothing and books nothing.
   const liveHolds = new Set(); // hold ids of requests in flight here
   // A request in flight refreshes its hold's `at` every third of the window,
   // so a sweep on another container (which cannot see this process's
@@ -237,30 +242,44 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const age = abandonedHoldMs();
     const cut = now() - age;
     const rows = (await stateQuery(`SELECT id, updated_at FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND (body->>'heldMicro')::bigint > 0`, [COLL])).rows;
-    let released = 0, micro = 0;
+    let released = 0, micro = 0, settled = 0, settledMicro = 0;
     for (const row of rows) {
       const hash = row.id.slice(2);
       const quietRow = new Date(row.updated_at).getTime() < cut;
       const out = await mutatePgNow(hash, (rec) => {
         if (!rec || !(rec.heldMicro > 0)) return { result: null };
         const holds = { ...(rec.holds || {}) };
-        let back = 0, n = 0;
+        let back = 0, leaving = 0, n = 0;
+        const spends = []; // settling holds: [id, held, taken, slug, via]
         for (const [id, h] of Object.entries(holds)) {
           if (liveHolds.has(id) || !(Number(h?.at) < cut)) continue;
-          back += Number(h.m) || 0; n++; delete holds[id];
+          const held = Number(h.m) || 0;
+          leaving += held;
+          if (h.s) { const taken = Math.max(0, Math.min(held, Number(h.s.m) || 0)); spends.push([id, held, taken, h.s.slug ?? null, h.s.via ?? null]); back += held - taken; }
+          else { back += held; n++; }
+          delete holds[id];
         }
         // Held money no entry accounts for, on a row nobody has touched for the whole window.
-        const untracked = rec.heldMicro - back - holdTotal(holds);
-        if (quietRow && untracked > 0 && ![...liveHolds].some((id) => id.startsWith(`${hash.slice(0, 12)}:`))) { back += untracked; n++; }
-        back = Math.min(back, rec.heldMicro);
-        if (!n || back <= 0) return { result: null };
+        const untracked = rec.heldMicro - leaving - holdTotal(holds);
+        if (quietRow && untracked > 0 && ![...liveHolds].some((id) => id.startsWith(`${hash.slice(0, 12)}:`))) { back += untracked; leaving += untracked; n++; }
+        if (!n && !spends.length) return { result: null };
+        const spent = spends.reduce((a, x) => a + x[2], 0);
+        leaving = Math.min(leaving, rec.heldMicro);
+        back = Math.max(0, Math.min(back, leaving - spent));
         rec.holds = holds;
-        rec.heldMicro -= back; rec.balanceMicro += back;
-        return { rec, result: { n, back, keyId: rec.keyId } };
+        rec.heldMicro -= leaving; rec.balanceMicro += back; rec.spentMicro = (rec.spentMicro || 0) + spent;
+        if (spends.length) {
+          const at = now();
+          rec.calls = (rec.calls || 0) + spends.length; rec.lastUsedAt = new Date(at).toISOString();
+          rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), ...Object.fromEntries(spends.map(([id, held, taken]) => [id, { m: taken, h: held, at, booked: true }])) });
+        }
+        const keyId = rec.keyId;
+        return { rec, result: { n, back, s: spends.length, spent, keyId }, after: () => { for (const [, , taken, slug, via] of spends) onDebit?.({ slug, priceUsd: microToUsd(taken), keyId, via }); } };
       });
-      if (out) { released += out.n; micro += out.back; log(`[credits] released ${out.n} abandoned hold(s) on key ${out.keyId} ($${microToUsd(out.back)}): no settle or release landed within ${Math.round(age / 1000)} s`); }
+      if (out?.n) { released += out.n; micro += out.back; log(`[credits] released ${out.n} abandoned hold(s) on key ${out.keyId} ($${microToUsd(out.back)}): no settle or release landed within ${Math.round(age / 1000)} s`); }
+      if (out?.s) { settled += out.s; settledMicro += out.spent; log(`[credits] debited ${out.s} settling hold(s) on key ${out.keyId} ($${microToUsd(out.spent)}): their calls answered 200 and no settle landed within ${Math.round(age / 1000)} s`); }
     }
-    return { released, micro };
+    return { released, micro, settled, settledMicro };
   }
   if (usePg) {
     const every = Math.max(60_000, Math.min(15 * 60_000, Math.floor(abandonedHoldMs() / 2)));
@@ -587,15 +606,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     delete rec.holds[holdId];
     return heldMicro;
   }
-  function settleOn(rec, heldMicro, slug, chargeUsd, holdId = null) {
+  function settleOn(rec, heldMicro, slug, chargeUsd, holdId = null, via = null) {
     if (!rec) return { result: null };
     // A retried settle whose first attempt landed (its reply was lost): the
     // row already says what that settle took. Nothing moves again, and the
     // sale is booked at that amount (the first attempt never booked it).
     const prior = holdId && !Object.hasOwn(rec.holds || {}, holdId) ? rec.settledHolds?.[holdId] : null;
+    // A hold the sweep debited (`booked`) already booked its sale.
     if (prior) {
       const taken = Number(prior.m) || 0;
-      return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+      return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, ...(prior.booked ? {} : { after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, via }) }) };
     }
     heldMicro = takeHold(rec, heldMicro, holdId);
     const held = Math.min(heldMicro, rec.heldMicro || 0);
@@ -604,7 +624,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
     if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
-    return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId }) };
+    return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, via }) };
   }
   // What each recent settle took, by hold id (database only): kept long
   // enough for a retry of a settle whose reply was lost, then dropped.
@@ -645,8 +665,21 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // Final 200: the hold becomes spend. `chargeUsd` (the meter's actual x
   // markup on a metered route) takes LESS than the hold and returns the rest
   // to the balance; it can never take more than was held.
-  function settle(hash, heldMicro, slug, chargeUsd = null, holdId = null) {
-    return mutate(hash, (rec) => settleOn(rec, heldMicro, slug, chargeUsd, holdId));
+  // `via`: the path the call arrived on (src/sale-path.js), passed to onDebit.
+  function settle(hash, heldMicro, slug, chargeUsd = null, holdId = null, via = null) {
+    return mutate(hash, (rec) => settleOn(rec, heldMicro, slug, chargeUsd, holdId, via));
+  }
+  // A final 200 is about to end: mark the hold settling with what the debit
+  // takes, so a sweep that finds it after its settle could not land turns it
+  // into spend instead of returning it (database only).
+  function markSettling(hash, holdId, chargeUsd, slug, via) {
+    return mutatePgNow(hash, (rec) => {
+      const h = rec?.holds?.[holdId];
+      if (!h) return { result: false };
+      const want = Number.isFinite(Number(chargeUsd)) && Number(chargeUsd) > 0 ? usdToMicro(Number(chargeUsd)) : Number(h.m) || 0;
+      rec.holds = { ...rec.holds, [holdId]: { ...h, s: { m: Math.min(Number(h.m) || 0, want), slug, via } } };
+      return { rec, result: true };
+    });
   }
   // Any non-200 outcome (4xx/5xx, client abort before the response finished):
   // the hold goes back to the balance - nothing was charged.
@@ -746,17 +779,25 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   }
 
   // On the database, a settle or release after the answer is a promise nobody
-  // awaits: it is retried a few times, and a failure is logged (the hold then
-  // stays on the row, which the operator view shows as held).
+  // awaits. A release is retried a few times; one that never lands leaves the
+  // hold to the sweep, which returns it to the balance. A settle (`persist`)
+  // is retried with backoff until shortly before the sweep window, while its
+  // hold stays live and fresh; one that never lands leaves a hold the sweep
+  // debits when it was marked settling, and returns otherwise.
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // The hold stays in `liveHolds` until its settle or release has landed or
-  // given up; the sweep then returns one that never landed.
-  function later(label, fn, onDone = null, holdId = null) {
+  // given up.
+  function later(label, fn, onDone = null, holdId = null, { persist = false } = {}) {
     (async () => {
+      const deadline = Date.now() + Math.floor(abandonedHoldMs() * 0.9);
       try {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; ; i++) {
           try { const c = await fn(); onDone?.(c); return; }
-          catch (e) { if (i === 2) log(`[credits] ${label} failed after retries (the sweep returns the hold after ${Math.round(abandonedHoldMs() / 1000)} s): ${String(e?.message || e).slice(0, 120)}`); else await sleep(500 * (i + 1)); }
+          catch (e) {
+            const wait = persist ? Math.min(30_000, 500 * 2 ** i) : 500 * (i + 1);
+            if (persist ? Date.now() + wait >= deadline : i === 2) { log(`[credits] ${label} failed after retries (the sweep takes the hold after ${Math.round(abandonedHoldMs() / 1000)} s): ${String(e?.message || e).slice(0, 120)}`); return; }
+            await sleep(wait);
+          }
         }
       } finally { if (holdId) { liveHolds.delete(holdId); stopHoldFresh(holdId); } }
     })();
@@ -834,12 +875,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       if (a.holdId) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
       res.setHeader("X-Credits-Balance", String(a.balanceUsd));
       const slug = item.slug || req.path;
+      const via = salePathOf(req);
       // The two outcomes of the hold. On the files they answer at once; on the
       // database they are scheduled (and retried), and the charged amount is
       // recorded when the debit lands.
       const settleHold = (chargeUsd = null) => {
-        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd); if (c) req.creditsCharged = c.chargedUsd; return; }
-        later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId);
+        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, null, via); if (c) req.creditsCharged = c.chargedUsd; return; }
+        later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
       };
       const releaseHold = () => {
         if (!usePg) { release(a.hash, a.heldMicro); return; }
@@ -901,12 +943,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
           settleHold();
           return;
         }
-        const c = settle(a.hash, a.heldMicro, slug);
+        const c = settle(a.hash, a.heldMicro, slug, null, null, via);
         if (c) { req.creditsCharged = c.chargedUsd; req.creditsChargedOnClose = c.chargedUsd; }
       };
       const priorEnd = res.end;
       res.end = function creditsAwareEnd(...args) {
         if (goneEarly) decideGone();
+        else if (usePg && a.holdId && !done && res.statusCode === 200 && !servedWithoutRun(req, res)) {
+          const metered = meteredUsdOf(req, res);
+          markSettling(a.hash, a.holdId, Number.isFinite(metered) && metered > 0 ? metered : null, slug, via).catch(() => { /* the settle that follows retries */ });
+        }
         return priorEnd.apply(this, args);
       };
       res.on("close", () => {

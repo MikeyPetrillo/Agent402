@@ -29,6 +29,7 @@ import { routerRankingSentence } from "./routing-proof.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { mppFlagshipRows } from "./mpp-flagship.js";
 import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
+import { meteredTwinPath, meteredQuoteSentence, meteredRoutesInline, flatTiersLine } from "./metered-lead.js";
 import { PARAM_ALIASES } from "./input-aliases.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
@@ -191,7 +192,9 @@ function cutAtWord(text, max) {
 export function toolMetaDescription(tool, { computePayable = false, mpp = true } = {}) {
   const MAX = 155, MIN = 120;
   const p = priceWords(tool).long;
-  const pay = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
+  const payText = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
+  // The price words open their own sentence ("Quoted per request from ...").
+  const pay = payText.charAt(0).toUpperCase() + payText.slice(1);
   const room = MAX - pay.length - 2;
   let lead = String(tool.description || tool.name).replace(/\s+/g, " ").trim();
   lead = cutAtWord(lead, room);
@@ -426,7 +429,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
   if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
   else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
-  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.`);
+  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
   // The method alias (server.js) runs only when no catalog route of the other
@@ -535,7 +538,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.22</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.24</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -670,7 +673,7 @@ function faqItems() {
   { q: "What is MPP, and does Agent402 support it?", a: 'Yes. Every paid endpoint accepts MPP&rsquo;s evm method, and most also accept its tempo method (the wallet-identity routes, such as memory, and the long-running report routes take the evm method only). MPP (Machine Payments Protocol, the <code>Payment</code> HTTP authentication scheme, published as an Internet-Draft) carries the pay-per-call handshake through the web&rsquo;s standard auth headers: the 402 carries a <code>WWW-Authenticate: Payment</code> challenge, the client pays via <code>Authorization: Payment</code>, and settled responses return a <code>Payment-Receipt</code> naming the settlement transaction. Same URL, same price either way - MPP&rsquo;s evm method settles identically to x402 (same on-chain USDC settlement), while its tempo method settles natively via Tempo&rsquo;s own relay, a genuinely separate mechanism. How the two compare: <a href="/what-is-x402">/what-is-x402</a>; the full MPP explainer: <a href="/what-is-mpp">/what-is-mpp</a>.' },
   { q: "Which blockchain and asset does it use?", a: `${RAILS_PAREN}. The buyer needs only the stablecoin - gas is sponsored by the facilitator on EVM chains.` },
   { q: "Does using this spend my AI tokens?", a: "No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the judgment model the Smart Order Router uses to pick among shortlisted tools, and the image, speech, transcription, embedding and AI-answer tools. Proof-of-work spends your CPU; x402 spends USDC." },
-  { q: "Is there an OpenAI-compatible endpoint?", a: 'Yes - <code>/v1</code> is a pay-per-call OpenAI-wire LLM gateway: point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> for chat (flat quality tiers, a metered tier quoted per request, model-optional auto-routing), embeddings, and image generation. No API key, no signup - settle in USDC over x402, same as every other tool. See <a href="/pricing">/pricing</a> for the tier breakdown.' },
+  { q: "Is there an OpenAI-compatible endpoint?", a: `Yes. Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code>, the default: <code>/v1/metered/chat/completions</code> (and the Anthropic Messages and OpenAI Responses twins, <code>/v1/metered/messages</code> and <code>/v1/metered/responses</code>) serves third-party models with no API key and no signup, settled in USDC over x402 or MPP. ${meteredQuoteSentence().replace(/`([^`]+)`/g, "<code>$1</code>")} The flat tiers under <code>/v1</code> stay as the predictable-price option (one price per call), beside model-optional auto-routing, embeddings and image generation. See <a href="/pricing">/pricing</a> for the tier breakdown.` },
   { q: "Is my data stored?", a: 'Tool inputs are processed in memory to compute the response. The memory tools store data by design (wallet-keyed, owner-deletable, with optional TTL). An input is otherwise kept only in the cases the privacy policy lists, such as short-lived response caches, catalog searches that find no tool, decisions bought on /api/decide (30 days), and the feedback you leave on a paid call. Full policy: <a href="/privacy">/privacy</a>.' },
   { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every non-metered tool against its own documented example before each deploy (the metered ones - LLM tiers, report products, search and the tools that need a third-party key - are excluded so CI never spends upstream); and revenue settles on-chain to published receiving wallets (agent402.base.eth on Base and the other EVM chains, auditable by anyone on Basescan; every rail\'s receiving address, and any route that settles elsewhere, is in <a href=\"/.well-known/x402\">/.well-known/x402</a>)." },
   { q: "What happens if a tool fails after I pay?", a: "Over x402 you are not charged for an error: settlement runs only after a successful (under-400) response, so an error cancels it and no money moves. A payment that is final before the call runs (a Tempo push transfer over MPP) is recorded when the call fails and repaid on-chain; look one up by its transaction with <code>GET /api/refunds/lookup?tx=&lt;hash&gt;</code>. A few calls are charged by design even when the result is partial, and say so in their own description: a code run that hits its time limit, for example. On top of that, anything which can't be served reliably is removed from the catalog rather than left to fail, and failure rates are watched by CI and a 15-minute production heartbeat." },
@@ -797,7 +800,7 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.quote === "function" && String(tool.slug).startsWith("v1-chat-metered") ? ` ${meteredQuoteSentence()}` : ""}${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""}${meteredTwinPath(tool.slug) ? ` For the same models quoted per request from the body (on x402, Tempo and credits, settlement never exceeds the quote), use POST ${meteredTwinPath(tool.slug)}.` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
@@ -856,6 +859,8 @@ export function openapiSpec(baseUrl, catalog) {
           price: range
             ? { mode: "dynamic", currency: "USD", min: fmtUsd(range.minUsd), max: fmtUsd(range.maxUsd) }
             : { mode: "fixed", currency: "USD", amount: String(tool.price ?? "").replace(/[^0-9.]/g, "") || "0" },
+          // How a dynamic price is computed from the body, where the route states it.
+          ...(range && tool.quoteFormula ? { quoteFormula: tool.quoteFormula } : {}),
           ...(Object.keys(premium).length ? { premiumUsdByNetwork: premium } : {}),
           offers: mpp.map((o) => ({
             intent: o.intent,
@@ -1024,7 +1029,7 @@ export function openapiSpec(baseUrl, catalog) {
         // not pay-per-call. No credits sentence: credit sales are off by
         // default (CREDITS_SALES), so "buy at /credits" is not an instruction
         // an agent can follow.
-        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free (its payment.premiumUsdByNetwork names a chain's settlement premium, added to every price quoted on that chain, and payment.minPriceUsdByNetwork a chain's floor; an operation's x-payment-info carries the premium too); many tools also accept free proof-of-work (GET /api/pow). Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).",
+        `Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free (its payment.premiumUsdByNetwork names a chain's settlement premium, added to every price quoted on that chain, and payment.minPriceUsdByNetwork a chain's floor; an operation's x-payment-info carries the premium too); many tools also accept free proof-of-work (GET /api/pow). To call a model, use the metered routes (${meteredRoutesInline().replace(/`/g, "")}), the default. ${meteredQuoteSentence().replace(/`/g, "")} ${flatTiersLine().replace(/`/g, "")} Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).`,
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which

@@ -2,8 +2,9 @@ import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
+import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, assertRetiredRegistryConsistent } from "./retired-tools.js";
+import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -34,6 +35,7 @@ import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentSta
 import { runAsJob, activeJobs } from "./active-jobs.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
+import { salePathOf } from "./sale-path.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
@@ -69,6 +71,7 @@ import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
 import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
+import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
@@ -135,13 +138,26 @@ function settledPriceUsd(def, req, res) {
 function paidUsdOf(def, req, res, caip2) {
   return paidPriceUsd({ basePriceUsd: settledPriceUsd(def, req, res), caip2: caip2 || null, meteredUsd: meteredUsdOf(req, res), paymentHeader: paymentHeaderOf(req) });
 }
+// The catalog def of a flat chat tier's metered twin (metered-lead.js
+// meteredTwinSlug), or null. The slug index is built once, on first use after
+// the catalog is assembled.
+let catalogDefBySlug = null;
+function meteredTwinDefOf(slug) {
+  const twin = meteredTwinSlug(slug);
+  if (!twin) return null;
+  if (!catalogDefBySlug) catalogDefBySlug = new Map(Object.values(CATALOG).map((d) => [d.slug, d]));
+  return catalogDefBySlug.get(twin) || null;
+}
 // Card price for a QUOTED route: the metered quote tracks upstream closely, so
 // the card processor's fee would turn small card charges into a loss (audit
 // 2026-08-26); the stripe/charge challenge on a quoted route
 // carries the fee grossed up (ceil to a cent), the same way per-chain premiums
-// price fee-charging rails. Flat routes keep their listed price.
+// price fee-charging rails. Flat routes keep their listed price. A route
+// whose def sets cardOffer: false gets no card price, so neither the
+// stripe/charge challenge nor the Stripe gate prices it.
 const CARD_FEE_RATE = 0.029, CARD_FEE_FIXED_USD = 0.30;
 function cardPriceUsd(def, req) {
+  if (def?.cardOffer === false) return 0;
   const q = quotedPriceUsd(def, req);
   if (typeof def?.quote !== "function" || !(q > 0)) return q;
   return Math.ceil(((q + CARD_FEE_FIXED_USD) / (1 - CARD_FEE_RATE)) * 100) / 100;
@@ -323,7 +339,7 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
-import { railOf } from "./payment-rail.js";
+import { railOf, outcomeRailOf } from "./payment-rail.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
@@ -341,7 +357,7 @@ import { securityPage } from "./security-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
-import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
+import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
 import { refundLookup } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
@@ -420,6 +436,7 @@ import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
+import { redactSecrets } from "./tools/redact.js";
 import { warmLazyDeps } from "./tools/lazy-deps.js";
 import { KIT2 } from "./tools/kit2.js";
 import { UNIT_CATEGORIES, convertAnyUnit } from "./tools/convert-gen.js";
@@ -643,7 +660,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -2758,7 +2775,7 @@ const _monitorTargetValidators = {
   },
   // The alert path puts the target in an email SUBJECT sent to any address, so it is tighter than the
   // paid tool's query (no slashes, no plus signs, letters/digits first): a drug, food, brand or device name.
-  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation)."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
+  recall: (t) => { const q = normRecallQuery(t); if (!/^[\p{L}\p{N}][\p{L}\p{N} .,'&()-]{1,79}$/u.test(q) || hostnameShapedToken(q)) { const e = new Error("Enter a drug, food, brand or device name (letters, digits, spaces and basic punctuation), not a web address; put a space after a period in a name (St. Ives)."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   ipo: (t) => normIpoKeyword(t) || "all",
   research: (t) => { const q = String(t ?? "").trim().replace(/\s+/g, " "); if (q.length < 12 || q.length > 300) { const e = new Error("Enter a research question of 12 to 300 characters."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   filing: (t) => { const k = String(t).trim().toUpperCase(); if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(k)) { const e = new Error(`"${t}" is not a valid US ticker`); e.statusCode = 400; e.buyerSafe = true; throw e; } return k; },
@@ -2870,8 +2887,8 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
   try { res.json(await _freeAlerts.signup({ email: b.email, kind: b.kind, target: b.target, source: b.source })); }
   catch (e) {
-    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-    console.warn("[free-alerts] signup failed:", String(e?.message || e).slice(0, 160));
+    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+    console.warn("[free-alerts] signup failed:", redactSecrets(String(e?.message || e)).slice(0, 160));
     res.status(500).json({ error: "Could not sign you up. Please try again." });
   }
 });
@@ -2980,7 +2997,7 @@ try {
     // non-paying rail "card-prepaid" for reconciliation, so /revenue counts
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
-    onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
+    onDebit: ({ slug, priceUsd, keyId, via }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits", via }),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
@@ -3000,11 +3017,11 @@ const _manageTokenOk = (reportId, k) => {
 if (_subs) {
   app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
     try { res.json(await _subs.handleWebhook(req.body, req.headers["stripe-signature"])); }
-    catch (e) { res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) }); }
+    catch (e) { res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
 }
 
-app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb" }), async (req, res) => {
+app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: false }), async (req, res) => {
   // Mounted ahead of the security headers, so it sets its own: the browser
   // never sniffs a relayed body into another type.
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3201,6 +3218,28 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   sharedSettled: redisSharedSettled(),
 }) : null;
 if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
+// Every route below that takes more than the global 100 KB first passes the
+// large-body gate (src/large-body-gate.js): no Content-Encoding, no body over
+// 100 KB read for an unpaid call whose price does not depend on it, a
+// per-client bound on the unpaid ones that are read, and one in-flight byte
+// budget for every parse. The parsers run with inflate off and skip a body
+// the gate left unread.
+const MB = 1024 * 1024;
+const LARGE_BODY_ROUTES = [
+  ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
+  ["/v1/judge/vision", 23 * MB], ["/v1/judge/locate", 6 * MB], ["/v1/judge/long", 2 * MB],
+  ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
+];
+const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
+app.use(createLargeBodyGate({
+  routes: LARGE_BODY_ROUTES,
+  isPaid: (req) => looksLikePayment(req.headers),
+  bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`])),
+  freeMode: FREE_MODE,
+  unpaidLimiter: largeBodyUnpaidLimiter,
+  clientKey: clientIp,
+  maxInflightBytes: largeBodyInflightMaxBytes(),
+}));
 // The metered tier prices every request from its body, so a big body is a big
 // quote, never an unpriced cost - it can take real agent-host turns. A Claude
 // Code turn is ~110 KB (system prompt + 22 tool schemas, measured 2026-08-27)
@@ -3214,22 +3253,31 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 // unparsed stream. 26 MB matches the tool's own 25 MB file cap plus the
 // multipart envelope; anything larger is refused by the parser, not by us
 // reading it into memory twice.
-app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], express.raw({ type: "multipart/form-data", limit: "26mb" }));
+app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "26mb", inflate: false })));
 app.use("/v1/metered", express.json({ limit: "1mb" }));
 // The Jev preview routes carry images (base64 in JSON) or a long document, so
 // they take a larger body than the global 100 kb. Each limit is the route's own
 // cap plus the JSON envelope; the handler checks every image and byte again.
-app.use("/v1/judge/vision", express.json({ limit: "23mb" }));
-app.use("/v1/judge/locate", express.json({ limit: "6mb" }));
-app.use("/v1/judge/long", express.json({ limit: "2mb" }));
+app.use("/v1/judge/vision", unlessBodyUnread(express.json({ limit: "23mb", inflate: false })));
+app.use("/v1/judge/locate", unlessBodyUnread(express.json({ limit: "6mb", inflate: false })));
+app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // html-frames carries a whole HTML document (512 KB cap, checked by the
 // handler) and, for a frame check, up to 8 MB of baseline PNG as base64
 // (the handler's cap); the limit leaves room for the JSON escaping.
-app.use("/api/html-frames", express.json({ limit: "12mb" }));
+app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
-app.use("/v1/images/edits", express.json({ limit: "34mb" }));
-app.use("/v1/images/edits", express.raw({ type: "multipart/form-data", limit: "7mb" }));
+app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
+app.use("/v1/images/edits", unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "7mb", inflate: false })));
+// The seller sweep posts its observations here (up to 8 MB). The operator
+// check runs before a byte of the body is read, and ahead of the global
+// parser, which would otherwise refuse the body at 100 KB.
+const sellerVerificationJson = express.json({ limit: "8mb", inflate: false });
+app.use("/__operator/seller-verification", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  return sellerVerificationJson(req, res, next);
+});
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
@@ -3281,7 +3329,7 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
     : res.status(429).json({ error: "Too many requests", detail: "The transaction surfaces are cached 30-300s; poll no faster than that.", retryAfterSeconds: 60 });
 });
 
-app.use(express.json({ limit: "100kb" }));
+app.use(unlessBodyUnread(express.json({ limit: "100kb" })));
 // Decide execute is quoted from the decision and the caller's credit, read
 // synchronously from the ledger's mirror when the 402 is priced. Before any
 // gate runs, both are read fresh from the database, so a plan made or a
@@ -3473,7 +3521,7 @@ app.get(["/health", "/health/ready"], (req, res) => {
   // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
   // getOperatorToken are module consts defined below; this handler runs at
   // request time, after they init.
-  if (!operatorElevated(req)) {
+  if (!operatorView(req, res)) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
   const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
@@ -3606,7 +3654,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
   // heartbeat reads only `.status` fields, so bucketing costs it nothing.
-  const full = operatorElevated(req);
+  const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
@@ -4128,7 +4176,7 @@ app.get("/api/revenue/daily", async (req, res) => {
     const body = await memoSurfaceAsync("revenue:daily", 120_000, buildRevenueDaily);
     res.set("Cache-Control", "public, max-age=300").json(body);
   } catch (e) {
-    res.status(500).json({ error: "daily series failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "daily series failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Daily served-call counts by settlement method — the non-revenue companion to
@@ -4151,7 +4199,7 @@ app.get("/api/calls/daily", (req, res) => {
       days: getDailyCalls(),
     });
   } catch (e) {
-    res.status(500).json({ error: "daily calls failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "daily calls failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Daily Tempo settlements — the second non-on-chain-scan companion to
@@ -4175,7 +4223,7 @@ app.get("/__operator/decide-stats.json", async (req, res) => {
     const isOurs = (r) => r.synthetic === true || isOwnWallet(String(r.payer || "").replace(/^tempo:/, ""));
     res.json({ enabled: true, ...aggregateDecideStats(rows, { now, isOurs }) });
   } catch (e) {
-    res.status(500).json({ error: "decide stats failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "decide stats failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Decide usage for the /revenue monitor: per slug (decide, decide-execute),
@@ -4189,7 +4237,7 @@ app.get("/api/revenue/decide", (_req, res) => {
       note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = outside buyers, catalog sweepers included (a wallet that bought " + SWEEP_DISTINCT_TOOLS_PER_DAY + " or more distinct tools in one UTC day; sweeps says how many external settlements came from such wallets). externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
     })));
   } catch (e) {
-    res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "decide revenue failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 app.get("/api/revenue/tempo-daily", (req, res) => {
@@ -4202,7 +4250,7 @@ app.get("/api/revenue/tempo-daily", (req, res) => {
     }
     res.set("Cache-Control", "public, max-age=60").json(tempoDailyBody());
   } catch (e) {
-    res.status(500).json({ error: "tempo daily revenue failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "tempo daily revenue failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Machine-readable MPP-wire settlements (behind the /revenue "MPP transactions"
@@ -4218,7 +4266,7 @@ app.get("/api/revenue/mpp", (req, res) => {
       .set("Vary", "X-Operator-Token")
       .json(authed ? mppSales({ detailed: true }) : memoSurface("revenue:mpp", 60_000, () => mppSales({ detailed: false })));
   } catch (e) {
-    res.status(500).json({ error: "mpp settlements failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "mpp settlements failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 app.get("/revenue", async (req, res) => {
@@ -4242,7 +4290,7 @@ app.get("/revenue", async (req, res) => {
       const tempo = tempoDailyBody();
       range = revenuePageRange(req.query, { firstDay: revenueSeriesFirstDay(daily), totalsFor: (w) => revenueWindowTotals(daily, tempo, w, ledgerBuyerConcentrationIn(daily[REVENUE_DAY_COUNTS], w)) });
     } catch (e) {
-      console.warn(`[revenue] range figures unavailable: ${String(e?.message || e).slice(0, 120)}`);
+      console.warn(`[revenue] range figures unavailable: ${redactSecrets(String(e?.message || e)).slice(0, 120)}`);
     }
     res.set("Cache-Control", "no-cache").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures(), range, hashPriceUsd: TOOL_PRICES.hash }));
   } catch (e) {
@@ -4406,8 +4454,8 @@ if (_credits) {
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json({ url: (await _credits.createCheckout(req.body?.pack)).url }); }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[credits] createCheckout failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[credits] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
   });
@@ -4415,7 +4463,7 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
     try { res.json(await _credits.claim(String(req.query.session || ""))); }
-    catch (e) { console.warn("[credits] claim failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
+    catch (e) { console.warn("[credits] claim failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
   });
   app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -4471,7 +4519,7 @@ if (humanCheckoutEnabled()) {
       onDelivered: ({ sessionId, email, product, kind, label, input }) => { _followups.markRepeat(email); _followups.enqueue({ sessionId, email, product, kind, label, input }); },
       onFailed: ({ email, label, refunded }) => { _followups.sendFailed({ email, label, refunded }).catch(() => {}); },
     });
-  } catch (e) { console.warn("[human-checkout] init failed:", String(e?.message || e).slice(0, 200)); _humanCheckout = null; }
+  } catch (e) { console.warn("[human-checkout] init failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); _humanCheckout = null; }
   if (_humanCheckout) {
     // Abandoned claims from a previous process (deploy mid-generation) are
     // re-driven shortly after boot - the buyer may have closed the tab.
@@ -4493,8 +4541,8 @@ if (humanCheckoutEnabled()) {
         try { capturePostHogHumanFunnel({ step: "checkout_refused", product, reason: e?.statusCode && e.statusCode < 500 ? String(e.message).slice(0, 80) : "server" }); } catch { /* telemetry never breaks the request */ }
         // Our own 4xx messages are safe to show; a Stripe/SDK error is logged
         // and answered generically (its text can echo key mode/request detail).
-        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-        console.warn("[human-checkout] createSession failed:", String(e?.message || e).slice(0, 200));
+        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        console.warn("[human-checkout] createSession failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
       }
     });
@@ -4519,7 +4567,7 @@ if (humanCheckoutEnabled()) {
       try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
       catch (e) {
         // The detail (a database or driver message) is for the operator log only.
-        console.warn("[human-checkout] report read failed:", String(e?.message || e).slice(0, 200));
+        console.warn("[human-checkout] report read failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         res.status(500).set("Cache-Control", "no-store").json({ status: "error", error: "The report could not be read right now. Please retry in a moment." });
       }
     });
@@ -4551,8 +4599,8 @@ if (_subs) {
       res.json({ url });
     }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[monitors] createCheckout failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[monitors] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
   });
@@ -4564,7 +4612,7 @@ if (_subs) {
       // Do NOT mint a billing portal on the auto-poll (a portal can view invoices
       // + payment method and cancel). The manage link mints it on explicit click.
       res.json({ status: r.status, label: r.label, target: r.target });
-    } catch (e) { console.warn("[monitors] confirm failed:", String(e?.message || e).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
+    } catch (e) { console.warn("[monitors] confirm failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
   });
   // Explicit manage/cancel: mint the Stripe Customer Portal at click time, then
   // redirect. (The session id is the buyer's bearer for this purchase.)
@@ -4643,8 +4691,8 @@ if (_mppSubs) {
         // is in WWW-Authenticate and GET /api/mpp/monitors explains the rest.
         return res.status(402).set("WWW-Authenticate", offer.header).json({});
       } catch (e) {
-        if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-        console.warn("[mpp-subs] mintOffer failed:", String(e?.message || e).slice(0, 200));
+        if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        console.warn("[mpp-subs] mintOffer failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         return res.status(500).json({ error: "Could not start a subscription right now." });
       }
     }
@@ -4660,8 +4708,8 @@ if (_mppSubs) {
         const kind = e.binding ? "invalid-challenge" : "verification-failed";
         return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${String(e.message).slice(0, 200)}`));
       }
-      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[mpp-subs] activation failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[mpp-subs] activation failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       return res.status(500).json({ error: "Could not complete the subscription right now." });
     }
   });
@@ -4690,7 +4738,7 @@ if (_mppSubs) {
     // belongs, driven by the scheduler on its own clock.
     if (req.query.refresh && _mppSubs.isCanarySub(subId)) {
       try { await _mppSubs.refreshStatus(subId); }
-      catch (e) { console.warn("[mpp-subs] canary refresh failed:", String(e?.message || e).slice(0, 200)); }
+      catch (e) { console.warn("[mpp-subs] canary refresh failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); }
     }
     const reports = _monitors ? (_monitors.status().subs.find((r) => r.subId === subId) || null) : null;
     res.json({ ..._mppSubs.publicView(_mppSubs.get(subId) || rec), lastReportId: reports?.lastReportId || null, reportUrl: reports?.lastReportId ? `${BASE_URL}/m/${reports.lastReportId}` : null });
@@ -4702,8 +4750,8 @@ if (_mppSubs) {
     if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), mppManageTokenOf(req))); }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
-      console.warn("[mpp-subs] cancel failed:", String(e?.message || e).slice(0, 200));
+      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      console.warn("[mpp-subs] cancel failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not cancel right now." });
     }
   });
@@ -4749,7 +4797,7 @@ app.get("/__operator/monitors.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // The wallet-billed subscribers carry billing state the scheduler never sees
   // (paid period, charge failures, next retry), so they get their own block.
-  const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: String(e?.message || e).slice(0, 200) })) : { enabled: false };
+  const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: redactSecrets(String(e?.message || e)).slice(0, 200) })) : { enabled: false };
   // Card subscriptions a dispute holds out of fulfillment: Stripe may still
   // bill one whose dispute ended, so the operator sees each with its outcome.
   const disputed = _subs ? _subs.listDisputed() : [];
@@ -4762,7 +4810,7 @@ app.post("/__operator/mpp-subscriptions/sweep-canaries", async (req, res) => {
   if (!_mppSubs) return res.status(503).json({ error: "MPP subscriptions not enabled" });
   const olderThanMs = Number(req.query.olderThanMs) > 0 ? Number(req.query.olderThanMs) : undefined;
   try { res.set("Cache-Control", "no-store").json(await _mppSubs.sweepStaleCanaries(olderThanMs ? { olderThanMs } : {})); }
-  catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 200) }); }
+  catch (e) { res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // Manual tick (all due subs, or ?sub=<id> with force): paid re-runs + email, so
 // it takes the heavy-route limiter like the other upstream-reaching operator
@@ -4774,7 +4822,7 @@ app.post("/__operator/monitors/run", (req, res) => {
   const subId = req.query.sub ? String(req.query.sub) : null;
   _monitors.tick({ force: !!subId || req.query.force === "1", subId }).then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) })
   );
 });
 // Sales ledger — AGGREGATE beacon: totals, the recording window, and counts.
@@ -4790,7 +4838,7 @@ app.get("/api/sales", async (_req, res) => {
   } catch (err) {
     // Public route: a SQLite failure message names the ledger's absolute
     // path — log it, answer generically (leak audit 2026-08-18).
-    console.error(`[sales] summary failed: ${String(err?.message || err).slice(0, 300)}`);
+    console.error(`[sales] summary failed: ${redactSecrets(String(err?.message || err)).slice(0, 300)}`);
     res.status(500).json({ error: "sales summary unavailable" });
   }
 });
@@ -4809,7 +4857,7 @@ app.get("/__operator/settlement-reconciliation.json", (req, res) => {
     const days = Math.min(Math.max(parseInt(req.query?.days, 10) || 7, 1), 60);
     res.json(reconcileSettlements({ days }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 app.get("/__operator/sales.json", (req, res) => {
@@ -4826,7 +4874,20 @@ app.get("/__operator/sales.json", (req, res) => {
     try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
     res.json({ ...salesSummary({ detailed: true }), mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
+  }
+});
+
+// Sweep and burst cohorts with an organic daily series beside the unadjusted
+// one (operator-only; see salesCohorts in sales-ledger.js). Public revenue
+// figures are never adjusted by it. ?days= (max 30), ?toolsPerDay=, ?callsPerHour=.
+app.get("/__operator/cohorts.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store");
+  try {
+    res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -4838,7 +4899,7 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
   try {
     res.json(mppAgentsWeekly({ weeks: Number(req.query.weeks) || 12 }));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -4863,13 +4924,13 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
 // the WORKFLOW never touches the bucket - its own credentials are a funded
 // spending key, and widening that job's reach to our dataset storage would buy
 // nothing. Same split as POST /api/status/probe.
-app.post("/__operator/seller-verification", express.json({ limit: "8mb" }), async (req, res) => {
+app.post("/__operator/seller-verification", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   try {
     const out = await recordSellerVerification(req.body);
     res.set("Cache-Control", "no-store").json(out);
   } catch (e) {
-    res.status(e?.statusCode || 500).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(e?.statusCode || 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 // Settlement evidence that clears the router floor but looks staged
@@ -4932,7 +4993,7 @@ app.get("/__operator/nc-sales-tax.json", async (req, res) => {
       cardFundedSalesWithoutAddress: report.cardFundedSalesWithoutAddress,
     });
   } catch (e) {
-    res.status(503).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 app.get("/__operator/seller-verification.json", (req, res) => {
@@ -5001,7 +5062,7 @@ app.get("/__operator/margin.json", (req, res) => {
       ],
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
 
@@ -5011,7 +5072,7 @@ app.get("/api/x402-economy", async (_req, res) => {
   try {
     res.set("Cache-Control", "public, max-age=300").json(await x402EconomySnapshot());
   } catch (e) {
-    res.status(500).json({ error: "economy snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "economy snapshot failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // The standalone Observatory page folded into the marketplace's "The economy,
@@ -5428,6 +5489,15 @@ function operatorAuthed(req, { headerOnly = false } = {}) {
 // session cookie is scoped to /__operator and never arrives here. The
 // operator routes keep the Bearer form for curl.
 function operatorElevated(req) { return operatorAuthed(req, { headerOnly: true }); }
+// A public surface whose answer differs for the operator: keyed on the
+// operator header in every answer, and never stored by a shared cache when
+// elevated. Returns operatorElevated(req); call it once per request.
+function operatorView(req, res) {
+  const elevated = operatorElevated(req);
+  res.vary("X-Operator-Token");
+  if (elevated) res.set("Cache-Control", "private, no-store");
+  return elevated;
+}
 const reqIsHttps = (req) =>
   req.secure || (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
 // Always mark the session cookie Secure in production, even if a proxy-header
@@ -5560,7 +5630,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
     }
     res.json({ ok: true, asOf: new Date().toISOString(), ...gap });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
+    res.status(500).json({ ok: false, error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 app.get("/__operator/wishes.json", async (req, res) => {
@@ -5741,7 +5811,7 @@ app.post("/__operator/stall-profile", async (req, res) => {
     const out = await profileOnce({ seconds: req.query.seconds });
     res.set("Cache-Control", "no-store").status(out.busy ? 409 : 200).json(out);
   } catch (e) {
-    res.status(500).json({ error: "profile failed", detail: String(e?.message || e).slice(0, 120) });
+    res.status(500).json({ error: "profile failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) });
   }
 });
 // Unified tool index for the decide service (src/decide/index-export.js):
@@ -5783,7 +5853,7 @@ app.get("/__operator/facilitators.json", async (req, res) => {
     for (const f of facilitators) for (const n of (f.networks || [])) if (!firstFor[n]) firstFor[n] = f.label;
     res.json({ generatedAt: new Date().toISOString(), facilitators, firstTriedFor: firstFor });
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e).slice(0, 200) });
+    res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
 });
 // Search-engine data (GSC + Bing). Operator only; no-op without credentials.
@@ -5792,31 +5862,31 @@ app.get("/__operator/search.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").json(r),
-    (e) => res.status(500).json({ error: String(e.message).slice(0, 200) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) })
   );
 });
 app.get("/__operator/search", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").type("html").send(operatorSearchPage(BASE_URL, r)),
-    (e) => res.status(500).type("html").send(`<p>${String(e.message).slice(0, 200).replace(/[<>&]/g, "")}</p>`)
+    (e) => res.status(500).type("html").send(`<p>${redactSecrets(String(e.message)).slice(0, 200).replace(/[<>&]/g, "")}</p>`)
   );
 });
 app.post("/__operator/search/run", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
-  searchData.runOnce().then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.runOnce().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/inspect", express.json({ limit: "32kb" }), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
-  searchData.inspectUrls(urls).then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.inspectUrls(urls).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/sitemaps/submit", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
-  searchData.submitSitemaps().then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message) }));
+  searchData.submitSitemaps().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 // Daily MPP reconciliation: chain transfers to our Tempo recipient vs the
 // sales ledger vs the refund ledger, plus the MPP evm leg and Stripe SPT rows
@@ -5872,7 +5942,7 @@ app.post("/__operator/mpp-reconcile/run", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || "")) ? String(req.query.day) : null;
-  mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: String(e.message).slice(0, 200) }));
+  mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) }));
 });
 // Mark ONE reconciliation item as explained ({tx, note}) or lift the mark
 // ({tx, action:"restore"}). Writes only the explanations document, then
@@ -5884,7 +5954,7 @@ app.post("/__operator/mpp-reconcile/explain", express.json(), (req, res) => {
   const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   mppReconciler.explain({ tx: b.tx, note: b.note, action: b.action === undefined ? "explain" : b.action }).then(
     (r) => res.set("Cache-Control", "no-store").json(r),
-    (e) => res.status(Number.isInteger(e?.statusCode) ? e.statusCode : 500).set("Cache-Control", "no-store").json({ error: String(e?.message || e).slice(0, 300) }),
+    (e) => res.status(Number.isInteger(e?.statusCode) ? e.statusCode : 500).set("Cache-Control", "no-store").json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) }),
   );
 });
 app.get("/__operator/backup.json", (req, res) => {
@@ -5906,7 +5976,7 @@ app.post("/__operator/refunds/backfill", async (req, res) => {
   try {
     res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
   } catch (e) {
-    res.status(500).json({ error: String(e.message) });
+    res.status(500).json({ error: redactSecrets(String(e.message)) });
   }
 });
 app.get("/__operator/dataset.json", (req, res) => {
@@ -5916,7 +5986,7 @@ app.get("/__operator/dataset.json", (req, res) => {
   // second or it reports an outage after every deploy.
   datasetRecorded().then(
     (recorded) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded }),
-    (e) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded: { error: String(e.message) } })
+    (e) => res.set("Cache-Control", "no-store").json({ status: datasetStatus(), recorded: { error: redactSecrets(String(e.message)) } })
   );
 });
 // Write today's ecosystem snapshot by hand. Immutable: a day already recorded
@@ -5931,7 +6001,7 @@ app.post("/__operator/dataset/run", (req, res) => {
     force: String(req.query.force || "") === "1",
   }).then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e.message) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)) })
   );
 });
 app.post("/__operator/backup/run", (req, res) => {
@@ -5939,7 +6009,7 @@ app.post("/__operator/backup/run", (req, res) => {
   if (operatorHeavyLimited(req, res)) return;
   runBackup().then(
     (r) => res.json(r),
-    (e) => res.status(500).json({ error: String(e.message) })
+    (e) => res.status(500).json({ error: redactSecrets(String(e.message)) })
   );
 });
 // Publish/remove a /.well-known verification document at runtime. Local
@@ -5954,7 +6024,7 @@ app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) =
     const r = registerWellKnown(path, body, contentType || undefined);
     res.json({ ok: true, ...r, servedAt: `/.well-known/${r.path}`, entries: listWellKnown() });
   } catch (e) {
-    res.status(e.statusCode || 500).json({ error: e.message });
+    res.status(e.statusCode || 500).json({ error: redactSecrets(e?.message) });
   }
 });
 // The refund ledger - who is owed money for a charged-but-failed call, and
@@ -6080,7 +6150,7 @@ app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
     else if (action === "remove") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"add"|"remove","wallet":"0x...","note":"optional"}' });
   } catch (e) {
-    return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
+    return res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
   if (r.changed) dispatchEvidenceCache = null;
   res.set("Cache-Control", "no-store").json({ ok: true, ...r });
@@ -6174,7 +6244,7 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
     else if (action === "restore") r = await store.remove(wallet);
     else return res.status(400).json({ error: 'pass {"action":"clear"|"restore","wallet":"0x...","note":"optional"} or {"action":"disable"|"enable"}' });
   } catch (e) {
-    return res.status(e?.statusCode || 400).json({ error: String(e?.message || e).slice(0, 200) });
+    return res.status(e?.statusCode || 400).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) });
   }
   if (r.changed) dispatchEvidenceCache = null;
   res.set("Cache-Control", "no-store").json({ ok: true, wallet: r.wallet, cleared: r.listed, source: r.source ?? null, changed: r.changed });
@@ -6226,7 +6296,7 @@ app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, 
         const r = await registerOrigin(o);
         rows.push({ origin: o, listed: !!r?.listed, ...(r?.pending ? { pending: true } : {}), ...(r?.error ? { error: String(r.error).slice(0, 200) } : {}) });
       } catch (e) {
-        rows.push({ origin: o, listed: false, error: String(e?.message || e).slice(0, 200) });
+        rows.push({ origin: o, listed: false, error: redactSecrets(String(e?.message || e)).slice(0, 200) });
       }
     }
   };
@@ -6264,7 +6334,7 @@ app.get("/__operator/seller-evidence.json", async (req, res) => {
   try {
     res.set("Cache-Control", "no-store").json(await operatorDossier(origin));
   } catch (e) {
-    res.status(e?.statusCode || 500).json({ error: String(e?.message || e).slice(0, 300) });
+    res.status(e?.statusCode || 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
 });
 
@@ -6320,7 +6390,7 @@ app.get("/__operator/ledger-sync.json", async (req, res) => {
     const c = EVM_CHAINS[chain];
     if (!c) return;
     try { heads[chain] = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16); }
-    catch (e) { heads[chain] = { error: String(e?.message || e).slice(0, 120) }; }
+    catch (e) { heads[chain] = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
   }));
   const payload = {
     asOf: new Date().toISOString(),
@@ -6379,6 +6449,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
     if (gone) {
       const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
       const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}` } : null;
+      res.set(retirementHeaders(gone.retiredAt, replacement?.url));
       return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json` });
     }
     // Indexes that read the documented template call it with the placeholder
@@ -6787,6 +6858,9 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
 function logToolError(slug, status, message, shape, synthetic, probe) {
+  // Every caller's message is scrubbed of configured secrets and credential-
+  // bearing URLs before the log line, PostHog and the failure monitor read it.
+  message = redactSecrets(message || "");
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
   // Probe 4xx = an empty-input scanner sweeping the catalog and every tool
   // correctly rejecting it — expected behavior, not an error. An indexer sweep
@@ -6803,7 +6877,7 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
-  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${String(message || "").slice(0, 200)}`);
+  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${message.slice(0, 200)}`);
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
@@ -7017,8 +7091,10 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   } catch (err) {
     errored = true;
     status = err.statusCode || 500;
-    logToolError(analyticsSlug, status, err.message, undefined, synthetic);
-    res.status(status).json({ error: err.message });
+    // Scrubbed like the route binder's answer (src/tools/redact.js).
+    const errorMessage = redactSecrets(err?.message);
+    logToolError(analyticsSlug, status, errorMessage, undefined, synthetic);
+    res.status(status).json({ error: errorMessage });
   } finally {
     const latencyMs = Date.now() - startedAt;
     if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
@@ -7066,7 +7142,7 @@ app.post("/api/decide/feedback", express.json({ limit: "4kb" }), (req, res) => {
     _decideFeedback ||= makeFeedbackHandler({ ledger: decideLedger() });
     res.json(_decideFeedback(req.body));
   } catch (e) {
-    res.status(e.statusCode && e.statusCode < 500 ? e.statusCode : 500).json({ error: e.statusCode && e.statusCode < 500 ? e.message : "feedback failed" });
+    res.status(e.statusCode && e.statusCode < 500 ? e.statusCode : 500).json({ error: e.statusCode && e.statusCode < 500 ? redactSecrets(e.message) : "feedback failed" });
   }
 });
 app.post("/api/wish", (req, res) => {
@@ -7076,7 +7152,7 @@ app.post("/api/wish", (req, res) => {
     res.json(result);
   } catch (err) {
     const status = err.statusCode || 500;
-    res.status(status).json({ error: err.message });
+    res.status(status).json({ error: redactSecrets(err?.message) });
   }
 });
 // PUBLIC BEACON: aggregate totals + qualified-cluster COUNT only — never the
@@ -7968,8 +8044,10 @@ app.get("/api/mpp-index", (_req, res) => {
 // a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
   const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorElevated(req) ? 1000 : 200);
-  res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
+  const elevated = operatorView(req, res);
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), elevated ? 1000 : 200);
+  if (!elevated) res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+  res.json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
   const lb = mppLeaderboardSnapshot();
@@ -8069,9 +8147,7 @@ app.get("/api/index", (req, res) => {
   // index being public. The operator token returns the unpaginated snapshot for
   // our own tooling.
   const snap = getIndexSnapshot();
-  if (operatorElevated(req)) {
-    return res.set("Cache-Control", "no-store").json(snap);
-  }
+  if (operatorView(req, res)) return res.json(snap);
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
   // `perPage` is honoured as an alias for `limit` because two consumers in a row
   // guessed that name - our own scripts/seller-sweep.mjs and an outside seller's
@@ -8366,7 +8442,7 @@ app.get("/api/route/external-debug", async (req, res) => {
   if (!task) return res.status(400).json({ error: "Missing q/task" });
   const cap = Number(req.query.cap) > 0 ? Number(req.query.cap) : EXEC_TIERS[0].underlyingMaxUsd;
   try { res.json(await diagnoseExternalSeller(String(task), { cap })); }
-  catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 200) }); }
+  catch (e) { res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // x402 Leaderboard — public on-chain ranking of sellers in the Coinbase CDP
 // Bazaar (plus our own crawl) by settled USDC volume on Base, served as the
@@ -8406,7 +8482,7 @@ app.get("/api/leaderboard", (req, res) => {
   // ticket are two divisions away from callsSettled/uniqueBuyers/totalUsd), and
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
-  const topCeiling = operatorElevated(req) ? 500 : 50;
+  const topCeiling = operatorView(req, res) ? 500 : 50;
   // `?limit=` READ AS NOTHING until 2026-09-21. It is the obvious name to
   // reach for, it looked accepted because the response is a valid 200, and it
   // silently returned the default 25 - so a caller asking for 250 rows got 25
@@ -8964,6 +9040,7 @@ const retiredConvertGone = (req, res) => {
   // Residual demand we can't serve is the product signal worth an event.
   // Fire-and-forget, rate-capped in posthog.js; env-gated no-op like every capture.
   capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert" });
+  res.set(retirementHeaders(RETIRED_CONVERTERS_AT, `${BASE_URL}/api/unit-convert`));
   res.status(410).json({
     error: "This pairwise conversion endpoint is retired. Use POST /api/unit-convert with { value, from, to } - the same unit ids and the same math, one route for every pair. Discovery: GET /api/find?q=unit+convert.",
     replacement: {
@@ -9178,7 +9255,7 @@ app.get("/api/analytics", async (req, res) => {
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
   const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
-  res.json(redactAnalytics(data, operatorElevated(req)));
+  res.json(redactAnalytics(data, operatorView(req, res)));
 });
 
 let __analyticsSlugSet = null;
@@ -9193,7 +9270,7 @@ function analyticsKnownSlugs() {
 app.get("/analytics", async (req, res) => {
   // Operator-only since 2026-10-01: public visitors are sent to /status, which
   // publishes measured availability without per-tool traffic.
-  if (!operatorElevated(req)) return res.redirect(302, "/status");
+  if (!operatorView(req, res)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
@@ -9201,7 +9278,7 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorElevated(req)), {
+  res.type("html").send(analyticsPage(redactAnalytics(data, true), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
     // which exists for every real slug regardless of route shape.
@@ -9248,7 +9325,7 @@ const mcpMountOpts = {
   // synthetic, as its route booking would be.
   onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
     const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
-    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic }); } catch { /* bookkeeping only */ }
+    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic, path: "mcp" }); } catch { /* bookkeeping only */ }
     logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
   },
   onServed: (slug, meta = {}) => {
@@ -9403,7 +9480,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -9427,7 +9504,7 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd } } : {}),
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
@@ -9757,7 +9834,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug) } : null;
     },
   });
   if (stripeGate) {
@@ -9991,6 +10068,28 @@ if (FREE_MODE) {
               summary: "No wallet? This tool is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
               challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${encodeURIComponent(def.slug)}`,
               info: `${BASE_URL}/api/pow`,
+            };
+          }
+          return origJson(body);
+        };
+      }
+      // A flat chat tier's unpaid 402 names its metered twin on the same wire
+      // (additive `meteredTwin`; x402 clients read `accepts`): the same models,
+      // priced from this body instead of one flat price per call. Only on a
+      // first-contact quote: a refused payment (an x402 header, or an
+      // Authorization credential such as a Tempo credential or a credits key)
+      // keeps its own explanation.
+      const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      const twinDef = firstContact ? meteredTwinDefOf(def.slug) : null;
+      if (twinDef) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.meteredTwin) {
+            const [, twinPath] = String(twinDef.route).split(" ");
+            body.meteredTwin = {
+              route: twinDef.route,
+              url: `${BASE_URL}${twinPath}`,
+              note: `Same models, priced per request from this body. ${meteredQuoteSentence()} This route stays one flat price per call.`,
             };
           }
           return origJson(body);
@@ -10293,7 +10392,18 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      const verdict = await replayGuard.begin(replayKey);
+      // A long-running or composite route needs the shared claim: with the
+      // shared store configured but unreachable it is refused here, before
+      // any payment is taken, rather than claimed on this replica alone.
+      const replayDef = CATALOG[`${req.method} ${req.path}`];
+      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      if (verdict === "unavailable") {
+        res.setHeader("Retry-After", "30");
+        return res.status(503).json({
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          reason: "replay-store-unavailable",
+        });
+      }
       if (verdict !== "ok") {
         res.setHeader("X-Payment-Replay", verdict); // "consumed" | "inflight"
         return res.status(409).json({
@@ -10497,6 +10607,9 @@ app.use((req, res, next) => {
             // sha256 of the JSON body served (dispatcher), so POST /api/attest
             // can bind a settlement to the bytes the buyer received.
             responseSha256: req.__responseSha256 || null,
+            // The arrival path (src/sale-path.js): the connector's loopback,
+            // one of our client packages by User-Agent token, or plain HTTP.
+            via: salePathOf(req),
           });
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
@@ -10740,7 +10853,9 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
   res.once("close", () => {
     try {
       const status = res.headersSent ? res.statusCode : 499;
-      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted });
+      // Free (proof-of-work, trial) outcomes count on their own lane, which
+      // the toolFailures word does not read.
+      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
@@ -10753,12 +10868,16 @@ function sendToolError(res, err, slug) {
   const status = err?.statusCode || 502;
   // Every tool error answer logs through the one function, so a bespoke route's
   // 5xx reads in "[tool-error]" like a generic one.
-  logToolError(slug || "unknown", status, err?.message, undefined, isSyntheticRequest(res.req));
+  // Scrubbed like the route binder's answer (src/tools/redact.js).
+  const errorMessage = redactSecrets(err?.message);
+  logToolError(slug || "unknown", status, errorMessage, undefined, isSyntheticRequest(res.req));
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+  // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
+  if (err?.shed === true && res.locals) res.locals.shed = true;
   return res.status(status).json({
-    error: err?.message || "request failed",
+    error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
     ...(upstreamStatus ? { upstreamStatus } : {}),
     ...(attribution ? { attribution } : {}),
@@ -10772,7 +10891,9 @@ function sendToolError(res, err, slug) {
 // sends the self-explaining 400 and returns null.
 function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
-  const input = handlerInputOf(req, def);
+  let input;
+  try { input = handlerInputOf(req, def); }
+  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
   const refused = shapeRefusal(input, def);
   if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
   if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }
@@ -10920,7 +11041,7 @@ const memHandler = (fn) => async (req, res) => {
   try {
     res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
   }
 };
 
@@ -10999,7 +11120,7 @@ for (const tool of ALL_KIT) {
       // nonce - so a payer can make us spend then dodge settlement repeatedly.
       // Block a payer with too many recent spend-then-fail events BEFORE the next
       // run; record the outcome on finish (only a genuine spend counts as a fail,
-      // a paid 200 clears it). Registered before the handler so it fires even if
+      // a paid 200 is a settled outcome beside it). Registered before the handler so it fires even if
       // the handler throws. Same doctrine as the external-spend guard below.
       if (EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)) {
         // Belt for the global drain middleware: a composite that reaches the
@@ -11023,7 +11144,7 @@ for (const tool of ALL_KIT) {
           throw e;
         }
         if (await compositeGuardBlocked(guardKey)) {
-          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. A successful payment clears it.");
+          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
           throw e;
         }
@@ -11236,7 +11357,7 @@ for (const tool of ALL_KIT) {
       // the hang-up recorder). The body goes to a closed socket.
       if (clientGoneCtl?.signal.aborted || isClientGoneAbort(err)) { status = 499; if (!isClientGoneAbort(err)) err = clientGoneError(); }
       if (isClientGoneAbort(err)) {
-        if (!res.headersSent) { try { res.status(499).json({ error: err.message, tool: tool.slug, charged: false }); } catch { /* socket already gone */ } }
+        if (!res.headersSent) { try { res.status(499).json({ error: redactSecrets(err?.message), tool: tool.slug, charged: false }); } catch { /* socket already gone */ } }
         return;
       }
       if (res.headersSent) { try { res.end(); } catch { /* stream already gone */ } return; }
@@ -11258,7 +11379,11 @@ for (const tool of ALL_KIT) {
         const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
         probe = meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
       }
-      logToolError(tool.slug, status, err.message, shape, synthetic, probe);
+      // What a handler throws is answered and logged, so a configured secret
+      // or a credential-bearing URL an error quotes (an upstream echo, a
+      // database driver's connection string) is scrubbed first, on every status.
+      const errorMessage = redactSecrets(err?.message);
+      logToolError(tool.slug, status, errorMessage, shape, synthetic, probe);
       // WHOSE FAILURE IS THIS? Every 4xx carried the self-correction envelope -
       // the tool's input schema, its required keys and a working example - which
       // says one thing to a machine: your input was wrong, here is the shape.
@@ -11279,6 +11404,8 @@ for (const tool of ALL_KIT) {
         : upstreamStatus ? "upstream" : null;
       const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+      // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
+      if (err?.shed === true) res.locals.shed = true;
       const provenance = {
         ...(upstreamStatus ? { upstreamStatus } : {}),
         ...(attribution ? { attribution } : {}),
@@ -11286,7 +11413,7 @@ for (const tool of ALL_KIT) {
       };
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
-          error: err.message,
+          error: errorMessage,
           tool: tool.slug,
           ...provenance,
           // A repeated decide execution key returns the earlier run to the
@@ -11297,7 +11424,7 @@ for (const tool of ALL_KIT) {
           example: tool.discovery?.input || {},
         });
       } else {
-        res.status(status).json({ error: err.message, tool: tool.slug, ...provenance });
+        res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
       }
     } finally {
       const latencyMs = Date.now() - startedAt;
@@ -11347,8 +11474,14 @@ app.use((req, res, next) => {
 // error handler uses for /api + /__operator. Registered after every route
 // and before the error handler. Status stays 404 so route-existence probes
 // (test-mcp-self-consistency's live GET oracle) are unaffected.
+// A machine surface by path, read case-insensitively (routing is, so /V1/x
+// reaches the same 404 as /v1/x and gets the same JSON answer).
+function isMachinePath(path) {
+  const p = String(path || "").toLowerCase();
+  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator");
+}
 app.use((req, res) => {
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // An unknown /api path is almost always a retired tool or a guessed slug
     // (four indexers probed soundex, string-similarity, uuid-v5 and ~25 old
@@ -11367,6 +11500,7 @@ app.use((req, res) => {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
         try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+        res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
           hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}`,
@@ -11410,7 +11544,7 @@ app.use((err, req, res, _next) => {
   if (status === 400 && err?.type === "entity.parse.failed" && req.path.startsWith("/mcp")) {
     return res.status(400).json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null });
   }
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
     // it five times in 30 minutes, 2026-08-28): say where big bodies go.

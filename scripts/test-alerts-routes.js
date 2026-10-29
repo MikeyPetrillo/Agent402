@@ -54,6 +54,12 @@ try {
   ok(stopBad.status === 400 && /did not work/.test(await stopBad.text()), "a forged follow-up stop link renders the 400 page (no 500)");
   const hostile = await fetch(`${B}/alerts/confirm?id=__proto__&k=${confirmK}`);
   ok(hostile.status === 400, "a prototype-name id is refused");
+  // The server's recall validator (shared with the card and wallet monitor
+  // subscriptions) refuses a target shaped like a host name itself, before the
+  // engine's own check: its refusal names the allowed characters.
+  const host = await fetch(`${B}/api/alerts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: `host-${Date.now().toString(36)}@example.com`, kind: "recall", target: "Recall at www.example.org" }) });
+  const hostBody = await host.json().catch(() => ({}));
+  ok(host.status === 400 && /basic punctuation\), not a web address/.test(String(hostBody.error)), `the server's recall validator refuses a host-shaped target (got ${host.status} ${String(hostBody.error).slice(0, 90)})`);
   console.log(`\nPASS - ${pass} checks (alert routes end to end on a booted server)`);
   proc.kill("SIGKILL"); process.exit(0);
 } catch (e) { fail(e?.stack || String(e)); }

@@ -27,6 +27,9 @@
 import { createHash } from "node:crypto";
 
 const DEFAULT_BASE = "https://agent402.tools";
+// Keep in lockstep with package.json: the User-Agent product token that names
+// this package on every call it sends.
+const USER_AGENT = "agent402-openai-agents/0.1.13";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -59,7 +62,8 @@ async function discoveryFetch(fetchImpl, label, url, init) {
   let attempts = 0;
   for (;;) {
     attempts++;
-    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    const i = (typeof init === "function" ? init() : init) || {};
+    r = await fetchImpl(url, { ...i, headers: { "User-Agent": USER_AGENT, ...(i.headers || {}) } });
     if (r.ok) return r;
     if (attempts >= DISCOVERY_ATTEMPTS) break;
     const wait = await shedRetryWaitMs(r);
@@ -174,7 +178,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
 
   const idem = `a402oa-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
   const send = async (extraHeaders = {}, useFetch = fetchImpl) => {
-    const headers = { "Idempotency-Key": idem, ...extraHeaders };
+    const headers = { "User-Agent": USER_AGENT, "Idempotency-Key": idem, ...extraHeaders };
     let url = `${base}${entry.path}`;
     // A request through the payment fetch never follows a redirect: followed,
     // it would pay another origin's 402 or carry a signature to another host.

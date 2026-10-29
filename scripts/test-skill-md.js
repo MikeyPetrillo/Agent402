@@ -27,7 +27,7 @@ ok(!md.includes("—"), "no em dashes (house style)");
 ok(md.includes("500+"), "evergreen '500+' claim in prose");
 ok(md.includes("Call any of 2 tools ("), "exact tool count is derived from the catalog, not hand-typed");
 ok(md.includes("curl -fsSL https://agent402.tools/SKILL.md"), "tells a summarizing fetcher how to read it verbatim");
-ok(md.includes("npx -y agent402-mcp@0.13.22") && md.includes("npm install agent402-client"), "names both packages");
+ok(md.includes("npx -y agent402-mcp@0.13.24") && md.includes("npm install agent402-client"), "names both packages");
 ok(md.includes("X-Pow-Solution: <token>:<nonce>") && /hash the `challenge`, submit the `token`/i.test(md), "PoW instructions carry the two-field trap");
 ok(/Idempotency-Key/.test(md), "retry guidance names Idempotency-Key");
 ok(!/(sk-|0x[0-9a-f]{40,})/i.test(md.replace(/0x\.\.\./g, "")), "no key-shaped strings");
@@ -46,6 +46,12 @@ const registered = new Set([
   ...[...src.matchAll(/route(?::|\s*=)\s*`(?:GET|POST) ([^`$]+)\$\{/g)].map((m) => m[1] + "*"),
 ]);
 for (const k of Object.keys(catalog)) registered.add(k.split(" ")[1]);
+// The Messages and Responses wires build their routes from per-tier path
+// tables (not a literal the scan above can read): read the tables themselves.
+for (const kit of ["llm-messages-kit.js", "llm-responses-kit.js", "llm-gemini-kit.js"]) {
+  const mod = await import(new URL(`../src/tools/${kit}`, import.meta.url));
+  for (const [k, v] of Object.entries(mod)) if (/_PATH_BY_TIER$/.test(k)) for (const p of Object.values(v)) registered.add(p);
+}
 // A referenced path is satisfied by an exact route or by being a path PREFIX
 // of one (tier prefixes like /v1/base, families like /api/skill/<slug>).
 const satisfied = (p) => {

@@ -25,6 +25,9 @@ export function handlerInputOf(req, def) {
   // route to mount express.raw. A raw body is the handler's business, never a
   // bag of named parameters.
   const bodyIsParams = req.body && typeof req.body === "object" && !Array.isArray(req.body) && !Buffer.isBuffer(req.body);
+  // Handlers walk their input recursively; a body nested past
+  // MAX_INPUT_DEPTH is refused as a 400 before any of them sees it.
+  if (bodyIsParams && inputDepthExceeds(req.body)) throw inputTooDeep();
   const input = { ...(req.query ?? {}), ...(bodyIsParams ? req.body : {}) };
   // Accept MCP-style envelopes posted directly to the HTTP route. Agents
   // frequently mirror the shape they use over /mcp ({slug, params:{...}})
@@ -38,9 +41,66 @@ export function handlerInputOf(req, def) {
       }
     }
   }
+  // A field carrying JSON text is parsed and walked by its handler too.
+  if (jsonFieldTooDeep(input)) throw inputTooDeep();
   try { Object.defineProperty(req, "__handlerInput", { value: input, enumerable: false, writable: true }); } catch { /* frozen req in a test */ }
   aliasInto(req, input, def);
   return input;
+}
+
+export const MAX_INPUT_DEPTH = 64;
+const inputTooDeep = () => Object.assign(new Error(`Input is nested more than ${MAX_INPUT_DEPTH} levels deep`), { statusCode: 400 });
+
+/** True when an object or array inside `value` sits more than `max` levels
+ *  down. Iterative, so the check itself never recurses. */
+export function inputDepthExceeds(value, max = MAX_INPUT_DEPTH) {
+  if (!value || typeof value !== "object") return false;
+  const stack = [[value, 1]];
+  while (stack.length) {
+    const [v, d] = stack.pop();
+    for (const k in v) {
+      if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+      const c = v[k];
+      if (!c || typeof c !== "object" || Buffer.isBuffer(c)) continue;
+      if (d + 1 > max) return true;
+      stack.push([c, d + 1]);
+    }
+  }
+  return false;
+}
+
+/** True when a string reads as JSON text (first non-space character `{` or
+ *  `[`) and its brackets, outside string literals, nest more than `max`
+ *  levels. One linear scan, no parse. */
+export function jsonTextDepthExceeds(text, max = MAX_INPUT_DEPTH) {
+  if (typeof text !== "string" || text.length <= max) return false;
+  const first = text.trimStart()[0];
+  if (first !== "{" && first !== "[") return false;
+  let depth = 0, inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inStr) {
+      if (c === 92) i++; // backslash escapes the next character
+      else if (c === 34) inStr = false;
+    } else if (c === 34) inStr = true;
+    else if (c === 123 || c === 91) { if (++depth > max) return true; }
+    else if (c === 125 || c === 93) depth--;
+  }
+  return false;
+}
+
+/** A top-level field of the input that is JSON text nested past the bound. */
+function jsonFieldTooDeep(input) {
+  for (const k in input) {
+    if (Object.prototype.hasOwnProperty.call(input, k) && jsonTextDepthExceeds(input[k])) return true;
+  }
+  return false;
+}
+
+/** The 400 a caller outside the dispatcher sends for an input nested too deep
+ *  (the MCP connector calls handlers with its own params object). */
+export function inputDepthRefusal(value) {
+  return inputDepthExceeds(value) || (value && typeof value === "object" && jsonFieldTooDeep(value)) ? inputTooDeep().message : null;
 }
 
 // Fill a missing REQUIRED parameter from an accepted synonym (src/input-aliases.js).
@@ -78,7 +138,12 @@ function aliasInto(req, input, def) {
  *  not a 4xx is ignored here and left to the handler. */
 export function preValidateInput(def, req) {
   if (!def || !req) return null;
-  const input = handlerInputOf(req, def);
+  let input;
+  try { input = handlerInputOf(req, def); }
+  catch (e) {
+    if (Number(e?.statusCode) !== 400) throw e;
+    return { status: 400, body: { error: e.message, tool: def.slug, expected: def.discovery?.inputSchema?.properties || {}, required: def.discovery?.inputSchema?.required || [], example: def.discovery?.input || {} } };
+  }
   const schema = def.discovery?.inputSchema || {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   const missing = required.filter((k) => input[k] === undefined || input[k] === null);

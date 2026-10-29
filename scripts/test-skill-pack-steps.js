@@ -210,3 +210,33 @@ console.log(`\n${passed} passed, 0 failed (${SKILL_PACKS.length} packs checked)`
   ok(modelBackedPackSlugs(SKILL_PACKS, () => false).length === 0, "no model-backed tool, no model-backed pack");
 }
 console.log("model-backed pack derivation checked");
+
+// ---- finance packs read bounded free text --------------------------------
+// The scenario parsers read the first characters of the text with bounded
+// digit runs, and a year count over a century reads as unparsed, because the
+// year count sizes the cashflow arrays the chain builds.
+{
+  const step = (pack, slug) => PACK_STEPS[pack].steps.find((s) => s.slug === slug);
+  const npv = step("loan-comparison", "npv");
+  const good = npv.mapInput({ loanA: "$300,000 at 6.5% for 30 years" }, { "loan-payment": { payment: 1896.2 } });
+  ok(good.cashflows.length === 361 && good.cashflows[0] === 300000, "loan-comparison: a 30-year loan builds 360 payments after the principal");
+  const lp = step("loan-comparison", "loan-payment").mapInput({ loanA: "$300,000 at 6.5% for 30 years" });
+  ok(lp.principal === 300000 && Math.abs(lp.annualRate - 0.065) < 1e-12 && lp.termYears === 30, "loan-comparison: principal, rate and term parse as before");
+  const huge = npv.mapInput({ loanA: "$1 at 1% for 999999999 years" }, { "loan-payment": { payment: 1 } });
+  ok(huge.cashflows.length === 1, `loan-comparison: a term past a century builds no payment stream (got ${huge.cashflows.length})`);
+  const inv = step("investment-decision", "npv").mapInput({ project: "$500 returning $150/year for 999999999 years" });
+  ok(inv.cashflows.length === 1, "investment-decision: a horizon past a century builds no cashflow stream");
+  const ret = step("retirement-planning", "irr").mapInput({ scenario: "35 years old with $100 saved, contributing $1/month, retiring at 999" }, {});
+  ok(ret.cashflows.length === 2, "retirement-planning: an implausible retirement age builds no contribution stream");
+  const t = Date.now();
+  for (const pv of ["1".repeat(20000) + "x", "$" + "1,".repeat(10000) + "x", "1".repeat(20000) + "%x", "retire".repeat(4000)]) {
+    step("loan-comparison", "loan-payment").mapInput({ loanA: pv });
+    step("retirement-planning", "compound-interest").mapInput({ scenario: pv });
+    step("investment-decision", "npv").mapInput({ project: pv });
+  }
+  const ms = Date.now() - t;
+  ok(ms < 100, `scenario parsers stay fast on long digit runs (${ms}ms)`);
+  const late = step("loan-comparison", "loan-payment").mapInput({ loanA: `${"x".repeat(600)} $300,000 at 6.5% for 30 years` });
+  ok(!(late.principal > 0) && !(late.termYears > 0), `the parsers read only the first 500 characters of a scenario (got principal ${late.principal}, term ${late.termYears})`);
+}
+console.log("finance scenario bounds checked");

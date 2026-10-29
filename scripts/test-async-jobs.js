@@ -174,6 +174,22 @@ try {
     ok(fac.settle === s1b + 1, "and the job settled exactly once");
   }
 
+  // 1c. The replay carries the caller's User-Agent, so the job's sale books
+  // the caller's arrival path (src/sale-path.js), not the replay's own.
+  {
+    const payer = wallet(13);
+    const jc = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.13", "user-agent": "agent402-client/0.8.21", "payment-signature": credential(payer) })).json();
+    await waitFor(async () => ["succeeded", "failed"].includes((await job(jc.statusUrl)).state));
+    const { default: Database } = await import("better-sqlite3");
+    let via;
+    await waitFor(async () => {
+      const db = new Database(join(TMP, "sales.db"), { readonly: true });
+      try { via = db.prepare("SELECT via FROM sales WHERE lower(payer) = lower(?) ORDER BY id DESC LIMIT 1").get(payer)?.via; } finally { db.close(); }
+      return via !== undefined;
+    });
+    ok(via === "agent402-client/0.8.21", `an async job's sale books the caller's path (got ${via})`);
+  }
+
   // 2. Upstream failure: the job fails and nothing settles.
   const s2 = fac.settle; up.failNext = true;
   const j2 = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.3", "payment-signature": credential(wallet(2)) })).json();

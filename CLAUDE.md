@@ -70,7 +70,9 @@ LLC: credit the entity, never a personal name.
 - The free (PoW) tier is an allowlist: a tool is PoW-eligible only when `src/free-tier.js` lists
   it and `WALLET_ONLY_SLUGS` (`src/pow.js`) does not override it, so a new tool is wallet-only by
   default. Add a slug there only for pure-CPU tools (no egress, key or model). Free-tier egress is
-  a tested invariant (`scripts/test-free-tier-egress.js`).
+  a tested invariant (`scripts/test-free-tier-egress.js`), and so is a bounded run on long
+  adversarial strings: `scripts/test-redos-free-tier.js` sends every free tool's and skill's
+  string fields a hostile corpus while it times the event loop.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js`); they are EVM-exact only and refused on
   Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
@@ -124,6 +126,8 @@ LLC: credit the entity, never a personal name.
 `/sitemap.xml`, `/.well-known/glama.json`, `/x402-test` (payment-refusal diagnostics).
 Operator-only surfaces live under `/__operator/*` (token-authed); the operator view of a public
 surface reads `X-Operator-Token` only, since `Authorization` there is a buyer's credential.
+Such a route calls `operatorView(req, res)` (server.js): every answer varies on the header, and an
+elevated one is `private, no-store`, so a shared cache never keeps it.
 
 ## Dev / CI / deploy workflow
 - **Develop on branch `claude/sweet-brown-i99jl3`.** `main` is protected: PR required, never
@@ -231,7 +235,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
   (Anthropic Messages), `llm-responses-kit.js` (OpenAI Responses); flat tiers plus a metered
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
-  one input object for pricing and serving. Streams commit 200 only on the first `data:` frame.
+  one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
+  there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
@@ -246,12 +251,22 @@ heartbeat page on it under one issue that closes when nothing is owed.
   stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
   breakers and the composite guard, with a 429 that names it instead of the wallet.
+  The composite guard (`src/composite-spend-guard.js`) reads its window the same way: a settled
+  run stays as an outcome and never erases failures; a payer is blocked at
+  `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
+  (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
+  in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
+  route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
+  but unreachable, a long-running or composite route (`isLongRunningSlug`) is refused 503 with
+  `Retry-After` before any payment is taken (x402 dispatcher and card gate); fast routes fall back
+  to a per-process claim.
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
   can run through our own relayer; it is static so the paid retry re-derives the same amount.
-  A floored network is never offered `upto`. /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
+  A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
   the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
   each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
@@ -273,7 +288,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   The funding reader can be switched off (`LEADERBOARD_FUNDING_SCAN=off`); off, the router reads
   gross per-wallet evidence with no netting and no verdict.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
-  house style in `src/house-style.js`, samples in `src/sample-reports.js`.
+  house style in `src/house-style.js`, samples in `src/sample-reports.js`. Every kit that serves
+  model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a
+  link only to a listed source's host; images and raw HTML are removed) and wraps fetched text in
+  `quotedMaterial`; `scripts/test-report-prose-filter.js` runs each kit.
 - **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
   `src/facilitator-diagnostics.js`; Stellar confirm in `src/stellar-confirm.js`; Tempo
   chain-truth confirm in `src/tempo-confirm.js`. Arc (`eip155:5042`) settles through Circle's
@@ -302,6 +320,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
+  The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
+  (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded.
 - **Router worker:** `src/router-pool.js` scores route queries in a worker thread
@@ -309,7 +329,34 @@ heartbeat page on it under one issue that closes when nothing is owed.
   query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
   runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
   `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
-- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class and origin (outside vs our own synthetic traffic) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
+  connector's loopback, a client package by its User-Agent product token, or HTTP) in the
+  ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
+  (`COHORT_TOOLS_PER_DAY`) or per-hour call (`COHORT_CALLS_PER_HOUR`, default 300) threshold.
+- **Live view:** `services/live` deploys from this repository with every merge. The page reads
+  one event stream and, with nothing on it after 8 s (a proxy holding it), polls `/api/poll`
+  for the same numbered batches (`LIVE_POLL_KEEP_BATCHES`, default 300; a whole-hour answer at
+  most `LIVE_POLL_HELLO_PER_MIN`, default 30, times a minute per address). Tests:
+  `services/live/test.js`, `test-guard.js`.
+- **Large bodies:** `src/large-body-gate.js` sits before the parsers of the routes that take more
+  than the global 100 KB body: it refuses a Content-Encoding (415), answers an unpaid oversized
+  body whose price does not read it without reading it, rate-limits the unpaid ones that are
+  parsed, and reserves each parse against one in-flight budget (`LARGE_BODY_INFLIGHT_MAX_MB`,
+  default 256; 503 with Retry-After when spent), of which one client address holds at most a
+  quarter (never less than two of the largest route's bodies). A slow body is bounded by the
+  server's `HTTP_REQUEST_TIMEOUT_MS`.
+- **Media and documents:** the OCR language data is baked into the image at build
+  (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
+  directory), so `image-ocr` never fetches a model at request time; an engine that does not
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
+  (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
+  `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
+  (422). ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
+  allowlist of environment variables, so no key reaches a child process.
+- **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
+  listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
+  a workflow with no install (`wish-issues.yml`) reads the same rules.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read.

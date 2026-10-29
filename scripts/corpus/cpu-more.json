@@ -1702,6 +1702,19 @@
       }
     },
     {
+      "slug": "slugify",
+      "name": "letter separator is trimmed literally",
+      "input": {
+        "text": " Hello World 123 ",
+        "separator": "d"
+      },
+      "expect": {
+        "equals": {
+          "slug": "hellodworldd123"
+        }
+      }
+    },
+    {
       "slug": "truncate",
       "name": "no truncation needed",
       "input": {

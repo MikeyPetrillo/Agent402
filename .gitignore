@@ -1,4 +1,6 @@
 node_modules/
+# OCR language data, installed by scripts/fetch-tessdata.js
+/tessdata/
 .env
 *.log
 

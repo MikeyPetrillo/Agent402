@@ -204,6 +204,20 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok((await failures()) === before + 1, "and neither read of the real token spent budget or counted");
   }
 
+  // A public surface whose answer changes for the operator is never stored by
+  // a shared cache when elevated, and is keyed on the operator header always.
+  for (const p of ["/analytics", "/api/analytics", "/api/solana-leaderboard?top=600", "/api/leaderboard", "/api/index", "/health", "/api/gateway-status"]) {
+    const r = await fetch(`${base}${p}`, { headers: { "X-Operator-Token": TOKEN }, redirect: "manual" });
+    const cc = r.headers.get("cache-control") || "";
+    ok(r.status === 200 && /private/.test(cc) && /no-store/.test(cc) && !/public/.test(cc) && /x-operator-token/i.test(r.headers.get("vary") || ""),
+      `${p} elevated answers private, no-store and varies on the operator header (${r.status}, "${cc}", vary "${r.headers.get("vary")}")`);
+  }
+  for (const p of ["/api/solana-leaderboard", "/api/index"]) {
+    const r = await fetch(`${base}${p}`);
+    const cc = r.headers.get("cache-control") || "";
+    ok(!/private/.test(cc) && (p !== "/api/solana-leaderboard" || /public/.test(cc)) && /x-operator-token/i.test(r.headers.get("vary") || ""), `${p} public answer keeps its cache policy and varies on the operator header ("${cc}")`);
+  }
+
   // The operator no-store and session-sync middleware runs ahead of EVERY
   // operator route, the ones registered early in the file included: each of
   // these carries the Pragma only that middleware sets (a route may restate

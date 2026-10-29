@@ -35,7 +35,9 @@ export async function resolvePinned(host) {
   return addrs[0]; // pinned: connect to this exact validated IP, no re-resolution
 }
 
-export function startEgressProxy({ port = 0 } = {}) {
+// `resolve` replaces the validating resolver; only test suites pass one (to
+// treat a loopback fixture as a public host), never a serving path.
+export function startEgressProxy({ port = 0, resolve: resolveHost = resolvePinned } = {}) {
   const server = http.createServer((req, res) => {
     // Plain HTTP proxying (absolute-form request URL) — rare from Chromium.
     (async () => {
@@ -43,7 +45,7 @@ export function startEgressProxy({ port = 0 } = {}) {
       try { target = new URL(req.url); } catch { res.writeHead(400).end("bad target"); return; }
       if (target.protocol !== "http:") { res.writeHead(403).end("only http(s) via CONNECT"); return; }
       let pinned;
-      try { pinned = await resolvePinned(target.hostname); } catch (e) { res.writeHead(403).end(e.message); return; }
+      try { pinned = await resolveHost(target.hostname); } catch (e) { res.writeHead(403).end(e.message); return; }
       const upstream = http.request(
         { host: pinned.address, family: pinned.family, port: Number(target.port) || 80, method: req.method, path: target.pathname + target.search, headers: { ...req.headers, host: target.host }, timeout: CONNECT_TIMEOUT_MS },
         (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); },
@@ -61,7 +63,7 @@ export function startEgressProxy({ port = 0 } = {}) {
       const [host, portStr] = String(req.url).split(":");
       const port = Number(portStr) || 443;
       let pinned;
-      try { pinned = await resolvePinned(host); }
+      try { pinned = await resolveHost(host); }
       catch (e) { try { clientSocket.write(`HTTP/1.1 403 Forbidden\r\n\r\n${e.message}`); } catch { /* */ } clientSocket.destroy(); return; }
       const upstream = net.connect({ host: pinned.address, port, family: pinned.family }, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");

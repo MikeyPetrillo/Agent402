@@ -19,6 +19,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  contents: read
   issues: write
 
 jobs:
@@ -26,6 +27,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # No install: the listing screen (src/listing-screen.js) has no dependency.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
       - name: Open issues for wish clusters at threshold (gated OFF by default)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,14 +55,18 @@ jobs:
           THRESHOLD=$(echo "$WISHES" | jq -r '.threshold // 5')
           EXISTING=$(gh issue list --repo "$REPO" --label tool-wish --state all --limit 200 --json title --jq '.[].title')
           CREATED=0
-          echo "$WISHES" | jq -c '.clusters[] | select(.qualified == true)' | while read -r c; do
+          # Qualified clusters, minus any the listing screen flags (hidden
+          # characters, oversized text, instructions to whoever reads it).
+          echo "$WISHES" | node scripts/wish-issue-screen.mjs | while read -r c; do
             [ "$CREATED" -ge "$MAX_NEW" ] && { echo "cap reached ($MAX_NEW)"; break; }
             # Wish text is buyer-supplied. Same treatment as wish-reports.yml: it
             # goes into the body inside a code fence, so it renders as plain
             # text (no markdown, links or @mentions). Control characters become
             # spaces and backticks become quotes, so nothing can close the
-            # fence early; length is bounded.
-            CLEAN='def clean: tostring | explode | map(if . < 32 or . == 127 then 32 elif . == 96 then 39 else . end) | implode | .[0:2000];'
+            # fence early; length is bounded. The hidden-character classes of
+            # src/hidden-chars.js (zero-width, bidi, variation selectors, TAG
+            # text, soft hyphen) are removed first, title included.
+            CLEAN='def hidden: . == 173 or . == 6158 or (. >= 8203 and . <= 8205) or (. >= 8234 and . <= 8238) or (. >= 8288 and . <= 8292) or (. >= 8294 and . <= 8297) or (. >= 65024 and . <= 65039) or . == 65279 or (. >= 65529 and . <= 65531) or (. >= 917504 and . <= 917631) or (. >= 917760 and . <= 917999); def clean: tostring | explode | map(select(hidden | not)) | map(if . < 32 or . == 127 then 32 elif . == 96 then 39 else . end) | implode | .[0:2000];'
             TEXT=$(echo "$c" | jq -r "$CLEAN"' .text | clean')
             COUNT=$(echo "$c" | jq -r '.count | tonumber? // 0')
             SOURCES=$(echo "$c" | jq -r "$CLEAN"' .sources | to_entries | map("\(.key | clean): \(.value | clean)") | join(", ") | clean')

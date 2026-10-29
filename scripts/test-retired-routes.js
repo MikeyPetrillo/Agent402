@@ -5,7 +5,7 @@
 //   node scripts/test-retired-routes.js
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
-import { RETIRED_TOOLS, RETIRED_PACKS, retiredEntryFor, assertRetiredRegistryConsistent } from "../src/retired-tools.js";
+import { RETIRED_TOOLS, RETIRED_PACKS, RETIRED_CONVERTERS_AT, retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders } from "../src/retired-tools.js";
 import { loadSnapshot, envGatedSegments, segmentsOf, accountFor } from "./published-slugs.js";
 
 let pass = 0;
@@ -28,6 +28,24 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
   ok(/assertRetiredRegistryConsistent\(new Set\(Object\.values\(CATALOG\)\.map\(\(d\) => d\.slug\)\)\)/.test(src), "server.js runs the registry guard over the catalog's own slugs at boot");
   ok(src.indexOf("assertRetiredRegistryConsistent(new Set(") < src.indexOf("app.listen("), "...before the server listens");
 }
+
+// --- the retirement headers (RFC 8594 Sunset, Link rel="successor-version") ---
+{
+  const h = retirementHeaders("2026-09-20", "https://example.test/api/crypto-options-chain");
+  ok(h.Sunset === "Sun, 20 Sep 2026 00:00:00 GMT", `Sunset is the retirement date as an HTTP-date (got ${h.Sunset})`);
+  ok(h.Link === '<https://example.test/api/crypto-options-chain>; rel="successor-version"', `Link names the successor (got ${h.Link})`);
+  const none = retirementHeaders("2026-09-20", null);
+  ok(none.Sunset && !("Link" in none), "no replacement: Sunset only, never an invented successor");
+  ok(!("Sunset" in retirementHeaders("not-a-date")), "a malformed date sets no Sunset rather than a wrong one");
+  ok(/^\d{4}-\d{2}-\d{2}$/.test(RETIRED_CONVERTERS_AT), "the converters carry a retirement date too");
+}
+// A Sunset already past is what reads as retired (a future one is only a notice).
+const pastSunset = (r, date) => {
+  const raw = r.headers.get("sunset");
+  const t = Date.parse(raw || "");
+  return Number.isFinite(t) && t < Date.now() && raw === new Date(`${date}T00:00:00Z`).toUTCString();
+};
+const successorOf = (r) => (/^<([^>]+)>; rel="successor-version"$/.exec(r.headers.get("link") || "") || [])[1] || null;
 
 // --- path resolution ------------------------------------------------------------
 ok(retiredEntryFor("/api/options-chain")?.replacement === "crypto-options-chain", "/api/<retired tool> resolves with its replacement");
@@ -75,6 +93,8 @@ try {
   ok(gb.replacement?.slug === "crypto-options-chain" && /^POST \/api\/crypto-options-chain$/.test(gb.replacement?.route || "") && gb.replacement?.url === "http://agent402.test/api/crypto-options-chain", "...naming the live replacement's slug, route and url");
   ok(gb.retiredAt === "2026-09-20" && /retired on 2026-09-20/.test(gb.hint) && /crypto-options-chain/.test(gb.hint), "...with the date and the replacement in the hint");
   ok(Array.isArray(gb.suggestions) && typeof gb.find === "string", "...and the same find + suggestions the 404 carries");
+  ok(pastSunset(get, "2026-09-20"), `...with a past Sunset header on the retirement date (got ${get.headers.get("sunset")})`);
+  ok(successorOf(get) === "http://agent402.test/api/crypto-options-chain", `...and Link rel="successor-version" to the replacement (got ${get.headers.get("link")})`);
   const post = await fetch(`${base}/api/options-chain`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol: "AAPL" }) });
   ok(post.status === 410, `POST on a retired route is 410 too (got ${post.status})`);
   // The 2026-09-22 explorer-data retirement: every one answers 410, never a
@@ -88,11 +108,19 @@ try {
   const none = await fetch(`${base}/api/stock-dividends`);
   const nb = await none.json();
   ok(none.status === 410 && nb.replacement === null && /no direct replacement/.test(nb.hint), "a retirement with no replacement says so instead of inventing one");
+  ok(pastSunset(none, RETIRED_TOOLS["stock-dividends"].retiredAt) && none.headers.get("link") === null, "...with a Sunset header and no successor Link");
   const pack = await fetch(`${base}/api/skill/market-open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   const pb = await pack.json();
   ok(pack.status === 410 && pb.slug === "market-open" && /Skill pack market-open was retired/.test(pb.hint), `a retired skill pack is 410 (got ${pack.status})`);
   const unknown = await fetch(`${base}/api/nope-nope`);
   ok(unknown.status === 404 && (await unknown.json()).error === "not-found", "a guessed slug that was never a tool is still 404");
+  // Routing is case-insensitive, so is the machine-surface test: an uppercase
+  // /V1 or /API miss is the same JSON 404, never the HTML shell.
+  for (const p of ["/V1/nothing-here", "/API/NOPE-NOPE", "/Mcp/x"]) {
+    const r = await fetch(`${base}${p}`);
+    const ct = r.headers.get("content-type") || "";
+    ok(r.status === 404 && /application\/json/.test(ct) && (await r.json()).error === "not-found", `${p} is a JSON 404 (${r.status}, ${ct})`);
+  }
   const liveRoute = await fetch(`${base}/api/crypto-options-chain`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   ok(liveRoute.status !== 410 && liveRoute.status !== 404, `the replacement itself is served (got ${liveRoute.status})`);
   // Every route ever published is live, key-gated, or retired - and every
@@ -110,14 +138,17 @@ try {
     const b = await r.json().catch(() => ({}));
     const repl = RETIRED_TOOLS[slug]?.replacement || null;
     if (!(r.status === 410 && b.error === "gone" && b.slug === slug && (repl ? b.replacement?.slug === repl : b.replacement === null))) bad.push(`/api/${slug} ${r.status}`);
+    else if (!pastSunset(r, RETIRED_TOOLS[slug].retiredAt) || successorOf(r) !== (b.replacement?.url || null)) bad.push(`/api/${slug} headers ${r.headers.get("sunset")} ${r.headers.get("link")}`);
   }
   for (const slug of snapshot.packs) {
     if (live.packs.has(slug)) continue;
     const r = await fetch(`${base}/api/skill/${slug}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     const b = await r.json().catch(() => ({}));
     if (!(r.status === 410 && b.slug === slug)) bad.push(`/api/skill/${slug} ${r.status}`);
+    else if (!pastSunset(r, RETIRED_PACKS[slug].retiredAt) || successorOf(r) !== (b.replacement?.url || null)) bad.push(`/api/skill/${slug} headers ${r.headers.get("sunset")} ${r.headers.get("link")}`);
     const pr = await fetch(`${base}/api/skill-packs/${slug}/prompt`);
     if (pr.status !== 410) bad.push(`/api/skill-packs/${slug}/prompt ${pr.status}`);
+    else if (!pastSunset(pr, RETIRED_PACKS[slug].retiredAt)) bad.push(`/api/skill-packs/${slug}/prompt headers ${pr.headers.get("sunset")}`);
   }
   ok(bad.length === 0, `every retired snapshot route answers 410 with its registry replacement (wrong: ${bad.join(", ") || "none"})`);
   const research = await (await fetch(`${base}/api/research-company?ticker=AAPL`)).json();
@@ -130,5 +161,14 @@ try {
   ok((await fetch(`${base}/api/skill-packs/never-a-pack/prompt`)).status === 404, "an unknown pack's prompt is still 404");
   const conv = await fetch(`${base}/api/convert/km-to-miles`);
   ok(conv.status === 410, `the retired converters keep their own teaching 410 (got ${conv.status})`);
+  const convBody = await conv.json();
+  ok(/POST \/api\/unit-convert/.test(convBody.error || "") && convBody.replacement?.route === "POST /api/unit-convert", "...with its body unchanged");
+  for (const shape of ["/api/convert/km-to-miles", "/api/convert-km-to-miles", "/api/convert-not-a-unit-to-other"]) {
+    const r = shape === "/api/convert/km-to-miles" ? conv : await fetch(`${base}${shape}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    ok(r.status === 410 && pastSunset(r, RETIRED_CONVERTERS_AT) && successorOf(r) === "http://agent402.test/api/unit-convert", `${shape} 410 carries a past Sunset and the unit-convert successor (got ${r.status} ${r.headers.get("sunset")} ${r.headers.get("link")})`);
+  }
+  // A converter call we can serve is untouched: it is served (free boot), never a 410.
+  const served = await fetch(`${base}/api/convert-miles-to-kilometers?value=2`);
+  ok(served.status === 200 && served.headers.get("sunset") === null, `a servable converter call is still served, with no Sunset (got ${served.status})`);
 } finally { proc.kill("SIGTERM"); }
 console.log(`OK: ${pass} passed`);

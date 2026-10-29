@@ -30,6 +30,30 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
     "over-wildcarded rule is skipped (safe default: allowed, no match) rather than silently blocking");
 }
 
+// 1b. Rules inside the wildcard cap are matched without a regex: three
+// wildcards per rule, many rules, against a long non-matching path stays fast,
+// and so does a robots.txt holding thousands of such rules.
+{
+  const groups = parseRobots(["User-agent: *", "Disallow: /*a*a*a!", "Disallow: /*a*a*a@", "Disallow: /*a*a*a%"].join("\n"));
+  const start = Date.now();
+  const result = robotsAllows(groups, "test-agent", "/" + "a".repeat(8000));
+  const elapsed = Date.now() - start;
+  ok(elapsed < 100, `three-wildcard rules against an 8000-char path resolve in <100ms (got ${elapsed}ms)`);
+  ok(result.allowed === true, "a three-wildcard rule that does not match leaves the path allowed");
+  const many = ["User-agent: *"];
+  for (let i = 0; i < 4999; i++) many.push(`Disallow: /*a*a*a!${i}`);
+  const big = parseRobots(many.join("\n"));
+  const t2 = Date.now();
+  robotsAllows(big, "test-agent", "/" + "a".repeat(2000));
+  const e2 = Date.now() - t2;
+  ok(e2 < 200, `thousands of three-wildcard rules against a 2000-char path resolve in <200ms (got ${e2}ms)`);
+  const anchored = parseRobots("User-agent: *\nDisallow: /*.pdf$\nDisallow: /x*y*z\n");
+  ok(robotsAllows(anchored, "t", "/a/b.pdf").allowed === false && robotsAllows(anchored, "t", "/a/b.pdf?x").allowed === true,
+    "a trailing $ anchors the end; without it the rule is a prefix match");
+  ok(robotsAllows(anchored, "t", "/x1y2z3").allowed === false && robotsAllows(anchored, "t", "/x1z2y").allowed === true,
+    "wildcard segments must appear in order");
+}
+
 // 2. Normal, real-world robots.txt behavior is unaffected (0-2 wildcards).
 {
   const groups = parseRobots([
@@ -64,6 +88,17 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
     "rule with exactly 3 wildcards (at the cap) still matches and blocks");
   ok(robotsAllows(groups, "test-agent", "/w1x2y3z4q").allowed === true,
     "rule with 4 wildcards (over the cap) is skipped, so an otherwise-matching path is allowed");
+}
+
+// 2. One group keeps at most 2,000 rules, so a robots.txt of thousands of
+// rules costs a bounded scan per path; the first 2,000 still apply.
+{
+  const lines = ["User-agent: *"];
+  for (let i = 0; i < 4500; i++) lines.push(`Disallow: /p${i}/`);
+  const groups = parseRobots(lines.join("\n"));
+  ok(groups.length === 1 && groups[0].rules.length === 2000, `a group keeps at most 2,000 rules (got ${groups[0]?.rules.length})`);
+  ok(robotsAllows(groups, "test-agent", "/p1999/x").allowed === false && robotsAllows(groups, "test-agent", "/p2000/x").allowed === true,
+    "the rules inside the cap apply; the ones past it are not read");
 }
 
 console.log(`\n${pass} passed`);

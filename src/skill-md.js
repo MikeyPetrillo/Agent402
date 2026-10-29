@@ -14,6 +14,7 @@
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
+import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
 function toolList(catalog) {
@@ -67,8 +68,11 @@ ${REPO_URL}
 - Call any of ${total} tools (${powCount} of them free via
   proof-of-work): rendering, PDFs, OCR, images, conversions, data lookups,
   finance/crypto/macro, government data, wallet-keyed memory, and an
-  OpenAI-compatible LLM gateway (\`/v1/chat/completions\`, \`/v1/embeddings\`,
-  \`/v1/images/generations\`, \`/v1/audio/speech\`).
+  OpenAI-compatible LLM gateway (\`/v1/embeddings\`, \`/v1/images/generations\`,
+  \`/v1/audio/speech\`).
+- Call a model with no key (metered by default, model-backed, from
+  ${meteredFromPrice()} a call): ${meteredRoutesInline()}. ${meteredQuoteSentence()}
+  ${flatTiersLine()}
 - Run multi-tool workflows in one paid call (skill packs, \`POST /api/skill/<slug>\`).
 - Route a task to the best seller across the whole x402/MPP ecosystem and
   have it executed (\`POST /api/route/execute\`).
@@ -109,9 +113,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.13.22
+claude mcp add agent402 -- npx -y agent402-mcp@0.13.24
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.22
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.24
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -119,7 +123,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.22
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.22"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.24"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -230,9 +234,8 @@ curl -s "${baseUrl}/api/pow/challenge?slug=hash"
 curl -s -X POST ${baseUrl}/api/hash -H 'X-Pow-Solution: <token>:<nonce>' \\
   -H 'content-type: application/json' -d '{"text":"hello","algo":"sha256"}'
 
-# OpenAI-compatible LLM gateway (pay per call, no key; "auto" routes the model)
-curl -s -X POST ${baseUrl}/v1/auto/chat/completions -H 'content-type: application/json' \\
-  -d '{"messages":[{"role":"user","content":"Summarize x402 in one line"}]}'
+# call a model: metered, quoted from this body (no key)
+${meteredCurl(baseUrl)}
 \`\`\`
 
 ### Response Handling
@@ -275,6 +278,6 @@ of the response you hold, without trusting this document.
 | 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged on x402 |
 | Tool not found by \`/api/find\` | Wording too broad | Rephrase with the concrete input/output; browse ${baseUrl}/api/pricing; or request it via \`/api/wish\` |
 | 413 on \`/api/memory*\` | Namespace quota (10k keys / 32MB) | Delete keys or use another wallet namespace |
-| LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Use a higher tier (${tierFix || "see /api/pricing"}) or shorten the input |
+| LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Send it to the metered route (\`/v1/metered/chat/completions\`, quoted from the body), use a higher tier (${tierFix || "see /api/pricing"}) or shorten the input |
 `;
 }

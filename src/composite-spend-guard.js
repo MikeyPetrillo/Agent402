@@ -9,7 +9,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 //
 // This tracks per-payer "spent-then-failed-to-settle" events and blocks a payer
 // who crosses the threshold BEFORE the next expensive run. A genuine paid 200
-// clears the counter, so it never penalizes real buyers. In memory per replica
+// is an outcome in the same window and does not erase failures: a payer is
+// blocked at MAX_FAILS failures only while they are more than MIN_FAIL_SHARE
+// of its outcomes there, and at HARD_MAX_FAILS whatever it settled, so a
+// buyer settling many runs is not cut off by a few failures and interleaving
+// paid runs with unpaid ones does not reset the count. In memory per replica
 // (the per-call drain is small, blocks are short, and the gateway-balance alarm
 // is the outer backstop), and shared across replicas through
 // src/shared-limits.js when a Redis is configured: failures go to a shared
@@ -22,8 +26,19 @@ import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } fr
 const WINDOW_MS = Number(process.env.COMPOSITE_GUARD_WINDOW_MS) || 15 * 60_000;
 const MAX_FAILS = Number(process.env.COMPOSITE_GUARD_MAX_FAILS) || 3;
 const BLOCK_MS = Number(process.env.COMPOSITE_GUARD_BLOCK_MS) || 30 * 60_000;
+/** The share of a payer's outcomes in the window that must be failures
+ *  (strictly more than this) before MAX_FAILS of them block it. */
+const MIN_FAIL_SHARE = (() => { const n = Number(process.env.COMPOSITE_GUARD_MIN_FAIL_SHARE); return Number.isFinite(n) && n >= 0 && n < 1 ? n : 0.5; })();
+/** Failures in the window that block a payer whatever it settled. */
+const HARD_MAX_FAILS = Number(process.env.COMPOSITE_GUARD_HARD_MAX) || 10;
+/** Settled outcomes kept per payer (the rule needs a count, not every stamp). */
+const MAX_OKS_KEPT = 5000;
+function tripped(nFails, nOks) {
+  return nFails >= MAX_FAILS && (nFails >= HARD_MAX_FAILS || nFails > MIN_FAIL_SHARE * (nFails + nOks));
+}
 
 const fails = new Map();        // payer -> number[] (failure timestamps in window)
+const oks = new Map();          // payer -> number[] (settled-run timestamps in window)
 const blockedUntil = new Map(); // payer -> timestamp the block lifts
 // Global circuit breaker: spend-then-fail events across ALL keys in the window.
 // The per-key guard is evadable by rotating wallets/IPs; this bounds the total
@@ -44,7 +59,8 @@ let anonSeq = 0;
 let globalPausedUntil = 0;
 
 // ---- the shared half ----------------------------------------------------------
-// cg-fail (per payer, one entry per failure), cg-block (flag per payer),
+// cg-fail (per payer, one entry per failure), cg-ok (per payer, one entry per
+// settled run), cg-block (flag per payer),
 // cg-global (one entry per failure, at most MAX_FAILS per payer: the member
 // is the payer plus the failure's index modulo MAX_FAILS, so a payer's later
 // failures refresh its own entries instead of adding), cg-pause (flag).
@@ -56,14 +72,15 @@ function sharedRecordFailure(payer, t, global) {
   const member = `${PROC}:${++sharedSeq}`;
   const perKey = payer
     ? sharedWrite(CONTROL, shared.windowAdd("cg-fail", payer, { windowMs: WINDOW_MS, member, now: t })).then((r) => {
-      if (!r?.ok) return r;
-      if (r.count >= MAX_FAILS) {
+      if (!r?.ok || r.count < MAX_FAILS) return r;
+      return sharedWrite(CONTROL, shared.windowRead("cg-ok", payer, { windowMs: WINDOW_MS, now: t })).then((o) => {
+        const nOks = Math.max(o?.ok ? o.count : 0, localOks(payer, t));
+        if (!tripped(r.count, nOks)) return r;
         return Promise.all([
           sharedWrite(CONTROL, shared.flagSet("cg-block", payer, t + BLOCK_MS, { now: t })),
           sharedWrite(CONTROL, shared.windowClear("cg-fail", payer)),
         ]).then(() => r, () => r);
-      }
-      return r;
+      });
     })
     : Promise.resolve({ ok: true, count: 1 });
   if (!global) return track(perKey);
@@ -229,13 +246,24 @@ export function recordCompositeSpendFailure(payer, { global = true } = {}) {
   if (!payer) return;
   const arr = (fails.get(payer) || []).filter((x) => t - x < WINDOW_MS);
   arr.push(t);
-  if (arr.length >= MAX_FAILS) { blockedUntil.set(payer, t + BLOCK_MS); fails.delete(payer); }
+  if (tripped(arr.length, localOks(payer, t))) { blockedUntil.set(payer, t + BLOCK_MS); fails.delete(payer); }
   else fails.set(payer, arr);
 }
+function localOks(payer, t) {
+  const kept = (oks.get(payer) || []).filter((x) => t - x < WINDOW_MS);
+  if (kept.length) oks.set(payer, kept); else oks.delete(payer);
+  return kept.length;
+}
 
-/** A genuine paid success clears the payer's failure history. */
+/** A genuine paid success is an outcome in the payer's window: enough of them
+ *  keep its failures under the share that blocks it. It erases nothing. */
 export function recordCompositeSpendSuccess(payer) {
-  if (payer) { fails.delete(payer); if (SHARED) void sharedWrite(CONTROL, shared.windowClear("cg-fail", payer)); }
+  if (!payer) return;
+  const t = Date.now();
+  const kept = (oks.get(payer) || []).filter((x) => t - x < WINDOW_MS);
+  kept.push(t);
+  oks.set(payer, kept.length > MAX_OKS_KEPT ? kept.slice(-MAX_OKS_KEPT) : kept);
+  if (SHARED) void sharedWrite(CONTROL, shared.windowAdd("cg-ok", payer, { windowMs: WINDOW_MS, member: `${PROC}:${++sharedSeq}`, now: t }));
 }
 
 /** A composite finished: account its upstream spend (PostHog when configured),
@@ -322,14 +350,14 @@ export function compositeUsageSnapshot() {
 export const _compositeGuardShared = SHARED;
 /** Test/ops introspection. */
 export function _compositeGuardState() {
-  return { fails: fails.size, blocked: blockedUntil.size, WINDOW_MS, MAX_FAILS, BLOCK_MS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
+  return { fails: fails.size, oks: oks.size, blocked: blockedUntil.size, WINDOW_MS, MAX_FAILS, MIN_FAIL_SHARE, HARD_MAX_FAILS, BLOCK_MS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
 }
 export function _compositeGuardReset() {
   if (SHARED) {
-    for (const k of new Set([...fails.keys(), ...blockedUntil.keys()])) { void shared.windowClear("cg-fail", k); void shared.flagSet("cg-block", k, 0); }
+    for (const k of new Set([...fails.keys(), ...blockedUntil.keys(), ...oks.keys()])) { void shared.windowClear("cg-fail", k); void shared.windowClear("cg-ok", k); void shared.flagSet("cg-block", k, 0); }
     void shared.flagSet("cg-pause", "all", 0); void shared.windowClear("cg-global", "all");
   }
-  fails.clear(); blockedUntil.clear(); globalFailKeys = new Map(); globalPausedUntil = 0;
+  fails.clear(); oks.clear(); blockedUntil.clear(); globalFailKeys = new Map(); globalPausedUntil = 0;
   usage.runs = 0; usage.ok = 0; usage.failed = 0; usage.upstreamUsd = 0;
   usage.overCap = 0; usage.lastOverCap = null; usage.bySlug = {};
 }

@@ -45,6 +45,8 @@ import { AUTO_ID, routesFromCatalog, stripTrailingSlashes } from "./models.js";
 
 export const DEFAULT_UPSTREAM = "https://agent402.tools";
 export const PKG_VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+// The User-Agent product token that names this package on every request.
+const USER_AGENT = `agent402-openclaw/${PKG_VERSION}`;
 const MAX_BODY = 2 * 1024 * 1024;
 
 // The model catalog read (GET /v1/models) settles nothing, so a 503 the
@@ -78,7 +80,8 @@ async function discoveryFetch(fetchImpl, label, url, init) {
   let attempts = 0;
   for (;;) {
     attempts++;
-    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    const i = (typeof init === "function" ? init() : init) || {};
+    r = await fetchImpl(url, { ...i, headers: { "User-Agent": USER_AGENT, ...(i.headers || {}) } });
     if (r.ok) return r;
     if (attempts >= DISCOVERY_ATTEMPTS) break;
     const wait = await shedRetryWaitMs(r);
@@ -177,7 +180,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
   // error shape (wire.mapRefusal); every other upstream body is relayed as sent.
   async function forward(req, res, endpoint, outbound, extraHeaders, wire) {
     const clientIdem = typeof req.headers["idempotency-key"] === "string" && /^[\w.:-]{8,128}$/.test(req.headers["idempotency-key"]) ? req.headers["idempotency-key"] : null;
-    const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": `agent402-openclaw/${PKG_VERSION}`, ...extraHeaders };
+    const headers = { "content-type": "application/json", accept: req.headers.accept || "application/json", "idempotency-key": clientIdem || randomUUID(), "user-agent": USER_AGENT, ...extraHeaders };
     if (key) headers.authorization = `Bearer ${key}`;
     // A paid request never follows a redirect: followed, it would pay another
     // origin's 402 or carry a signature (or the credits key) to another host.

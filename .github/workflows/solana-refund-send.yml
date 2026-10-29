@@ -84,13 +84,16 @@ jobs:
           MAX: ${{ inputs.max_usd }}
           MEMO: ${{ inputs.memo }}
           EVIDENCE: ${{ inputs.evidence }}
+          RECLAIM_SENDING: ${{ inputs.reclaim_sending }}
+          SEND: ${{ inputs.send }}
         run: |
           if [ -z "$SOLANA_BURNER_KEY" ]; then echo "SOLANA_BURNER_KEY is not set"; exit 1; fi
           echo "::add-mask::$SOLANA_BURNER_KEY"
           [ -n "$AGENT402_OPERATOR_TOKEN" ] && echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
           # Inputs ride as env vars and are passed as argv, never interpolated
-          # into the shell line (N-03).
+          # into the shell line (N-03); the two booleans are compared as strings.
           ARGS=(--to "$TO" --usd "$USD" --max "$MAX" --evidence "$EVIDENCE")
-          ${{ inputs.reclaim_sending }} && ARGS+=(--reclaim-sending) || true
+          [ "$RECLAIM_SENDING" = "true" ] && ARGS+=(--reclaim-sending) || true
           [ -n "$MEMO" ] && ARGS+=(--memo "$MEMO")
-          node scripts/solana-refund-send.js "${ARGS[@]}" ${{ inputs.send && '--send' || '' }}
+          [ "$SEND" = "true" ] && ARGS+=(--send) || true
+          node scripts/solana-refund-send.js "${ARGS[@]}"

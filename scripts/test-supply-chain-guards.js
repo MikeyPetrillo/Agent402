@@ -92,6 +92,56 @@ for (const dir of pkgDirs) {
   ok(!existsSync(join(ROOT, dir, ".npmignore")), `${pkg.name}: no .npmignore (allowlist-only is the safe pattern)`);
 }
 
+// --- 2b. signing libraries resolve to what was tested ---------------------------
+// A package that signs payments ships exact versions of the libraries that
+// sign, equal to the versions its lockfile was tested with: a range lets a
+// consumer's install take a newer patch nobody here ran. Every peer of a
+// published package is capped below the next major, so a major nobody here
+// ran is never accepted unseen.
+{
+  const SIGNING = ["viem", "@solana/kit", "@modelcontextprotocol/sdk", "@x402/core", "@x402/evm", "@x402/fetch", "@x402/svm"];
+  const pkg = JSON.parse(readFileSync(join(ROOT, "mcp/package.json"), "utf8"));
+  const lock = JSON.parse(readFileSync(join(ROOT, "mcp/package-lock.json"), "utf8"));
+  for (const name of SIGNING) {
+    const spec = pkg.dependencies?.[name];
+    if (spec === undefined) continue;
+    const locked = lock.packages?.[`node_modules/${name}`]?.version;
+    ok(/^\d+\.\d+\.\d+$/.test(spec), `${pkg.name}: ${name} is pinned to an exact version (${spec})`);
+    ok(spec === locked, `${pkg.name}: ${name} ${spec} is the version its lockfile resolves (${locked})`);
+    ok(lock.packages?.[""]?.dependencies?.[name] === spec, `${pkg.name}: the lockfile's root records ${name} as ${spec}`);
+  }
+  ok(lock.packages?.[""]?.version === pkg.version && lock.version === pkg.version, `${pkg.name}: the lockfile carries the package version (${pkg.version})`);
+  // Every peer of every package we publish is capped below its next major.
+  let capped = 0;
+  for (const dir of pkgDirs) {
+    const p = JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8"));
+    const peers = Object.entries(p.peerDependencies || {});
+    if (!peers.length) continue;
+    capped++;
+    for (const [name, range] of peers) ok(/<\s*\d/.test(range), `${p.name}: peer ${name} carries an upper bound (${range})`);
+  }
+  ok(capped >= 6, `peer caps checked on every published package with peers (${capped})`);
+}
+
+// --- 2c. the tollbooth Docker image installs exact versions ------------------
+// The image's npm install names the tollbooth release this tree carries and
+// the x402 packages at the versions the root lockfile resolves.
+{
+  const df = readFileSync(join(ROOT, "tollbooth/deploy/docker/Dockerfile"), "utf8");
+  const line = df.split("\n").find((l) => /\bnpm install /.test(l)) || "";
+  const specs = line.split("npm install ")[1]?.trim().split(/\s+/).filter((t) => !t.startsWith("-")) || [];
+  const tbVersion = JSON.parse(readFileSync(join(ROOT, "tollbooth/package.json"), "utf8")).version;
+  const rootLock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
+  ok(specs.length >= 4, `the tollbooth image installs the tollbooth and its x402 packages (${specs.join(" ")})`);
+  for (const spec of specs) {
+    const m = /^(@?[^@]+)@(\d+\.\d+\.\d+)$/.exec(spec);
+    ok(Boolean(m), `tollbooth image: ${spec} is pinned to an exact version`);
+    if (!m) continue;
+    const want = m[1] === "agent402-tollbooth" ? tbVersion : rootLock.packages?.[`node_modules/${m[1]}`]?.version;
+    ok(m[2] === want, `tollbooth image: ${m[1]}@${m[2]} is the version this tree carries (${want})`);
+  }
+}
+
 // --- 3. remote installs in tests are pinned + scriptless --------------------
 // A range like ^0.12 is NOT a pin: it takes any new 0.12.x, which is precisely
 // how worm-published patch versions land in CI.

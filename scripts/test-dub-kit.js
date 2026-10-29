@@ -5,8 +5,9 @@
 // suites: test-llm-gateway, test-tts-elevenlabs).
 //
 // What it pins:
-//   - the price is the SUM of the two tiers it composes, read from their tool
-//     definitions (standard and hd), and the per-request quote follows `tier`;
+//   - the price is the SUM of the two tiers it composes: the translate tier's
+//     list price plus the speech tier's own quote at the dub cap (standard and
+//     hd), and the per-request quote follows `tier`;
 //   - the happy path: raw audio bytes typed by format, the translation and what
 //     served in X-Dub-Translation (base64 JSON), and the same facts as JSON
 //     when the call says json: 1 or format "json";
@@ -14,7 +15,7 @@
 //     (uncharged: settlement never runs for a status of 400 or more), a
 //     throttle keeps its status, and the speech step never runs after a
 //     failed translation;
-//   - a text over the speech cap, an unknown voice or a missing target
+//   - a text over the dub cap, an unknown voice or a missing target
 //     language is a 400 before ANY step runs, and a translation that comes
 //     out over the cap is a 422 before the speech step;
 //   - language forms: BCP-47 tags (any case) and English names normalize to
@@ -23,7 +24,7 @@
 //   - with the private cost table: each tier's worst case (the chat tier's
 //     bound for a translation at the cap, plus every speech link at the cap)
 //     stays within MARGIN of the summed price.
-import { DUB_TOOLS, DUB_TIERS, TRANSLATE_SLUG, dubPriceUsd, normalizeLanguage, parseTranslation, __setStepsForTest } from "../src/tools/dub-kit.js";
+import { DUB_TOOLS, DUB_TIERS, DUB_MAX_CHARS, TRANSLATE_SLUG, dubPriceUsd, normalizeLanguage, parseTranslation, __setStepsForTest } from "../src/tools/dub-kit.js";
 import { TTS_TOOLS, TTS_TIERS, FORMAT_CONTENT_TYPES } from "../src/tools/tts-kit.js";
 import { LLM_GATEWAY_TOOLS, TIERS, MARGIN, validateRequest, worstCaseUpstreamCost } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -57,16 +58,19 @@ const header = (r) => JSON.parse(Buffer.from(r.headers["X-Dub-Translation"], "ba
 
 // --- the price is the sum, derived ----------------------------------------------
 {
-  const standard = priceOf(translateDef) + priceOf(ttsOf("standard"));
-  const hd = priceOf(translateDef) + priceOf(ttsOf("hd"));
-  ok(Math.abs(dubPriceUsd("standard") - standard) < 1e-9 && Math.abs(dubPriceUsd("hd") - hd) < 1e-9, `the tier sums read the two tool definitions (${TRANSLATE_SLUG} + ${DUB_TIERS.standard}, ${TRANSLATE_SLUG} + ${DUB_TIERS.hd})`);
+  // The speech tier's own quote function, called with a body at the dub cap.
+  const atCap = { text: "x".repeat(DUB_MAX_CHARS) };
+  const standard = priceOf(translateDef) + ttsOf("standard").quote(atCap);
+  const hd = priceOf(translateDef) + ttsOf("hd").quote(atCap);
+  ok(Math.abs(dubPriceUsd("standard") - standard) < 1e-9 && Math.abs(dubPriceUsd("hd") - hd) < 1e-9, `the tier sums read the two tool definitions (${TRANSLATE_SLUG} + ${DUB_TIERS.standard}, ${TRANSLATE_SLUG} + ${DUB_TIERS.hd}, each speech tier quoted at ${DUB_MAX_CHARS} chars)`);
+  ok(DUB_MAX_CHARS === TTS_TIERS[DUB_TIERS.standard].maxChars && DUB_MAX_CHARS === TTS_TIERS[DUB_TIERS.hd].maxChars, "the dub cap equals both speech tiers' caps");
   ok(priceOf(dub) === dubPriceUsd("standard"), "the catalog price is the standard sum");
   ok(dub.quote({}) === dubPriceUsd("standard") && dub.quote({ tier: "standard" }) === dubPriceUsd("standard"), "the quote for a body without a tier, or tier standard, is the standard sum");
   ok(dub.quote({ tier: "hd" }) === dubPriceUsd("hd") && dub.quote({ tier: " HD " }) === dubPriceUsd("hd"), "the quote for tier hd is the hd sum");
   ok(dub.quoteMaxUsd === dubPriceUsd("hd") && dubPriceUsd("hd") > dubPriceUsd("standard"), "the quote ceiling is the hd sum");
   ok(dub.description.includes(`$${dubPriceUsd("standard").toFixed(3)}`) && dub.description.includes(`$${dubPriceUsd("hd").toFixed(3)}`), "the description quotes both derived sums");
   ok(dub.modelBacked === true && dub.binaryTypes.includes("audio/mpeg"), "model-backed, and declares its audio media types");
-  ok(TIERS[TRANSLATE_SLUG].maxTokens >= Math.ceil(TTS_TIERS[DUB_TIERS.hd].maxChars * 0.9), `the translate tier's output cap (${TIERS[TRANSLATE_SLUG].maxTokens} tokens) holds a translation at the speech cap (${TTS_TIERS[DUB_TIERS.hd].maxChars} chars)`);
+  ok(TIERS[TRANSLATE_SLUG].maxTokens >= Math.ceil(DUB_MAX_CHARS * 0.9), `the translate tier's output cap (${TIERS[TRANSLATE_SLUG].maxTokens} tokens) holds a translation at the dub cap (${DUB_MAX_CHARS} chars)`);
 }
 
 // --- the happy path: raw bytes with the header ------------------------------------
@@ -146,7 +150,7 @@ const header = (r) => JSON.parse(Buffer.from(r.headers["X-Dub-Translation"], "ba
 
 // --- refusals before any step ------------------------------------------------------
 {
-  const cap = TTS_TIERS[DUB_TIERS.standard].maxChars;
+  const cap = DUB_MAX_CHARS;
   let e = await throwsWith(() => run({ text: "x".repeat(cap + 1), targetLanguage: "es" }));
   ok(e?.statusCode === 400 && /Text too long/.test(e.message) && calls.length === 0, `${cap + 1} chars is refused before any step`);
   const atCap = await run({ text: "x".repeat(cap), targetLanguage: "es" });
@@ -213,7 +217,7 @@ const header = (r) => JSON.parse(Buffer.from(r.headers["X-Dub-Translation"], "ba
 {
   const gaps = upstreamCostsLoaded() ? upstreamCostsGaps() : null;
   if (gaps && !gaps.length) {
-    const cap = TTS_TIERS[DUB_TIERS.hd].maxChars;
+    const cap = DUB_MAX_CHARS;
     const body = validateRequest({ messages: [{ role: "system", content: "x".repeat(600) }, { role: "user", content: "y".repeat(cap) }], temperature: 0.2 }, TRANSLATE_SLUG);
     const translateWorst = worstCaseUpstreamCost(body, TIERS[TRANSLATE_SLUG]).totalUsd;
     ok(translateWorst <= priceOf(translateDef) * MARGIN + 1e-12, `a translation at the cap stays within the translate tier's own bound (${TRANSLATE_SLUG})`);
@@ -221,8 +225,8 @@ const header = (r) => JSON.parse(Buffer.from(r.headers["X-Dub-Translation"], "ba
       const t = TTS_TIERS[DUB_TIERS[tier]];
       const rows = t.chain.map((m) => upstreamCosts().speech?.[m]);
       ok(rows.every((r) => Number.isFinite(r) && r > 0), `${tier}: a private per-char row exists for every speech link`);
-      const speechWorst = Math.max(...rows) * t.maxChars;
-      ok(translateWorst + speechWorst <= dubPriceUsd(tier) * MARGIN + 1e-12, `${tier}: translation plus ${t.maxChars} chars on the dearest speech link stays within ${MARGIN * 100}% of the summed price`);
+      const speechWorst = Math.max(...rows) * DUB_MAX_CHARS;
+      ok(translateWorst + speechWorst <= dubPriceUsd(tier) * MARGIN + 1e-12, `${tier}: translation plus ${DUB_MAX_CHARS} chars on the dearest speech link stays within ${MARGIN * 100}% of the summed price`);
     }
   } else if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") {
     ok(false, `the private upstream-cost table is ${gaps ? `incomplete (missing: ${gaps.join(", ")})` : "not loaded"}; the margin bound was not checked`);

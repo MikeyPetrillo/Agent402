@@ -17,6 +17,12 @@ ok(LLM_MESSAGES_TOOLS.every((t) => t.route === `POST ${MESSAGES_PATH_BY_TIER[t.s
 ok(LLM_MESSAGES_TOOLS.every((t) => WALLET_ONLY_SLUGS.has(t.slug)), "every Messages route is wallet-only (never PoW-free: metered upstream)");
 ok(LLM_MESSAGES_TOOLS.every((t) => t.price === (t.slug === "v1-chat-nano-messages" ? "$0.003" : t.slug === "v1-chat-metered-messages" ? "$0.001" : `$${TIERS[t.slug.replace(/-messages$/, "")].price.toFixed(2)}`)), "price strings mirror the sibling chat tier (metered: the $0.001 floor)");
 ok(typeof bySlug("v1-chat-metered-messages").quote === "function" && LLM_MESSAGES_TOOLS.filter((t) => typeof t.quote === "function").length === 1, "only the metered Messages route carries a per-request quote function");
+{
+  // A card on a quoted route is charged the quote grossed up for the
+  // processor fee (server.js cardPriceUsd), never settled at actual usage.
+  const d = bySlug("v1-chat-metered-messages").description;
+  ok(!/card[^.;]*settle actual usage/i.test(d) && /upto or credits and settle actual usage/.test(d) && /card payment is charged the quote plus the processor fee/.test(d), "the metered Messages description scopes settle-actual to upto and credits and says what a card pays");
+}
 ok(MESSAGES_TIER_BY_PATH["/v1/messages"] === "v1-chat" && MESSAGES_TIER_BY_PATH["/v1/pro/messages"] === "v1-chat-pro", "path -> tier map");
 
 // ---- validation ----

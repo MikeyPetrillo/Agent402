@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.22",
+  "version": "0.13.24",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -73,13 +73,13 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "@solana/kit": "^8.4.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@solana/kit": "8.4.0",
     "@x402/core": "2.28.0",
     "@x402/evm": "2.28.0",
     "@x402/fetch": "2.28.0",
     "@x402/svm": "2.28.0",
-    "viem": "^2.21.0"
+    "viem": "2.52.2"
   },
   "overrides": {
     "qs": "6.16.1",

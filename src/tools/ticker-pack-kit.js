@@ -42,7 +42,7 @@ import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock } from "../report-synthesis.js";
-import { checkReportGrounding, combineGrounding } from "../report-grounding.js";
+import { checkReportGrounding, combineGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText } from "./edgar-kit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
@@ -777,7 +777,8 @@ ${factLines.join("\n")}`;
       : await settle(() => d.synthesize({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), SYNTH_TIMEOUT_MS + 5_000, "pack synthesis");
     if (packSynth.ok) {
       spent += costOf(packSynth.data);
-      const text = textOf(packSynth.data);
+      // Links only to the pack's merged sources, no images or HTML (src/report-grounding.js).
+      const text = sanitizeReportProse(textOf(packSynth.data), merged);
       const idx = text.indexOf("===NEXT===");
       if (idx >= 0) { execSummary = text.slice(0, idx).trim(); nextSteps = text.slice(idx + "===NEXT===".length).trim(); }
       else { execSummary = text.trim(); }

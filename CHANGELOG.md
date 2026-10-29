@@ -6,6 +6,90 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-29 (metered default, speech quotes, sale paths)
+Surfaces:
+- The metered gateway (/v1/metered/chat/completions and its Messages and
+  Responses twins) is the default way to call a model on /llms.txt, the
+  openapi guidance, SKILL.md, the connector's server.describe and
+  payment.info, the home page, the FAQ, the x402 guide, the README and the
+  wiki: the 402 quotes the request from its body (the input estimated from its
+  tokens with headroom, plus max_tokens), and on x402, Tempo and credits
+  settlement never exceeds that quote; a card payment adds the processor fee.
+  The flat tiers stay as the predictable-price option, and a flat chat tier's
+  unpaid 402 names its metered twin in meteredTwin.
+- A retired route's 410 carries a Sunset header with its retirement date and,
+  when a replacement is live, a Link header with rel="successor-version"
+  naming it; the retired pairwise converters name /api/unit-convert. The JSON
+  body is unchanged.
+- /api/revenue's cacheSeconds is the HTTP max-age it sends;
+  refreshesEverySeconds and nextRefreshAt state the cadence of the rail scan
+  behind it.
+- The privacy page (dated 2026-10-29) says the sales ledger keeps how a paid
+  call arrived.
+
+Speech:
+- /api/tts and /api/tts-hd are quoted per request from the length of the
+  text: a floor plus a per-character rate, rounded up to the next $0.001, so
+  2,000 characters costs what the flat price did. The cap stays 2,000
+  characters on both. The 402, Tempo and credits all read the quote;
+  /api/pricing (quoteRange, quoteFormula), /openapi.json, the tool pages and
+  /llms-full.txt publish the range and the formula. /api/dub keeps its
+  2,000-character cap and its price; /api/tts-lite stays flat.
+- /api/tts and /api/tts-hd are called directly: route-execute refuses routes
+  quoted per request, so the 402 carries the real price.
+- Catalog lines in /llms-full.txt read "from" the floor on every route quoted
+  per request.
+
+Packages:
+- agent402-client 0.8.21 takes a userAgent option (a calling package's own
+  product token, sent before the client's). agent402-mcp 0.13.24,
+  agent402-agentkit 0.1.10, agent402-ai-sdk 0.2.12, agent402-anthropic-tools
+  0.1.13, elizaos-plugin-agent402 0.2.10, agent402-google-adk 0.1.12,
+  agent402-langchain 0.2.12, agent402-llamaindex 0.1.13,
+  agent402-openai-agents 0.1.13, agent402-openai-tools 0.1.13,
+  agent402-strands 0.1.13 and agent402-langchain 0.1.6 on PyPI name
+  themselves in the User-Agent of every request; the adapters that pass it
+  require agent402-client 0.8.21 or later. agent402-openclaw 0.5.8 ships its
+  README's metered-default wording.
+- agent402-mcp 0.13.24 pins viem, @solana/kit and @modelcontextprotocol/sdk
+  to exact versions, so an install resolves the signing libraries it was
+  tested with. agent402-tollbooth 0.10.8 accepts the x402 packages from 2.0.0
+  up to, not including, 3. agent402-openclaw 0.5.8, agent402-agentkit 0.1.10
+  and elizaos-plugin-agent402 0.2.10 cap each optional peer below its next
+  major (the x402 packages and viem below 3, @coinbase/agentkit below 1, zod
+  below 5); agent402-ai-sdk 0.2.12 caps ai below 8 and agent402-llamaindex
+  0.1.13 caps llamaindex below 1.
+
+Operations:
+- Each sale records the path it arrived on: the hosted connector's loopback,
+  one of our client packages by its User-Agent product token, or HTTP; rows
+  recorded before read unknown. The operator sales and tool-failure views
+  group by that path, and an operator cohort view lists wallets past a
+  per-day distinct-tool or per-hour call threshold beside a daily series
+  without them. Public figures are unchanged.
+- An operator test wallet that pays the Gateway batched route is booked as
+  our own traffic.
+- A catalog call served on the free proof-of-work or trial tier that ends
+  in a 5xx counts on its own lane of the operator tool-failure view, beside
+  a per-rail breakdown; the toolFailures word on /api/gateway-status reads
+  paying buyers' outcomes, and free outcomes only when a tool fails nearly
+  every free call.
+
+Limits:
+- A request body nested more than 64 levels deep answers 400; a compressed
+  request body (any Content-Encoding) on the large-upload routes answers 415;
+  a large upload while this host's in-flight upload budget, or one address's
+  share of it, is full answers 503 with Retry-After; repeated unpaid large bodies from one address to a
+  quoted route answer 429; a PDF whose streams decode past the processing
+  limits answers 422, and a PDF call while the PDF workers and their queue
+  are full answers 503 with Retry-After; base58 text is capped at 4,096
+  characters (400 past it). None of these is charged.
+
+Live view:
+- Where a network holds the event stream back, the page switches to short
+  polls of /api/poll after 8 seconds and keeps updating; its status label
+  reads the connection, so a quiet minute on a working connection reads live.
+
 ### 2026-10-29 (payments, gateway, router, connector)
 Payments and refunds:
 - A card report bought at checkout is generated from the Stripe webhook as

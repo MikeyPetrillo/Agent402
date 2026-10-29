@@ -23,7 +23,7 @@
 import { stepProgress } from "../job-progress.js";
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
-import { checkReportGrounding } from "../report-grounding.js";
+import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { makeResearchHandler } from "./research-deep-kit.js";
 import { IMAGES_FAST_TOOLS } from "./llm-images-fast-kit.js";
 import { runImageOffThread } from "./image-pool.js";
@@ -183,6 +183,10 @@ ${sourceBlock}`;
     const sd = await d.synthesize({ model: SYNTH, messages: [{ role: "user", content: prompt }], max_tokens: t.synthMaxTokens, response_format: { type: "json_object" }, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
     spent += costOf(sd);
     const art = parseArticleJson(textOf(sd));
+    // Every model-written field links only to the research's sources and
+    // carries no image or HTML (src/report-grounding.js).
+    const clean = (x) => sanitizeReportProse(x, sources);
+    Object.assign(art, { headlines: art.headlines.map(clean), subtitle: clean(art.subtitle), body: clean(art.body), takeaways: art.takeaways.map(clean), post: clean(art.post) });
     // Every number the model wrote (headlines, subtitle, article, takeaways,
     // companion post), traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding([art.headlines.join("\n"), art.subtitle, art.body, art.takeaways.join("\n"), art.post].join("\n\n"), prompt);

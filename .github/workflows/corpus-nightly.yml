@@ -41,6 +41,8 @@ jobs:
           node-version: 22
       - name: ffmpeg (the media tools; ubuntu-latest does not ship it)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+      - name: OCR language data for image-ocr (pinned, hash-checked; the server never downloads it)
+        run: node scripts/fetch-tessdata.js tessdata eng
       - name: Install
         # --ignore-scripts is the repo's supply-chain rule (no dependency
         # lifecycle scripts); better-sqlite3 is the one native module the

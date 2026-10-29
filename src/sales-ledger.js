@@ -19,7 +19,9 @@
 // leg is covered by the heartbeat token instead.
 //
 // Privacy: rows hold ONLY slug, price, rail, chain, payer wallet (already
-// public on-chain in the settle tx), and tx hash. Never inputs, IPs, or UAs.
+// public on-chain in the settle tx), tx hash, and the arrival path (a fixed
+// word, or one of our own packages' User-Agent product token; never the full
+// User-Agent). Never inputs or IPs.
 //
 // Zero config: persists wherever /data exists (prod); elsewhere it lands in
 // /tmp (ephemeral, still functional) — SALES_LEDGER_DB overrides for tests.
@@ -51,6 +53,7 @@ import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, 
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
+import { cleanSalePath, salePathGroup } from "./sale-path.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -134,6 +137,11 @@ for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS 
 // the whole table on every /revenue and /api/stats build (2026-09-25 audit).
 for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_wire_ts ON sales (wire, ts)"); } catch { /* exists */ } }
 for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_ts ON sales (ts)"); } catch { /* exists */ } }
+// Additive column: the path the paid call arrived on (src/sale-path.js):
+// "mcp", a client package's User-Agent product token, or "http". NULL on rows
+// recorded before it existed and on sales no request carried (card checkout,
+// subscription invoices); readers report those as "unknown".
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN via TEXT"); } catch { /* exists */ } }
 
 // Boot-time reclassification (2026-08-20): `internal` is decided at record
 // time, so a wallet that JOINS the burner/test set later leaves stale
@@ -178,7 +186,7 @@ const IMPORT_NAME = basename(DB_PATH);
 // in-memory mirror and the write-through file only in database mode, so file
 // mode's file is untouched.
 if (USE_PG) for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN sale_uid TEXT"); } catch { /* exists */ } }
-const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", ...(USE_PG ? ["sale_uid"] : [])];
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", ...(USE_PG ? ["sale_uid"] : [])];
 const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
 const PG_DDL = () => `
   CREATE TABLE IF NOT EXISTS ${T("sales")} (
@@ -202,6 +210,7 @@ const PG_DDL = () => `
   CREATE INDEX IF NOT EXISTS sales_updated_at ON ${T("sales")} (updated_at);
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS sale_uid TEXT;
   CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_uid ON ${T("sales")} (sale_uid);
+  ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS via TEXT;
   CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
     tx          TEXT PRIMARY KEY,
     sale_id     BIGINT NOT NULL,
@@ -225,6 +234,7 @@ const saleRowOf = (r) => cleanRow({
   id: Number(r.id), ts: Number(r.ts), slug: r.slug, price_usd: Number(r.price_usd) || 0, rail: r.rail, network: r.network ?? null,
   payer: r.payer ?? null, tx: r.tx ?? null, internal: Number(r.internal) ? 1 : 0, wire: r.wire ?? null, quote_usd: num(r.quote_usd),
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
+  via: r.via ?? null,
   ...(USE_PG ? { sale_uid: r.sale_uid ?? null } : {}),
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
@@ -257,7 +267,8 @@ const writer = createLedgerWriter({ enqueue, ready: () => readyP(), deadLetter, 
 const SALE_INS_COLS = ["ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256"];
 const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "text", "text", "integer", "text", "double precision", "text"];
 /** A sale's values carry its sale_uid as a twelfth value (an entry queued
- *  before sale_uid existed has eleven). */
+ *  before sale_uid existed has eleven) and its path as a thirteenth (an entry
+ *  queued before the path existed has twelve and lands with NULL). */
 const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && vals[11] ? vals[11] : null);
 /** INSERT a sale unless the same sale is already there. With a sale_uid that
  *  is the identity (the live write and the replay of one sale share it, two
@@ -265,8 +276,8 @@ const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && 
  *  existed), the whole row: ts, slug, rail, payer and tx. A tx alone is never
  *  a sale's identity: two sales can name one payment (a subscription invoice,
  *  a webhook sent twice), so a replay must not drop the second. */
-const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid)
-  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
+const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via)
+  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12, $13) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
 const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
   SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
   WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE tx IS NOT DISTINCT FROM $7::text
@@ -274,7 +285,7 @@ const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_C
   RETURNING *`;
 /** Insert-if-absent for one queued sale; resolves the row when this call inserted it. */
 async function insertSaleIfAbsent(vals) {
-  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), vals.slice(0, 12))).rows[0] || null;
+  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12])])).rows[0] || null;
   return (await stateQuery(INSERT_SALE_IF_ABSENT_ROW(), vals.slice(0, 11))).rows[0] || null;
 }
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -487,7 +498,7 @@ export function salesDeadLetterState() {
 export async function _salesDeadLetterEntries() { return deadLetter ? deadLetter.entries() : []; }
 
 const insertSale = db.prepare(
-  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 /** Settle tx hash/signature out of the base64 PAYMENT-RESPONSE receipt. */
@@ -508,7 +519,7 @@ export function txFromPaymentResponse(headerValue) {
  * when the write failed), queued behind earlier writes so rows land in call
  * order; the serving path does not wait on it.
  */
-export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256 }) {
+export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
@@ -530,7 +541,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       // The sale's own id, and the sale on local disk BEFORE it is queued: a
       // crash, a kill or a database that hangs through the shutdown flush
       // leaves it there, and the replay lands it once (by this id).
-      const pgVals = [...vals, randomUUID()];
+      const pgVals = [...vals, randomUUID(), cleanSalePath(via)];
       return writer.write("record-sale", async () => {
         let row = await insertSaleIfAbsent(pgVals);
         // No row: this sale is already there (an earlier attempt whose reply was lost).
@@ -539,7 +550,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
         return true;
       }, { kind: "sale", payload: pgVals, onError: false });
     }
-    insertSale.run(...vals);
+    insertSale.run(...vals, cleanSalePath(via));
   } catch { /* never break serving for accounting */ }
   return USE_PG ? Promise.resolve(false) : undefined;
 }
@@ -1394,7 +1405,139 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
     repeatBuyers: byPayer.map((r) => ({
       payer: r.payer, sales: r.sales, revenueUsd: +r.revenue.toFixed(4), lastAt: new Date(r.last_ts).toISOString(),
     })),
+    byPath: salesByPath({ days }),
   };
+}
+
+// External paid sales per arrival path (operator only). One row per (stored
+// path, payer), folded in JS: distinct payers are counted per path group as a
+// set, never added across versions or rows.
+const qExtByPathPayer = db.prepare(`
+  SELECT via, payer, COUNT(*) AS n, SUM(price_usd) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  GROUP BY via, payer`);
+/**
+ * { [path]: { sales, revenueUsd, payers, versions } } over the window: path is
+ * "mcp", "http", a client package name, or "unknown" (rows recorded before the
+ * path existed, and sales no request carried). `versions` counts sales per
+ * stored product token for the package paths.
+ */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function salesByPath({ days = 30 } = {}) {
+  const since = Date.now() - Math.max(0, Number(days) || 0) * 86_400_000;
+  const out = {};
+  const sets = new Map();
+  for (const r of qExtByPathPayer.all(since)) {
+    const group = salePathGroup(r.via);
+    const e = out[group] || (out[group] = { sales: 0, revenueUsd: 0, payers: 0, versions: {} });
+    const n = Number(r.n) || 0;
+    e.sales += n;
+    e.revenueUsd += Number(r.usd) || 0;
+    if (r.via && group !== r.via) e.versions[r.via] = (e.versions[r.via] || 0) + n;
+    if (r.payer) { let set = sets.get(group); if (!set) sets.set(group, (set = new Set())); set.add(r.payer); }
+  }
+  for (const [group, e] of Object.entries(out)) {
+    e.revenueUsd = +e.revenueUsd.toFixed(6);
+    e.payers = sets.get(group)?.size || 0;
+    if (!Object.keys(e.versions).length) delete e.versions;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Sweep and burst cohorts (operator only, computed on read, nothing stored).
+//
+// A wallet that buys more than `toolsPerDay` distinct tools inside one UTC day
+// is walking the catalog; one that makes more than `callsPerHour` calls inside
+// one UTC hour is bursting. Both are real outside buyers and every public
+// figure counts them as such: this view only names them for the operator and
+// serves, beside the unadjusted daily series, an "organic" one without them.
+// The default tools threshold matches the decide sweep rule above (more than
+// 29 is 30 or more).
+export const COHORT_MAX_DAYS = 30;
+export const COHORT_DEFAULTS = Object.freeze({
+  toolsPerDay: Number(process.env.COHORT_TOOLS_PER_DAY) || SWEEP_DISTINCT_TOOLS_PER_DAY - 1,
+  callsPerHour: Number(process.env.COHORT_CALLS_PER_HOUR) || 300,
+});
+const COHORT_CACHE_MS = 60_000;
+const qCohortDayTools = db.prepare(`
+  SELECT payer, MAX(n) AS n FROM (
+    SELECT payer, (ts / 86400000) AS d, COUNT(DISTINCT slug) AS n
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+    GROUP BY payer, d)
+  GROUP BY payer HAVING MAX(n) > ?`);
+const qCohortHourCalls = db.prepare(`
+  SELECT payer, MAX(n) AS n FROM (
+    SELECT payer, (ts / 3600000) AS h, COUNT(*) AS n
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+    GROUP BY payer, h)
+  GROUP BY payer HAVING MAX(n) > ?`);
+const qCohortPayer = db.prepare(`
+  SELECT COUNT(DISTINCT slug) AS tools, COUNT(*) AS calls, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  FROM sales WHERE internal = 0 AND payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?`);
+const qCohortDaily = db.prepare(`
+  SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day, payer, COUNT(*) AS n, SUM(price_usd) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+  GROUP BY day, payer`);
+let cohortCache = null; // { key, at, value }
+/**
+ * { window, thresholds, wallets: [...], daily: [{day, sales, revenueUsd,
+ * organicSales, organicRevenueUsd, cohortSales, cohortRevenueUsd}] }.
+ * Operator only: the wallets carry addresses, and the organic series is never
+ * a public figure.
+ */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function salesCohorts({ days = COHORT_MAX_DAYS, toolsPerDay = COHORT_DEFAULTS.toolsPerDay, callsPerHour = COHORT_DEFAULTS.callsPerHour, now = Date.now(), fresh = false } = {}) {
+  const d = Math.max(1, Math.min(COHORT_MAX_DAYS, Math.floor(Number(days)) || COHORT_MAX_DAYS));
+  const tN = Math.max(1, Math.floor(Number(toolsPerDay)) || COHORT_DEFAULTS.toolsPerDay);
+  const cM = Math.max(1, Math.floor(Number(callsPerHour)) || COHORT_DEFAULTS.callsPerHour);
+  const key = `${d}|${tN}|${cM}`;
+  if (!fresh && cohortCache && cohortCache.key === key && now - cohortCache.at < COHORT_CACHE_MS) return cohortCache.value;
+  const until = now + 1;
+  const since = now - d * 86_400_000;
+  const flagged = new Map(); // payer -> { maxToolsInDay, maxCallsInHour }
+  for (const r of qCohortDayTools.all(since, until, tN)) flagged.set(r.payer, { maxToolsInDay: Number(r.n) || 0, maxCallsInHour: null });
+  for (const r of qCohortHourCalls.all(since, until, cM)) {
+    const e = flagged.get(r.payer) || { maxToolsInDay: null, maxCallsInHour: null };
+    e.maxCallsInHour = Number(r.n) || 0;
+    flagged.set(r.payer, e);
+  }
+  const wallets = [];
+  for (const [payer, why] of flagged) {
+    const a = qCohortPayer.get(payer, since, until) || {};
+    wallets.push({
+      payer,
+      kind: why.maxToolsInDay != null && why.maxCallsInHour != null ? "sweep+burst" : why.maxToolsInDay != null ? "sweep" : "burst",
+      maxToolsInDay: why.maxToolsInDay, maxCallsInHour: why.maxCallsInHour,
+      tools: Number(a.tools) || 0, calls: Number(a.calls) || 0, usd: +Number(a.usd || 0).toFixed(6),
+      firstSeen: a.first_ts ? new Date(a.first_ts).toISOString() : null,
+      lastSeen: a.last_ts ? new Date(a.last_ts).toISOString() : null,
+    });
+  }
+  wallets.sort((x, y) => y.usd - x.usd || y.calls - x.calls);
+  const byDay = new Map();
+  for (const r of qCohortDaily.all(since, until)) {
+    const e = byDay.get(r.day) || { day: r.day, sales: 0, revenueUsd: 0, organicSales: 0, organicRevenueUsd: 0, cohortSales: 0, cohortRevenueUsd: 0 };
+    const n = Number(r.n) || 0, usd = Number(r.usd) || 0;
+    e.sales += n; e.revenueUsd += usd;
+    // A row with no recorded payer cannot belong to a flagged wallet: it stays organic.
+    if (r.payer && flagged.has(r.payer)) { e.cohortSales += n; e.cohortRevenueUsd += usd; }
+    else { e.organicSales += n; e.organicRevenueUsd += usd; }
+    byDay.set(r.day, e);
+  }
+  const daily = [...byDay.values()].sort((x, y) => (x.day < y.day ? -1 : 1)).map((e) => ({
+    ...e, revenueUsd: +e.revenueUsd.toFixed(6), organicRevenueUsd: +e.organicRevenueUsd.toFixed(6), cohortRevenueUsd: +e.cohortRevenueUsd.toFixed(6),
+  }));
+  const value = {
+    window: { days: d, from: new Date(since).toISOString(), to: new Date(now).toISOString() },
+    thresholds: { toolsPerDay: tN, callsPerHour: cM, rule: `a wallet is listed when it bought more than ${tN} distinct tools in one UTC day (sweep) or made more than ${cM} paid calls in one UTC hour (burst)` },
+    wallets,
+    daily,
+    scope: "External paid sales only (internal = 0 on paying rails). Operator view: public revenue figures count every outside buyer, listed wallets included; organic* is the same series without the listed wallets.",
+    generatedAt: new Date(now).toISOString(),
+  };
+  cohortCache = { key, at: now, value };
+  return value;
 }
 
 // Day-bucketed Tempo settlements (wire 'mpp-tempo', plus tempo/subscription charges), UTC, straight from

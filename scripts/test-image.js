@@ -101,6 +101,26 @@ catch (e) { ok(e.statusCode === 400, "garbage image throws 400"); }
 try { await tool("image-exif")({}); ok(false, "missing url+image should throw"); }
 catch (e) { ok(e.statusCode === 400, "image-exif without url/image throws 400"); }
 
+// exif reports size from the container header and never decodes the pixels: a
+// small PNG declaring a 12000x12000 canvas answers its size while the event
+// loop stays free (an inline decode holds it for most of a second).
+{
+  const zlib = await import("node:zlib");
+  const crc32 = (b) => { let c, crc = 0xffffffff; for (let n = 0; n < b.length; n++) { c = (crc ^ b[n]) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; } return (crc ^ 0xffffffff) >>> 0; };
+  const chunk = (t, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc32(td)); return Buffer.concat([l, td, c]); };
+  const W = 12000;
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(W, 4); ihdr[8] = 8;
+  const big = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(Buffer.alloc((W + 1) * W), { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
+  let last = performance.now(), worst = 0;
+  const iv = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+  await new Promise((res) => setTimeout(res, 20));
+  const er = await tool("image-exif")({ image: big.toString("base64") });
+  await new Promise((res) => setTimeout(res, 20));
+  clearInterval(iv);
+  ok(er.width === W && er.height === W && er.hasExif === false, `exif reports a large PNG's header size (got ${er.width}x${er.height})`);
+  ok(worst < 150, `exif on a 12000x12000 PNG holds the loop under 150 ms (worst ${Math.round(worst)} ms)`);
+}
+
 // The three compute-payable tools run in a worker thread (src/tools/image-pool.js),
 // so their rejections cross a postMessage boundary. These three pin that the
 // crossing preserves both the message and the statusCode: a caller must not be

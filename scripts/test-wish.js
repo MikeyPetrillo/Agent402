@@ -231,7 +231,7 @@ function freshFile(tag) {
   ok(agg.distinctClusters === 5, `clusters still tracked in memory past the file cap (got ${agg.distinctClusters})`);
 }
 
-// --- /api/wishes aggregate: shape + no raw context + esc'd text ---
+// --- /api/wishes aggregate: shape + no raw context + raw text ---
 {
   freshFile("aggregate-shape");
   recordWish({ need: "<script>alert(1)</script> pdf splitter", context: "super secret internal detail", source: "api", ip: "10.0.5.1" });
@@ -241,7 +241,7 @@ function freshFile(tag) {
   ok(JSON.stringify(keys) === JSON.stringify(["callers", "count", "firstSeen", "issueOpened", "lastSeen", "qualified", "sources", "text"]), `aggregate row has exactly the documented keys, no raw context (got ${keys.join(",")})`);
   ok(row.callers === 1 && !/10\.0\.5\.1/.test(JSON.stringify(agg)), "callers is a COUNT of day-scoped hashes; the address itself never reaches the board");
   ok(!("context" in row), "aggregate row never carries a raw context field");
-  ok(row.text.includes("&lt;script&gt;") && !row.text.includes("<script>"), `aggregate text is esc()'d (got ${row.text})`);
+  ok(row.text.includes("<script>") && !row.text.includes("&lt;"), `aggregate text is the raw text; a renderer escapes it (got ${row.text})`);
   ok(typeof row.firstSeen === "string" && typeof row.lastSeen === "string" && !Number.isNaN(Date.parse(row.firstSeen)), "firstSeen/lastSeen are ISO timestamps");
 }
 

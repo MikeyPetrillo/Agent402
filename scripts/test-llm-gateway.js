@@ -787,6 +787,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(h && h.endpoint === "/v1/metered/chat/completions" && h.wouldHaveCostUsd < h.youPaidUsd, "a small flat call discloses the metered quote, under what it paid");
   ok(h.youPaidUsd === 0.02 && h.wouldHaveCostUsd >= 0.001, "it names what the buyer actually paid and never quotes below the settlement floor");
   ok(/base URL/.test(h.note), "and says how to switch");
+  ok(!/body and settles actual usage/.test(h.note) && /upto or credits payer settles actual usage/.test(h.note) && /exact payer pays that quote/.test(h.note) && /card payment adds the processor fee/.test(h.note), "and scopes settle-actual to upto and credits, naming what exact and card pay");
   ok(meteredHintFor(norm(200, 256), "v1-chat-metered") === null, "the metered tier never hints at itself");
   const big = validateRequest({ model: "gpt-4o-mini", messages: [{ role: "user", content: "x".repeat(20000) }], max_tokens: 1024 }, "v1-chat");
   ok(meteredHintFor(big, "v1-chat") === null, "a body over the size bound is skipped rather than doubling the tokenizer run - an absent field claims nothing");

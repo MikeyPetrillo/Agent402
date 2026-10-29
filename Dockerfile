@@ -59,6 +59,14 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
 # in the Security-Model wiki page (worker isolation) or a platform that supports them.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
+# OCR language data for every language image-ocr accepts, installed at build
+# time so the server never downloads a model at request time. The script pins
+# one package version and checks each file's SHA-256 before writing it, so the
+# layer is reproducible and a changed upstream file fails the build. Its own
+# layer, ahead of src/, so a source edit does not refetch it.
+COPY scripts/fetch-tessdata.js ./scripts/
+RUN node scripts/fetch-tessdata.js /app/tessdata
+
 COPY src ./src
 # The decide service (a separate Railway service started with
 # `node services/decide/server.js`) ships in the same image.

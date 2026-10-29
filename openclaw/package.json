@@ -1,6 +1,6 @@
 {
   "name": "agent402-openclaw",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "OpenClaw model provider for Agent402: an auto-routed tier at a flat per-call price and explicit LLM models priced per request, paid in USDC over x402, or with a prepaid credits key, through a local proxy. Zero dependencies; x402 wallet payment is an optional peer.",
   "type": "module",
   "main": "index.js",
@@ -44,9 +44,9 @@
     "test": "node test.js"
   },
   "peerDependencies": {
-    "@x402/evm": ">=2.20.0",
-    "@x402/fetch": ">=2.20.0",
-    "viem": ">=2.48.11"
+    "@x402/evm": ">=2.20.0 <3",
+    "@x402/fetch": ">=2.20.0 <3",
+    "viem": ">=2.48.11 <3"
   },
   "peerDependenciesMeta": {
     "@x402/evm": {

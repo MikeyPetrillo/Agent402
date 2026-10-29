@@ -143,6 +143,9 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
       try { canon = String(await validate(raw)); }
       catch (e) { if (e?.buyerSafe) throw bad(String(e.message).slice(0, 160), e.statusCode || 400); throw bad("We could not validate that target. Check it and try again."); }
     }
+    // The target is printed in the confirmation subject; a recall target that
+    // reads as a host name is refused rather than mailed.
+    if (kind === "recall" && hostnameShapedToken(canon)) throw bad("Enter a drug, food, brand or device name, not a web address; put a space after a period in a name (St. Ives).");
     if (PG && !(await refresh())) throw bad("Alerts are unavailable right now. Please try again in a few minutes.", 503);
     sweep();
     const mine = Object.values(store.alerts).filter((a) => a.email === em && (a.status === "active" || a.status === "pending"));
@@ -416,6 +419,14 @@ export function alertFormHtml({ kind, target, source = "" } = {}) {
   <div class="al-msg" role="status" style="font-size:13px;color:var(--muted);margin-top:8px;"></div>
   <p style="font-size:12px;color:var(--faint);margin:8px 0 0;">Free. One email a day at most, only when something changes. Confirm by email first; unsubscribe with one click. <a href="/privacy" style="color:var(--faint);">Privacy</a>.</p>
 </form>`;
+}
+
+/** True when some whitespace-separated token of `text` is shaped like a host
+ *  name (dot-separated labels ending in a 2+ letter label), which a mail
+ *  client would turn into a link in a subject line. A recall target names a
+ *  product, never a web address. */
+export function hostnameShapedToken(text) {
+  return String(text ?? "").split(/\s+/).some((tok) => /^[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*\.\p{L}{2,}\.?$/u.test(tok.replace(/^[(,'&]+|[),'&]+$/g, "")));
 }
 
 /** Which alert kind a report kind maps to (the sample and delivery pages). */

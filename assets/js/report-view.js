@@ -27,8 +27,9 @@
     allowedHosts = {};
     (sources || []).forEach(function (src) { try { allowedHosts[new URL(src.url).host] = true; } catch (e) { /* not a URL */ } });
   }
+  // No allowlist (no cited sources, or none set yet) links nothing.
   function linkOk(url) {
-    if (!allowedHosts) return true;
+    if (!allowedHosts) return false;
     try { return allowedHosts[new URL(url).host] === true; } catch (e) { return false; }
   }
   function inline(l) {

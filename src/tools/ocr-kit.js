@@ -12,6 +12,10 @@
 // than browser/PDF tooling. PoW-eligible (pure CPU, no network in the hot path).
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -20,40 +24,96 @@ function bad(message, statusCode = 400) {
 const MAX_B64 = 12_000_000; // ~9 MB encoded — same cap as image-kit
 const MAX_FETCH = 8 * 1024 * 1024; // 8 MB cap when fetching from a URL
 
-// Lazy-initialized singleton worker. tesseract.js workers load ~12 MB of
-// language data on first use; reusing one worker across requests keeps cold
-// starts off the per-call hot path. The worker is process-wide and reset on
-// crash by the recreate-on-error path inside doRecognize().
-let workerPromise = null;
-let workerLang = null;
+// Language data is read from a local directory, never fetched at request time:
+// scripts/fetch-tessdata.js installs the pinned, hash-checked files there (the
+// Dockerfile runs it at build time). OCR_TESSDATA_DIR overrides the default
+// <repo>/tessdata. tesseract.js caches nothing (cacheMethod "none"), and its
+// cachePath points at a private temp directory so no code path writes into the
+// working directory.
+export const TESSDATA_DIR = resolve(process.env.OCR_TESSDATA_DIR || fileURLToPath(new URL("../../tessdata", import.meta.url)));
+const TESS_CACHE_DIR = join(tmpdir(), "agent402-tessdata-cache");
 
-async function getWorker(lang) {
-  // If the requested language differs from the cached worker's, build a new
-  // one. (English is the default and overwhelmingly common, so the singleton
-  // hits in the common case.)
-  if (!workerPromise || workerLang !== lang) {
-    workerLang = lang;
-    workerPromise = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
-      // CRITICAL: on a worker 'reject' (e.g. a malformed image tesseract can't
-      // decode) tesseract.js rejects the recognize() promise AND, when no
-      // errorHandler is set, `throw`s inside its own message handler — which
-      // escapes as an uncaughtException and, with the A402-10 fatal handler,
-      // would let one bad image crash the whole server (a DoS). Providing a
-      // handler routes that error here instead of throwing; the same error
-      // still rejects recognize(), which the caller below try/catches into a
-      // clean 500. So this contains the stray throw without hiding the failure.
-      errorHandler: (e) => {
-        console.error("[ocr] tesseract worker error (contained):", (e && e.message) || e);
-      },
-    })).catch((e) => {
-      // Reset so the next request retries instead of permanently failing.
-      workerPromise = null;
-      workerLang = null;
-      throw e;
-    });
-  }
-  return workerPromise;
+export function tessdataInstalled(lang) {
+  return existsSync(join(TESSDATA_DIR, `${lang}.traineddata.gz`));
 }
+
+// One tesseract.js worker per language, in a small map with least-recently-used
+// eviction. tesseract.js workers load the language model on first use, so a
+// warm worker keeps model loading off the per-call path. Every worker that
+// leaves the map (evicted, or dropped after a failure) is terminated once its
+// in-flight recognitions finish, so a caller alternating languages never grows
+// the thread count past the cap.
+export const OCR_WORKER_MAX = 3;
+const OCR_INIT_TIMEOUT_MS = Number(process.env.OCR_INIT_TIMEOUT_MS) || 30_000;
+const workers = new Map(); // lang -> { promise, active, retired }
+
+function retireEntry(entry) {
+  entry.retired = true;
+  if (entry.active === 0) {
+    entry.promise.then((w) => w.terminate()).catch(() => { /* never started */ });
+  }
+}
+
+function dropEntry(lang, entry) {
+  if (workers.get(lang) === entry) workers.delete(lang);
+  retireEntry(entry);
+}
+
+function getWorkerEntry(lang) {
+  let entry = workers.get(lang);
+  if (entry) {
+    workers.delete(lang); // re-insert to mark most recently used
+    workers.set(lang, entry);
+    return entry;
+  }
+  if (!tessdataInstalled(lang)) {
+    throw bad(`OCR language data for "${lang}" is not installed on this server`, 503);
+  }
+  mkdirSync(TESS_CACHE_DIR, { recursive: true });
+  entry = { promise: null, active: 0, retired: false };
+  const started = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
+    langPath: TESSDATA_DIR,
+    cachePath: TESS_CACHE_DIR,
+    cacheMethod: "none",
+    gzip: true,
+    // CRITICAL: on a worker 'reject' (e.g. a malformed image tesseract can't
+    // decode) tesseract.js rejects the recognize() promise AND, when no
+    // errorHandler is set, `throw`s inside its own message handler, which
+    // escapes as an uncaughtException and, with the A402-10 fatal handler,
+    // would let one bad image crash the whole server (a DoS). Providing a
+    // handler routes that error here instead of throwing; the same error
+    // still rejects recognize(), which the caller below try/catches into a
+    // clean 500. So this contains the stray throw without hiding the failure.
+    errorHandler: (e) => {
+      console.error("[ocr] tesseract worker error (contained):", (e && e.message) || e);
+    },
+  }));
+  // tesseract.js never settles createWorker when language initialization fails
+  // (an unreadable data file), so startup carries its own deadline. A worker
+  // that starts after the deadline is terminated as soon as it appears.
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(bad(`OCR engine for "${lang}" did not start`, 503)), OCR_INIT_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  entry.promise = Promise.race([started, deadline]);
+  entry.promise.finally(() => clearTimeout(timer)).catch(() => {});
+  started.then((w) => { if (entry.retired && entry.active === 0) w.terminate(); }).catch(() => {});
+  // A worker that fails to start leaves the map so the next request retries.
+  entry.promise.catch(() => dropEntry(lang, entry));
+  workers.set(lang, entry);
+  while (workers.size > OCR_WORKER_MAX) {
+    const [oldLang, oldest] = workers.entries().next().value;
+    dropEntry(oldLang, oldest);
+  }
+  return entry;
+}
+
+/** Test hook: how many language workers are held, and terminate them all. */
+export const __ocrTest = {
+  workerCount: () => workers.size,
+  async shutdown() { for (const [lang, entry] of [...workers]) dropEntry(lang, entry); },
+};
 
 function decodeImageInput(input) {
   if (typeof input !== "string" || !input.trim()) {
@@ -70,25 +130,29 @@ function decodeImageInput(input) {
 }
 
 // Tesseract supports a long list of languages by 3-letter ISO 639-2 code.
-// Validate to a conservative whitelist of the common ones so a typo doesn't
-// trigger an unbounded model download. The worker downloads the model on
-// first use of each language.
-const SUPPORTED_LANGS = new Set([
+// Validate to a conservative whitelist of the common ones; each has pinned,
+// locally installed language data (scripts/fetch-tessdata.js).
+export const SUPPORTED_LANGS = new Set([
   "eng", "spa", "fra", "deu", "ita", "por", "nld", "rus", "pol", "tur",
   "chi_sim", "chi_tra", "jpn", "kor", "ara", "hin", "tha", "vie", "ukr", "ell",
 ]);
 
 async function doRecognize(buf, lang) {
-  const worker = await getWorker(lang);
+  const entry = getWorkerEntry(lang);
+  entry.active++;
   try {
+    const worker = await entry.promise;
     const { data } = await worker.recognize(buf);
     return data;
   } catch (e) {
-    // On a worker-side crash drop the singleton so the next request gets a
-    // fresh worker; this avoids one bad input poisoning the process.
-    workerPromise = null;
-    workerLang = null;
+    // On a worker-side crash drop this language's worker so the next request
+    // gets a fresh one; this avoids one bad input poisoning the process.
+    dropEntry(lang, entry);
+    if (e?.statusCode === 503) throw e;
     throw bad(`OCR failed: ${e.message || "unknown"}`, 500);
+  } finally {
+    entry.active--;
+    if (entry.retired) retireEntry(entry);
   }
 }
 

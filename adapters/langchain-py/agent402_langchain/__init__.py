@@ -36,8 +36,10 @@ from typing import Any, Callable, Optional
 
 import requests
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 DEFAULT_BASE = "https://agent402.tools"
+# The User-Agent product token that names this package on every request.
+_USER_AGENT = f"agent402-langchain-py/{__version__}"
 _TIMEOUT = 60
 
 
@@ -69,13 +71,13 @@ class _Client:
 
     def _get(self, path: str, params: Optional[dict] = None) -> Any:
         r = requests.get(f"{self.base}{path}", params=params, timeout=_TIMEOUT,
-                         headers={"Accept": "application/json"})
+                         headers={"Accept": "application/json", "User-Agent": _USER_AGENT})
         r.raise_for_status()
         return r.json()
 
     def _post(self, path: str, body: dict) -> Any:
         r = requests.post(f"{self.base}{path}", json=body, timeout=_TIMEOUT,
-                          headers={"Accept": "application/json"})
+                          headers={"Accept": "application/json", "User-Agent": _USER_AGENT})
         r.raise_for_status()
         return r.json()
 
@@ -101,7 +103,7 @@ class _Client:
         ).hexdigest()[:24]
 
         def send(extra_headers: Optional[dict] = None, fetch: Optional[Callable] = None):
-            headers = {"Idempotency-Key": idem, "Accept": "application/json"}
+            headers = {"Idempotency-Key": idem, "Accept": "application/json", "User-Agent": _USER_AGENT}
             if extra_headers:
                 headers.update(extra_headers)
             url = f"{self.base}{path}"

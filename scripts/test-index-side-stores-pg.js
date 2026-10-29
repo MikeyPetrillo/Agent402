@@ -65,9 +65,12 @@ try {
   const rb = await B.registerOrigin("https://sub-b.example", { crawl });
   ok(ra.listed && rb.listed, "each container takes one new submission");
   await settle();
+  // A's own save merges what the table already holds, so when B saved first
+  // A counts B's submission before the pull; either way it does after one.
   const before = A.submissionSlotStatus().submitted;
   await A.pullIndexChanges();
-  ok(A.submissionSlotStatus().submitted === before + 1, `A counts B's submission after a pull (${before} -> ${A.submissionSlotStatus().submitted})`);
+  const after = A.submissionSlotStatus().submitted;
+  ok(after === 2 && before <= after, `A counts B's submission after a pull (${before} -> ${after})`);
   await B.pullIndexChanges();
   ok(B.submissionSlotStatus().submitted === A.submissionSlotStatus().submitted, "both containers hold the same submitted set");
 

@@ -53,6 +53,6 @@
   // return (same paths GA skips, src/ledger-chrome.js GA_BEARER_PATH; kept
   // identical by scripts/test-ga-snippet.js). The project's URL blocklist is a
   // second layer; this one ships with the code and cannot drift from it.
-  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/.test(location.pathname)) data.cfg.disable_session_recording = true;
+  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/.test(location.pathname)) data.cfg.disable_session_recording = true;
   posthog.init(data.key, data.cfg);
 })();

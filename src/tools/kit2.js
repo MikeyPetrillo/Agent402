@@ -43,6 +43,7 @@ const parseMaybeJson = (v, label) => {
 // Encoding
 // ===========================================================================
 
+const BASE58_MAX_CHARS = 4096;
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function base58encode(buf) {
   let x = 0n;
@@ -95,7 +96,11 @@ function base32encode(buf) {
   return out;
 }
 function base32decode(str) {
-  const clean = str.toUpperCase().replace(/=+$/, "").replace(/\s/g, "");
+  // Trailing padding is cut with a loop: /=+$/ rescans a long run of "="
+  // from every position before a non-pad character.
+  let end = str.length;
+  while (end > 0 && str[end - 1] === "=") end--;
+  const clean = str.slice(0, end).toUpperCase().replace(/\s/g, "");
   let bits = 0;
   let value = 0;
   const out = [];
@@ -153,7 +158,8 @@ const encoding = [
     tags: ["base58", "encode", "decode", "crypto"],
     discovery: { bodyType: "json", input: { text: "Hello", mode: "encode" }, inputSchema: { properties: { text: { type: "string" }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "9Ajdvzr" } } },
     handler: (i) => {
-      const text = cap(need(i, "text"));
+      // Base58 is a big-integer conversion, quadratic in the input length.
+      const text = cap(need(i, "text"), BASE58_MAX_CHARS);
       return i.mode === "decode"
         ? { mode: "decode", result: base58decode(text).toString("utf8") }
         : { mode: "encode", result: base58encode(Buffer.from(text, "utf8")) };
@@ -1443,13 +1449,15 @@ const validation = [
 ];
 
 // --- json-schema-infer helpers ---------------------------------------------
+// [format, pattern, longest string the format can be]: a longer string is
+// never tested, so no pattern runs on unbounded input.
 const STRING_FORMATS = [
-  ["date-time", /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/],
-  ["date", /^\d{4}-\d{2}-\d{2}$/],
-  ["time", /^\d{2}:\d{2}:\d{2}(\.\d+)?$/],
-  ["uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i],
-  ["email", /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/],
-  ["uri", /^https?:\/\/\S+$/],
+  ["date-time", /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/, 64],
+  ["date", /^\d{4}-\d{2}-\d{2}$/, 10],
+  ["time", /^\d{2}:\d{2}:\d{2}(\.\d+)?$/, 32],
+  ["uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 36],
+  ["email", /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/, 254],
+  ["uri", /^https?:\/\/\S+$/, 8192],
 ];
 function inferSchema(value, depth) {
   if (depth > 24) return {};
@@ -1458,7 +1466,7 @@ function inferSchema(value, depth) {
   if (t === "boolean") return { type: "boolean" };
   if (t === "number") return { type: Number.isInteger(value) ? "integer" : "number" };
   if (t === "string") {
-    const fmt = STRING_FORMATS.find(([, re]) => re.test(value));
+    const fmt = STRING_FORMATS.find(([, re, max]) => value.length <= max && re.test(value));
     return fmt ? { type: "string", format: fmt[0] } : { type: "string" };
   }
   if (Array.isArray(value)) {

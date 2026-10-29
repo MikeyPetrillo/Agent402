@@ -6,6 +6,8 @@
 // opens a WebSocket back to the same server; the network guard is pointed at
 // the fixture for the test (as test-page-speed-frames.js does), so the only
 // thing standing between the page and the socket is the context itself.
+// A second fixture pair checks redirect hops and popups, which context.route
+// does not see, against the in-process validating egress proxy.
 // Needs Playwright's Chromium; under CI a missing browser fails, it never skips.
 //
 //   node scripts/test-render-isolation.js
@@ -81,6 +83,50 @@ try {
 } finally {
   __test.setNetworkGuard(null);
   server.close();
+}
+
+// --- redirects and popups: hops context.route does not see ---------------------------
+// "Public" is 127.0.0.1 and "private" is localhost (the guard is pointed at the
+// fixture as above). A top-level 302 and a subresource 302 to the private
+// server, and a popup opened at it, must never reach it: with no render worker
+// configured the browser runs through the in-process validating proxy, which
+// checks every connection, and a popup window is closed as it opens.
+if (!process.env.RENDER_EGRESS_PROXY_URL) {
+  const privHits = [];
+  const priv = http.createServer((req, res) => { privHits.push(req.url); res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><article><h1>PRIVATE</h1></article></body></html>"); });
+  await new Promise((r) => priv.listen(0, "127.0.0.1", r));
+  const PRIV = `http://localhost:${priv.address().port}`;
+  const pubHits = [];
+  const pub = http.createServer((req, res) => {
+    pubHits.push(req.url);
+    if (req.url === "/ok") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<html><body><article><h1>Public page</h1><p>public body text</p></article></body></html>"); }
+    if (req.url === "/redir") { res.writeHead(302, { location: `${PRIV}/via-redirect` }); return res.end(); }
+    if (req.url === "/subredir") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><img src="/redir-img"><p>x</p></body></html>'); }
+    if (req.url === "/redir-img") { res.writeHead(302, { location: `${PRIV}/via-subresource-redirect` }); return res.end(); }
+    if (req.url === "/popup-pub") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><p>x</p><script>window.open("/popup-target")</script></body></html>'); }
+    if (req.url === "/popup-target") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><p>t</p><script>setTimeout(() => { new Image().src = "/popup-alive"; }, 200)</script></body></html>'); }
+    if (req.url === "/popup-alive") { res.writeHead(204); return res.end(); }
+    if (req.url === "/popup") { res.writeHead(200, { "content-type": "text/html" }); return res.end(`<html><body><p>x</p><script>window.open(${JSON.stringify(`${PRIV}/via-popup`)})</script></body></html>`); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => pub.listen(0, "127.0.0.1", r));
+  const PUB = `http://127.0.0.1:${pub.address().port}`;
+  try {
+    __test.setNetworkGuard({ assertPublicUrl: async (u) => new URL(u), hostIsPublic: async (h) => h === "127.0.0.1" });
+    const html = await __test.withPage(`${PUB}/ok`, (page) => page.content());
+    ok(/public body text/.test(html), "(control) a public page renders through the in-process proxy");
+    for (const path of ["/redir", "/subredir", "/popup"]) {
+      await __test.withPage(`${PUB}${path}`, async (page) => { await page.waitForTimeout(500); return page.content(); }).catch(() => null);
+    }
+    ok(privHits.length === 0, `redirect hops and popups never reach a private host (private hits: ${JSON.stringify(privHits)})`);
+    // A popup to a public page is closed as it opens: its script never runs.
+    await __test.withPage(`${PUB}/popup-pub`, async (page) => { await page.waitForTimeout(1000); return page.content(); }).catch(() => null);
+    ok(pubHits.includes("/popup-pub") && !pubHits.includes("/popup-alive"), `a popup window is closed as it opens (public hits: ${JSON.stringify(pubHits.filter((u) => u.startsWith("/popup")))})`);
+  } finally {
+    __test.setNetworkGuard(null);
+    pub.close();
+    priv.close();
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

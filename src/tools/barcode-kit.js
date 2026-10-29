@@ -11,6 +11,8 @@ import jpeg from "jpeg-js";
 // @zxing/library 0.23 ships CJS only, so a named import stops resolving there.
 // The default export carries every symbol on both 0.21 and 0.23.
 import { loadZxing, loadJsQR } from "./lazy-deps.js";
+import { declaredDimensions } from "./image-ops.js";
+import { runImageOffThread } from "./image-pool.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -21,8 +23,11 @@ function bad(message) {
 const MAX_B64 = 12_000_000; // ~9 MB decoded; bounds CPU/memory per call
 const MAX_PIXELS = 4096 * 4096;
 
-// Decode a base64 PNG/JPEG (optionally a data: URL) to { data: RGBA, width, height }.
-function toRgba(imageField) {
+// Validate a base64 PNG/JPEG (optionally a data: URL) and return its bytes.
+// Runs on the main thread and reads only the container header: the pixel cap
+// is checked against the declared width and height, so an oversized or
+// unreadable image is refused before any decoder allocates its canvas.
+function toImageBuffer(imageField) {
   if (typeof imageField !== "string" || !imageField.trim()) throw bad('Missing "image" (base64 PNG or JPEG, optionally a data: URL)');
   let b64 = imageField.trim();
   const m = b64.match(/^data:image\/(png|jpe?g);base64,(.*)$/is);
@@ -36,6 +41,18 @@ function toRgba(imageField) {
   const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
   const isJpg = buf[0] === 0xff && buf[1] === 0xd8;
   if (!isPng && !isJpg) throw bad("unsupported image format - provide a PNG or JPEG");
+  const dims = declaredDimensions(buf);
+  if (!dims || !(dims.width > 0) || !(dims.height > 0)) {
+    throw bad(`could not decode ${isPng ? "PNG" : "JPEG"} image: unreadable header`);
+  }
+  if (dims.width * dims.height > MAX_PIXELS) throw bad(`image too large (${dims.width}x${dims.height}; max ${MAX_PIXELS} px)`);
+  return buf;
+}
+
+// Decode PNG/JPEG bytes to { data: RGBA, width, height }. Called inside the
+// image worker (decodeBarcodeBuffer), never on the main thread.
+function toRgba(buf) {
+  const isPng = buf[0] === 0x89 && buf[1] === 0x50;
   let img;
   try {
     if (isPng) {
@@ -85,6 +102,14 @@ function decodeBarcode({ data, width, height }, zxing, jsQR) {
   return { found: false, format: null, text: null };
 }
 
+/** Decode + scan, as one unit of synchronous CPU: run by src/tools/image-worker.js
+ *  so neither the pixel decode nor the symbology search holds the event loop. */
+export async function decodeBarcodeBuffer(buf) {
+  const rgba = toRgba(buf);
+  const [zxing, jsQR] = await Promise.all([loadZxing(), loadJsQR()]);
+  return decodeBarcode(rgba, zxing, jsQR);
+}
+
 export const BARCODE_TOOLS = [
   {
     route: "POST /api/barcode-decode", name: "Barcode / QR decode", slug: "barcode-decode", category: "data", price: "$0.001",
@@ -104,9 +129,8 @@ export const BARCODE_TOOLS = [
       output: { example: { found: true, format: "QR_CODE", text: "AGENT402", decoder: "zxing" } },
     },
     handler: async (i) => {
-      const rgba = toRgba(i.image);
-      const [zxing, jsQR] = await Promise.all([loadZxing(), loadJsQR()]);
-      return decodeBarcode(rgba, zxing, jsQR);
+      const buf = toImageBuffer(i.image);
+      return runImageOffThread({ op: "barcode", buffer: buf, maxPixels: MAX_PIXELS });
     },
   },
 ];

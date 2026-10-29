@@ -19,6 +19,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { mppMethodsProse } from "./mpp-offers.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
+import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -29,6 +30,8 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+// A catalog line's price: a route quoted per request lists its floor as "from".
+const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),
@@ -524,11 +527,11 @@ function llmsFullBody(baseUrl, catalog) {
       // listed at roughly a tenth of the bytes; the pointer below still leads
       // to the full schemas.
       if (inCat.length > 40) {
-        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}`).join("\n");
+        const compact = inCat.map((t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${priceOfLine(t)}/call${slowRouteMarker(t)}`).join("\n");
         return `## Tools - ${label}\n\n${compact}\n\n- [Full input schemas for all ${inCat.length} ${label} endpoints](${baseUrl}/api/pricing)`;
       }
       const items = inCat.map(
-        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${t.price}/call${slowRouteMarker(t)}. ${t.description}`
+        (t) => `- [${t.name}](${baseUrl}/tools/${t.slug}): ${priceOfLine(t)}/call${slowRouteMarker(t)}. ${t.description}`
       );
       return `## Tools - ${label}\n\n${items.join("\n")}`;
     })
@@ -597,6 +600,15 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
 
 **How to read our 402 if you only speak one dialect.** The same response carries BOTH headers, always - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative.
 
+## Call a model (metered, the default)
+The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${meteredQuoteSentence()}
+
+\`\`\`bash
+${meteredCurl(baseUrl)}
+\`\`\`
+
+${flatTiersLine()}
+
 ## Key machine surfaces
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
@@ -625,7 +637,7 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - Smithery: listed at https://smithery.ai/servers/mike-kq9d/agent402 (paste \`${baseUrl}/mcp\` at https://smithery.ai/new)
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.13.22\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key already issued). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.22\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.13.24\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key already issued). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.24\`
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
@@ -675,7 +687,7 @@ export function llmsTxt(baseUrl, catalog) {
   const title = full[0];
   const summary = full.find((l) => l.startsWith("> "));
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
-  const keep = ["Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   const sections = keep.map((name) => {
     const start = full.indexOf(`## ${name}`);
     if (start < 0) return "";
@@ -719,7 +731,9 @@ export function llmsFullTxt(baseUrl, catalog) {
     const m = t.match(/^(.{20,240}?[.!?])(\s|$)/);
     return m ? m[1] : t.slice(0, 240);
   };
-  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price || "see /api/pricing"} | ${firstSentence(t.description)}`).join("\n");
+  // A route quoted by a stated formula carries it after the sentence, so the
+  // line prices the call whatever the description's first sentence says.
+  const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price ? priceOfLine(t) : "see /api/pricing"} | ${firstSentence(t.description)}${t.quoteRange && t.quoteFormula ? ` The quote is ${t.quoteFormula}.` : ""}`).join("\n");
   const learnLines = LEARN.map((l) => `- [${l.term}](${baseUrl}/learn/${l.slug}): ${l.summary}`).join("\n");
   return `${llmsFullBody(baseUrl, catalog)}
 ## Learn (summaries)

@@ -110,13 +110,14 @@ function solve(challenge, difficulty) {
 const redis = createClient({ url: REDIS });
 await redis.connect();
 // The hash slug's counts per lane, summed over this server's published
-// buckets: { outside, synthetic } of ok answers.
+// buckets: { outside, synthetic, free } of ok answers (a proof-of-work or
+// trial call counts on the free lane).
 const lanes = async () => {
   const keys = await redis.keys(`tfm:${PREFIX}:snap:*`);
-  const out = { outside: 0, synthetic: 0, snapshots: keys.length };
+  const out = { outside: 0, synthetic: 0, free: 0, snapshots: keys.length };
   for (const k of keys) {
     let snap = null; try { snap = JSON.parse(await redis.get(k)); } catch { snap = null; }
-    for (const row of Object.values(snap?.tools?.hash || {})) { out.outside += row.o?.[0] || 0; out.synthetic += row.s?.[0] || 0; }
+    for (const row of Object.values(snap?.tools?.hash || {})) { out.outside += row.o?.[0] || 0; out.synthetic += row.s?.[0] || 0; out.free += row.f?.[0] || 0; }
   }
   return out;
 };
@@ -136,9 +137,9 @@ try {
   ok(r.status === 200 && r.headers.get("x-pow-accepted") === "true", `proof-of-work call with a forged payment header is served (got ${r.status})`);
   const body = await r.json().catch(() => ({}));
   ok(typeof body.hex === "string" && body.hex.startsWith("b94d27b9"), "the answer is the tool's own");
-  const l1 = await waitLanes((l) => l.outside + l.synthetic >= 1);
+  const l1 = await waitLanes((l) => l.outside + l.synthetic + l.free >= 1);
   ok(l1.snapshots >= 1, `the monitor published its snapshot to Redis (${l1.snapshots})`);
-  ok(l1.outside === 1 && l1.synthetic === 0, `the forged header does not move the free call onto our own lane (outside ${l1.outside}, synthetic ${l1.synthetic})`);
+  ok(l1.free === 1 && l1.synthetic === 0 && l1.outside === 0, `the forged header does not move the free call onto our own lane: it counts on the free lane (free ${l1.free}, outside ${l1.outside}, synthetic ${l1.synthetic})`);
 
   // Control: a paid call that settles from our own wallet IS our own traffic.
   // The paywall answers 402 once its facilitator's supported kinds are read.
@@ -155,7 +156,7 @@ try {
   const paid = await fetch(`${BASE}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json", "Payment-Signature": credential }, body: JSON.stringify({ text: "hello world" }) });
   ok(paid.status === 200, `the paid control from our own wallet is served (${paid.status})`);
   const l2 = await waitLanes((l) => l.synthetic >= 1);
-  ok(l2.synthetic === 1 && l2.outside === 1, `an own-wallet paid call lands on the synthetic lane (outside ${l2.outside}, synthetic ${l2.synthetic})`);
+  ok(l2.synthetic === 1 && l2.free === 1 && l2.outside === 0, `an own-wallet paid call lands on the synthetic lane (synthetic ${l2.synthetic}, free ${l2.free}, outside ${l2.outside})`);
 } finally {
   if (fail) for (const l of serverLog.slice(-30)) console.error("  server:", l);
   proc.kill();

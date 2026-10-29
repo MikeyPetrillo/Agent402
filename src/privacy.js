@@ -95,7 +95,9 @@ so every claim below is verifiable in code.</p>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
-    served, so a receipt can prove what was delivered; the response itself is not kept;</li>
+    served, so a receipt can prove what was delivered; the response itself is not kept. It also keeps
+    how the call arrived: through our hosted MCP connector, from one of our client packages (its name
+    and version, the first word of the User-Agent it sends), or as any other HTTP request;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
     you write, is kept with that call's transaction id and is never published.</li>
   </ul></li>

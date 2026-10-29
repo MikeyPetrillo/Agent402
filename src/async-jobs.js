@@ -45,7 +45,9 @@ const PREFER_ASYNC = /(^|[\s,;])respond-async(?=$|[\s,;=])/i;
 export const wantsAsync = (req) => PREFER_ASYNC.test(String(req?.headers?.prefer || ""));
 
 // Request headers the paid call needs, and nothing else.
-const FORWARD = ["content-type", "accept", "payment-signature", "x-payment", "payment-identifier", "authorization", "idempotency-key", "x-pow-solution", "x-heartbeat-token"];
+// user-agent: the replay keeps the buyer's client token, so the sale books the
+// path the call arrived on (src/sale-path.js), not the loopback's own.
+const FORWARD = ["content-type", "accept", "payment-signature", "x-payment", "payment-identifier", "authorization", "idempotency-key", "x-pow-solution", "x-heartbeat-token", "user-agent"];
 // Response headers worth keeping with the result (the receipt, the balance).
 const KEEP = ["payment-response", "payment-receipt", "x-credits-balance", "x-idempotent-replay", "x-metered-usd", "x-cache"];
 

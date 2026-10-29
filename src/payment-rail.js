@@ -19,3 +19,16 @@ export function railOf(req) {
   if (h["x-pow-solution"]) return "pow";
   return null;
 }
+
+// The rail a FINISHED catalog call was served on, for the failure monitor
+// (src/tool-failure-monitor.js). The free rails are read only from the
+// response headers the proof-of-work and trial gates set when they accept a
+// call, never from a request header, so a caller cannot move a paid outcome
+// onto the free lane; a solution header the gate did not accept is "none".
+export function outcomeRailOf(req, res) {
+  const accepted = (name) => { try { return res?.getHeader?.(name) === "true"; } catch { return false; } };
+  if (accepted("X-Trial-Accepted")) return "trial";
+  if (accepted("X-Pow-Accepted")) return "pow";
+  const r = railOf(req);
+  return r && r !== "pow" ? r : "none";
+}

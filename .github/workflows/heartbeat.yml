@@ -508,24 +508,26 @@ jobs:
 
       # The nightly offsite backup (src/backup.js): one word on
       # /api/gateway-status. held (a state table, or the whole database
-      # snapshot, did not go up), failed (the run threw) and stale (no
-      # successful run in 26 h while configured) page; ok closes; off and
+      # snapshot, did not go up), failed (the run threw, or the encryption
+      # key does not parse), stale (no successful run in 26 h while
+      # configured) and unencrypted (no encryption key in production) page;
+      # ok closes; off and
       # unknown do neither. Two readings 30 s apart, because a boot can read
       # stale once before the persisted status has loaded.
-      - name: Offsite backup check (alarm on a held, failed or stale backup)
+      - name: Offsite backup check (alarm on a held, failed, stale or unencrypted backup)
         if: always()
         continue-on-error: true
         run: |
           read_bk() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.backup.status // "unknown"' 2>/dev/null || echo unknown; }
           WORD=$(read_bk)
-          case "$WORD" in held|failed|stale) sleep 30; WORD=$(read_bk) ;; esac
+          case "$WORD" in held|failed|stale|unencrypted) sleep 30; WORD=$(read_bk) ;; esac
           echo "offsite backup: $WORD"
           TITLE="Offsite backup is not current"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            held|failed|stale)
+            held|failed|stale|unencrypted)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir). stale: no successful run in 26 h. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir, or a BACKUP_ENCRYPTION_KEY that is set but does not parse). stale: no successful run in 26 h. unencrypted: BACKUP_ENCRYPTION_KEY is unset in production, so objects go up as plain gzip. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi

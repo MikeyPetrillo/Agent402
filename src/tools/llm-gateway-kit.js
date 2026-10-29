@@ -3672,7 +3672,7 @@ export function meteredHintFor(normalizedBody, tierSlug, imageCount = 0) {
     endpoint: metered.route.split(" ")[1],
     wouldHaveCostUsd: quote,
     youPaidUsd: flat,
-    note: "The same request on the metered route is quoted from its own body and settles actual usage. Point your SDK's base URL at /v1/metered to use it.",
+    note: "The same request on the metered route is quoted from its own body: an x402 exact payer pays that quote, an upto or credits payer settles actual usage under it, and a card payment adds the processor fee. Point your SDK's base URL at /v1/metered to use it.",
   };
 }
 
@@ -3737,7 +3737,7 @@ export const LLM_GATEWAY_TOOLS = [
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
     description:
-      `OpenAI-compatible chat completions billed per request from what the call costs: the 402 quotes exact-BPE input plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
+      `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
     discovery: { bodyType: "json", input: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o-mini" } } },
     handler: makeHandler("v1-chat-metered"),

@@ -21,6 +21,9 @@
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
+// Keep in lockstep with package.json: the User-Agent product token that names
+// this package on every call it sends.
+const USER_AGENT = "agent402-agentkit/0.1.10";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -53,7 +56,8 @@ async function discoveryFetch(fetchImpl, label, url, init) {
   let attempts = 0;
   for (;;) {
     attempts++;
-    r = await fetchImpl(url, typeof init === "function" ? init() : init);
+    const i = (typeof init === "function" ? init() : init) || {};
+    r = await fetchImpl(url, { ...i, headers: { "User-Agent": USER_AGENT, ...(i.headers || {}) } });
     if (r.ok) return r;
     if (attempts >= DISCOVERY_ATTEMPTS) break;
     const wait = await shedRetryWaitMs(r);
@@ -93,7 +97,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
     // The x402 client is handed to agent402-client too, which holds every
     // payment it signs to the ceilings below (guardX402Client).
     const paying = creditsKey ? null : await x402For(walletProvider, fetchImpl, { payees, guarded: true });
-    const client = new Agent402({ baseUrl: base, fetch: paying?.payFetch, x402Client: paying?.client, fetchImpl, creditsKey, maxPerCallUsd, dailyLimitUsd, maxPerHostUsd });
+    const client = new Agent402({ userAgent: USER_AGENT, baseUrl: base, fetch: paying?.payFetch, x402Client: paying?.client, fetchImpl, creditsKey, maxPerCallUsd, dailyLimitUsd, maxPerHostUsd });
     clients.set(key, client);
     return client;
   };

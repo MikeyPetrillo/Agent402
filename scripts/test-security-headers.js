@@ -24,7 +24,7 @@ const base = `http://127.0.0.1:${PORT}`;
 let childLog = "";
 const T_SPAWN = Date.now();
 const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MTA_STS_MX: "mx1.example,mx2.example" },
+  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MTA_STS_MX: "mx1.example,mx2.example", GA_MEASUREMENT_ID: "G-TEST1234" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const stamp = (d) => String(d).split(/\r?\n/).filter(Boolean).map((l) => `[+${((Date.now() - T_SPAWN) / 1000).toFixed(1)}s] ${l}`).join("\n") + "\n";
@@ -137,6 +137,23 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   const cc = (opLogin.headers.get("cache-control") || "").toLowerCase();
   ok(cc.includes("no-store") && cc.includes("private"), `operator response is no-store, private (got "${cc}")`);
   ok((opLogin.headers.get("vary") || "").toLowerCase().includes("cookie"), "operator response Vary includes Cookie");
+
+  // The analytics script host rides only an answer whose page carries the GA
+  // loader: a public page has it, a bearer-link page and the operator pages
+  // carry no third-party script host at all.
+  {
+    const scriptSrc = (r) => (/script-src ([^;]*)/.exec(r.headers.get("content-security-policy") || "") || [])[1] ?? null;
+    const homePage = await fetch(`${base}/`);
+    const homeHtml = await homePage.text();
+    ok(homeHtml.includes("/js/ga-loader.js") && scriptSrc(homePage) === "'self' https://www.googletagmanager.com", `a public page with the GA loader allows its one script host (${scriptSrc(homePage)})`);
+    for (const p of ["/r/cs_test_abc", "/m/mr_test", "/credits/thanks", "/monitors/manage", "/reports/public/rp_test", "/__operator/login", "/__operator"]) {
+      const r = await fetch(`${base}${p}`, { redirect: "manual" });
+      const body = await r.text();
+      const src = scriptSrc(r);
+      ok(src === null || src === "'self'", `${p} carries no third-party script host (${r.status}, script-src ${src})`);
+      ok(!body.includes("/js/ga-loader.js"), `${p} carries no GA loader`);
+    }
+  }
 
   // F10: the retired waitlist page serves no form at all (a 301 to /tollbooth),
   // so no page can build a GitHub issue URL with lead PII.

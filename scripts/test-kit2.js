@@ -30,6 +30,19 @@ await check("base58", { text: "Hello World" }, (o) => o.result === "JxF12TrwUP45
 await check("base58", { text: "JxF12TrwUP45BMd", mode: "decode" }, (o) => o.result === "Hello World", "round-trip");
 await check("base32", { text: "hello" }, (o) => o.result === "NBSWY3DP");
 await check("base32", { text: "NBSWY3DP", mode: "decode" }, (o) => o.result === "hello", "round-trip");
+await check("base32", { text: "NBSWY3DP======", mode: "decode" }, (o) => o.result === "hello", "trailing padding is cut");
+{
+  // Base32 is linear and keeps the general 100,000-character limit; a long
+  // run of padding before a character is refused at once, not rescanned.
+  const t0 = performance.now();
+  let err = null;
+  try { bySlug.base32.handler({ text: "=".repeat(99_999) + "A", mode: "decode" }); } catch (e) { err = e; }
+  const ms = performance.now() - t0;
+  if (!err || err.statusCode !== 400 || ms > 100) fails.push(`base32: 100k padding run should be refused 400 in under 100 ms (got ${err?.statusCode} in ${ms.toFixed(0)} ms)`);
+  else { pass++; console.log(`✓ base32             100k padding run refused in ${ms.toFixed(1)} ms`); }
+  const long = bySlug.base32.handler({ text: "a".repeat(50_000) });
+  if (long.result.length !== 80_000) fails.push("base32: 50,000 characters encode (no 4,096 cap)"); else pass++;
+}
 await check("crc32", { text: "hello world" }, (o) => o.hex === "0d4a1185");
 await check("rot13", { text: "Hello" }, (o) => o.result === "Uryyb");
 await check("rot13", { text: "Uryyb" }, (o) => o.result === "Hello", "self-inverse");

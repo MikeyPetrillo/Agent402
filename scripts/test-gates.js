@@ -41,7 +41,7 @@ const GATES = [
   {
     gate: "test-package-integrity.js",
     file: "adapters/strands/package.json",
-    from: '"agent402-client": ">=0.6.0 <1.0.0"',
+    from: '"agent402-client": ">=0.8.21 <1.0.0"',
     to: '"agent402-client": "^0.1.0"',
     defect: "a published adapter pinning a client version we no longer ship",
   },
