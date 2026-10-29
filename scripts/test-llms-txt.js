@@ -104,6 +104,15 @@ try {
   // Section count sanity — the file currently has multiple `## ` headers. A
   // floor of 3 catches a regression that collapses the structure into a flat
   // wall of text.
+  // The short index keeps the model section from the full text, metered first,
+  // so an agent that reads only /llms.txt learns the default way to call a model.
+  {
+    const sec = (txt.split(/^## /m).find((p) => p.startsWith("Call a model (metered, the default)")) || "");
+    ok(sec.length > 0, "llms.txt keeps the 'Call a model (metered, the default)' section");
+    ok(sec.includes("POST /v1/metered/chat/completions") && /settlement never exceeds that quote/.test(sec) && /curl -i -X POST \S+\/v1\/metered\/chat\/completions/.test(sec),
+      "...with the metered routes, the quote sentence and a runnable call");
+    ok(txt.indexOf("## Call a model (metered, the default)") < txt.indexOf("## Key machine surfaces"), "...ahead of the machine surfaces");
+  }
   const sectionCount = (txt.match(/^## /gm) || []).length;
   ok(sectionCount >= 3, `llms.txt has >= 3 '##' sections (got ${sectionCount}) — structure must remain navigable`);
 

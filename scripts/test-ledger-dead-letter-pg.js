@@ -254,8 +254,13 @@ try {
     cutRelay();
     await sl.recordSale({ slug: "uid", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xuid-entry" });
     ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 13 && /^[0-9a-f-]{36}$/.test(e.payload[11]) && e.payload[12] === null), "a new entry carries the sale's id as a twelfth value and its arrival path as a thirteenth");
+    // A sale that arrived from one of our client packages keeps its path through the outage.
+    await sl.recordSale({ slug: "via", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xvia-entry", via: "agent402-client/x" });
+    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload[6] === "0xvia-entry" && e.payload[12] === "agent402-client/x"), "a queued sale carries its arrival path (agent402-client/x)");
     healRelay();
     await settle();
+    const viaRows = (await sdb.stateQuery(`SELECT via FROM ${S}.sales WHERE tx = '0xvia-entry'`)).rows;
+    ok(viaRows.length === 1 && viaRows[0].via === "agent402-client/x", `the replayed sale lands once with its arrival path (${JSON.stringify(viaRows.map((r) => r.via))})`);
   }
 
   // ---- (9) Tempo push debts: changes to a debt wait and land after the debt -------

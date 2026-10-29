@@ -96,6 +96,24 @@ await expectErr({ slug: "route-execute", params: {} }, 409, "self-dispatch refus
 // price sits under the cap: the flat routing fee cannot cover a quote, and the
 // executor's no-request dispatch would skip the quote and the belt entirely.
 await expectErr({ slug: "quoted-tool", params: { model: "x", messages: [] } }, 409, "per-request-priced (quoted) tool refused", "call them directly");
+// The real tts and tts-hd defs are quoted from the text's length, so they are
+// refused the same way at every tier: the 402 of a direct call carries the quote.
+{
+  const { TTS_TOOLS } = await import("../src/tools/tts-kit.js");
+  const { dispatchable } = await import("../src/tools/route-execute.js");
+  for (const slug of ["tts", "tts-hd"]) {
+    const def = TTS_TOOLS.find((d) => d.slug === slug);
+    ok(typeof def?.quote === "function", `${slug} is quoted per request`);
+    const d = dispatchable(def);
+    ok(d.ok === false && /quoted from the body/.test(d.why || ""), `${slug} is not dispatchable (${d.why})`);
+    CATALOG[def.route] = def;
+    await expectErr({ slug, params: { text: "hello" } }, 409, `${slug} refused through route-execute`, "call them directly");
+  }
+  const plus = buildRouteExecuteTool({ getCatalog: () => CATALOG, baseUrl: "https://agent402.tools", tier: (await import("../src/tools/route-execute.js")).EXEC_TIERS.find((t) => t.slug === "route-execute-plus") });
+  let e = null;
+  try { await plus.handler({ slug: "tts-hd", params: { text: "hello" } }); } catch (x) { e = x; }
+  ok(e?.statusCode === 409 && /call them directly/.test(e.message), `tts-hd refused through route-execute-plus, whose cap covers its floor (${e?.statusCode})`);
+}
 {
   const r = await tool.handler({ slug: "leaky-tool", params: {} });
   ok(r.result.answer === 42 && !("__meterUpstreamUsd" in r.result) && !JSON.stringify(r).includes("__meterUpstreamUsd"), "an inner handler's meter sentinel never rides the nested router result");

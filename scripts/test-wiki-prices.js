@@ -38,5 +38,20 @@ for (const file of readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md
 }
 // Control: the scan finds rows at all, so an empty match is not a pass.
 ok(rows >= 10, `checked ${rows} wiki price rows`);
+
+// The tts quote in prose: wiki/TTS.md states each tier's floor, per-1,000
+// rate and price at the cap, read here from the formula /api/pricing serves.
+{
+  const tts = readFileSync(join(ROOT, "wiki", "TTS.md"), "utf8").replace(/\s+/g, " ");
+  for (const slug of ["tts", "tts-hd"]) {
+    const row = (pricing.endpoints || []).find((e) => e.slug === slug);
+    const m = String(row?.quoteFormula || "").match(/^(\$[\d.]+) plus (\$[\d.]+) per 1,000 characters of text, rounded up to the next \$0\.001 \(([\d,]+) characters: (\$[\d.]+)\)$/);
+    ok(!!m, `/api/pricing carries the ${slug} quote formula (${row?.quoteFormula})`);
+    if (!m) continue;
+    const [, floor, per1k, chars, atCap] = m;
+    ok(tts.includes(`\`${slug}\` is ${floor} plus ${per1k} per 1,000 characters`), `wiki/TTS.md states ${slug} as ${floor} plus ${per1k} per 1,000 characters`);
+    ok(tts.includes(`${chars} characters, the cap, costs`) && tts.includes(`${atCap} on \`${slug}\``), `wiki/TTS.md states ${chars} characters on ${slug} at ${atCap}`);
+  }
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed (${rows} wiki price rows checked)`);
 process.exit(fail ? 1 : 0);
