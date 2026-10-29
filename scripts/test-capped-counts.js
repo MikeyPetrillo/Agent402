@@ -12,21 +12,13 @@
 // finding, and someone acts on it. This is a SOURCE scan because a fixture
 // small enough to unit-test sits under every limit and passes either way -
 // which is exactly why nothing caught it for five days.
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { walk } from "./lib/shipped-files.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const files = [];
-const walk = async (dir) => {
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    if (e.name === "node_modules" || e.name.startsWith(".")) continue;
-    const p = `${dir}/${e.name}`;
-    if (e.isDirectory()) await walk(p);
-    else if (e.name.endsWith(".js")) files.push(p);
-  }
-};
-await walk("src");
+const files = walk("src").filter((p) => p.endsWith(".js"));
 
 // Every prepared statement whose SQL carries a LIMIT, by variable name.
 //
