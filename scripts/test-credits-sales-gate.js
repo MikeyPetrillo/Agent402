@@ -44,12 +44,16 @@ const boot = (env) => new Promise(async (resolve) => {
     [/\bbuy (prepaid )?credits\b/i, "an invitation to buy credits"],
     [/\btop up (your )?credits\b/i, "an invitation to top up credits"],
     [/\bcredits? packs?\b/i, "a credit pack on offer"],
+    // A key is "already issued"; "paid by card" offers the purchase the
+    // switch may have closed.
+    [/\bpaid by card or USDC\b/i, "card payment for a tool call"],
   ];
   const files = [join(ROOT, "README.md"), ...packageDirs().flatMap(shippedFiles)].filter((f) => /\.(md|js|ts|py|json)$/.test(f));
   ok(files.length >= 30, `credits copy: ${files.length} static surfaces read (README + shipped package files)`);
   const scan = (text) => OFFERS.filter(([re]) => re.test(text)).map(([, why]) => why);
   ok(scan("## For humans: reports, monitors and prepaid credits\n(credits keys: https://agent402.tools/credits)").length === 2, "control: the retired heading and key pointer are both reported");
   ok(scan("## Prepaid credits (keys already issued)\n\nPrepaid credits: not on sale. A key already issued keeps working.").length === 0, "control: describing an issued key is not an offer");
+  ok(scan("models at a flat per-call price, paid by card or USDC.").length === 1, "control: a package that sells the card path is reported");
   const hits = files.flatMap((f) => scan(readFileSync(f, "utf8")).map((why) => `${relative(ROOT, f)}: ${why}`));
   ok(hits.length === 0, `no static surface offers credits for sale${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
 }
@@ -75,6 +79,8 @@ try {
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
+  const descOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  ok(/not on sale/.test(descOf(pageOff)) && !/Buy \$/.test(descOf(pageOff)), `/credits describes itself as closed while sales are off ("${descOf(pageOff).slice(0, 40)}...")`);
   // A closed product is kept out of search: no sitemap slot, noindex on the
   // page, while the page itself still answers 200 for key holders.
   const robotsMeta = (html) => (html.match(/<meta name="robots" content="([^"]*)"/) || [])[1] || "";
@@ -95,6 +101,7 @@ try {
   const pageOnRes = await fetch(`${B}/credits`);
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
+  ok(!/not on sale/.test(descOf(pageOn)) && /\$20/.test(descOf(pageOn)), `/credits describes the purchase when sales are on ("${descOf(pageOn).slice(0, 40)}...")`);
   for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);

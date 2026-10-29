@@ -1,6 +1,6 @@
 // research-deep — grounded multi-search + rerank + synthesis report tools.
-// One request, one payment, one cited report. Three tiers priced per report
-// ($5/$15/$30). Payable like any paid route (crypto/x402/MPP or card).
+// One request, one payment, one cited report. Tiers priced per report in
+// RESEARCH_TIERS below. Payable like any paid route (crypto/x402/MPP or card).
 //
 // Composes gateway primitives in-process (never loopback HTTP to our own paid
 // routes): fetchOpenRouter for plan/search/synthesis, OpenRouter's `web` (Exa)

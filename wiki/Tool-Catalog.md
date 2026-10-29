@@ -105,7 +105,7 @@ Three design points worth knowing:
 - **Literals and comments are scrubbed before analysis**, so the word `DROP` inside a string is never a false alarm.
 - **Signing is env-gated.** `SQL_CERT_SIGNING_KEY` (a PKCS8 PEM) is the signing identity. Unset, `sql-guard` still returns full verdicts and says plainly that it cannot sign them. It never returns an unsigned object shaped like a signed result. Rotating the key invalidates outstanding signed results, which live 5 minutes by default.
 
-**Honest scope:** this is a *lexical* guard over a published catalogue. It catches the shapes that destroy production data. It is not a SQL parser and cannot know that a `WHERE` clause names the wrong tenant.
+**Honest scope:** this is a *lexical* guard over a published catalog. It catches the shapes that destroy production data. It is not a SQL parser and cannot know that a `WHERE` clause names the wrong tenant.
 
 ## Quality guarantees
 

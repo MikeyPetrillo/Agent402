@@ -55,18 +55,9 @@ function setDocumentHeaders(res) {
     // wish-board text, etc.) rather than relying on a templating engine's
     // automatic escaping, across hundreds of call sites; removing
     // 'unsafe-inline' means a future missed esc() call can no longer be
-    // turned into a working <script> injection, only inert markup. One
-    // narrow exception remains: unpkg.com, for the homepage's pinned,
-    // SRI-verified d3 + topojson-client tags (the dot-map, Aug 2026 revamp -
-    // the site's first-ever third-party script, an explicit, knowing
-    // tradeoff against the "everything self-hosted" posture used everywhere
-    // else, incl. fonts). A specific host, never a wildcard or 'unsafe-eval'
-    // — SRI on the tags themselves is a second, independent layer (a
-    // compromised unpkg response with a mismatched hash is refused by the
-    // browser before it ever executes). connect-src's existing 'https:'
-    // already covers the map's runtime fetch of the world-atlas geometry
-    // from jsdelivr, so no change needed there. www.googletagmanager.com
-    // (2026-10-01) serves the Google Analytics tag loaded by
+    // turned into a working <script> injection, only inert markup. The one
+    // script host beyond 'self' is www.googletagmanager.com
+    // (2026-10-01), which serves the Google Analytics tag loaded by
     // assets/js/ga-loader.js when GA_MEASUREMENT_ID is set; its collection
     // requests ride the existing connect-src/img-src https:.
     // form-action: a form submits only to this origin, or to mailto: (the

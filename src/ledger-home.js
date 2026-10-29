@@ -108,6 +108,21 @@ export function railsByVolume(stats, { tempo = tempoEnabled() } = {}) {
   return rows.sort((a, b) => b.n - a.n);
 }
 
+/** A seller's name is read from its own pages, so it can be a page title
+ *  ("Foo - Home", "preview", a sentence) rather than a name. On the home
+ *  page such a row is labeled by its host instead. */
+const looksLikePageTitle = (s) => / - /.test(s) || /\bpreview\b/i.test(s) || s.trim().split(/\s+/).length > 6;
+const sellerHostOf = (r) => {
+  for (const u of [r?.homepage, ...(Array.isArray(r?.origins) ? r.origins : [])]) {
+    try { if (u) return new URL(String(u)).host; } catch { /* not a URL */ }
+  }
+  return null;
+};
+export function sellerLabel(r) {
+  const name = String(r?.name || "");
+  return looksLikePageTitle(name) ? (sellerHostOf(r) || name) : name;
+}
+
 /** Live leaderboard top rows, excluding Agent402's own row (best-effort name
  * match - same approach as /what-is-x402's adoption table). */
 function externalLeaderboardRows(leaderboardSnapshot, limit = 6) {
@@ -117,7 +132,7 @@ function externalLeaderboardRows(leaderboardSnapshot, limit = 6) {
     .slice(0, limit)
     .map((r, i) => ({
       rank: String(i + 1).padStart(2, "0"),
-      name: r.name,
+      name: sellerLabel(r),
       usd: `$${Number(r.totalUsd || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       calls: fmtNum(r.callsSettled),
       buyers: fmtNum(r.uniqueBuyers),
@@ -415,9 +430,9 @@ ${whySectionHtml()}
         <span id="hm-demo-status" style="color:var(--on-panel-faint);">ready</span>
       </div>
       <pre id="hm-demo-out" class="hm-term" style="padding:20px;flex:1;color:var(--on-panel);"># the same three steps, from a shell:
-curl -s '/api/pow/challenge?slug=hash'
+curl -s '${esc(baseUrl)}/api/pow/challenge?slug=hash'
 # solve: sha256("&lt;challenge&gt;:" + nonce) with N leading zero bits
-curl -X POST /api/hash \\
+curl -X POST ${esc(baseUrl)}/api/hash \\
   -H 'content-type: application/json' \\
   -H 'X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;' \\
   -d '{"text":"hello","algo":"sha256"}'</pre>

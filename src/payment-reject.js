@@ -292,7 +292,7 @@ export function unclassifiedPaymentHint({ paymentHeader, paymentRequiredHeader, 
     reason: "unclassified",
     retry: "compare-with-requirements",
     detail:
-      `This payment decoded but matched no requirement on this route, and the mismatch is not one this server recognises. ` +
+      `This payment decoded but matched no requirement on this route, and the mismatch is not one this server recognizes. ` +
       `Field NAMES received (values are never echoed) - ${parts.join("; ")}. ` +
       `One accepts entry in PAYMENT-REQUIRED carries ${wanted.join(", ")}; every field but extra must match it exactly. ` +
       `If it looks correct to you then the fault may be ours, and we would rather hear about it: ${reportUrl}`,

@@ -345,4 +345,34 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(bad.length === 0, `every dollar figure in pack prose is that pack's derived price${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
 
+// --- the media tiers in llms-full.txt and the "most tools" band -------------
+// The image and video paragraph typed five prices beside their routes; they
+// read the catalog now, rendered here against odd prices a typed figure
+// cannot match by chance. The "most tools" per-call band is one named
+// constant (src/typical-price-range.js) that /llms.txt, the quickstart guide
+// and the FAQ all read; test-docs-truth measures it against the served
+// catalog.
+{
+  const { llmsFullTxt } = await import("../src/seo.js");
+  const { TYPICAL_PRICE_RANGE, typicalPriceShare } = await import("../src/typical-price-range.js");
+  const { readFileSync } = await import("node:fs");
+  const odd = {
+    "POST /v1/images/fast": { slug: "v1-images-fast", price: "$0.023", category: "llm" },
+    "POST /v1/images/pro": { slug: "v1-images-pro", price: "$0.057", category: "llm" },
+    "POST /v1/images/generations": { slug: "v1-images", price: "$0.089", category: "llm" },
+    "POST /v1/images/edits": { slug: "v1-images-edit", price: "$0.021", category: "llm" },
+    "POST /v1/videos/generations": { slug: "v1-videos", price: "$0.207", category: "llm" },
+  };
+  const llms = llmsFullTxt("https://agent402.tools", odd);
+  for (const [route, def] of Object.entries(odd)) ok(llms.includes(`\`${route}\` (${def.price},`), `llms-full.txt states the catalog price beside ${route} (${def.price})`);
+  ok(!/\$0\.08, flagship|\$0\.20, one silent/.test(llms), "the typed media prices cannot come back");
+  ok(/^\$\d/.test(TYPICAL_PRICE_RANGE.text) && TYPICAL_PRICE_RANGE.text === `$${TYPICAL_PRICE_RANGE.minUsd} to $${TYPICAL_PRICE_RANGE.maxUsd}`, `the band's text is its bounds (${TYPICAL_PRICE_RANGE.text})`);
+  ok(typicalPriceShare(["$0.001", "$0.004", "$0.02", "$0.50", "quoted", 0.3]) === 0.6, "control: the share counts priced tools inside the band and skips a quoted price");
+  ok(llms.includes(`most tools ${TYPICAL_PRICE_RANGE.text}`), "llms.txt quotes the band from the constant");
+  for (const f of ["src/seo.js", "src/guides.js", "src/pages.js"]) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    ok(/TYPICAL_PRICE_RANGE\.text/.test(src) && !/\$0\.001[–-]\$0\.02|\$0\.001 to \$0\.02/.test(src), `${f} reads the band from the constant and types no range`);
+  }
+}
+
 console.log(`\n${pass} passed, 0 failed`);

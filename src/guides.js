@@ -19,6 +19,7 @@ import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gate
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
+import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -121,7 +122,7 @@ console.log(await res.json()); // { title, markdown, wordCount, … }
 \`\`\`
 
 That one wrapped \`fetch\` now covers 500+ tools - browser rendering,
-live search, PDFs, durable memory - most a flat $0.001–$0.02 per call, with premium AI, media and multi-tool packs priced higher.
+live search, PDFs, durable memory - most a flat ${TYPICAL_PRICE_RANGE.text} per call, with premium AI, media and multi-tool packs priced higher.
 The full catalog is machine-readable at
 [/api/pricing](https://agent402.tools/api/pricing).
 
@@ -798,7 +799,7 @@ was minted from, and that entry's \`extra.name\` and \`extra.version\` are the
 domain to sign under, read from the token on chain.
 
 If a credential does arrive signed under a different known name, we recover the
-signer and recognise it before spending a facilitator round trip on it. You get
+signer and recognize it before spending a facilitator round trip on it. You get
 a \`402\` with an RFC 9457 \`application/problem+json\` body naming both the name
 you signed under and the one the token uses, so the mistake is readable instead
 of looking like an outage. That response also carries no \`WWW-Authenticate\`
