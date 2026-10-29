@@ -125,6 +125,25 @@ for (const dir of pkgDirs) {
   ok(capped >= 4, `peer caps checked on every package with a payment peer (${capped})`);
 }
 
+// --- 2c. the tollbooth Docker image installs exact versions ------------------
+// The image's npm install names the tollbooth release this tree carries and
+// the x402 packages at the versions the root lockfile resolves.
+{
+  const df = readFileSync(join(ROOT, "tollbooth/deploy/docker/Dockerfile"), "utf8");
+  const line = df.split("\n").find((l) => /\bnpm install /.test(l)) || "";
+  const specs = line.split("npm install ")[1]?.trim().split(/\s+/).filter((t) => !t.startsWith("-")) || [];
+  const tbVersion = JSON.parse(readFileSync(join(ROOT, "tollbooth/package.json"), "utf8")).version;
+  const rootLock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
+  ok(specs.length >= 4, `the tollbooth image installs the tollbooth and its x402 packages (${specs.join(" ")})`);
+  for (const spec of specs) {
+    const m = /^(@?[^@]+)@(\d+\.\d+\.\d+)$/.exec(spec);
+    ok(Boolean(m), `tollbooth image: ${spec} is pinned to an exact version`);
+    if (!m) continue;
+    const want = m[1] === "agent402-tollbooth" ? tbVersion : rootLock.packages?.[`node_modules/${m[1]}`]?.version;
+    ok(m[2] === want, `tollbooth image: ${m[1]}@${m[2]} is the version this tree carries (${want})`);
+  }
+}
+
 // --- 3. remote installs in tests are pinned + scriptless --------------------
 // A range like ^0.12 is NOT a pin: it takes any new 0.12.x, which is precisely
 // how worm-published patch versions land in CI.
