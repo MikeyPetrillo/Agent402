@@ -5,6 +5,7 @@ process.env.COMPOSITE_GUARD_WINDOW_MS = "60000";
 process.env.COMPOSITE_GUARD_BLOCK_MS = "600";
 process.env.COMPOSITE_GUARD_GLOBAL_MAX_FAILS = "6";
 process.env.COMPOSITE_GUARD_GLOBAL_PAUSE_MS = "700";
+process.env.COMPOSITE_GUARD_HARD_MAX = "6";
 
 const g = await import("../src/composite-spend-guard.js");
 let pass = 0, fail = 0;
@@ -20,13 +21,29 @@ ok(!g.compositeGuardBlocked(P), "2 failures (under the threshold of 3) does NOT 
 g.recordCompositeSpendFailure(P);
 ok(g.compositeGuardBlocked(P), "the 3rd spend-then-fail BLOCKS the payer");
 
+// A settled run is an outcome in the window, not an eraser: a payer whose
+// failures outnumber its settled runs is blocked at MAX_FAILS.
 const Q = "0xPayerBBB";
 g.recordCompositeSpendFailure(Q);
 g.recordCompositeSpendFailure(Q);
 g.recordCompositeSpendSuccess(Q); // a genuine paid success
 g.recordCompositeSpendFailure(Q);
-g.recordCompositeSpendFailure(Q);
-ok(!g.compositeGuardBlocked(Q), "a paid success resets the counter (legit buyers never blocked)");
+ok(g.compositeGuardBlocked(Q), "3 failures against 1 settled run block: a success does not erase the failures before it");
+// An honest payer with many settled runs is not cut off by a few failures.
+const H = "0xPayerHonest";
+for (let i = 0; i < 10; i++) g.recordCompositeSpendSuccess(H);
+for (let i = 0; i < 5; i++) g.recordCompositeSpendFailure(H);
+ok(!g.compositeGuardBlocked(H), "5 failures against 10 settled runs do NOT block (failures are under half the outcomes)");
+// Alternating one paid run and one unpaid run never passes the share, so the
+// hard cap bounds it.
+const A = "0xPayerAlternating";
+let blockedAt = 0;
+for (let i = 1; i <= 20 && !blockedAt; i++) {
+  g.recordCompositeSpendSuccess(A);
+  g.recordCompositeSpendFailure(A);
+  if (g.compositeGuardBlocked(A)) blockedAt = i;
+}
+ok(blockedAt === 6, `alternating paid and unpaid runs 1:1 is blocked at the hard cap of 6 failures (blocked at ${blockedAt || "never"})`);
 
 // EVERY composite that fans out to metered upstream must be guarded, or its
 // agent path is an unguarded upstream-drain. Locks the class so a new expensive

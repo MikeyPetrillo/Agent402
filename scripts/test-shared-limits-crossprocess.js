@@ -100,7 +100,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
 // ---- 2. two replicas of the control modules --------------------------------------------
 function replica(name) {
   const c = spawn(process.execPath, ["scripts/lib/shared-limits-driver.js"], {
-    env: { ...BASE_ENV, EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4", TYPESAFE_API_KEY: "test-key-never-sent", OPENROUTER_API_KEY: "", DECIDE_OPENROUTER_API_KEY: "", INFLIGHT_COVER: "" },
+    env: { ...BASE_ENV, EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_HARD_MAX: "5", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4", TYPESAFE_API_KEY: "test-key-never-sent", OPENROUTER_API_KEY: "", DECIDE_OPENROUTER_API_KEY: "", INFLIGHT_COVER: "" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(c);
@@ -190,6 +190,17 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(r.paused === true, "the sixth, recorded on B, pauses the reports on A");
   r = await B.send({ op: "cg.paused" });
   ok(r.paused === true, "and on B");
+  // Settled runs are outcomes in the shared window: recorded on A, they keep
+  // B's failures for the same payer under the share; the hard cap (five)
+  // blocks it whatever it settled.
+  const W = "0xaaaa000000000000000000000000000000000002";
+  for (let i = 0; i < 6; i++) await A.send({ op: "cg.success", payer: W });
+  await B.send({ op: "cg.fail", payer: W, n: 3, global: false });
+  r = await A.send({ op: "cg.blocked", payer: W });
+  ok(r.blocked === false, "three failures on B against six settled runs on A: not blocked");
+  await B.send({ op: "cg.fail", payer: W, n: 2, global: false });
+  r = await A.send({ op: "cg.blocked", payer: W });
+  ok(r.blocked === true, "the fifth failure, recorded on B, reaches the hard cap and blocks the payer on A");
 }
 // --- the external spend guard, per payer ---
 {

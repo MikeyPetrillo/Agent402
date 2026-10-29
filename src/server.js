@@ -11054,7 +11054,7 @@ for (const tool of ALL_KIT) {
       // nonce - so a payer can make us spend then dodge settlement repeatedly.
       // Block a payer with too many recent spend-then-fail events BEFORE the next
       // run; record the outcome on finish (only a genuine spend counts as a fail,
-      // a paid 200 clears it). Registered before the handler so it fires even if
+      // a paid 200 is a settled outcome beside it). Registered before the handler so it fires even if
       // the handler throws. Same doctrine as the external-spend guard below.
       if (EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)) {
         // Belt for the global drain middleware: a composite that reaches the
@@ -11078,7 +11078,7 @@ for (const tool of ALL_KIT) {
           throw e;
         }
         if (await compositeGuardBlocked(guardKey)) {
-          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. A successful payment clears it.");
+          const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
           throw e;
         }
