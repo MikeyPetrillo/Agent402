@@ -23,7 +23,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const BASE = "eip155:8453";
-const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const ALGO_TREASURY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
 // Throwaway addresses (no key exists for either): the spending wallets.

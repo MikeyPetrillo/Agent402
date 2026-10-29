@@ -800,6 +800,9 @@ export const CAIP2_NAMES = {
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "solana",
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": "solana-devnet",
   "stellar:pubnet": "stellar",
+  // Both spellings of Algorand mainnet: the CAIP-2 form every 402 carries now
+  // and the full-hash form earlier settlements were booked under.
+  "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k": "algorand",
   "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": "algorand",
   // Added 2026-08-02. Both rails shipped without an entry here, so every
   // settlement on them was booked under its raw CAIP-2 id and shown that way

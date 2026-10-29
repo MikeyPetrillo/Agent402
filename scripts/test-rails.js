@@ -16,6 +16,7 @@
 import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, railKey, GATED_RAILS, liveRails } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
 import { railsCoveredByLiveView } from "../src/revenue-live.js";
+import { CAIP2_PATTERN, ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -52,6 +53,14 @@ const paymentsCaip2 = new Set(Object.values(NETWORKS));
 for (const r of RAILS) {
   ok(paymentsCaip2.has(r.caip2), `RAILS "${r.name}" (${r.caip2}) is settleable in payments.js — copy doesn't advertise a dead rail`);
 }
+// Every id a 402 can carry is strict CAIP-2: a reference of at most 32
+// characters from [-_a-zA-Z0-9]. The Bazaar validator parses with that
+// grammar, so an id outside it (a base64 genesis hash with its `=`) drops
+// every route from discovery.
+for (const [name, caip2] of Object.entries(NETWORKS)) ok(CAIP2_PATTERN.test(caip2), `payments.js network "${name}" (${caip2}) is a strict CAIP-2 id`);
+for (const r of [...RAILS, ...GATED_RAILS]) ok(CAIP2_PATTERN.test(r.caip2), `rail "${r.name}" (${r.caip2}) is a strict CAIP-2 id`);
+ok(NETWORKS.algorand === ALGORAND_MAINNET_CAIP2 && !CAIP2_PATTERN.test(ALGORAND_MAINNET_LEGACY_CAIP2) && canonicalAvmNetwork(ALGORAND_MAINNET_LEGACY_CAIP2) === NETWORKS.algorand,
+  "Algorand is offered as the 32-character CAIP-2 id, and the full-hash spelling folds to it");
 
 // --- derived strings mention every rail ----------------------------------
 const assets = [...new Set(RAILS.map((r) => r.asset))];

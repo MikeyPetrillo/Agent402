@@ -1670,7 +1670,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .map((r) => ({
         seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
         price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
-        networks: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="], settled: r.verifs,
+        networks: [PAY_NETWORKS.algorand], settled: r.verifs,
         // Only a row whose count we read from the chain ourselves. A
         // facilitator-witnessed row ("both"/undefined) keeps GoPlausible's
         // count, so comparing its advertised address against the live one

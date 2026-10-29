@@ -12,6 +12,7 @@
 // module owns the *claims*, not the storytelling.
 
 import { gatedRailOffered } from "./gated-rails.js";
+import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 
 export const RAILS = [
   { name: "Base", asset: "USDC", caip2: "eip155:8453", chainId: 8453, primary: true },
@@ -25,7 +26,7 @@ export const RAILS = [
   { name: "Optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
   { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
   { name: "Stellar", asset: "USDC", caip2: "stellar:pubnet" },
-  { name: "Algorand", asset: "USDC", caip2: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" },
+  { name: "Algorand", asset: "USDC", caip2: ALGORAND_MAINNET_CAIP2 },
   { name: "Robinhood Chain", asset: "USDG", caip2: "eip155:4663", chainId: 4663 },
 ];
 

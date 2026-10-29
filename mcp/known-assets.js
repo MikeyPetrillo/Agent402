@@ -32,7 +32,10 @@ export const KNOWN_ASSETS = Object.freeze({
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": [{ asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, symbol: "USDC" }], // devnet
   // Stellar: the USDC Stellar Asset Contract (7 decimals on Stellar).
   "stellar:pubnet": [{ asset: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", decimals: 7, symbol: "USDC" }],
-  // Algorand: USDC is ASA 31566704.
+  // Algorand: USDC is ASA 31566704. Mainnet is named by its CAIP-2 id (the
+  // first 32 characters of the base64 genesis hash) and, by sellers that
+  // predate it, by the full hash.
+  "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k": [{ asset: "31566704", decimals: 6, symbol: "USDC" }],
   "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": [{ asset: "31566704", decimals: 6, symbol: "USDC" }],
 });
 

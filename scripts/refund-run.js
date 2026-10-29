@@ -66,6 +66,7 @@ import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
 import { isGatewayWire } from "../src/gateway-wire.js";
+import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 
 const GATEWAY_TRANSFER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const GATEWAY_NO_ID_HOLD = "Circle Gateway debt with no Gateway transfer id recorded - cannot be proven; resolve by hand from Gateway's transfer history";
@@ -143,16 +144,17 @@ const CAIP2_BY_SHORT_NAME = {
   // src/tempo-push-debts.js).
   tempo: "eip155:4217",
   stellar: "stellar:pubnet",
-  algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+  algorand: ALGORAND_MAINNET_CAIP2,
 };
 // The ledger can also carry the display label (src/stats.js CAIP2_NAMES), which
 // names the token for a non-USDC rail: "robinhood (USDG)". The suffix is not
 // part of the chain's name, so it is dropped before the lookup; without this
-// every Robinhood debt was held "unsupported network robinhood (USDG)".
+// every Robinhood debt was held "unsupported network robinhood (USDG)". A debt
+// booked under the full-hash Algorand id folds to the CAIP-2 one.
 export function normalizeNetwork(network) {
   const n = String(network || "").trim();
   const short = n.replace(/\s*\([^)]*\)\s*$/, "").toLowerCase();
-  return CAIP2_BY_SHORT_NAME[short] || CAIP2_BY_SHORT_NAME[n.toLowerCase()] || n;
+  return CAIP2_BY_SHORT_NAME[short] || CAIP2_BY_SHORT_NAME[n.toLowerCase()] || canonicalAvmNetwork(n);
 }
 
 export const TEMPO_NETWORK = "eip155:4217";
