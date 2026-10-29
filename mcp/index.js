@@ -61,7 +61,16 @@ const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$
 // Catalog and seller requests (the 402 and the paid retry included) go through
 // a dedicated dispatcher that refuses a TLS chain through a distrusted
 // intermediate CA (networks.js).
-const ownFetch = distrustFetch();
+// Every request names this package in its User-Agent (product token only), so
+// the seller can tell which client a call came from. A caller's own
+// User-Agent header, when one is set, is kept.
+const plainFetch = distrustFetch();
+const ownFetch = (input, init = {}) => {
+  // The payment wrapper passes a Request and no init: its headers are the base.
+  const h = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  if (!h.has("user-agent")) h.set("user-agent", `agent402-mcp/${VERSION}`);
+  return plainFetch(input, { ...init, headers: h });
+};
 const AGENT_KEY = process.env.AGENT_KEY || "";
 // Solana secret key: base58 string (Phantom/solana-keygen export) or a JSON
 // byte array. Either key alone enables paid calls; with both, the buyer can
@@ -931,7 +940,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.22",
+          npm: "npx -y agent402-mcp@0.13.23",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -951,7 +960,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.22",
+          npm: "npx -y agent402-mcp@0.13.23",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,

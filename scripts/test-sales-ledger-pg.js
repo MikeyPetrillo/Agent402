@@ -263,6 +263,35 @@ try {
     ok(big.loaded && !big.unloaded.includes("sales ledger") && big.landed === true && big.n === 130_001,
       `130k file sales in the reconcile window: the ledger loads and a sale lands (${JSON.stringify(big)})`);
   }
+
+  // ---- the arrival path: a column in the table, old rows read "unknown" -------
+  {
+    const unknownBefore = sl.salesByPath({ days: 30 }).unknown?.sales || 0;
+    ok(unknownBefore >= 2, `rows imported from a file without the column read "unknown" (${unknownBefore})`);
+    ok((await sl.recordSale({ slug: "via-mcp", priceUsd: 0.01, rail: "usdc", network: "base", payer: BUYER, tx: "0xviamcp", wire: "x402", via: "mcp" })) === true, "a sale with a path lands");
+    ok((await sl.recordSale({ slug: "via-client", priceUsd: 0.02, rail: "usdc", network: "base", payer: BUYER2, tx: "0xviaclient", wire: "x402", via: "agent402-client/0.8.21" })) === true, "a client sale lands");
+    const rows = await q(`SELECT tx, via FROM ${S}.sales WHERE tx IN ('0xviamcp', '0xviaclient', '0xfile2') ORDER BY tx`);
+    ok(rows.find((r) => r.tx === "0xviamcp")?.via === "mcp" && rows.find((r) => r.tx === "0xviaclient")?.via === "agent402-client/0.8.21" && rows.find((r) => r.tx === "0xfile2")?.via === null, `Postgres stores the path, NULL on imported rows (${JSON.stringify(rows)})`);
+    const bp = sl.salesByPath({ days: 30 });
+    ok(bp.mcp?.sales === 1 && bp["agent402-client"]?.sales === 1 && bp["agent402-client"]?.payers === 1 && (bp.unknown?.sales || 0) === unknownBefore, `the mirror groups by path (${JSON.stringify({ mcp: bp.mcp, client: bp["agent402-client"] })})`);
+    {
+      const f = new Database(FILE, { readonly: true });
+      const r = f.prepare("SELECT via FROM sales WHERE tx = ?").get("0xviaclient");
+      f.close();
+      ok(r?.via === "agent402-client/0.8.21", "write-through: the file row carries the path");
+    }
+    const src = `
+      const sl = await import(${JSON.stringify(join(ROOT, "src/sales-ledger.js"))});
+      const sdb = await import(${JSON.stringify(join(ROOT, "src/state-db.js"))});
+      await sl.salesLedgerReady();
+      console.log(JSON.stringify(sl.salesByPath({ days: 30 })));
+      await sdb.closeStateDb(); process.exit(0);
+    `;
+    const fresh = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], { env: { ...process.env, SALES_LEDGER_DB: join(DIR, "absent2", "agent402-sales.db") }, cwd: ROOT, encoding: "utf8" }));
+    // (this process's mirror still holds a row the test deleted from the table; the table is the reference)
+    const nullRows = (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE via IS NULL AND internal = 0 AND rail IN ('usdc','marketplace','card','credits') AND ts >= $1`, [Date.now() - 30 * 86_400_000]))[0].n;
+    ok(fresh.mcp?.sales === 1 && fresh["agent402-client"]?.sales === 1 && fresh.unknown?.sales === nullRows, `a fresh process reads the paths from the table, NULL as "unknown" (${JSON.stringify({ mcp: fresh.mcp?.sales, client: fresh["agent402-client"]?.sales, unknown: fresh.unknown?.sales, nullRows })})`);
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

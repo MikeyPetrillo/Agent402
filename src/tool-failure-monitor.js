@@ -65,6 +65,7 @@
 import { randomUUID } from "node:crypto";
 import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { salePathGroup } from "./sale-path.js";
 
 export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
@@ -79,6 +80,7 @@ export const REPLAY_KINDS = ["implicit", "keyed"];
 export { ANSWER_CLASSES };
 const LAST_ANSWERS_PER_SLUG = 5;
 const MAX_SLUGS = 2_000;
+const MAX_PATHS = 64;
 const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
 const REMOTE_MAX_AGE_MS = 30_000;
@@ -201,6 +203,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const refusals = [];          // { at, network, facilitator, reason }
   const replays = new Map();    // slug -> Map(bucket -> [implicit, keyed])
   const buyerRefusals = new Map(); // bucket -> count (no slug, no key)
+  const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [] })
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
   const hosts = [];             // [matcher(host) -> bool, name, perFetch]
   let remote = { at: 0, snapshots: [], ok: false, merged: null };
@@ -230,7 +233,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     } catch { return false; }
   }
 
-  function noteTool(slug, status, { synthetic = false, shed = false, at = now() } = {}) {
+  function noteTool(slug, status, { synthetic = false, shed = false, at = now(), path = null } = {}) {
     const s = String(slug || "");
     if (!s) return null;
     let m = tools.get(s);
@@ -240,6 +243,18 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     if (!row) { row = { o: emptyTool(), s: emptyTool() }; m.set(b, row); prune(m, at); }
     const klass = toolClassOf(status, { shed });
     row[synthetic ? "s" : "o"][TOOL_CLASSES.indexOf(klass)]++;
+    // The same outcome by arrival path (operator detail only): the group, so
+    // client versions share one row.
+    if (path) {
+      const g = salePathGroup(path);
+      let pm = paths.get(g);
+      if (!pm && paths.size < MAX_PATHS) { pm = new Map(); paths.set(g, pm); }
+      if (pm) {
+        let pr = pm.get(b);
+        if (!pr) { pr = { o: emptyTool(), s: emptyTool() }; pm.set(b, pr); prune(pm, at); }
+        pr[synthetic ? "s" : "o"][TOOL_CLASSES.indexOf(klass)]++;
+      }
+    }
     return klass;
   }
 
@@ -361,6 +376,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       refusals: refusals.filter((r) => r.at > t - DAY_MS),
       gas: relayerGas.filter((r) => r.at > t - DAY_MS),
       replays: pack(replays),
+      paths: pack(paths),
       buyerRefusals: Object.fromEntries([...buyerRefusals].filter(([b]) => b > floor)),
     };
   }
@@ -392,8 +408,15 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     const gasM = {}; // newest reading per (network, facilitator, signer)
-    const repM = {}, brM = {};
+    const repM = {}, brM = {}, pathM = {};
     for (const s of all) {
+      for (const [g, rows] of Object.entries(s.paths || {})) {
+        const dst = (pathM[g] ||= {});
+        for (const [b, row] of Object.entries(rows)) {
+          const d = (dst[b] ||= { o: emptyTool(), s: emptyTool() });
+          add(d.o, row.o); add(d.s, row.s);
+        }
+      }
       for (const [slug, rows] of Object.entries(s.replays || {})) {
         const dst = (repM[slug] ||= {});
         for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyReplay()), row);
@@ -430,7 +453,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -547,6 +570,17 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       for (const k of REPLAY_KINDS) { replayTotals.hour[k] += named(REPLAY_KINDS, h)[k]; replayTotals.day[k] += named(REPLAY_KINDS, d)[k]; }
     }
     replayRows.sort((a, b) => (b.day.implicit + b.day.keyed) - (a.day.implicit + a.day.keyed) || a.slug.localeCompare(b.slug));
+    // Catalog outcomes by arrival path (detail only, never a word).
+    const byPath = {};
+    for (const [g, rows] of Object.entries(m.paths || {})) {
+      const h = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, hourFloor);
+      const d = sumWindow(rows, ["o", "s"], TOOL_CLASSES.length, dayFloor);
+      const ho = named(TOOL_CLASSES, h.o), dO = named(TOOL_CLASSES, d.o);
+      byPath[g] = {
+        hour: { outside: ho, synthetic: named(TOOL_CLASSES, h.s), outsideErrors: ho.fail + ho.timeout },
+        day: { outside: dO, synthetic: named(TOOL_CLASSES, d.s), outsideErrors: dO.fail + dO.timeout },
+      };
+    }
     const rank = { failing: 0, degraded: 1, ok: 2 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
@@ -554,7 +588,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
-      replays: replayRows, replayTotals,
+      replays: replayRows, replayTotals, byPath,
       thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
       answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
@@ -643,7 +677,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   return {
     id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 

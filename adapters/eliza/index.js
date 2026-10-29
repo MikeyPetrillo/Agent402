@@ -9,6 +9,9 @@
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
+// Keep in lockstep with package.json: the User-Agent product token that names
+// this package on every call it sends.
+const USER_AGENT = "elizaos-plugin-agent402/0.2.10";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -102,7 +105,7 @@ async function clientFor(runtime, fetchImpl = globalThis.fetch) {
   const prev = clients.get(key);
   if (prev?.sig === sig) return prev.client;
   const paying = creditsKey ? null : await x402FromKey(walletKey, fetchImpl);
-  const client = new Agent402({ baseUrl, fetchImpl, fetch: paying?.payFetch, x402Client: paying?.client, creditsKey: creditsKey || null, maxPerCallUsd, dailyLimitUsd });
+  const client = new Agent402({ userAgent: USER_AGENT, baseUrl, fetchImpl, fetch: paying?.payFetch, x402Client: paying?.client, creditsKey: creditsKey || null, maxPerCallUsd, dailyLimitUsd });
   // The ledger outlives the client: what was spent under the old settings was
   // still spent. (The client keeps it as a plain array; sharing the array is
   // the whole mechanism.)

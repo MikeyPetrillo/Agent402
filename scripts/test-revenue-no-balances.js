@@ -5,7 +5,8 @@
 // handlers are mounted here exactly as server.js mounts them, on port 0.
 import { readFileSync } from "node:fs";
 import express from "express";
-import { revenueApiHandlers, publicRevenueSnapshot, lastGoodSnapshot, revenuePage } from "../src/revenue-live.js";
+import { revenueApiHandlers, publicRevenueSnapshot, lastGoodSnapshot, revenuePage, revenueCadenceFields, REVENUE_API_MAX_AGE_S } from "../src/revenue-live.js";
+import { REVENUE_SNAPSHOT_TTL_MS } from "../src/refresh-cadence.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -48,6 +49,11 @@ try {
   ok(pub.allTime?.allTimeInboundCount === 5 && pub.sales?.count === 1, "the ledger counts still ride the public body");
   ok(/not published/.test(pub.note) && !/totalUsd/.test(pub.note), "the note says balances are not published");
   ok(/public/.test(pubRes.headers.get("cache-control") || ""), "the public body stays cacheable");
+  // cacheSeconds is the max-age actually sent; the scan's own cadence is separate.
+  const maxAge = Number((/max-age=(\d+)/.exec(pubRes.headers.get("cache-control") || "") || [])[1]);
+  ok(pub.cacheSeconds === maxAge && maxAge === REVENUE_API_MAX_AGE_S, `cacheSeconds equals the HTTP max-age sent (${pub.cacheSeconds} vs ${maxAge})`);
+  ok(pub.refreshesEverySeconds === REVENUE_SNAPSHOT_TTL_MS / 1000 && pub.refreshesEverySeconds > pub.cacheSeconds, `refreshesEverySeconds states the scan cadence (${pub.refreshesEverySeconds})`);
+  ok(Date.parse(pub.nextRefreshAt) >= Date.now() - 5000, `a snapshot past its cadence reports its refresh as due now (${pub.nextRefreshAt})`);
 
   const anon = await fetch(`${base}/__operator/revenue.json`);
   ok(anon.status === 404, "the operator view answers 404 without the operator credential");
@@ -60,6 +66,16 @@ try {
   ok(/no-store/.test(opRes.headers.get("cache-control") || ""), "the operator view is never cached");
 } finally {
   srv.close();
+}
+
+// nextRefreshAt is the snapshot's read time plus the scan cadence.
+{
+  const asOf = new Date(Date.now() - 60_000).toISOString();
+  const f = revenueCadenceFields({ asOf });
+  ok(f.nextRefreshAt === new Date(Date.parse(asOf) + REVENUE_SNAPSHOT_TTL_MS).toISOString(), "a fresh snapshot's next refresh is its read time plus the cadence");
+  ok(lastGoodSnapshot({ asOf, rails: [] }).cacheSeconds === REVENUE_API_MAX_AGE_S, "the saved-reading snapshot carries the same cacheSeconds");
+  const src = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
+  ok(!/cacheSeconds: (?!REVENUE_API_MAX_AGE_S)\d+,\n\s+(totalUsd|stale)/.test(src) && (src.match(/cacheSeconds: REVENUE_API_MAX_AGE_S/g) || []).length >= 2, "every snapshot builder reads cacheSeconds from the one constant");
 }
 
 // The cold path (saved reading) goes through the same filter.

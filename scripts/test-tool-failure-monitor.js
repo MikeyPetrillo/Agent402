@@ -134,6 +134,29 @@ await check("the egress meter's observer feeds the monitor (5xx, timeout, networ
   } finally { globalThis.fetch = realFetch; }
 });
 
+await check("outcomes by arrival path: grouped, merged across replicas, detail only", async () => {
+  const kv = new Map();
+  const store = {
+    async publish(id, json) { kv.set(id, json); return { ok: true }; },
+    async readAll() { return { ok: true, snapshots: [...kv].map(([id, v]) => ({ id, ...JSON.parse(v) })) }; },
+  };
+  const c = clock();
+  const a = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "pa" });
+  const b = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "pb" });
+  a.noteTool("hash", 200, { path: "mcp" }); a.noteTool("hash", 502, { path: "mcp" });
+  a.noteTool("hash", 200, { path: "agent402-client/0.8.20" });
+  b.noteTool("hash", 504, { path: "agent402-client/0.8.21" }); b.noteTool("hash", 200, { path: "http" });
+  b.noteTool("hash", 200); // no path: counted per slug only
+  await a.publish(); await b.publish();
+  c.t += 31_000;
+  const r = await a.report();
+  assert.deepEqual(Object.keys(r.byPath).sort(), ["agent402-client", "http", "mcp"], "client versions share one row");
+  assert.equal(r.byPath.mcp.hour.outside.ok, 1); assert.equal(r.byPath.mcp.hour.outsideErrors, 1);
+  assert.equal(r.byPath["agent402-client"].day.outside.ok, 1); assert.equal(r.byPath["agent402-client"].day.outsideErrors, 1, "a timeout on another replica is merged in");
+  const st = JSON.stringify(await a.status({ fresh: true, full: true }));
+  assert.ok(!/byPath|agent402-client/.test(st), "the status words carry no path");
+});
+
 await check("replica merge: each replica publishes its buckets and a read sums every replica's", async () => {
   const kv = new Map();
   const store = {

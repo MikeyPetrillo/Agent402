@@ -71,7 +71,9 @@ export const OUR_EVM_WALLETS = new Set(
   // buys are self-funded test traffic on every chain it pays from, never
   // revenue (its first Tempo MPP buy classified external for a day because
   // tempo settles carried no payer; both halves fixed the same day).
-  (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022,0x902dcf34e53695bdea2ffb354b1a2e58bd598256,0x77065d81e18ad403bcd6e9a0616b288e16744121,0x24e6a249111ae0cc8ea09f487a114f7e7ef15e12,0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0,0xaf13aa07e7360cc56b3dabf649ffef087c0cd5a6,0x130ce484c8046988ae8e2804289eaf4c7c67f30d")
+  // 0x80665a36… is the operator's Circle Gateway TEST buyer: it pays our own
+  // gateway-batched route from a Gateway deposit, so its buys are internal.
+  (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022,0x902dcf34e53695bdea2ffb354b1a2e58bd598256,0x77065d81e18ad403bcd6e9a0616b288e16744121,0x24e6a249111ae0cc8ea09f487a114f7e7ef15e12,0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0,0xaf13aa07e7360cc56b3dabf649ffef087c0cd5a6,0x130ce484c8046988ae8e2804289eaf4c7c67f30d,0x80665a362793b4b67b2ec58f5dd8f0006e5560c7")
     .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
 );
 // Default = the canary's Solana burner (public address; the key lives only
@@ -621,14 +623,28 @@ export function railStatus(r) {
   return r.staleBalance ? "cached" : "live";
 }
 
+/** The HTTP max-age /api/revenue sends; `cacheSeconds` in its body is this. */
+export const REVENUE_API_MAX_AGE_S = 30;
+/**
+ * The cadence fields: `cacheSeconds` is how long the HTTP answer may be
+ * reused (the max-age sent), `refreshesEverySeconds` how often the rail scan
+ * behind it runs, and `nextRefreshAt` when this snapshot's scan is due (now
+ * when it is already due: a read past it starts the scan in the background).
+ */
+export function revenueCadenceFields(snap, now = Date.now()) {
+  const at = Date.parse(snap?.asOf || "");
+  const due = Number.isFinite(at) ? Math.max(at + REVENUE_SNAPSHOT_TTL_MS, now) : null;
+  return { cacheSeconds: REVENUE_API_MAX_AGE_S, refreshesEverySeconds: Math.round(REVENUE_SNAPSHOT_TTL_MS / 1000), nextRefreshAt: due == null ? null : new Date(due).toISOString() };
+}
+
 /** The operator view: the full snapshot, balances and totalUsd included. */
 export function operatorRevenueBody(snap, ledger = {}) {
-  return { ...snap, ...ledger, operatorView: true };
+  return { ...snap, ...revenueCadenceFields(snap), ...ledger, operatorView: true };
 }
 
 /** The public view: publicRevenueSnapshot plus the ledger totals. */
 export function publicRevenueBody(snap, ledger = {}) {
-  return { ...publicRevenueSnapshot(snap), ...ledger };
+  return { ...publicRevenueSnapshot(snap), ...revenueCadenceFields(snap), ...ledger };
 }
 
 /**
@@ -643,7 +659,7 @@ export function revenueApiHandlers({ snapshot, ledger, authed }) {
     publicHandler: async (_req, res) => {
       try {
         const body = publicRevenueBody(await snapshot(), await ledger());
-        res.set("Cache-Control", "public, max-age=30").json(body);
+        res.set("Cache-Control", `public, max-age=${REVENUE_API_MAX_AGE_S}`).json(body);
       } catch (e) { fail(res, e); }
     },
     operatorHandler: async (req, res) => {
@@ -1652,7 +1668,7 @@ export function lastGoodSnapshot(lg) {
     spec: "agent402-revenue/1",
     asOf: lg.asOf || null,
     stale: true,
-    cacheSeconds: 30,
+    cacheSeconds: REVENUE_API_MAX_AGE_S,
     totalUsd: Number(totalUsd.toFixed(6)),
     windowExternalUsd: null,
     maxCallUsd: MAX_CALL_USD,
@@ -1733,7 +1749,7 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
   cached = {
     spec: "agent402-revenue/1",
     asOf: new Date().toISOString(),
-    cacheSeconds: 60,
+    cacheSeconds: REVENUE_API_MAX_AGE_S,
     totalUsd: Number(totalUsd.toFixed(6)),
     windowExternalUsd: Number(windowExternalUsd.toFixed(6)),
     maxCallUsd: MAX_CALL_USD,

@@ -30,8 +30,13 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.20";
+const VERSION = "0.8.21";
 const USER_AGENT = `agent402-client/${VERSION}`;
+// A package built on this SDK (an adapter) names itself first: its own
+// product token, then this one. Anything that is not one well-formed token
+// is ignored and the SDK's own token is sent alone.
+const PRODUCT_TOKEN_RE = /^[A-Za-z0-9.-]{1,40}\/[A-Za-z0-9.-]{1,20}$/;
+const userAgentOf = (product) => (typeof product === "string" && PRODUCT_TOKEN_RE.test(product) ? `${product} ${USER_AGENT}` : USER_AGENT);
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
 // caller, while still stopping the class it exists for. A ceiling that is off
@@ -120,6 +125,8 @@ export class Agent402 {
    * @param {typeof fetch} [opts.fetch]      an x402-wrapped fetch for wallet-only tools (optional)
    * @param {boolean} [opts.cache=true]      cache results in memory (deterministic tools)
    * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch through distrustFetch)
+   * @param {string} [opts.userAgent]        a calling package's own product token ("name/version"),
+   *                                         sent before agent402-client's in the User-Agent
    * @param {boolean} [opts.tlsDistrust=true] send the default fetch through distrustFetch (refuses a TLS
    *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
@@ -156,7 +163,8 @@ export class Agent402 {
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
-    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null } = {}) {
+    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null } = {}) {
+    this.userAgent = userAgentOf(userAgent);
     this.respondAsync = respondAsync;
     this.gateway = normalizeGateway(gateway);
     this.asyncTimeoutMs = numOrNull(asyncTimeoutMs) ?? DEFAULT_ASYNC_TIMEOUT_MS;
@@ -171,7 +179,7 @@ export class Agent402 {
     this.payFetch = payFetch || null;
     // Wrap the plain fetch so every request identifies the SDK (see USER_AGENT
     // above). Caller-supplied init.headers still win on a key collision.
-    this.f = (url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": USER_AGENT, ...(init.headers || {}) } });
+    this.f = (url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": this.userAgent, ...(init.headers || {}) } });
     this._catalog = null;
     // The wait between shed-503 retries of a discovery read (tests replace it).
     this._sleep = sleepMs;
@@ -511,7 +519,7 @@ export class Agent402 {
     const send = async (extraHeaders = {}, useFetch = this.f, { paid = false } = {}) => {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
-      const headers = { "User-Agent": USER_AGENT, "Idempotency-Key": idem, ...extraHeaders };
+      const headers = { "User-Agent": this.userAgent, "Idempotency-Key": idem, ...extraHeaders };
       let url = `${this.baseUrl}${tool.path}`;
       // A request that can carry a payment never follows a redirect: followed,
       // it would answer a 402 from another origin with a signature to that

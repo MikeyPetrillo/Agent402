@@ -19,6 +19,9 @@
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
+// Keep in lockstep with package.json: the User-Agent product token that names
+// this package on every call it sends.
+const USER_AGENT = "agent402-llamaindex/0.1.13";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -74,7 +77,7 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
  */
 export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = true, fetch: payFetch } = {}) {
   const llama = await loadLlamaIndex();
-  const client = new Agent402({ baseUrl, fetch: payFetch });
+  const client = new Agent402({ userAgent: USER_AGENT, baseUrl, fetch: payFetch });
   // Bounded discovery fetch: caller picks baseUrl, so cap the wait. Node ≥18
   // exposes AbortSignal.timeout() (declared in package.json engines).
   const r = await discoveryFetch(globalThis.fetch, `Could not load ${baseUrl}/openapi.json`, `${baseUrl}/openapi.json`, () => ({ signal: AbortSignal.timeout(15000) }));
@@ -145,7 +148,7 @@ function makeExecute(client, meta) {
  * Returns an `execute(name, args)` that calls Agent402 with PoW or x402 payment.
  */
 export function agent402Execute({ baseUrl = DEFAULT_BASE, fetch: payFetch } = {}) {
-  const client = new Agent402({ baseUrl, fetch: payFetch });
+  const client = new Agent402({ userAgent: USER_AGENT, baseUrl, fetch: payFetch });
   return async function execute(name, args) {
     return client.call(name, args ?? {});
   };
