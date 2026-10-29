@@ -322,9 +322,9 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(acceptUsd({ network: "eip155:8453", asset: BASE_USDC, amount: "1e6" }) === null, "an amount that is not whole base units cannot be priced");
   }
 
-  // wallet, no signing guard: an accept in an asset this client cannot price
-  // is skipped beside one it can (the priced one is the quote the cap is
-  // checked against); only an offer with nothing priceable is refused.
+  // wallet, no signing guard: the wallet may sign any accept, so an accept in
+  // an asset this client cannot price refuses the call before the wallet runs,
+  // whatever else the 402 offers; an offer priced in full pays at its dearest.
   {
     const mkOffer = (accepts) => Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64");
     const unknown = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x000000000000000000000000000000000000bEEF", payTo: "0xdead", extra: { decimals: 18 } };
@@ -338,16 +338,30 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.001" }]]);
       return { c, counters };
     };
+    const priced = (network, asset, amount) => ({ scheme: "exact", network, amount, asset, payTo: "0xdead" });
     {
-      const { c, counters } = build(mkOffer([{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, payTo: "0xdead" }, unknown]));
-      const r = await c.call("chat", {});
-      ok(r && counters.paid === 1 && counters.preflights === 1, "an unknown-asset accept beside a priced Base accept is skipped: the call is paid under the cap");
-      ok(c.spendingSummary().dailyUsd === 0.001, `the ledger books the priced accept (${c.spendingSummary().dailyUsd})`);
+      // The unknown accept listed FIRST is the one a stock x402 client picks.
+      const { c, counters } = build(mkOffer([unknown, priced("eip155:8453", BASE_USDC, "1000")]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 1, `an unknown-asset accept ahead of a priced Base accept refuses the call with no guard on the wallet (${e?.message})`);
+      ok(counters.preflights === 1 && counters.paid === 0, "refused on the preflight: the wallet fetch never ran");
+      ok(c.spendingSummary().calls === 0, "nothing was booked as spent");
     }
     {
-      const { c, counters } = build(mkOffer([{ scheme: "exact", network: "eip155:8453", amount: "5000000", asset: BASE_USDC, payTo: "0xdead" }, unknown]));
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "1000"), unknown]));
       let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
-      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && counters.paid === 0, `the cap is still checked against the priced accept ($5 over $0.1: ${e?.limit})`);
+      ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && counters.paid === 0, "the order does not matter: an unknown-asset accept behind the priced one refuses too");
+    }
+    {
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "1000"), priced("eip155:137", POLYGON_USDC, "2000")]));
+      const r = await c.call("chat", {});
+      ok(r && counters.paid === 1 && counters.preflights === 1, "an offer priced in full is paid under the cap");
+      ok(c.spendingSummary().dailyUsd === 0.002, `the ledger books the dearest accept, the one the wallet may sign (${c.spendingSummary().dailyUsd})`);
+    }
+    {
+      const { c, counters } = build(mkOffer([priced("eip155:8453", BASE_USDC, "5000000"), priced("eip155:137", POLYGON_USDC, "1000")]));
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && counters.paid === 0, `the cap is checked against the dearest priced accept ($5 over $0.1: ${e?.limit})`);
     }
     {
       const { c, counters } = build(mkOffer([unknown, { ...unknown, network: "eip155:999" }]));
@@ -455,11 +469,36 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", "5000000 base units of USDC declared as 18 decimals is still $5, and is refused");
   }
   // An unknown asset is never signed under the guard.
+  const odd = [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1", extra: { name: "Odd", version: "1", decimals: 18 } }];
   {
-    const odd = [{ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1", extra: { name: "Odd", version: "1", decimals: 18 } }];
     const { c, seen } = build({ preflight: cheap, paid: odd, maxPerCallUsd: 0.1 });
     let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
     ok(seen.signed.length === 0 && e?.name === "SpendingLimitError", `an accept in an unknown asset is not signed (${e?.message})`);
+  }
+  // An unknown asset listed FIRST beside a priced accept. Control: with no cap
+  // and no guard the stock client signs the first accept its scheme serves,
+  // the unknown one, for an amount this client never priced.
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].amount === "1", "control: a stock x402 client signs the unknown-asset accept when it is listed first");
+  }
+  // So a capped wallet with no guard is refused before its fetch runs ...
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false, maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(e?.name === "SpendingLimitError" && e.limit === "knownAsset" && e.unknownOptions === 1, `without the guard, a priced accept behind an unknown one does not make the 402 payable (${e?.message})`);
+    ok(seen.preflights === 1 && seen.unpaid === 0 && seen.signed.length === 0, "refused on the preflight: the wallet fetch never ran and nothing was signed");
+  }
+  // ... and the same 402 under the guard pays the accept that can be priced.
+  {
+    const oddFirst = [...odd, ...cheap];
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, maxPerCallUsd: 0.1 });
+    await c.call("chat", {});
+    ok(seen.signed.length === 1 && seen.signed[0].network === "eip155:8453" && seen.signed[0].amount === "10000", "with the guard, the unknown-asset accept is dropped and the priced one is signed");
+    ok(c.spendingSummary().dailyUsd === 0.01, `the ledger books the signed amount (${c.spendingSummary().dailyUsd})`);
   }
   // The rolling cap is checked at signing against what is left.
   {
