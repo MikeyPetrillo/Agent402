@@ -9,6 +9,8 @@
 // All money outputs round to 2 decimals; rates round to 6 decimals (basis
 // points are 4 decimals, and we keep 2 extra for downstream chaining).
 
+import { round4 } from "./stats-kit.js";
+
 function bad(message) {
   const err = new Error(message);
   err.statusCode = 400;
@@ -58,11 +60,7 @@ function round6(n) {
   return Math.round(n * 1_000_000) / 1_000_000;
 }
 
-// Prices/greeks round to 4 decimals.
-function round4(n) {
-  if (!Number.isFinite(n)) return n;
-  return Math.round(n * 10_000) / 10_000;
-}
+// Prices/greeks round to 4 decimals (round4, from stats-kit.js).
 
 // Standard normal PDF/CDF. erf via Abramowitz & Stegun 7.1.26 (~1e-7 accuracy) —
 // enough to price options to the cent and match standard references.

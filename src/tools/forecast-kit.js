@@ -17,6 +17,8 @@
 // series with heavy-tailed residuals (financial returns, count data),
 // treat the intervals as indicative not exact.
 
+import { round4, mean, stddev } from "./stats-kit.js";
+
 function bad(message) {
   const err = new Error(message);
   err.statusCode = 400;
@@ -34,27 +36,6 @@ function toNumbers(value, field) {
     out[i] = n;
   }
   return out;
-}
-
-function round4(n) {
-  if (!Number.isFinite(n)) return n;
-  return Math.round(n * 10000) / 10000;
-}
-
-function mean(arr) {
-  let s = 0;
-  for (const v of arr) s += v;
-  return s / arr.length;
-}
-
-function stddev(arr, mu) {
-  if (arr.length < 2) return 0;
-  let s = 0;
-  for (const v of arr) {
-    const d = v - mu;
-    s += d * d;
-  }
-  return Math.sqrt(s / (arr.length - 1));
 }
 
 const Z95 = 1.96;

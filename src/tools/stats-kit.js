@@ -32,7 +32,7 @@ function toNumbers(value, field) {
 // 4-decimal rounding for "human-readable" stats outputs. Internal math uses
 // full precision; rounding happens once at the boundary so we don't compound
 // floating-point error across operations.
-function round4(n) {
+export function round4(n) {
   if (!Number.isFinite(n)) return n;
   return Math.round(n * 10000) / 10000;
 }
@@ -51,7 +51,7 @@ function quantile(sortedAsc, q) {
   return sortedAsc[lo] + (sortedAsc[hi] - sortedAsc[lo]) * (pos - lo);
 }
 
-function mean(arr) {
+export function mean(arr) {
   let s = 0;
   for (const v of arr) s += v;
   return s / arr.length;
@@ -60,7 +60,7 @@ function mean(arr) {
 // Sample standard deviation (Bessel-corrected, divide by n-1). Matches
 // Excel's STDEV.S, Python's statistics.stdev, and what agents almost always
 // want when they say "standard deviation" without specifying.
-function stddev(arr, mu) {
+export function stddev(arr, mu) {
   if (arr.length < 2) return 0;
   let s = 0;
   for (const v of arr) {
