@@ -343,6 +343,28 @@ ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that 
   cutoffs.length = 0;
 }
 
+// A throw inside the completion path itself (after the run answered: reading
+// its headers, booking it, writing the record) ends the task FAILED with a
+// short reason, never a handle that polls "working" until its TTL, and the
+// fault stays out of the buyer-visible text.
+{
+  let reads = 0;
+  const brokenHeaders = { get: () => { if (++reads > 1) throw new Error("header store broke: internal detail"); return null; } };
+  plan = { research: { delayMs: TASK_GATE_MS_TEST * 2, res: { status: 200, headers: brokenHeaders, contentType: "application/json", json: { report: "fine" } } } };
+  cutoffs.length = 0;
+  const broke = await callComposite("research");
+  ok(broke.result?.resultType === "task", "the run that will break the completion path is handed back as a task first");
+  await sleep(TASK_GATE_MS_TEST * 2 + 300);
+  const brokeRec = await rpc("tasks/get", { taskId: broke.result.taskId, _meta: CLIENT_CAPS });
+  ok(reads > 1, "the completion path threw after the answer was translated (test harness sanity)");
+  ok(brokeRec.result?.status === "failed", `a throw inside the completion path ends the task failed, not working (${brokeRec.result?.status})`);
+  const brokeMsg = String(brokeRec.result?.statusMessage || "");
+  ok(/could not be recorded/.test(brokeMsg) && /may still have completed and been charged/.test(brokeMsg) && !/header store broke|internal detail/.test(brokeMsg), `the reason is short and carries the money story, never the fault's own text (${brokeMsg.slice(0, 100)})`);
+  ok(cutoffs.length === 0, "the run answered, so it is not booked as a connector cut-off");
+  await sleep(200);
+  ok((await rpc("tasks/get", { taskId: broke.result.taskId, _meta: CLIENT_CAPS })).result?.status === "failed", "...and the record stays failed");
+}
+
 // A fast success inside the gate window is answered synchronously, unchanged.
 plan = { research: { delayMs: 0, res: jsonRes(200, { quick: true }) } };
 const beforeFast = readdirSync(STORE_DIR).length;

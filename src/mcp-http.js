@@ -928,7 +928,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const mppReceipt = receiptFromHeader(r.headers?.get?.("payment-receipt"));
         const settle = settleReceiptFromHeader(r.headers?.get?.("payment-response")) || tempoSettleProof(mppReceipt, credentialHeader);
         await tasks.complete(rec.taskId, out, { receipt: settle || mppReceipt, priceUsd: taskPaidUsd(entry.def, credentialHeader, settle) });
-      }).catch(() => { /* settled never rejects; belt and braces */ });
+      }).catch(async (err) => {
+        // `settled` never rejects, so this is a throw inside the completion
+        // path itself (reading the answer, booking it, writing the record).
+        // Left alone it would leave the task "working" until its TTL; it ends
+        // failed, with the fault logged here and kept out of the buyer's text.
+        endProgress();
+        console.error(`[mcp-tasks] completion path threw for ${rec.taskId} (${entry.def.slug}): ${String(err?.message || err).slice(0, 200)}`);
+        try {
+          await tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: "The connector could not record the run's result." }, `The run's result could not be recorded by this connector. ${PAID_CUTOFF_TEXT}`);
+        } catch { /* a terminal record is never rewritten */ }
+      });
 
       return createTaskResult(rec);
     }
