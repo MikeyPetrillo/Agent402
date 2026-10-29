@@ -2,6 +2,19 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-10-30",
+    title: "The metered gateway leads, speech quoted from the text, each sale's arrival path",
+    items: [
+      "Surfaces: the metered gateway (/v1/metered/chat/completions and its Messages and Responses twins) is the default way to call a model on /llms.txt, the openapi guidance, SKILL.md, the connector's server.describe and payment.info, the home page, the FAQ, the x402 guide, the README and the wiki: the 402 quotes the request from its body (the input estimated from its tokens with headroom, plus max_tokens), and on x402, Tempo and credits settlement never exceeds that quote; a card payment adds the processor fee. The flat tiers stay as the predictable-price option, and a flat chat tier's unpaid 402 names its metered twin in meteredTwin.",
+      "Surfaces: a retired route's 410 carries a Sunset header with its retirement date and, when a replacement is live, a Link header with rel=\"successor-version\" naming it; the retired pairwise converters name /api/unit-convert. The JSON body is unchanged.",
+      "Surfaces: /api/revenue's cacheSeconds is the HTTP max-age it sends; refreshesEverySeconds and nextRefreshAt state the cadence of the rail scan behind it. The privacy page (dated 2026-10-30) says the sales ledger keeps how a paid call arrived.",
+      "Speech: /api/tts and /api/tts-hd are quoted per request from the length of the text, a floor plus a per-character rate rounded up to the next $0.001, so 2,000 characters costs what the flat price did; the cap stays 2,000 characters on both. The 402, Tempo and credits all read the quote, and /api/pricing, /openapi.json, the tool pages and /llms.txt publish the range and the formula. /api/dub keeps its cap and price; /api/tts-lite stays flat.",
+      "Speech: /api/tts and /api/tts-hd are called directly; route-execute refuses routes quoted per request, so the 402 carries the real price.",
+      "Packages: agent402-client 0.8.21 takes a userAgent option (a calling package's own product token, sent before the client's). agent402-mcp 0.13.23, agent402-agentkit 0.1.10, agent402-ai-sdk 0.2.12, agent402-anthropic-tools 0.1.13, elizaos-plugin-agent402 0.2.10, agent402-google-adk 0.1.12, agent402-langchain 0.2.12, agent402-llamaindex 0.1.13, agent402-openai-agents 0.1.13, agent402-openai-tools 0.1.13, agent402-strands 0.1.13 and agent402-langchain 0.1.6 on PyPI name themselves in the User-Agent of every request.",
+      "Operations: each sale records the path it arrived on (the hosted connector's loopback, one of our client packages by its User-Agent product token, or HTTP; earlier rows read unknown). The operator sales and tool-failure views group by that path, and an operator cohort view lists wallets past a per-day distinct-tool or per-hour call threshold beside a daily series without them. Public figures are unchanged. An operator test wallet that pays the Gateway batched route is booked as our own traffic.",
+    ],
+  },
+  {
     date: "2026-10-29",
     title: "Lost answers booked at the paid price, budgets fitted under the cap, Algorand by its CAIP-2 id",
     items: [
@@ -23,8 +36,6 @@ const ENTRIES = [
       "Router: /api/route serves a seller's name, homepage, description and tags through the same listing screen as the index, and our own catalog is recognized by canonical host, a redirected manifest included.",
       "MCP connector: server.describe no longer lists the client names seen since boot; a paid call is booked once, by the route it reaches; tasks/cancel reaches a task running on another replica.",
       "MCP connector: a paid blocking call to a slow route from a client without the tasks extension is refused before any payment, with the guidance the HTTP route gives; the free-tier limit copy says the figure is shared across replicas.",
-      "Surfaces: the metered gateway (/v1/metered/chat/completions and its Messages and Responses twins) is the default way to call a model on /llms.txt, the openapi guidance, SKILL.md, the connector's server.describe and payment.info, the home page, the FAQ, the x402 guide, the README and the wiki: the 402 quotes the request from its body and settlement never exceeds that quote. The flat tiers stay as the predictable-price option, and a flat chat tier's unpaid 402 names its metered twin in meteredTwin.",
-      "Surfaces: a retired route's 410 carries a Sunset header with its retirement date and, when a replacement is live, a Link header with rel=\"successor-version\" naming it; the retired pairwise converters name /api/unit-convert. The JSON body is unchanged.",
       "Surfaces: each chain's settlement premium is published as payment.premiumUsdByNetwork on /api/pricing, in /llms.txt, in the openapi guidance and on the connector's payment.info, beside the per-chain floors.",
       "Surfaces: Algorand mainnet is offered under its 32-character CAIP-2 id; a payment naming the older full-hash id still settles. agent402-client 0.8.20, agent402-mcp 0.13.22 and agent402-openclaw 0.5.7 read both spellings; the earlier client matches only the old id. agent402-mcp 0.13.22, elizaos-plugin-agent402 0.2.9 and agent402-agentkit 0.1.9 describe a credits key as sold or already issued, and the mcp package shows a buy link only while the service's /api/pricing says credits are on sale.",
       "Surfaces: /health answers cross-origin requests, and a cdnOrigin word on /api/gateway-status reports whether a CDN-range peer reached the origin without its edge secret.",
@@ -34,10 +45,6 @@ const ENTRIES = [
       "Surfaces: the privacy page carries a rights section for readers in the EU and the UK, and its backups wording names the state database.",
       "Operations: the operator view of a public surface reads X-Operator-Token only; an Authorization header there is a buyer's credential. An operator session is known on every operator route across containers.",
       "Operations: the nightly backup runs once a night across replicas; deploy and probe steps that run package code see no job secret; @hono/node-server 2.1.3 in the root and mcp overrides; the agentkit-live lockfile installs again.",
-      "Speech: /api/tts and /api/tts-hd are quoted per request from the length of the text, a floor plus a per-character rate rounded up to the next $0.001, so 2,000 characters costs what the flat price did; the cap stays 2,000 characters on both. The 402, Tempo, card and credits all read the quote, and /api/pricing, /openapi.json, the tool pages and /llms.txt publish the range and the formula. /api/dub keeps its cap and price; /api/tts-lite stays flat.",
-      "Surfaces: /api/revenue's cacheSeconds is the HTTP max-age it sends; refreshesEverySeconds and nextRefreshAt state the cadence of the rail scan behind it. The privacy page says the sales ledger keeps how a paid call arrived.",
-      "Packages: agent402-client 0.8.21 takes a userAgent option (a calling package's own product token, sent before the client's). agent402-mcp 0.13.23, agent402-agentkit 0.1.10, agent402-ai-sdk 0.2.12, agent402-anthropic-tools 0.1.13, elizaos-plugin-agent402 0.2.10, agent402-google-adk 0.1.12, agent402-langchain 0.2.12, agent402-llamaindex 0.1.13, agent402-openai-agents 0.1.13, agent402-openai-tools 0.1.13, agent402-strands 0.1.13 and agent402-langchain 0.1.6 on PyPI name themselves in the User-Agent of every request.",
-      "Operations: each sale records the path it arrived on (the hosted connector's loopback, one of our client packages by its User-Agent product token, or HTTP; earlier rows read unknown). The operator sales and tool-failure views group by that path, and an operator cohort view lists wallets past a per-day distinct-tool or per-hour call threshold beside a daily series without them. Public figures are unchanged. An operator test wallet that pays the Gateway batched route is booked as our own traffic.",
     ],
   },
   {
