@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-10-29 (transactions page updates itself)
+Surfaces:
+- An open /revenue page reads its figures again every minute while the tab
+  is visible: the headline, the rail and MPP tables and the chart, for the
+  same date range (a preset range moves with the day). A failed read keeps
+  what is shown.
+
 ### 2026-10-29 (metered default, speech quotes, sale paths)
 Surfaces:
 - The metered gateway (/v1/metered/chat/completions and its Messages and

@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-10-29",
+    title: "The transactions page updates itself",
+    items: [
+      "Surfaces: an open /revenue page reads its figures again every minute while the tab is visible: the headline, the rail and MPP tables and the chart, for the same date range (a preset range moves with the day). A failed read keeps what is shown.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "The metered gateway leads, speech quoted from the text, each sale's arrival path",
     items: [
       "Surfaces: the metered gateway (/v1/metered/chat/completions and its Messages and Responses twins) is the default way to call a model on /llms.txt, the openapi guidance, SKILL.md, the connector's server.describe and payment.info, the home page, the FAQ, the x402 guide, the README and the wiki: the 402 quotes the request from its body (the input estimated from its tokens with headroom, plus max_tokens), and on x402, Tempo and credits settlement never exceeds that quote; a card payment adds the processor fee. The flat tiers stay as the predictable-price option, and a flat chat tier's unpaid 402 names its metered twin in meteredTwin.",

@@ -2117,7 +2117,7 @@ export function revenuePage(baseUrl, snap) {
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
-    <section>
+    <section data-rv-live="head">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0;">
@@ -2131,7 +2131,7 @@ export function revenuePage(baseUrl, snap) {
     <section>
     ${revenueChartSection(snap.range)}
     </section>
-    <section>
+    <section data-rv-live="rails">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
@@ -2144,10 +2144,10 @@ export function revenuePage(baseUrl, snap) {
     ${gwBatched ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">Circle Gateway batched: <strong style="color:var(--ink);">${Number(gwBatched.count).toLocaleString()}</strong> transaction${Number(gwBatched.count) === 1 ? "" : "s"}, ${Number(gwBatched.externalCount).toLocaleString()} external, ${esc(usdCell(gwBatched.externalUsd))} external. Settled off chain at Circle Gateway and withdrawn on chain separately, so they are not in the chain rows above; a withdrawal is not counted again.</p>` : ""}
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (the rail stays live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
-    <section>
+    <section data-rv-live="mpp">
     ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}
     </section>
-    <section>
+    <section data-rv-live="decide">
     ${decideSection(snap.decide)}
     </section>
     <section>

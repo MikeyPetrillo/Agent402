@@ -330,7 +330,7 @@
     // degrades to an empty lane rather than rejecting the whole set.
     function qs(){return state.win?"?from="+state.win.from+"&to="+state.win.to:""}
     var loadSeq=0;
-    function load(){var seq=++loadSeq;
+    function load(quiet){var seq=++loadSeq;
     return Promise.all([
       fetch("/api/revenue/daily"+qs()).then(function(r){return r.json()}),
       fetch("/api/calls/daily"+qs()).then(function(r){return r.json()}).catch(function(){return{days:[],recordingSince:null}}),
@@ -351,7 +351,7 @@
       state.buyersAtStart=res[0].buyersCumulativeAtStart||0;
       if(res[0].totals)showTotals(res[0].totals);
       render();buyersNote();
-    }).catch(function(){if(seq!==loadSeq)return;document.querySelector(".rvz-wrap").innerHTML='<div class="rvz-empty">series unavailable</div>'});
+    }).catch(function(){if(seq!==loadSeq||quiet)return;document.querySelector(".rvz-wrap").innerHTML='<div class="rvz-empty">series unavailable</div>'});
     }
     // Range control: preset chips are links and the custom form is a GET form,
     // so both work with no script. Here they switch the window in place and
@@ -395,4 +395,32 @@
       window.addEventListener("popstate",function(ev){var w=ev.state&&ev.state.rvzWin;if(w)go(w,false)});
     }
     load();
+    // The open page keeps itself current: every minute while the tab is
+    // visible it reads its own URL again (so the range stays), swaps in the
+    // server-rendered figures marked data-rv-live, then reloads the series.
+    // A failed read keeps what is shown; a section holding focus or a text
+    // selection is left alone; a preset range rolls over at UTC midnight.
+    var LIVE_MS=60000,lastLive=Date.now(),liveBusy=false;
+    function swapLive(html){
+      var doc=new DOMParser().parseFromString(html,"text/html"),sel=window.getSelection&&window.getSelection();
+      [].slice.call(document.querySelectorAll("[data-rv-live]")).forEach(function(el){
+        var fresh=doc.querySelector('[data-rv-live="'+el.getAttribute("data-rv-live")+'"]');
+        if(!fresh||fresh.innerHTML===el.innerHTML||el.contains(document.activeElement))return;
+        if(sel&&!sel.isCollapsed&&el.contains(sel.anchorNode))return;
+        el.innerHTML=fresh.innerHTML});
+      var nz=doc.getElementById("rvz"),w=state.win;
+      if(nz&&w&&w.preset&&nz.dataset.today&&nz.dataset.today!==w.today){
+        w.today=nz.dataset.today;if(nz.dataset.first)w.first=nz.dataset.first;state.win=presetWin(w.preset);showWin()}
+    }
+    function liveTick(){
+      if(liveBusy||document.visibilityState==="hidden")return;
+      liveBusy=true;lastLive=Date.now();
+      fetch(location.pathname+location.search,{cache:"no-store",headers:{Accept:"text/html"}})
+        .then(function(r){return r.ok?r.text():null})
+        .then(function(h){if(h)try{swapLive(h)}catch(e){}},function(){})
+        .then(function(){return load(true)})
+        .then(function(){liveBusy=false},function(){liveBusy=false});
+    }
+    setInterval(liveTick,LIVE_MS);
+    document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&Date.now()-lastLive>=LIVE_MS)liveTick()});
   })();
