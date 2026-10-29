@@ -80,8 +80,12 @@ const read = (rel) => { try { return readFileSync(join(root, rel), "utf8"); } ca
 // every chain including Robinhood's USDG, eleven carry USDC.
 const USDC_RAILS = RAILS.filter((r) => r.asset === "USDC").length;
 const ALL_RAILS = RAILS.length;
-// A sentence about charging names the rail it holds on, or the push exception.
-const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP\b|\bpush\b|\bowed\b|\bproof-of-work\b|\bPoW\b|\bunpaid\b/i;
+// A sentence about charging names the rail it holds on (x402, MPP evm, card,
+// credits), or the push exception. A bare "MPP" is not a rail: MPP carries
+// the Tempo push method the claim is false for. "Owed" beside the claim is
+// not the exception either, and a free tier (proof-of-work) says nothing
+// about what a paid rail charges.
+const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP evm\b|\bpush\b|\bunpaid\b/i;
 // Copy surfaces: every tracked text file outside src, every markdown file,
 // and the src modules that render pages or documents rather than answer a
 // paid request (their names say so). Pinned below against the known ones.
@@ -379,6 +383,10 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "- **Failures are not charged.** Any 4xx/5xx - no match, over-cap, seller down - cancels your settlement."],
                        ["<control>", "Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged."],
                        ["<control>", "The decision could not be made. Nothing was charged."],
+                       ["<control>", "A run where no step succeeds is not charged over MPP."],
+                       ["<control>", "A 4xx is never charged, nothing owed."],
+                       ["<control>", "Any failed call is not charged (we accept proof-of-work)."],
+                       ["<control>", "If the seller does not answer, nothing is charged."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -393,8 +401,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 26;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 20 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 33;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 24 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
