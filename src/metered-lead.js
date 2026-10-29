@@ -5,12 +5,15 @@
 // reads this module, so the wording and the figures cannot drift apart.
 // Prices and the default model are read from the tier table, never typed.
 import { TIERS, tierPriceLabel, isFlatTier } from "./tools/llm-gateway-kit.js";
+import { MESSAGES_PATH_BY_TIER } from "./tools/llm-messages-kit.js";
+import { RESPONSES_PATH_BY_TIER } from "./tools/llm-responses-kit.js";
+import { GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js";
 
 /** The metered route on each wire, the OpenAI chat wire first. */
 export const METERED_WIRES = Object.freeze([
-  Object.freeze({ slug: "v1-chat-metered", path: "/v1/metered/chat/completions", wire: "OpenAI chat" }),
-  Object.freeze({ slug: "v1-chat-metered-messages", path: "/v1/metered/messages", wire: "Anthropic Messages" }),
-  Object.freeze({ slug: "v1-chat-metered-responses", path: "/v1/metered/responses", wire: "OpenAI Responses" }),
+  Object.freeze({ slug: "v1-chat-metered", path: TIERS["v1-chat-metered"].route.split(" ")[1], wire: "OpenAI chat" }),
+  Object.freeze({ slug: "v1-chat-metered-messages", path: MESSAGES_PATH_BY_TIER["v1-chat-metered"], wire: "Anthropic Messages" }),
+  Object.freeze({ slug: "v1-chat-metered-responses", path: RESPONSES_PATH_BY_TIER["v1-chat-metered"], wire: "OpenAI Responses" }),
 ]);
 
 const metered = () => TIERS["v1-chat-metered"];
@@ -38,7 +41,7 @@ export function meteredRoutesInline() {
 /** A call anyone can run: unpaid, it answers 402 with this body's quote. */
 export function meteredCurl(baseUrl) {
   return [
-    `curl -i -X POST ${baseUrl}/v1/metered/chat/completions -H 'content-type: application/json' \\`,
+    `curl -i -X POST ${baseUrl}${METERED_WIRES[0].path} -H 'content-type: application/json' \\`,
     `  -d '{"model":"${meteredDefaultModel()}","messages":[{"role":"user","content":"Summarize x402 in one line"}],"max_tokens":200}'`,
     "# unpaid: HTTP 402 quoting this body; an x402 or MPP client pays the quote and resends",
   ].join("\n");
@@ -69,4 +72,15 @@ export function meteredTwinSlug(slug) {
   const tier = wire ? s.slice(0, -wire.length) : s;
   if (!tier.startsWith("v1-chat") || !isFlatTier(tier)) return null;
   return `v1-chat-metered${wire}`;
+}
+
+const TWIN_PATHS = Object.freeze({
+  ...Object.fromEntries(METERED_WIRES.map((w) => [w.slug, w.path])),
+  "v1-chat-metered-gemini": GEMINI_PATH_BY_TIER["v1-chat-metered"],
+});
+
+/** The path of a flat chat tier's metered twin, or null. */
+export function meteredTwinPath(slug) {
+  const twin = meteredTwinSlug(slug);
+  return twin ? TWIN_PATHS[twin] || null : null;
 }

@@ -217,12 +217,29 @@ so an agent skips the token-heavy "search around to find a tool" step.
 
 ## LLM gateway (`/v1`) - chat, embeddings, rerank, images, speech & finished reports, pay per call
 
-Point any OpenAI SDK at `base_url = https://agent402.tools/v1` and pay per call in
-USDC over x402 or MPP - no API key, no signup, no account (a prepaid credits key
-also works, see [For humans](#for-humans-reports-and-monitors)):
+**Call a model: the metered route is the default.** `POST /v1/metered/chat/completions`
+(and the Anthropic Messages and OpenAI Responses twins, `/v1/metered/messages` and
+`/v1/metered/responses`) serves third-party models with no API key, no signup and no
+account, paid per call in USDC over x402 or MPP (a prepaid credits key also works, see
+[For humans](#for-humans-reports-and-monitors)). The 402 quotes this exact request from
+its own body (the input counted exactly plus your `max_tokens`, at the model's list
+price plus a fee), and settlement never exceeds that quote: an `exact` payer pays the
+quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the
+answer used.
+
+```bash
+curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
+  -d '{"model":"anthropic/claude-haiku-4.5","messages":[{"role":"user","content":"Summarize x402 in one line"}],"max_tokens":200}'
+# unpaid: HTTP 402 quoting this body; an x402 or MPP client pays the quote and resends
+```
+
+The flat tiers below stay as the predictable-price option: point any OpenAI SDK at
+`base_url = https://agent402.tools/v1` (or `/v1/nano`, `/v1/pro`, `/v1/premium`) for one
+price per call whatever the length.
 
 | Endpoint | Price | Serves |
 |---|---|---|
+| `POST /v1/metered/chat/completions` | from $0.001 | **the default** - every explicit model the flat chat tiers serve, quoted per request from the body (up to 200k chars in, 8,192 tokens out) |
 | `POST /v1/nano/chat/completions` | $0.003 | nano models - priced for high-frequency agent loops |
 | `POST /v1/auto/chat/completions` | $0.01 | **no model needed** - deterministic eval-ranked routing (code / reasoning / long / general), optional `quality: fast \| balanced \| best` at the same price, decision disclosed via `agent402_router` |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama…) |

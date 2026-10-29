@@ -73,6 +73,13 @@ MCP connector:
 - tasks/cancel reaches a task running on another replica.
 
 Surfaces:
+- The metered gateway (/v1/metered/chat/completions and its Messages and
+  Responses twins) is the default way to call a model on /llms.txt, the
+  openapi guidance, SKILL.md, the connector's server.describe and
+  payment.info, the home page, the FAQ, the x402 guide, the README and the
+  wiki: the 402 quotes the request from its body and settlement never
+  exceeds that quote. The flat tiers stay as the predictable-price option,
+  and a flat chat tier's unpaid 402 names its metered twin in meteredTwin.
 - Each chain's settlement premium is published as payment.premiumUsdByNetwork
   on /api/pricing, in /llms.txt, in the openapi guidance and on the
   connector's payment.info, beside the per-chain floors.

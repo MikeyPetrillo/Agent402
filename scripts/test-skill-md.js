@@ -46,6 +46,12 @@ const registered = new Set([
   ...[...src.matchAll(/route(?::|\s*=)\s*`(?:GET|POST) ([^`$]+)\$\{/g)].map((m) => m[1] + "*"),
 ]);
 for (const k of Object.keys(catalog)) registered.add(k.split(" ")[1]);
+// The Messages and Responses wires build their routes from per-tier path
+// tables (not a literal the scan above can read): read the tables themselves.
+for (const kit of ["llm-messages-kit.js", "llm-responses-kit.js", "llm-gemini-kit.js"]) {
+  const mod = await import(new URL(`../src/tools/${kit}`, import.meta.url));
+  for (const [k, v] of Object.entries(mod)) if (/_PATH_BY_TIER$/.test(k)) for (const p of Object.values(v)) registered.add(p);
+}
 // A referenced path is satisfied by an exact route or by being a path PREFIX
 // of one (tier prefixes like /v1/base, families like /api/skill/<slug>).
 const satisfied = (p) => {

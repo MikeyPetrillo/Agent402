@@ -2,9 +2,9 @@
 
 Part of [Agent402](https://agent402.tools), the open-source paid door for AI agents.
 
-Agent402 as an [OpenClaw](https://openclaw.ai) model provider: the auto-routed
-tier at a **flat per-call price** and explicit frontier models **priced per
-request** from the body, paid in **USDC over x402** from a wallet or with a
+Agent402 as an [OpenClaw](https://openclaw.ai) model provider: explicit models
+**priced per request** from the body by default (metered), and the auto-routed
+tier at a **flat per-call price**, paid in **USDC over x402** from a wallet or with a
 prepaid credits key (agent402.tools/credits says whether packs are on sale). The
 same key and gateway reach Agent402's 500+ pay-per-call tools; credits pay
 Agent402's own services, so the routes that buy from an outside seller
@@ -57,7 +57,9 @@ install from a packed archive and from the npm registry, doctor, setup, model
 listing, gateway boot and one agent turn (`test-real-install.js`).
 
 No OpenClaw? `agent402-openclaw proxy` runs the proxy alone; point any OpenAI
-client at `http://127.0.0.1:8412/v1` with model `auto`.
+client at `http://127.0.0.1:8412/v1`. An explicit model rides the metered route
+by default (each request quoted from its body, and settlement never exceeds the
+quote); model `auto` takes the flat routed tier.
 
 **Claude Code and other Anthropic-wire clients** (0.5.0): the proxy also answers
 `POST /v1/messages` and forwards it to the gateway's metered Messages route,

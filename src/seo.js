@@ -19,6 +19,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { mppMethodsProse } from "./mpp-offers.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
+import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -597,6 +598,15 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
 
 **How to read our 402 if you only speak one dialect.** The same response carries BOTH headers, always - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative.
 
+## Call a model (metered, the default)
+The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${meteredQuoteSentence()}
+
+\`\`\`bash
+${meteredCurl(baseUrl)}
+\`\`\`
+
+${flatTiersLine()}
+
 ## Key machine surfaces
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
@@ -675,7 +685,7 @@ export function llmsTxt(baseUrl, catalog) {
   const title = full[0];
   const summary = full.find((l) => l.startsWith("> "));
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
-  const keep = ["Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   const sections = keep.map((name) => {
     const start = full.indexOf(`## ${name}`);
     if (start < 0) return "";

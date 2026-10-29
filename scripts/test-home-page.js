@@ -135,8 +135,10 @@ const catalog = {
   const faqLdCount = (html.match(/"@type":"Question"/g) || []).length;
   const faqVisibleCount = (html.match(/<summary style=/g) || []).length;
   // 4 since 2026-08-18: the Agentic Finance (AIFI) definition leads the FAQ.
-  ok(faqLdCount === 6, `FAQPage JSON-LD carries exactly 6 questions (got ${faqLdCount})`);
-  ok(faqVisibleCount === 6, `visible FAQ prose carries exactly 6 questions, matching the schema 1:1 (got ${faqVisibleCount})`);
+  // 7 since the metered gateway became the default way to call a model.
+  ok(faqLdCount === 7, `FAQPage JSON-LD carries exactly 7 questions (got ${faqLdCount})`);
+  ok(faqVisibleCount === 7, `visible FAQ prose carries exactly 7 questions, matching the schema 1:1 (got ${faqVisibleCount})`);
+  ok(/How does an agent call a model\?[\s\S]{0,600}settlement never exceeds that quote/.test(html.replace(/<[^>]+>/g, " ")), "the model FAQ leads with the metered route and its quote");
 }
 
 // --- copy hygiene --------------------------------------------------------------
@@ -247,6 +249,8 @@ const catalog = {
   ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
   ok(!/fifteen lines|~15 lines/.test(html), "no unverifiable size claim for contributing a tool");
   ok(/href="\/tools\/v1-chat-metered"[^>]*><span>POST \/v1\/metered\/chat\/completions/.test(html), "the metered row links to the metered tier's page");
+  const rows = [...html.matchAll(/<span>((?:GET|POST) \/[^<]*)<\/span>/g)].map((m) => m[1]);
+  ok(rows[0] === "POST /v1/metered/chat/completions", `the agents table leads with the metered route (${rows[0]})`);
   const { WHY_POINTS } = await import("../src/why.js");
   const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
   ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
