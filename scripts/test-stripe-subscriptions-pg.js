@@ -166,6 +166,25 @@ try {
     const evNew = { id: "evt_race_inv", type: "invoice.paid", data: { object: { id: "in_race", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1" } } };
     const codes = await Promise.all([sendTo(cx, evNew), sendTo(cy, evNew)]);
     ok(codes.every((c) => c === 200) && x.length + y.length === 1, `one new invoice delivered to two containers at once is booked once (${codes.join(",")}; sales ${x.length}+${y.length})`);
+
+    // A dispute received on one container holds the subscription on the row;
+    // the dispute closing in our favor on the other container releases it
+    // (and reaches the hook), and the first container reads the release.
+    const closedHook = [];
+    const mkD = (hooks = {}) => createStripeSubscriptions({ stripe: { ...stripe, webhooks: Stripe.webhooks }, baseUrl: "https://example.test", storePath: STORE, ...hooks });
+    const dA = mkD(), dB = mkD({ onDisputeClosed: (pi, o) => closedHook.push({ pi, ...o }) });
+    await wait(300);
+    await Promise.all([dA.reload(), dB.reload()]);
+    await sendTo(dA, { id: "evt_d_inv", type: "invoice.paid", data: { object: { id: "in_disp", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1", payments: { data: [{ payment: { payment_intent: "pi_disp" } }] } } } });
+    await sendTo(dA, { id: "evt_d_open", type: "charge.dispute.created", data: { object: { id: "dp_pg", payment_intent: "pi_disp", amount: 900 } } });
+    ok(dA.get("sub_cs_three")?.disputed === true && dA.listDisputed().some((d) => d.subId === "sub_cs_three" && d.lastPaymentIntent === "pi_disp"), "a dispute marks the record on the container that received it");
+    await dB.reload();
+    ok(dB.get("sub_cs_three")?.disputed === true && dB.listDisputed().some((d) => d.subId === "sub_cs_three"), "the other container reads the hold after a reload");
+    await sendTo(dB, { id: "evt_d_won", type: "charge.dispute.closed", data: { object: { id: "dp_pg", payment_intent: "pi_disp", status: "won" } } });
+    ok(closedHook.length === 1 && closedHook[0].pi === "pi_disp" && closedHook[0].won === true && dB.get("sub_cs_three")?.disputed === false && dB.listDisputed().length === 0, "the dispute closed in our favor on B releases the hold there and reaches the hook");
+    await dA.reload();
+    const rd = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
+    ok(dA.get("sub_cs_three")?.disputed === false && rd?.disputed === false && rd?.disputeOutcome === "won", `A reads the release after a reload; the row carries the outcome (${rd?.disputeOutcome})`);
   }
 
   // A replayed record never overwrites a newer copy.

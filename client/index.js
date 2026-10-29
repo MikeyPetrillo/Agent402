@@ -19,8 +19,8 @@
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { quoteOf, guardSigning } from "./known-assets.js";
-export { KNOWN_ASSETS, knownAsset, acceptUsd } from "./known-assets.js";
+import { quoteOf, guardSigning, networkIdsOf } from "./known-assets.js";
+export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
@@ -160,7 +160,7 @@ export class Agent402 {
     if (x402Client) this.guardX402Client(x402Client);
     // The chains a pre-wrapped fetch pays on, as CAIP-2 ids (null = unknown).
     this._payNetworks = Array.isArray(payNetworks) && payNetworks.length
-      ? new Set(payNetworks.map((n) => String(NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim()).toLowerCase()))
+      ? new Set(payNetworks.flatMap((n) => networkIdsOf(n)).map((id) => id.toLowerCase()))
       : null;
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
@@ -656,8 +656,11 @@ export class Agent402 {
    *  "guarded" (the signing guard holds every signature to the caps, so the
    *  cheapest known accept is what can be paid, and unknown ones are dropped
    *  there), "wallet" (no guard: the wallet may sign any accept, so the dearest
-   *  one counts, among the chains in `payNetworks` when they are given, and one
-   *  that cannot be priced is refused here), or "credits" (nothing is signed:
+   *  one that can be priced counts, among the chains in `payNetworks` when
+   *  they are given; an accept in an asset this client cannot price is
+   *  skipped beside one it can, and refused here only when none can be
+   *  priced, since the cap is enforced on the accept the wallet chooses when
+   *  the guard is on), or "credits" (nothing is signed:
    *  the credits gate debits the route's own quote, and no accept is below it,
    *  since a chain premium or price floor only raises an accept, so the
    *  cheapest known accept counts).
@@ -682,10 +685,14 @@ export class Agent402 {
       return listUsd; /* no readable 402: the advertised price */
     }
     if (!q) return listUsd;
-    if (q.max == null || (mode === "wallet" && q.unknown > 0)) {
+    // An option in an asset this client cannot price is skipped beside one it
+    // can (a seller adding a chain this table does not know yet must not
+    // refuse every capped buyer); only an offer with nothing priceable is
+    // refused, since no cap can be checked against it.
+    if (q.max == null) {
       if (mode === "credits") return listUsd;
       throw new SpendingLimitError(
-        `refusing to pay for "${slug}" - ${q.max == null ? "no" : "a"} payment option it offers is in an asset this client cannot price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
+        `refusing to pay for "${slug}" - no payment option it offers is in an asset this client can price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`,
         { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
     }
     const quoted = mode === "wallet" ? q.max : q.min;
@@ -961,9 +968,12 @@ function resultCacheKey(slug, params, validator) {
  *   withNetworkPreference(x402client, ["robinhood"]);       // or ["eip155:4663"]
  *   const payFetch = wrapFetchWithPayment(fetch, x402client);
  *
- * Short names map to CAIP-2; unknown entries pass through verbatim so future
- * chains work without a package update. Throws (before paying) when the
- * preference matches none of a seller's payment options.
+ * A name resolves through the known-asset table to every id that chain is
+ * spelled with on the wire (./known-assets.js NETWORK_NAMES), and an id to
+ * the ids of its chain, so either spelling of a chain matches the other;
+ * unknown entries pass through verbatim so future chains work without a
+ * package update. Throws (before paying) when the preference matches none of
+ * a seller's payment options.
  */
 export const NETWORK_CAIP2 = {
   base: "eip155:8453",
@@ -983,22 +993,14 @@ export const NETWORK_CAIP2 = {
   algorand: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
 };
 
-// Algorand mainnet is also spelled as its full base64 genesis hash (44
-// characters, trailing `=`) by sellers that predate the 32-character CAIP-2
-// reference; both name the same chain, so a preference matches either.
-const ALGORAND_MAINNET_GENESIS_HASH_ID = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
-const sameNetwork = (a, b) => {
-  const fold = (n) => (n === ALGORAND_MAINNET_GENESIS_HASH_ID ? NETWORK_CAIP2.algorand : n).toLowerCase();
-  return fold(String(a || "")) === fold(String(b || ""));
-};
-
 export function withNetworkPreference(client, networks) {
-  const prefs = (networks || []).map((n) => NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim());
+  // Every id each preference names, in preference order, once each.
+  const prefs = [...new Set((networks || []).flatMap((n) => networkIdsOf(n)))];
   if (!prefs.length) return client;
   const orig = client.createPaymentPayload.bind(client);
   client.createPaymentPayload = (paymentRequired) => {
     const list = Array.isArray(paymentRequired?.accepts) ? paymentRequired.accepts : [];
-    const picked = prefs.flatMap((caip2) => list.filter((a) => sameNetwork(a?.network, caip2)));
+    const picked = prefs.flatMap((id) => list.filter((a) => String(a?.network || "").toLowerCase() === id.toLowerCase()));
     if (!picked.length) {
       const offered = [...new Set(list.map((a) => a?.network).filter(Boolean))];
       throw new Error(`network preference [${prefs.join(", ")}] matched none of the seller's payment options [${offered.join(", ")}]`);

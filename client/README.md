@@ -366,7 +366,9 @@ caps hold at signing by default.
 network (`KNOWN_ASSETS`: USDC on each Agent402 rail, USDG on Robinhood Chain,
 with their on-chain decimals), never from a decimals value the seller sends. An
 option in an asset outside the table cannot be priced, and a capped wallet never
-signs it. When a cap is set, the client preflights the `402` and checks the
+signs it. Since 0.8.19 such an option is skipped when another option in the
+same `402` can be priced (the quote is then the priced one), and a capped call
+is refused only when no option can be priced. When a cap is set, the client preflights the `402` and checks the
 ceiling against the **larger** of the advertised price (from the seller's
 `/api/pricing`) and the amount the `402` quotes; if no `402` comes back
 (FREE_MODE) it checks the advertised price. Caps hold under **concurrency** too:
@@ -398,7 +400,11 @@ const payFetch = wrapFetchWithPayment(fetch, client);
 Short names map to CAIP-2 (`base`, `solana`, `polygon`, `arbitrum`,
 `robinhood`); unknown entries pass through verbatim so future chains work
 without a package update. If the preference matches none of a seller's
-payment options it throws **before** any payment is signed.
+payment options it throws **before** any payment is signed. Since 0.8.19 a
+name resolves through the known-asset table (`NETWORK_NAMES`) to every id the
+chain is spelled with on the wire, and an id to the ids of its chain, so
+`["algorand"]`, or either spelling of Algorand mainnet, matches a seller that
+uses the other.
 
 
 ## Only pay who you meant to (`withPayeeAllowlist`)

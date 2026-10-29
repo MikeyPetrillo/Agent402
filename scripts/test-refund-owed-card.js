@@ -38,7 +38,7 @@ try {
     await new Promise((r) => setTimeout(r, 500));
   }
   const read = async (operator) => {
-    const r = await fetch(`${base}/api/gateway-status`, operator ? { headers: { Authorization: `Bearer ${TOKEN}` } } : {});
+    const r = await fetch(`${base}/api/gateway-status`, operator ? { headers: { "X-Operator-Token": TOKEN } } : {});
     return (await r.json()).refundsOwed;
   };
   const MIN = 60_000, HOUR = 3600_000;

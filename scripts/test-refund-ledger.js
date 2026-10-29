@@ -93,9 +93,11 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
 {
   const { CAIP2_NAMES } = await import("../src/stats.js");
   const { normalizeNetwork, familyOf } = await import("./refund-run.js");
+  // A chain spelled two ways on the wire (Algorand mainnet) normalizes to
+  // its canonical id from either spelling and from its label.
   const unknown = Object.entries(CAIP2_NAMES)
     .filter(([caip]) => !/sepolia|devnet|testnet/.test(caip + CAIP2_NAMES[caip]))
-    .filter(([caip, label]) => normalizeNetwork(label) !== caip || familyOf(normalizeNetwork(label)) === "unknown")
+    .filter(([caip, label]) => normalizeNetwork(label) !== normalizeNetwork(caip) || familyOf(normalizeNetwork(label)) === "unknown")
     .map(([, label]) => label);
   ok(!unknown.length, `every mainnet network label normalizes to its CAIP-2 and a known family (unmapped: ${unknown.join(", ") || "none"})`);
   const p = planRefunds([mk({ id: 1, network: "robinhood (USDG)" })], { senders: SENDERS });

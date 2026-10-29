@@ -139,7 +139,7 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  * @param {string} deps.baseUrl
  * @param {string} [deps.storePath]  override for tests
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -491,7 +491,26 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
           for (const [subId, rec] of store) {
             if (rec?.disputed) continue;
-            if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) stored = stored && await upsert(subId, { disputed: true, disputedAt: new Date().toISOString() });
+            if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) stored = stored && await upsert(subId, { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null });
+          }
+        }
+        break;
+      }
+      case "charge.dispute.closed": {
+        // The dispute ended. Won, or an inquiry closed without a chargeback
+        // (warning_closed): the money stayed, so the hold on fulfillment ends
+        // and the credits key the dispute disabled is enabled again (the
+        // hook). Lost: the record stays disputed and the outcome is noted.
+        const obj = event.data.object;
+        const pi = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id || null;
+        const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
+        const won = outcome === "won" || outcome === "warning_closed";
+        if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome }); } catch { /* never fail the webhook on a hook */ } }
+        const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
+        for (const [subId, rec] of store) {
+          if (!rec?.disputed) continue;
+          if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) {
+            stored = stored && await upsert(subId, won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() });
           }
         }
         break;
@@ -538,6 +557,17 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     }
     return out;
   }
+  // Subscriptions a dispute holds out of fulfillment (the operator view):
+  // Stripe may still bill one whose dispute ended without the closed event
+  // reaching us, so each is listed with what is known of the dispute.
+  function listDisputed() {
+    const out = [];
+    for (const rec of store.values()) {
+      if (rec?.disputed !== true) continue;
+      out.push({ subId: rec.subId, product: rec.product || null, target: rec.target || null, status: rec.status || null, disputedAt: rec.disputedAt || null, disputeOutcome: rec.disputeOutcome || null, lastPaymentIntent: rec.lastPaymentIntent || null, lastInvoiceId: rec.lastInvoiceId || null });
+    }
+    return out.sort((a, b) => String(b.disputedAt || "").localeCompare(String(a.disputedAt || "")));
+  }
   const get = (subId) => store.get(subId) || null;
   // Card subscriptions a checkout email can still manage (the "Already
   // subscribed?" form on /monitors). Reads the stored records only, never
@@ -560,5 +590,5 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     return { ...tally, byType: { ...tally.byType }, configured: Boolean(webhookSecret()) };
   }
 
-  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, get, findManageableByEmail, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
+  return { createCheckout, recordFromSession, handleWebhook, portalSession, listActive, listDisputed, get, findManageableByEmail, refreshStatus, webhookStats, reload, replayPending, ready: () => ready, _store: store };
 }

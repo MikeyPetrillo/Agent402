@@ -50,6 +50,40 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   rmSync(dir, { recursive: true, force: true });
 }
 
+// --- 1b. Two containers over one document: each appends, neither drops ----
+{
+  const dir = mkdtempSync(join(tmpdir(), "a402-rp2-"));
+  const file = join(dir, "purchases.json");
+  const OTHER = "https://other.example";
+  let t = 1_000_000_000_000;
+  const A = createRouterPurchaseStore({ file, now: () => t });
+  const B = createRouterPurchaseStore({ file, now: () => t });
+  A.load(); B.load();
+  // A writes first, then B: a whole-body save from B would erase A's row.
+  t += 1000; A.record({ origin: SELLER, payTo: W, chain: "base" });
+  ok(await A.flush(), "A's buy is stored");
+  t += 1000; B.record({ origin: OTHER, payTo: W, chain: "solana" });
+  t += 1000; B.record({ origin: SELLER, payTo: W, chain: "solana" });
+  ok(await B.flush(), "B's buys are stored");
+  const stored = JSON.parse(readFileSync(file, "utf8")).rows;
+  ok(stored[`${SELLER}|${W}`]?.buys.length === 2 && stored[`${OTHER}|${W}`]?.buys.length === 1, `the document holds the union of both writers (${JSON.stringify(Object.keys(stored))})`);
+  ok(B.at(SELLER, W).calls === 2 && B.at(SELLER, W).payers === 2, "the writer that landed last reads the union at once (its write returned the merged body)");
+  // A still holds its own memory copy; past the refresh interval a read re-reads the document.
+  t += 31_000;
+  const sa = A.snapshot(), sb = B.snapshot();
+  ok(sa.get(SELLER)?.get(W)?.calls === 2 && sa.get(SELLER).get(W).payers === 2 && sa.get(OTHER)?.get(W)?.calls === 1, `A's snapshot sees B's buys after a refresh (${JSON.stringify([...(sa.get(SELLER) || [])])})`);
+  ok(sb.get(SELLER)?.get(W)?.calls === 2 && sb.get(OTHER)?.get(W)?.calls === 1, "B's snapshot holds the same union");
+  // A buy recorded while another one is being written is never lost.
+  t += 1000; A.record({ origin: SELLER, payTo: W, chain: "base" });
+  const inFlight = A.flush();
+  t += 1000; A.record({ origin: OTHER, payTo: W, chain: "base" });
+  await inFlight; await A.flush();
+  const C = createRouterPurchaseStore({ file, now: () => t });
+  const sc = C.snapshot();
+  ok(sc.get(SELLER)?.get(W)?.calls === 3 && sc.get(OTHER)?.get(W)?.calls === 2, `a fresh instance reads every buy from both writers (${sc.get(SELLER)?.get(W)?.calls}, ${sc.get(OTHER)?.get(W)?.calls})`);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // --- 2. The Bazaar fold: the router's purchases come off the figures -------
 {
   // A seller the Bazaar counts at 60 calls from one payer: all of them ours.
@@ -85,6 +119,37 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   ok(u.get(SELLER).byWallet.get(W).payers === undefined && u.get(SELLER).clearing.has(W), "CONTROL: no payer figure at all stays unknown and does not refuse");
   const zc = buildEvidenceBinding({ chainProven: new Map([[SELLER, { settled: 600, payers: 0, payTo: W }]]), ...FLOORS });
   ok(zc.get(SELLER).byWallet.get(W).payers === 0 && !zc.get(SELLER).clearing.has(W), "a chain-join row measured at zero payers refuses too");
+  // The Bazaar fold keeps the distinction at the source: an item with no
+  // payer field folds as calls only, one measured at zero folds the zero.
+  const { foldBazaarQuality } = await import("../src/x402-index.js");
+  const noField = new Map();
+  foldBazaarQuality(noField, SELLER, { l30DaysTotalCalls: 80 }, W);
+  const nf = buildEvidenceBinding({ bazaarQuality: [...noField], ...FLOORS }).get(SELLER);
+  ok(noField.get(SELLER).payers30d === undefined && nf?.byWallet.get(W)?.settled === 80 && nf.byWallet.get(W).payers === undefined && nf.clearing.has(W), `a Bazaar item with no payer field leaves the breadth unknown and does not refuse (${JSON.stringify(nf?.byWallet.get(W))})`);
+  const zero = new Map();
+  foldBazaarQuality(zero, SELLER, { l30DaysTotalCalls: 80, l30DaysUniquePayers: 0 }, W);
+  const z0 = buildEvidenceBinding({ bazaarQuality: [...zero], ...FLOORS }).get(SELLER);
+  ok(zero.get(SELLER).payers30d === 0 && z0?.byWallet.get(W)?.payers === 0 && !z0.clearing.has(W), "a Bazaar item measured at zero payers refuses at the breadth floor");
+  const mixed = new Map();
+  foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 10 }, W);
+  foldBazaarQuality(mixed, SELLER, { l30DaysTotalCalls: 70, l30DaysUniquePayers: 4 }, W);
+  ok(mixed.get(SELLER).payers30d === 4 && mixed.get(SELLER).byPayTo[W].calls === 80 && mixed.get(SELLER).byPayTo[W].payers === 4, "a measured figure beside an unmeasured item folds as the measured one");
+  // A stored entry is read in the shape the fold writes now: a zero payer
+  // figure without the measured marker (what an older fold wrote for an item
+  // with no payer field) is unknown; a measured zero carries the marker and
+  // refuses; both survive a save and a reload.
+  const { qualityFromStored, _routerReplicaQualityOf } = await import("../src/x402-index.js");
+  const oldShape = { calls30d: 80, payers30d: 0, lastCalledAt: null, payTos: [W], curated: false, byPayTo: { [W]: { calls: 80, payers: 0 } } };
+  const reloadedOld = qualityFromStored(JSON.parse(JSON.stringify(oldShape)));
+  const bo = buildEvidenceBinding({ bazaarQuality: [[SELLER, reloadedOld]], ...FLOORS }).get(SELLER);
+  ok(reloadedOld.payers30d === undefined && reloadedOld.byPayTo[W].payers === undefined && bo?.byWallet.get(W)?.settled === 80 && bo.byWallet.get(W).payers === undefined && bo.clearing.has(W), `an old-shape stored entry (payers 0, no marker) loads as unknown and clears on calls alone (${JSON.stringify(bo?.byWallet.get(W))})`);
+  const measuredZero = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(zero.get(SELLER)))));
+  const bz = buildEvidenceBinding({ bazaarQuality: [[SELLER, measuredZero]], ...FLOORS }).get(SELLER);
+  ok(zero.get(SELLER).payersMeasured === true && zero.get(SELLER).byPayTo[W].measured === true && measuredZero.payers30d === 0 && measuredZero.byPayTo[W].payers === 0 && bz?.byWallet.get(W)?.payers === 0 && !bz.clearing.has(W), "a new-shape entry measured at zero carries the marker, reloads as zero and refuses");
+  const reloadedNoField = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(noField.get(SELLER)))));
+  ok(reloadedNoField.payers30d === undefined && reloadedNoField.byPayTo[W].payers === undefined && !Object.hasOwn(reloadedNoField, "payersMeasured"), "a new-shape entry with no payer field reloads as unknown");
+  const reloadedMixed = qualityFromStored(JSON.parse(JSON.stringify(_routerReplicaQualityOf(mixed.get(SELLER)))));
+  ok(reloadedMixed.payers30d === 4 && reloadedMixed.byPayTo[W].payers === 4 && reloadedMixed.payersMeasured === true, "a measured figure above zero reloads unchanged");
 }
 
 // --- 4. The chain join: the merchant SQL leaves our wallets out ------------
@@ -101,6 +166,7 @@ const FLOORS = { minSettled: 50, minPayers: 3 };
   const at = server.indexOf("function buildEvidenceBindingByOrigin(");
   const builder = server.slice(at, server.indexOf("\n}\n", at));
   ok(/routerPurchases: routerPurchasesSnapshot\(\)/.test(builder), "the server's binding is built with the router's purchase record");
+  ok(/^routerPurchaseStore\(\)\.load\(\);/m.test(server) && server.indexOf("routerPurchaseStore().load();") < server.indexOf("function buildEvidenceBindingByOrigin("), "the server loads the purchase record at boot, before the first evidence build");
   ok(/merchants: econ\.topMerchants/.test(server.slice(server.indexOf("function buildChainProven("), server.indexOf("function buildChainProven(") + 400)), "the chain join reads topMerchants");
 }
 
