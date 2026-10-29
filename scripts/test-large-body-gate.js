@@ -72,6 +72,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(r.nexted && gate.inFlightBytes() === base, "a body declared over the route limit is left to the parser's 413 and reserves nothing");
   r = run(gate, fakeReq({ "content-length": big }, "/BIG/"));
   ok(r.req.__bodyUnread === true, "the route match ignores case and a trailing slash, as routing does");
+  {
+    // One address cannot hold the whole budget: its reservations stop at the
+    // per-client share, another address still gets in, and release frees it.
+    const g = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: () => true, clientKey: (req) => req.headers.ip, maxInflightBytes: 100_000_000 });
+    const at = (ip, n) => run(g, fakeReq({ "content-length": String(n), ip }));
+    const held = [at("1.1.1.1", 9_000_000), at("1.1.1.1", 9_000_000)];
+    const third = at("1.1.1.1", 9_000_000);
+    ok(held.every((x) => x.nexted) && !third.nexted && third.res.statusCode === 503 && g.clientBytes("1.1.1.1") === 18_000_000, "one address holds at most its share of the in-flight budget (two of the largest bodies, or a quarter of the budget)");
+    ok(at("2.2.2.2", 9_000_000).nexted, "another address still gets in while the first holds its share");
+    held[0].res.emit("finish"); held[0].res.emit("close");
+    ok(g.clientBytes("1.1.1.1") === 9_000_000 && at("1.1.1.1", 9_000_000).nexted, "a released reservation frees the address's share");
+    const q = createLargeBodyGate({ routes: [["/big", 1_000_000]], isPaid: () => true, maxInflightBytes: 100_000_000 });
+    ok([0, 1, 2].map(() => run(q, fakeReq({ "content-length": "1000000" }))).every((x) => x.nexted), "with small routes the share is a quarter of the budget, not twice the route limit");
+  }
   const free = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: () => false, freeMode: true });
   r = run(free, fakeReq({ "content-length": big }));
   ok(r.nexted && !r.req.__bodyUnread, "FREE_MODE reads every body");

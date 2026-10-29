@@ -17,7 +17,10 @@
 //     length is not declared) against one in-flight budget for the process
 //     and is refused with a 503 and Retry-After when the budget is spent; the
 //     reservation is released when the response finishes or the connection
-//     closes.
+//     closes. One client address holds at most maxPerClientBytes of it (by
+//     default a quarter of the budget, never less than two of the largest
+//     route's bodies), so a few uploads under one address cannot spend it all;
+//     a slow body is bounded by the server's requestTimeout.
 //
 // A route's own parser still enforces its limit with a 413; a body declared
 // over that limit is left to it and reserves nothing.
@@ -39,9 +42,11 @@ export function largeBodyInflightMaxBytes(env = process.env) {
  * @param {(req) => string} [o.clientKey]
  * @param {number} [o.maxInflightBytes]
  */
-export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES }) {
+export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES, maxPerClientBytes }) {
   const limits = new Map(routes);
+  const perClientMax = maxPerClientBytes ?? Math.max(Math.floor(maxInflightBytes / 4), 2 * Math.max(0, ...limits.values()));
   let inFlight = 0;
+  const byClient = new Map();
   function gate(req, res, next) {
     if (req.method !== "POST") return next();
     // Routing is case-insensitive and ignores a trailing slash; so is this.
@@ -68,18 +73,26 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
       }
     }
     if (size > limit) return next();
-    if (inFlight + size > maxInflightBytes) {
+    const who = clientKey(req), held = byClient.get(who) || 0;
+    if (inFlight + size > maxInflightBytes || held + size > perClientMax) {
       res.set("Retry-After", "5");
       return res.status(503).json({ error: "busy", hint: "This host is reading other large request bodies right now; retry in a few seconds. Nothing was charged." });
     }
     inFlight += size;
+    byClient.set(who, held + size);
     let released = false;
-    const release = () => { if (!released) { released = true; inFlight -= size; } };
+    const release = () => {
+      if (released) return;
+      released = true; inFlight -= size;
+      const left = (byClient.get(who) || 0) - size;
+      if (left > 0) byClient.set(who, left); else byClient.delete(who);
+    };
     res.on("finish", release);
     res.on("close", release);
     next();
   }
   gate.inFlightBytes = () => inFlight;
+  gate.clientBytes = (key) => byClient.get(key) || 0;
   return gate;
 }
 
