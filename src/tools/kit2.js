@@ -96,7 +96,11 @@ function base32encode(buf) {
   return out;
 }
 function base32decode(str) {
-  const clean = str.toUpperCase().replace(/=+$/, "").replace(/\s/g, "");
+  // Trailing padding is cut with a loop: /=+$/ rescans a long run of "="
+  // from every position before a non-pad character.
+  let end = str.length;
+  while (end > 0 && str[end - 1] === "=") end--;
+  const clean = str.slice(0, end).toUpperCase().replace(/\s/g, "");
   let bits = 0;
   let value = 0;
   const out = [];
@@ -167,8 +171,7 @@ const encoding = [
     tags: ["base32", "encode", "decode"],
     discovery: { bodyType: "json", input: { text: "hello", mode: "encode" }, inputSchema: { properties: { text: { type: "string" }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "NBSWY3DP" } } },
     handler: (i) => {
-      // Base58 is a big-integer conversion, quadratic in the input length.
-      const text = cap(need(i, "text"), BASE58_MAX_CHARS);
+      const text = cap(need(i, "text"));
       return i.mode === "decode"
         ? { mode: "decode", result: base32decode(text).toString("utf8") }
         : { mode: "encode", result: base32encode(Buffer.from(text, "utf8")) };
