@@ -3672,7 +3672,7 @@ export function meteredHintFor(normalizedBody, tierSlug, imageCount = 0) {
     endpoint: metered.route.split(" ")[1],
     wouldHaveCostUsd: quote,
     youPaidUsd: flat,
-    note: "The same request on the metered route is quoted from its own body and settles actual usage. Point your SDK's base URL at /v1/metered to use it.",
+    note: "The same request on the metered route is quoted from its own body: an x402 exact payer pays that quote, an upto or credits payer settles actual usage under it, and a card payment adds the processor fee. Point your SDK's base URL at /v1/metered to use it.",
   };
 }
 
