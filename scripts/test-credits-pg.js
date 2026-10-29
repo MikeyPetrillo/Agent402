@@ -105,10 +105,15 @@ try {
   // A dispute disables the key; the dispute closing in our favor on the
   // other container enables it again, and a key disabled for a refund stays
   // disabled whatever a dispute on its payment did.
-  ok((await A.enableByPaymentIntent("pi_new", "disputed")) === null && (await B.balance(KEY)).disabled === true, "a dispute closing enables nothing on a key disabled because its payment was refunded");
-  ok((await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await B.enableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await A.balance(KEY)).disabled === false, "a dispute closed in our favor on the other container enables the key its creation disabled");
-  ok((await A.enableByPaymentIntent("pi_new", "disputed")) === null, "...and enabling it again changes nothing");
-  ok((await A.disableByPaymentIntent("pi_new", "refunded")) === minted.keyId && (await B.balance(KEY)).disabled === true, "the key is disabled again for the sections below (a refund after the dispute)");
+  // Disable causes rank operator over refund over dispute on the row, so a
+  // dispute closing in our favor on the other container lifts a key only
+  // when that dispute was its sole cause; the operator view names the cause.
+  const reasonOf = async (inst) => (await inst.status()).rows.find((x) => x.keyId === minted.keyId)?.disabledReason;
+  ok((await A.enableByPaymentIntent("pi_new", "disputed")) === null && (await B.balance(KEY)).disabled === true && (await reasonOf(B)) === "refunded", "a dispute closing enables nothing on a key disabled because its payment was refunded");
+  ok((await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(B)) === "refunded" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "a dispute after a full refund keeps the refund as the cause: the win never re-enables");
+  ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(B)) === "disputed" && (await B.enableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await A.balance(KEY)).disabled === false, "dispute-disabled, then won on the other container: the key is enabled again");
+  ok((await A.setDisabled(minted.keyId, true)) === true && (await reasonOf(B)) === "operator" && (await B.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "operator-disabled, then disputed, then won: stays disabled for the operator");
+  ok((await A.setDisabled(minted.keyId, false)) === true && (await A.disableByPaymentIntent("pi_new", "disputed")) === minted.keyId && (await B.setDisabled(minted.keyId, true)) === true && (await reasonOf(A)) === "operator" && (await B.enableByPaymentIntent("pi_new", "disputed")) === null && (await A.balance(KEY)).disabled === true, "disputed, then operator-disabled, then won: stays disabled (and the key is disabled for the sections below)");
 
   // ---- (6) roll-forward: files written in a rollback window win per id -----
   const keyFile = join(DIR, `k_${HASH}.json`);

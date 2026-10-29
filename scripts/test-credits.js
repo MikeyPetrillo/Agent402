@@ -6,7 +6,7 @@
 // request passes through untouched; accounting hooks fire; state survives a
 // reload; operator status never exposes key material.
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
-import { rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import express from "express";
@@ -366,6 +366,27 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     ok(back.ok === true, "...and it authorizes again");
     lc.release(back.hash, back.heldMicro);
     ok(lc.enableByPaymentIntent("pi_cs_rf3", "disputed") === null && lc.enableByPaymentIntent("pi_cs_rf2", "disputed") === null && lc.authorize(r2.key, 0.001).reason === "disabled", "an enabled key, and a key disabled for a refund, are left as they are");
+    // Disable causes rank operator over refund over dispute: a dispute that
+    // closes in our favor (which the cardholder can bring about with an
+    // inquiry they withdraw) lifts a key only when that dispute was its sole
+    // cause. The operator view names the cause.
+    const reasonOf = (keyId) => lc.status().rows.find((x) => x.keyId === keyId)?.disabledReason;
+    const r4 = await buy("cs_rf4", { email: "rf4@x.com", card: "fp_rf4" });
+    ok(lc.setDisabled(r4.keyId, true) && reasonOf(r4.keyId) === "operator", "an operator disable records its cause on the operator view");
+    ok(lc.disableByPaymentIntent("pi_cs_rf4", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r4.keyId && reasonOf(r4.keyId) === "operator" && lc.enableByPaymentIntent("pi_cs_rf4", "disputed") === null && lc.authorize(r4.key, 0.001).reason === "disabled", "operator-disabled, then disputed, then the dispute won: the key stays disabled for the operator");
+    ok(lc.setDisabled(r4.keyId, false) && reasonOf(r4.keyId) === null && lc.status().rows.find((x) => x.keyId === r4.keyId)?.disabled === false, "only the operator switch lifts an operator disable");
+    const r5 = await buy("cs_rf5", { email: "rf5@x.com", card: "fp_rf5" });
+    ok(lc.disableByPaymentIntent("pi_cs_rf5", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r5.keyId && reasonOf(r5.keyId) === "disputed" && lc.setDisabled(r5.keyId, true) && reasonOf(r5.keyId) === "operator" && lc.enableByPaymentIntent("pi_cs_rf5", "disputed") === null && lc.authorize(r5.key, 0.001).reason === "disabled", "disputed, then operator-disabled, then the dispute won: stays disabled");
+    const r6 = await buy("cs_rf6", { email: "rf6@x.com", card: "fp_rf6" });
+    ok(lc.disableByPaymentIntent("pi_cs_rf6", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r6.keyId && lc.disableByPaymentIntent("pi_cs_rf6", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r6.keyId && reasonOf(r6.keyId) === "refunded" && lc.enableByPaymentIntent("pi_cs_rf6", "disputed") === null && lc.authorize(r6.key, 0.001).reason === "disabled", "disputed, then refunded in full, then the dispute won: a full refund never re-enables");
+    const r7 = await buy("cs_rf7", { email: "rf7@x.com", card: "fp_rf7" });
+    ok(lc.disableByPaymentIntent("pi_cs_rf7", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r7.keyId && lc.disableByPaymentIntent("pi_cs_rf7", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r7.keyId && reasonOf(r7.keyId) === "refunded" && lc.enableByPaymentIntent("pi_cs_rf7", "disputed") === null && lc.authorize(r7.key, 0.001).reason === "disabled", "refunded in full, then disputed, then the dispute won: stays disabled");
+    // A key disabled by the previous build's operator switch recorded no cause: it counts as the operator's.
+    const r8 = await buy("cs_rf8", { email: "rf8@x.com", card: "fp_rf8" });
+    lc.setDisabled(r8.keyId, true);
+    { const f = join(LDIR, readdirSync(LDIR).find((n) => n.startsWith("k_") && JSON.parse(readFileSync(join(LDIR, n), "utf8")).keyId === r8.keyId)); const rec = JSON.parse(readFileSync(f, "utf8")); delete rec.disabledReason; writeFileSync(f, JSON.stringify(rec)); }
+    const lc2 = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: LDIR, now: () => t, log: () => {} }); // reads the directory as the next boot would
+    ok(lc2.status().rows.find((x) => x.keyId === r8.keyId)?.disabledReason === null && lc2.disableByPaymentIntent("pi_cs_rf8", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r8.keyId && lc2.status().rows.find((x) => x.keyId === r8.keyId)?.disabledReason === "operator" && lc2.enableByPaymentIntent("pi_cs_rf8", "disputed") === null && lc2.authorize(r8.key, 0.001).reason === "disabled", "a disable with no recorded cause (an older build's operator switch) is the operator's: a dispute never lifts it");
   }
   ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
   t += 86_400_001;

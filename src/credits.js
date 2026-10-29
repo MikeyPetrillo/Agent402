@@ -670,16 +670,19 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const tot = (k) => keys.reduce((a, r) => a + (Number(r[k]) || 0), 0);
     return {
       keys: keys.length, loadedUsd: microToUsd(tot("loadedMicro")), spentUsd: microToUsd(tot("spentMicro")), outstandingUsd: microToUsd(tot("balanceMicro")), heldUsd: microToUsd(tot("heldMicro")), calls: tot("calls"),
-      rows: keys.sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt))).slice(0, 200).map((r) => ({ keyId: r.keyId, balanceUsd: microToUsd(r.balanceMicro), spentUsd: microToUsd(r.spentMicro), calls: r.calls, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, disabled: !!r.disabled })),
+      rows: keys.sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt))).slice(0, 200).map((r) => ({ keyId: r.keyId, balanceUsd: microToUsd(r.balanceMicro), spentUsd: microToUsd(r.spentMicro), calls: r.calls, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, disabled: !!r.disabled, disabledReason: r.disabled ? r.disabledReason || null : null })),
     };
   };
   function status() {
     if (usePg) return allKeys().then((xs) => statusOf(xs.map((x) => x.rec)));
     return statusOf(allKeys().map((x) => x.rec));
   }
+  // The operator's switch. A disable records "operator" as the reason, which
+  // no webhook path overrides or lifts: only this switch clears it.
+  const operatorSwitch = (r, disabled) => { r.disabled = !!disabled; r.disabledReason = disabled ? "operator" : null; };
   function setDisabled(keyId, disabled) {
-    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => x.rec?.keyId === keyId); return hit ? mutatePg(hit.hash, (r) => (r ? { rec: Object.assign(r, { disabled: !!disabled }), result: true } : { result: false })) : false; });
-    for (const { hash, rec: r } of allKeys()) { if (r?.keyId === keyId) { r.disabled = !!disabled; save(hash, r); return true; } }
+    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => x.rec?.keyId === keyId); return hit ? mutatePg(hit.hash, (r) => (r ? { rec: (operatorSwitch(r, disabled), r), result: true } : { result: false })) : false; });
+    for (const { hash, rec: r } of allKeys()) { if (r?.keyId === keyId) { operatorSwitch(r, disabled); save(hash, r); return true; } }
     return false;
   }
 
@@ -689,19 +692,32 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // charge's running total, so a second refund takes only its own part) off
   // the balance, and disables the key only once the payment is fully
   // refunded; a dispute, or a refund with no amount, disables it outright.
-  // Returns the key id or null.
+  // Disable causes rank: an operator disable is kept over a refund, a refund
+  // over a dispute, so the reason on the key is the strongest cause and a
+  // dispute closing lifts nothing a stronger cause holds. The dispute itself
+  // is recorded beside it (disputedPaymentIntent, disputeAt). Returns the
+  // key id or null.
   const paidBy = (r, paymentIntent) => r && Array.isArray(r.paymentIntents) && r.paymentIntents.includes(paymentIntent);
+  const CAUSE_RANK = { operator: 3, refunded: 2, disputed: 1 };
   function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null } = {}) {
     if (!paymentIntent) return answer(null);
     const cents = amountRefundedCents == null ? null : Number(amountRefundedCents);
     const clawback = (r) => {
+      if (reason === "disputed") { r.disputedPaymentIntent = paymentIntent; r.disputeAt = new Date(now()).toISOString(); }
       if (reason === "refunded" && cents !== null && Number.isFinite(cents) && cents >= 0) {
         const refundedMicro = Math.round(cents) * 10_000;
         const delta = refundedMicro - (r.refundedMicro || 0);
         if (delta > 0) { r.balanceMicro = Math.max(0, r.balanceMicro - delta); r.refundedMicro = refundedMicro; }
         if (fullyRefunded !== true && refundedMicro < (r.loadedMicro || 0)) { log(`[credits] key ${r.keyId}: $${(cents / 100).toFixed(2)} refunded (${paymentIntent}), balance reduced`); return r.keyId; }
       }
-      r.disabled = true; r.disabledReason = reason; log(`[credits] key ${r.keyId} disabled (${reason}, ${paymentIntent})`); return r.keyId;
+      // A key disabled with no recorded cause was switched off by the operator
+      // (the one path that recorded none): it ranks as such.
+      if (r.disabled === true && !CAUSE_RANK[r.disabledReason]) r.disabledReason = "operator";
+      const held = r.disabled === true ? CAUSE_RANK[r.disabledReason] : 0;
+      r.disabled = true;
+      if ((CAUSE_RANK[reason] || 0) >= held) r.disabledReason = reason;
+      log(`[credits] key ${r.keyId} disabled (${reason}, ${paymentIntent}${r.disabledReason !== reason ? `; kept ${r.disabledReason}` : ""})`);
+      return r.keyId;
     };
     if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => paidBy(x.rec, paymentIntent)); return hit ? mutatePg(hit.hash, (r) => (paidBy(r, paymentIntent) ? { rec: r, result: clawback(r) } : { result: null })) : null; });
     for (const { hash, rec: r } of allKeys()) {
@@ -712,13 +728,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
 
   // The reverse of a dispute clawback: the dispute closed in our favor (won,
   // or an inquiry closed without a chargeback), so the key it disabled is
-  // enabled again. Only a key disabled for that `reason` is touched: a key
-  // disabled because its payment was refunded, or by the operator, stays
-  // disabled. Returns the key id or null.
+  // enabled again. Lifted only when that dispute, on that payment, is the
+  // key's sole disable cause: a key the operator switched off, or whose
+  // payment was refunded, before or after the dispute, stays disabled
+  // (disableByPaymentIntent keeps the stronger cause). Returns the key id or
+  // null.
   function enableByPaymentIntent(paymentIntent, reason = "disputed") {
     if (!paymentIntent) return answer(null);
-    const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason;
-    const lift = (r) => { r.disabled = false; r.disabledReason = null; log(`[credits] key ${r.keyId} enabled again (${reason} closed, ${paymentIntent})`); return r.keyId; };
+    const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason
+      && (reason !== "disputed" || !r.disputedPaymentIntent || r.disputedPaymentIntent === paymentIntent);
+    const lift = (r) => { r.disabled = false; r.disabledReason = null; if (reason === "disputed") r.disputeClosedAt = new Date(now()).toISOString(); log(`[credits] key ${r.keyId} enabled again (${reason} closed in our favor, ${paymentIntent})`); return r.keyId; };
     if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => held(x.rec)); return hit ? mutatePg(hit.hash, (r) => (held(r) ? { rec: r, result: lift(r) } : { result: null })) : null; });
     for (const { hash, rec: r } of allKeys()) {
       if (held(r)) { const id = lift(r); save(hash, r); return id; }
