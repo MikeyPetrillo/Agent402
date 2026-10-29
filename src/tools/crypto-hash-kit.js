@@ -1,7 +1,5 @@
-// Crypto-hash kit — key derivation (PBKDF2, scrypt, HKDF), constant-time
-// comparison, and multi-digest checksumming. The primitives an agent needs
-// when building or verifying password hashing, token derivation, or file
-// integrity workflows.
+// Crypto-hash kit — multi-digest checksumming (MD5, SHA-1, SHA-256, SHA-512,
+// CRC32) for payload and file integrity workflows.
 //
 // Built entirely on node:crypto (stdlib, no new deps). All pure CPU, no
 // network, no LLM -> automatically proof-of-work eligible (free tier).
@@ -16,26 +14,6 @@ function bad(message) {
 function need(input, field) {
   const v = input[field];
   if (typeof v !== "string") throw bad(`Missing or invalid "${field}"`);
-  return v;
-}
-
-// Validate a positive integer within bounds, returning a default when absent.
-function intOpt(input, field, defaultVal, min, max) {
-  if (input[field] === undefined || input[field] === null) return defaultVal;
-  const n = Number(input[field]);
-  if (!Number.isInteger(n) || n < min || n > max)
-    throw bad(`"${field}" must be an integer between ${min} and ${max}`);
-  return n;
-}
-
-// Allowed hash digests for PBKDF2 / HKDF. node:crypto supports more, but
-// these cover every real-world use case and keep the attack surface small.
-const ALLOWED_DIGESTS = new Set(["sha1", "sha256", "sha384", "sha512"]);
-
-function validDigest(input, field, defaultVal) {
-  const v = (input[field] || defaultVal).toLowerCase();
-  if (!ALLOWED_DIGESTS.has(v))
-    throw bad(`"${field}" must be one of: ${[...ALLOWED_DIGESTS].join(", ")}`);
   return v;
 }
 
