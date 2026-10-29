@@ -4,7 +4,7 @@
 // not just the atomic tool description.
 //
 // The backlink section is rendered conditionally inside toolPage()
-// (src/pages.js:222) and is easy to silently drop in a future refactor — there
+// (src/pages.js) and is easy to silently drop in a future refactor — there
 // is no compile-time tie between SKILL_PACKS.toolSlugs and the rendered HTML.
 // This test boots a FREE_MODE server, fetches a tool page that is provably in
 // multiple packs, and asserts:

@@ -1,9 +1,10 @@
-// Smoke test for the MCP search_tools ranker against the *live* catalog.
+// Smoke test for the MCP catalog.search ranker against the *live* catalog.
 //
 // test-find-ranking.js locks the HTTP /api/find ranker on natural-language
-// agent queries. The MCP connector's `search_tools` tool is a separate ranker
-// (src/mcp-http.js:60 — slug-exact / slug-includes / hay-includes, simpler than
-// findTools), and it's the surface most directory-installed clients (Claude
+// agent queries. The MCP connector's `catalog.search` tool is a separate ranker
+// (searchTools() in src/mcp-http.js — slug-exact / slug-includes /
+// hay-includes, simpler than findTools), and it's the surface most
+// directory-installed clients (Claude
 // Desktop, Cursor, Smithery, mcp.so installs) hit first. A drift in this
 // ranker degrades discoverability for those clients silently, even when
 // /api/find still looks fine.

@@ -5,7 +5,8 @@
 // something that does X, and /api/find ranked it below something else. The fix
 // in this codebase is a curated alias on the tool, never a score boost - an
 // alias is a name the tool also answers to, and it lands in find's haystack
-// (find.js:178) where it helps every future query for free.
+// (the `hay` field findTools() builds in src/find.js) where it helps every
+// future query for free.
 //
 // THE PROMOTION STAYS HUMAN. This prints a diff; it does not write one. An
 // alias is a permanent change to a public discovery surface, and a model that
