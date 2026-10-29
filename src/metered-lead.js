@@ -28,9 +28,9 @@ export function meteredDefaultModel() {
   return metered().defaultModel;
 }
 
-/** One sentence: what the quote is, and that settlement never exceeds it. */
+/** What the quote is, and the rails on which settlement never exceeds it. */
 export function meteredQuoteSentence() {
-  return "The 402 quotes this exact request from its own body (the input counted exactly plus your `max_tokens`, at the model's list price plus a fee), and settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the answer used.";
+  return "The 402 quotes this exact request from its own body (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits, settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the answer used; a card payment adds the processor fee.";
 }
 
 /** The three routes as one inline list. */

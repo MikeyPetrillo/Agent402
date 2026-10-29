@@ -222,10 +222,11 @@ so an agent skips the token-heavy "search around to find a tool" step.
 `/v1/metered/responses`) serves third-party models with no API key, no signup and no
 account, paid per call in USDC over x402 or MPP (a prepaid credits key also works, see
 [For humans](#for-humans-reports-and-monitors)). The 402 quotes this exact request from
-its own body (the input counted exactly plus your `max_tokens`, at the model's list
-price plus a fee), and settlement never exceeds that quote: an `exact` payer pays the
-quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the
-answer used.
+its own body (the input estimated from its tokens with headroom, plus your
+`max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits,
+settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto`
+payer (where the 402 offers it) or a credits key settles what the answer used; a card
+payment adds the processor fee.
 
 ```bash
 curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
