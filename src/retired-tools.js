@@ -106,6 +106,23 @@ export const RETIRED_PACKS = Object.freeze({
   "math-suite": { retiredAt: "2026-07-06", replacement: null },
 });
 
+/** The pairwise convert-<from>-to-<to> routes (server.js, RETIRED_CONVERT_API_RE)
+ *  were retired into POST /api/unit-convert on this date. */
+export const RETIRED_CONVERTERS_AT = "2026-07-13";
+
+/** The retirement headers every 410 for a retired route carries, so a client
+ *  or monitor reads "retired" from the headers alone: `Sunset` (RFC 8594) is
+ *  the retirement date as an HTTP-date, and `Link rel="successor-version"`
+ *  names the replacement's absolute URL when there is one. A bare 410 says
+ *  only "gone"; these say since when and where to go. */
+export function retirementHeaders(retiredAt, successorUrl = null) {
+  const headers = {};
+  const t = Date.parse(`${retiredAt}T00:00:00Z`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(retiredAt || "")) && Number.isFinite(t)) headers.Sunset = new Date(t).toUTCString();
+  if (successorUrl) headers.Link = `<${successorUrl}>; rel="successor-version"`;
+  return headers;
+}
+
 /** The retired entry a request path names, or null. Reads the first path
  *  segment after /api/ (or /api/skill/), so a trailing segment or query does
  *  not turn a retired route back into a 404. */

@@ -73,6 +73,10 @@ MCP connector:
 - tasks/cancel reaches a task running on another replica.
 
 Surfaces:
+- A retired route's 410 carries a Sunset header with its retirement date and,
+  when a replacement is live, a Link header with rel="successor-version"
+  naming it; the retired pairwise converters name /api/unit-convert. The JSON
+  body is unchanged.
 - Each chain's settlement premium is published as payment.premiumUsdByNetwork
   on /api/pricing, in /llms.txt, in the openapi guidance and on the
   connector's payment.info, beside the per-chain floors.
