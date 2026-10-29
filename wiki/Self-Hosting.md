@@ -60,7 +60,7 @@ For persistent state (stats, memory, PoW replay protection), mount a volume at `
 4. Set environment variables in the Railway dashboard (see table below).
 5. Deploy. Railway auto-detects the start command from `package.json`.
 
-> **Protect in-flight calls across redeploys:** set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on the service (the hosted deploy job sets 120). Without a grace period between SIGTERM and SIGKILL, every redeploy kills in-flight requests. With it, the server's built-in graceful drain lets ordinary active requests finish (up to 75s) before exiting; report composites still running are cut off and answer 503. Settlement runs after the handler and only on a response under 400, so a request cut off this way is not charged.
+> **Protect in-flight calls across redeploys:** set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on the service (the hosted deploy job sets 120). Without a grace period between SIGTERM and SIGKILL, every redeploy kills in-flight requests. With it, the server's built-in graceful drain lets ordinary active requests finish (up to 75s) before exiting; report composites still running are cut off and answer 503. Settlement runs after the handler and only on a response under 400, so a request cut off this way is not charged on x402.
 
 ## Environment variables
 

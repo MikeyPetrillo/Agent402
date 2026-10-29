@@ -69,7 +69,7 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 | `POST /v1/judge/locate` | $0.002 | Preview. One `image` and up to 4 `targets`; each comes back with `present` (a probability), `found`, `box` and `boxConfidence`. A box is always returned, so read `found` first. |
 | `POST /v1/judge/long` | $0.02 | Preview. `/v1/judge`'s questions over a document of up to 900,000 bytes (about 262k tokens). |
 
-`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged.
+`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged on x402.
 
 ## Retired model ids
 
@@ -77,7 +77,7 @@ A request that names a model the upstream has retired is served by its successor
 
 ## Metered tier - pay per request, quoted first
 
-`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price, plus our fee), never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
+`POST /v1/metered/chat/completions` (`v1-chat-metered`) serves every explicit model the flat chat tiers serve (the same allowlists; `GET /v1/models` names it beside each chat model as `meteredEndpoint`, with `meteredMaxInputChars` 200k and `meteredMaxTokens` 8,192), but the price is not flat: **the 402 quotes this exact request from its own body**. The quote is the request's worst case (input counted exactly, plus your `max_tokens`, at the model's list price, plus our fee), never below the $0.001 settlement floor, rounded up to a micro-dollar; a request whose quote would exceed $2 is refused with a `400` naming the cap (a `4xx` cancels x402 settlement, so nothing is charged). Because the price is derived from the body actually served, a payment authorized for a small quote cannot ride a bigger request. Set `max_tokens` to what you need: it is what you pay for.
 
 Two ways to pay it:
 

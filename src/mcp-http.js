@@ -135,7 +135,10 @@ const PAID_LOOPBACK_TIMEOUT_MS = Math.max(1_000, MCP_REQ_DEADLINE_MS - 2_500);
 // recorded as owed and refunded. The connector cannot tell which happened at
 // the moment it gives up, so "not charged" would not be a promise it can keep.
 export const PAID_CUTOFF_TEXT = "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Check any payment by its settlement transaction, free, at GET /api/refunds/lookup?tx=<hash>: it answers whether a refund is recorded and, once sent, our refund transaction. Do not retry blindly: a retry is a new paid call.";
-export const UNPAID_CUTOFF_TEXT = "No payment was presented, so nothing was charged.";
+export const UNPAID_CUTOFF_TEXT = "No payment was presented, so there was nothing to charge.";
+/** The clause every connector "not charged" line carries: a Tempo push
+ *  transfer is final before the call and a failure on it is booked as owed. */
+export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
 // The RFC 9457 members of a 402 problem document, and nothing else. A paywall
 // 402 body also carries the full PaymentRequired offer (it mirrors the
 // PAYMENT-REQUIRED header, src/payment-required-body.js); the error data, the
@@ -721,7 +724,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (r.status >= 400) {
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: r.status, errorMessage: String(r.json?.error || r.text || r.status).slice(0, 200), inputKeys: Object.keys(params || {}) });
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? " - not charged" : " - not charged (settlement runs only after a successful handler)"}: ${detail}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${PUSH_EXCEPTION}` : ` - not charged (settlement runs only after a successful handler)${PUSH_EXCEPTION}`}: ${detail}` }], isError: true };
       }
       onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
@@ -758,7 +761,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // cheaply rather than starting a run we cannot hand back.
       if (tasks.atCapacity()) {
         return {
-          content: [{ type: "text", text: `Agent402 is at capacity for long-running ${entry.def.slug} runs right now - nothing was started and you were not charged. Retry shortly.` }],
+          content: [{ type: "text", text: `Agent402 is at capacity for long-running ${entry.def.slug} runs right now - nothing was started and no payment was claimed. Retry shortly.` }],
           isError: true,
         };
       }
@@ -842,7 +845,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // JSON-RPC error on the underlying request, so the task FAILED - and
           // the challenges ride along so the client can pay and call again.
           const code = err instanceof McpError ? err.code : TASK_INTERNAL_ERROR;
-          await tasks.fail(rec.taskId, { code, message: err?.message || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call. You were not charged.");
+          await tasks.fail(rec.taskId, { code, message: err?.message || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call; no payment was claimed.");
           return;
         }
         // Spec: `failed` is for JSON-RPC errors only. A tool result that
@@ -1313,7 +1316,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             ...(Number.isInteger(handlerErr?.retryAfter) ? { retryAfterSeconds: handlerErr.retryAfter } : {}),
             ...(fromUpstream || status >= 500
               ? {
-                whoseFault: "not your input - a third party this tool depends on refused or failed our request, and you were not charged",
+                whoseFault: "not your input - a third party this tool depends on refused or failed our request, and you were not charged, except a Tempo transfer sent before the call, which is recorded as owed",
                 nextStep: attribution === "upstream"
                   ? "retry the SAME call later; changing the input will not help"
                   : "this resource is not reachable by this server; a different source may be, but the same call will keep failing",

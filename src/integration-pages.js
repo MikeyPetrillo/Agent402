@@ -733,7 +733,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `<pre ${PRE}><code>${esc(i.walletExample)}</code></pre>` : ""}
-      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || "A call that fails is not charged: settlement runs after the tool and only on a successful response.")} Background: ${learnLinks}.</p>
+      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || "A call that fails is not charged on x402: settlement runs after the tool and only on a successful response.")} Background: ${learnLinks}.</p>
     </section>
 
     ${tools.length ? `<section style="margin-bottom:34px;">

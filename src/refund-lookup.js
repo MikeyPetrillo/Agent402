@@ -78,7 +78,7 @@ export function lookupKeys(input) {
 }
 
 const NOTES = {
-  none: "No refund is recorded for this transaction. A payment is refunded only when it settled and the call failed to deliver; a call that returned an error before settlement was never charged.",
+  none: "No refund is recorded for this transaction. A payment is refunded only when it settled and the call failed to deliver; a call that returned an error before its x402 settlement was never charged.",
   owed: "A refund is recorded and owed. It is sent to the paying wallet on the same network after the payment is re-verified on chain.",
   sending: "The refund is being sent now.",
   paid: "Refunded. refundTx is our transfer back to the paying wallet on the same network.",

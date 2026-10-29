@@ -921,7 +921,7 @@ export function openapiSpec(baseUrl, catalog) {
       op.requestBody = openapiRequestBody(discovery);
       op.parameters = headerParams;
     }
-    if (tool.asyncProfile && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): status working, state queued; poll its statusUrl, waiting Retry-After seconds between polls. Nothing has been charged yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
+    if (tool.asyncProfile && op.responses) op.responses["202"] = { description: "Accepted (Prefer: respond-async): status working, state queued; poll its statusUrl, waiting Retry-After seconds between polls. Nothing has settled yet.", content: { "application/json": { schema: ASYNC_JOB_SCHEMA } } };
     // Machine-readable duration and async advice (src/slow-routes.js): the
     // same block /api/pricing rows and a slow route's 402 body carry.
     if (tool.asyncProfile) op["x-agent402-async"] = asyncAdvice(tool);

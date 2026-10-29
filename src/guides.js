@@ -297,8 +297,8 @@ quote yourself: \`curl -i -X POST http://localhost:3000/api/summarize\` answers
 
 1. **x402 settles after your handler runs, and only on success.**
    \`@x402/express\` verifies the payment, runs the handler, and settles only a
-   response below 400; an error answer cancels settlement, so the buyer is not
-   charged. You still paid for any upstream work that failed, so anything that
+   response below 400; an error answer cancels settlement, so the buyer is
+   not charged on x402. You still paid for any upstream work that failed, so anything that
    can't be served reliably (upstreams that block datacenter IPs, flaky APIs)
    should be removed, not monetized.
 2. **Discovery is half the product.** Publish a machine-readable catalog
@@ -670,8 +670,8 @@ pays Base sellers, and the same holds for its **Solana**, **Algorand** and
 **Tempo** (MPP) legs, each paid from this server's spending wallet on that
 chain. The buyer's settlement funds the float on the same rail - and if
 you pay on a chain without a spending wallet behind it, you get an honest 409
-naming the supported chains, and **you are not charged** (a rejected request
-cancels x402 settlement by design).
+naming the supported chains, and **you are not charged on x402** (a rejected
+request cancels settlement by design).
 
 ## A receipt
 
@@ -696,8 +696,9 @@ provenance stays explicit.
 
 ## Why this is safe to build on
 
-- **Failures are not charged.** Any 4xx/5xx - no match, over-cap, seller
-  down - cancels your settlement. You pay only for delivered results.
+- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
+  down - cancels your settlement, and a Tempo transfer sent before the call is
+  recorded as owed. You pay only for delivered results.
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived

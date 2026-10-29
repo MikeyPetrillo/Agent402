@@ -322,7 +322,7 @@ curl -X POST https://agent402.tools/api/decide \
 - **The fee comes back.** A decision paid with a wallet returns its fee as a 24-hour credit toward
   `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps bought from the
   seller and resold at the seller's price plus a disclosed 5% markup. Spend stops at the budget,
-  fallbacks are tried in order, and a run where no step succeeds is not charged. Because it can
+  fallbacks are tried in order, and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed. Because it can
   buy from outside sellers, execute is paid from a wallet (x402, or MPP on a chain).
 - **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
   whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).

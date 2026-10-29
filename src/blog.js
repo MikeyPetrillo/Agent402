@@ -78,7 +78,7 @@ export const BLOG_POSTS = [
   <li>The decision fee comes back as a credit worth all of it, valid for 24 hours, toward running that plan.</li>
   <li>Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed markup.</li>
   <li>Backups run in order. A backup that names an input differently gets it under its own name.</li>
-  <li>Spend stops at your budget, and a run where no step succeeds is not charged.</li>
+  <li>Spend stops at your budget, and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed.</li>
   <li>Every step comes back with its own receipt.</li>
 </ul>
 
