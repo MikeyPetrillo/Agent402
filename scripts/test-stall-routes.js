@@ -220,9 +220,17 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   cache.set(origin, { ...v, fetchedAt: 2 });
   const fresh = "https://stall-routes-new.example";
   cache.set(fresh, { ...v, manifest: { name: "stall routes new", homepage: fresh }, tools: v.tools.map((t) => ({ ...t, seller: fresh })), fetchedAt: 2 });
-  const rebuilt = await blockOf(() => x.routableSellerSummaries());
+  // The alias walk behind the rebuild reads a host per cached origin, redirect
+  // target and homepage: each is parsed once per string, never once per walk,
+  // so a rebuild parses URLs for the changed sellers only.
+  const RealURL = globalThis.URL;
+  let parses = 0;
+  globalThis.URL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  let rebuilt;
+  try { rebuilt = await blockOf(() => x.routableSellerSummaries()); } finally { globalThis.URL = RealURL; }
   const projected = x._routableRowBuildsForTest() - before;
   ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
+  ok(parses <= 16, `...and parses URLs for the changed sellers only (${parses} parses over ${rebuilt.value.length} sellers)`);
   ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
 }
