@@ -20,7 +20,7 @@ The 402 lists the challenges in a fixed order: `tempo` (one per currency, USDC.e
 - `tempo` is offered on every paid route except the identity-bound ones (wallet-keyed memory, usage history, attestations, feedback), whose identity is the signed EIP-3009 payer, and the long-running ones (report products, video, the fast and pro image tiers, seller payability checks), which can outlive a Tempo credential.
 - `stripe` is offered on routes priced $0.50 or more. Identity-bound routes and the routes that buy from an outside seller (the route-execute tiers, `seller-payability`, `/api/decide/execute` and the flight routes) never offer it.
 
-Each paid operation in [`/openapi.json`](https://agent402.tools/openapi.json) lists the same offers in the same order under `x-payment-info.offers` (method, currency, chain, amount in the currency's smallest unit), and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) summarises them under `mpp`.
+Each paid operation in [`/openapi.json`](https://agent402.tools/openapi.json) lists the same offers in the same order under `x-payment-info.offers` (method, currency, chain, amount in the currency's smallest unit), and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) summarizes them under `mpp`.
 
 ### Signing an `evm` challenge: use the token's own EIP-712 domain
 

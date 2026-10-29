@@ -1504,7 +1504,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (body.method === "tasks/cancel") {
       // Cooperative and eventually consistent: we abort the live run, which
       // makes the paid request a non-200 and CANCELS settlement.
-      try { await tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error cancelling task"); }
+      try { await tasks.cancel(taskId); } catch { return err(TASK_INTERNAL_ERROR, "Internal error canceling task"); }
       return okResult(taskAck());
     }
     // tasks/update: this connector never elicits, so it never surfaces
