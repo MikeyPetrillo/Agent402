@@ -800,7 +800,7 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.quote === "function" && String(tool.slug).startsWith("v1-chat-metered") ? ` ${meteredQuoteSentence()}` : ""}${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""}${meteredTwinPath(tool.slug) ? ` For the same models quoted per request from the body (settlement never exceeds the quote), use POST ${meteredTwinPath(tool.slug)}.` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.quote === "function" && String(tool.slug).startsWith("v1-chat-metered") ? ` ${meteredQuoteSentence()}` : ""}${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""}${meteredTwinPath(tool.slug) ? ` For the same models quoted per request from the body (on x402, Tempo and credits, settlement never exceeds the quote), use POST ${meteredTwinPath(tool.slug)}.` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
