@@ -57,10 +57,27 @@ ok(/googletagmanager\.com\/gtag\/js\?id=/.test(loader), "loader: loads Google's 
   ok(/page_location: location\.origin \+ location\.pathname/.test(loader) && /\^utm_\[a-z_\]\+\$/.test(loader), "loader: the URL sent drops every query parameter but utm_*");
 }
 
-const server = readFileSync(new URL("../src/security-headers.js", import.meta.url), "utf8");
-const csp = /"default-src 'self';[^"]*"/.exec(server)?.[0] || "";
-ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(csp), "CSP: script-src adds exactly www.googletagmanager.com");
-ok(!/script-src[^;]*('unsafe-inline'|'unsafe-eval'|\*)/.test(csp), "CSP: no unsafe-inline, unsafe-eval or wildcard in script-src");
+const { contentSecurityPolicy, securityHeaders } = await import("../src/security-headers.js");
+const csp = contentSecurityPolicy();
+const cspGa = contentSecurityPolicy({ analytics: true });
+ok(/script-src 'self';/.test(csp), "CSP: the site policy allows scripts from this origin only");
+ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(cspGa) && cspGa.replace(" https://www.googletagmanager.com", "") === csp, "CSP: the analytics policy adds exactly www.googletagmanager.com");
+ok(![csp, cspGa].some((c) => /script-src[^;]*('unsafe-inline'|'unsafe-eval'|\*)/.test(c)), "CSP: no unsafe-inline, unsafe-eval or wildcard in script-src");
+{
+  // Per answer: only a body that carries the GA loader widens script-src.
+  const answer = (path, body) => {
+    const h = {};
+    const res = { headersSent: false, setHeader: (k, v) => { h[k.toLowerCase()] = v; }, getHeader: (k) => h[k.toLowerCase()], send() { return this; } };
+    securityHeaders()({ path }, res, () => {});
+    res.send(body);
+    return h["content-security-policy"];
+  };
+  process.env.GA_MEASUREMENT_ID = "G-TEST1234";
+  ok(answer("/", `<html>${gaSnippet(`${B}/`)}</html>`) === cspGa, "a page whose body carries the GA loader gets the analytics policy");
+  ok(answer("/r/cs_1", `<html>${gaSnippet(`${B}/r/cs_1`)}</html>`) === csp, "a bearer page (no loader) keeps the site policy");
+  ok(answer("/", Buffer.from(`<html>${gaSnippet(`${B}/`)}</html>`)) === cspGa, "a Buffer body is read the same way");
+  delete process.env.GA_MEASUREMENT_ID;
+}
 
 const privacy = readFileSync(new URL("../src/privacy.js", import.meta.url), "utf8");
 ok(/Google Analytics/.test(privacy) && /_ga/.test(privacy) && !/no accounts, no cookies/i.test(privacy), "privacy page names Google Analytics and its cookie, and no longer claims no cookies");

@@ -20,11 +20,31 @@ function headIsHtml(res, headArgs) {
   }
   return false;
 }
+// The analytics tag's script host is allowed per answer: only an HTML body
+// that carries the first-party GA loader (src/ledger-chrome.js gaSnippet,
+// which leaves it off every bearer-link page) gets it in script-src.
+const GA_SCRIPT_HOST = "https://www.googletagmanager.com";
+const GA_LOADER_MARK = "/js/ga-loader.js";
+function bodyCarriesGaLoader(body) {
+  if (typeof body === "string") return body.includes(GA_LOADER_MARK);
+  if (Buffer.isBuffer(body)) return body.includes(GA_LOADER_MARK);
+  return false;
+}
 export function securityHeaders() {
   return (req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+    const send = res.send;
+    if (typeof send === "function") {
+      res.send = function (body) {
+        // Only the site policy is widened; a route that set its own is left as it is.
+        if (!res.headersSent && res.getHeader("content-security-policy") === contentSecurityPolicy() && bodyCarriesGaLoader(body)) {
+          res.setHeader("Content-Security-Policy", contentSecurityPolicy({ analytics: true }));
+        }
+        return send.apply(this, arguments);
+      };
+    }
     if (DOCUMENT_HEADERS_SKIP.test(req.path)) {
       const writeHead = res.writeHead;
       res.writeHead = function (...args) {
@@ -43,8 +63,10 @@ function setDocumentHeaders(res) {
   // XSS or third-party script accidentally probing for them.
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
-  res.setHeader(
-    "Content-Security-Policy",
+  res.setHeader("Content-Security-Policy", contentSecurityPolicy());
+}
+export function contentSecurityPolicy({ analytics = false } = {}) {
+  return (
     // script-src drops 'unsafe-inline' (2026-08-16): every page-behavior
     // script site-wide now lives in a real file under /js/:file (strict
     // filename allowlist, no path traversal - see server.js's /js/:file
@@ -56,16 +78,17 @@ function setDocumentHeaders(res) {
     // automatic escaping, across hundreds of call sites; removing
     // 'unsafe-inline' means a future missed esc() call can no longer be
     // turned into a working <script> injection, only inert markup. The one
-    // script host beyond 'self' is www.googletagmanager.com
-    // (2026-10-01), which serves the Google Analytics tag loaded by
-    // assets/js/ga-loader.js when GA_MEASUREMENT_ID is set; its collection
-    // requests ride the existing connect-src/img-src https:.
+    // script host beyond 'self' is www.googletagmanager.com, added only to
+    // an answer whose body carries the GA loader (see securityHeaders); it
+    // serves the Google Analytics tag loaded by assets/js/ga-loader.js when
+    // GA_MEASUREMENT_ID is set, and its collection requests ride the
+    // existing connect-src/img-src https:.
     // form-action: a form submits only to this origin, or to mailto: (the
     // /company contact form opens the visitor's email app). Card checkout is
     // a redirect, never a form post to another origin.
     // scripts/test-csp-form-action.js keeps every form in the tree inside it.
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https:; frame-src 'self' https://live.agent402.tools; object-src 'none'; base-uri 'self'; form-action 'self' mailto:; frame-ancestors 'self'"
-  );
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self' https:; frame-src 'self' https://live.agent402.tools; object-src 'none'; base-uri 'self'; form-action 'self' mailto:; frame-ancestors 'self'"
+  ).replace("script-src 'self';", analytics ? `script-src 'self' ${GA_SCRIPT_HOST};` : "script-src 'self';");
 }
 
 export { DOCUMENT_HEADERS_SKIP, setDocumentHeaders, headIsHtml };
