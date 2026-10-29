@@ -58,6 +58,12 @@ const packs = await (await fetch(`${TARGET}/api/skill-packs.json`)).json();
   }
   console.log(`llms.txt: ${seen} route prices checked, ${stale} stale`);
   if (seen < 20 || stale) { console.error(`FAIL: llms.txt route prices (${seen} seen, ${stale} stale)`); process.exit(1); }
+  // "most tools $a to $b" is one constant the prose reads; it must still
+  // describe most of the served catalog's flat prices.
+  const { TYPICAL_PRICE_RANGE, typicalPriceShare } = await import("../src/typical-price-range.js");
+  const share = typicalPriceShare((pricing.endpoints || []).map((e) => e.price));
+  ok(share > 0.5, `the "most tools ${TYPICAL_PRICE_RANGE.text}" band covers ${(share * 100).toFixed(0)}% of the served catalog's priced tools`);
+  ok(llms.includes(`most tools ${TYPICAL_PRICE_RANGE.text}`), "llms-full.txt quotes that band");
 }
 const routeByPath = new Map();   // "/api/x" -> { price, method }
 const priceBySlug = new Map();
