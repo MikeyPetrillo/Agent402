@@ -204,7 +204,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
   const expired = (rec) => rec.ttlMs != null && now() - (rec.createdAtMs || 0) > rec.ttlMs;
   const ORPHAN_MESSAGE = "This run did not survive a server restart and was not completed. You were not charged: payment settles only on a delivered result. Please call again.";
   const ORPHAN_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart; not charged." });
-  const CANCEL_MESSAGE = "Cancelled at your request. The run may still have completed and been charged; if it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.";
+  const CANCEL_MESSAGE = "Canceled at your request. The run may still have completed and been charged; if it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.";
 
   const newRecord = (slug) => {
     const iso = new Date(now()).toISOString();

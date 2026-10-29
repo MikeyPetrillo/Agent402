@@ -1173,6 +1173,8 @@ jobs:
           t node scripts/test-no-third-party-names.js
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
+          # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
+          t node scripts/test-us-spelling.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
           t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)

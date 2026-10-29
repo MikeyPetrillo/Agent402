@@ -1920,7 +1920,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
       throw bad(
         `"zdr" is not available on ${tier.route.split(" ")[1]}. "${tier.lockedModel || "This tier's model"}" is a stealth ` +
         "(cloaked) preview listing: the provider serves it at no cost in exchange for RETAINING and reviewing prompts and " +
-        "completions, so zero-data-retention routing cannot be honoured here at any price. Send confidential input to a " +
+        "completions, so zero-data-retention routing cannot be honored here at any price. Send confidential input to a " +
         "priced tier instead - /v1/nano/chat/completions ($0.003), /v1/chat/completions ($0.02), /v1/pro/chat/completions " +
         "($0.10) and /v1/premium/chat/completions ($0.50) all accept zdr:true."
       );

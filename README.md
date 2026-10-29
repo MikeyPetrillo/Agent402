@@ -377,7 +377,7 @@ curl -X POST https://agent402.tools/api/route \
 curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
 ```
 
-**Dispatch is labelled, never implied:** every `/api/route` row and `/api/index`
+**Dispatch is labeled, never implied:** every `/api/route` row and `/api/index`
 seller carries `routerDispatchEligible` and `routerDispatchReason` (`crawl_failed`,
 `network_unknown`, `settlement_required`, `settlement_checked_at_pay_time`,
 `eligible`, ...); `executeVia` appears only on a row the router will pay right

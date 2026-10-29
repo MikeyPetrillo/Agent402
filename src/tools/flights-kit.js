@@ -352,7 +352,7 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
     // never for prepaid credits or a card (src/third-party-routes.js).
     paysThirdPartySeller: true,
     price: `${FLIGHT_STATUS_PRICE_USD}`,
-    description: "Live status of one flight by its number: scheduled, estimated and actual departure and arrival, delay in minutes, gates and terminals, progress, cancelled or diverted. Give a date to pick that day's flight; otherwise the flight in the air now or the next to depart. A day the flight does not fly answers found:false with the days it does. Bought live per request from an outside flight data seller; the answer names which seller served it.",
+    description: "Live status of one flight by its number: scheduled, estimated and actual departure and arrival, delay in minutes, gates and terminals, progress, canceled or diverted. Give a date to pick that day's flight; otherwise the flight in the air now or the next to depart. A day the flight does not fly answers found:false with the days it does. Bought live per request from an outside flight data seller; the answer names which seller served it.",
     tags: ["travel", "flights", "flight status", "flight tracker", "delay", "departure", "arrival", "gate", "is my flight on time"],
     discovery: {
       bodyType: "json",

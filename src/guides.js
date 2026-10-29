@@ -798,7 +798,7 @@ was minted from, and that entry's \`extra.name\` and \`extra.version\` are the
 domain to sign under, read from the token on chain.
 
 If a credential does arrive signed under a different known name, we recover the
-signer and recognise it before spending a facilitator round trip on it. You get
+signer and recognize it before spending a facilitator round trip on it. You get
 a \`402\` with an RFC 9457 \`application/problem+json\` body naming both the name
 you signed under and the one the token uses, so the mistake is readable instead
 of looking like an outage. That response also carries no \`WWW-Authenticate\`
