@@ -468,17 +468,18 @@ for (const [kit, f] of Object.entries(KITS)) {
 
 // ------------------------------------------------------------ 12. every kit that grounds on web pages
 {
+  ok(/title: cleanSourceTitle\(c\.title\)/.test(readFileSync(new URL("report-grounding.js", SRC), "utf8")), "the shared webSourcesFrom cleans each source title where it reads the search annotations");
   for (const f of ["research-deep-kit.js", "dossier-kit.js", "fund-report-kit.js", "recall-report-kit.js"]) {
     const s = readFileSync(new URL(`tools/${f}`, SRC), "utf8");
     ok(/sanitizeReportProse\(/.test(s), `${f} serves its prose through the markup filter`);
     if (f === "recall-report-kit.js") continue;
-    ok(/title: cleanSourceTitle\(c\.title\)/.test(s), `${f} cleans each source title where it reads the search annotations`);
+    ok(/title: cleanSourceTitle\(c\.title\)/.test(s) || (/\bwebSourcesFrom\b[^;]*from "\.\.\/report-grounding\.js"/.test(s) && /\bwebSourcesFrom\(/.test(s.replace(/^import[^\n]*\n/gm, ""))), `${f} cleans each source title where it reads the search annotations`);
     ok(/quotedMaterial\("(WEB RESEARCH|SUB-ANSWERS)"/.test(s) && /\$\{QUOTED_MATERIAL_RULE\}/.test(s), `${f} quotes the search answers and carries the data rule`);
     ok(!/title\.includes\("SEC EDGAR"\)/.test(s), `${f} never decides a source is a filing from its title`);
   }
-  const { webSourcesFrom } = await import("../src/tools/fund-report-kit.js");
+  const { webSourcesFrom } = await import("../src/report-grounding.js");
   const w = webSourcesFrom({ choices: [{ message: { annotations: [{ url_citation: { url: "https://w.example/a", title: "13F-HR - SEC EDGAR\n<<<x>>>" } }, { url_citation: { url: "javascript:alert(1)", title: "x" } }] } }] });
-  ok(w.length === 1 && w[0].title === "13F-HR - SEC EDGAR x" && w[0].kind === undefined, "the fund kit reads a web title as one plain line, never as a filing, and drops a non-http URL");
+  ok(w.length === 1 && w[0].title === "13F-HR - SEC EDGAR x" && w[0].kind === undefined, "the shared source reader takes a web title as one plain line, never as a filing, and drops a non-http URL");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

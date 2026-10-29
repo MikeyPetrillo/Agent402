@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { REPORT_TIERS } from "../src/report-tiers.js";
 import { LINKEDIN_WORDS } from "../src/tools/linkedin-article-kit.js";
-import { stoppedForLength, trimToCompleteBlock, completeSynthesis, proseOf, SHORTENED_NOTE, lengthRetryNote } from "../src/report-synthesis.js";
+import { stoppedForLength, trimToCompleteBlock, completeSynthesis, proseOf, SHORTENED_NOTE, lengthRetryNote, settleWithin } from "../src/report-synthesis.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const resp = (content, finish, cost = 0.01) => ({ choices: [{ message: { content }, finish_reason: finish }], usage: { cost } });
@@ -79,6 +79,22 @@ for (const kit of registryKits) {
   ok(other.every((x) => /^\d[\d_]*$/.test(x.cap)), `${kit}: search and planning calls carry a fixed literal cap (${other.map((x) => `${x.model}=${x.cap}`).join(" | ") || "none"})`);
   const helpers = [...src.matchAll(/(?:const GROUND = |\b(?:ground|plan): )"([^"]+)"/g)].map((m) => m[1]);
   ok(helpers.every((id) => !/^anthropic\//.test(id)), `${kit}: the search and planning models are not the synthesis model (${helpers.join(", ") || "none"})`);
+}
+// settleWithin: a data leg never throws, and a leg that settles early leaves
+// no timer behind to hold the process for the rest of its timeout.
+{
+  const timers = () => process.getActiveResourcesInfo().filter((t) => t === "Timeout").length;
+  const before = timers();
+  const okLeg = await settleWithin(Promise.resolve(7), 60_000);
+  const badLeg = await settleWithin(Promise.reject(Object.assign(new Error("upstream down"), { statusCode: 503 })), 60_000);
+  ok(okLeg.ok === true && okLeg.data === 7 && badLeg.ok === false && badLeg.error === "upstream down" && badLeg.status === 503, "a leg settles to {ok,data} or {ok:false,error,status}");
+  ok(timers() === before, `a settled leg leaves no timer pending (${timers() - before} left)`);
+  const slow = await settleWithin(new Promise(() => {}), 20);
+  ok(slow.ok === false && slow.error === "timeout" && slow.status === 504, "a leg past its timeout fails as a 504 timeout");
+  const sync = await settleWithin(() => { throw Object.assign(new Error("bad input"), { statusCode: 400 }); }, 1000);
+  ok(sync.ok === false && sync.error === "bad input" && sync.status === 400 && timers() === before, "a function leg that throws synchronously is a failed leg");
+  const plain = await settleWithin(Promise.reject("x"));
+  ok(plain.ok === false && plain.error === "x" && plain.status === null, "a non-Error rejection reads as its string, with no status");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

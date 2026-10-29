@@ -19,7 +19,8 @@
 // synthesis. Settlement-safe (throws >=400 on total failure), WALLET_ONLY, not
 // cached. Synthesis gated on OPENROUTER_API_KEY.
 import { stepProgress } from "../job-progress.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { reportChat, costOf, textOf, settleWithin } from "../report-synthesis.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle } from "../report-grounding.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
@@ -134,22 +135,9 @@ function H(slug) {
   if (!t) throw bad(`token-risk: missing dependency '${slug}'`, 500);
   return t.handler;
 }
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 // `status` rides back because a caller has to tell "the source answered and
 // held nothing" (422) from "the source did not answer" (502/503/504, or no
 // status at all for a timeout or a socket error). Those need opposite words.
-async function settle(p, timeoutMs) {
-  try {
-    const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
-    return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e), status: Number(e?.statusCode) || null }; }
-}
 // The statuses that mean "not this buyer's fault"; anything else a probe
 // reports is normalised to 503 rather than relayed.
 const UNAVAILABLE_STATUS = new Set([502, 503, 504]);
@@ -182,7 +170,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
   const goplus = deps.probeGoPlus || probeGoPlus;
   const dexPairs = deps.probeDexPairs || probeDexPairs;
   const tool = deps.tool || H;
-  const ask = deps.chat || chat;
+  const ask = deps.chat || reportChat;
   return async (input, req) => {
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"address": "0x…", "chain": "base"}');
     const address = String(input.address ?? input.token ?? "").trim();
@@ -196,10 +184,10 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
 
     // 1) ON-CHAIN PROBES (parallel, each non-fatal).
     const [srcR, gpR, dexR, abiR] = await Promise.all([
-      settle(tool("contract-source")({ address, network: chain }), PROBE_TIMEOUT_MS),
-      settle(goplus({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(dexPairs({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(tool("contract-abi")({ address, network: chain }), PROBE_TIMEOUT_MS),
+      settleWithin(tool("contract-source")({ address, network: chain }), PROBE_TIMEOUT_MS),
+      settleWithin(goplus({ chain, address }), PROBE_TIMEOUT_MS),
+      settleWithin(dexPairs({ chain, address }), PROBE_TIMEOUT_MS),
+      settleWithin(tool("contract-abi")({ address, network: chain }), PROBE_TIMEOUT_MS),
     ]);
     const src = srcR.ok ? srcR.data : null;
     const gp = gpR.ok ? gpR.data : null;
@@ -247,7 +235,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
     if (t.scan && verified) {
       const source = extractSource(src);
       if (source.trim()) {
-        const r = await settle(tool("solidity-scan")({ source }), PROBE_TIMEOUT_MS);
+        const r = await settleWithin(tool("solidity-scan")({ source }), PROBE_TIMEOUT_MS);
         if (r.ok) scan = r.data; else scanErr = r.error;
       } else scanErr = "verified source text was not extractable from the verification record";
     }

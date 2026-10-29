@@ -24,9 +24,9 @@
 //   describeFilingChanges(prev, next) human-readable lines for the filings in
 //     `next` that were not in `prev` - the body of the alert email.
 import { stepProgress } from "../job-progress.js";
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { completeSynthesis, proseOf, reportChat, costOf } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany } from "./edgar-kit.js";
 // The submissions read itself is the helper ticker-pack already ships (one
 // EDGAR JSON read, column-oriented "recent" arrays zipped into rows). Imported,
@@ -240,13 +240,6 @@ export const formLabel = (form) => FORM_LABELS[String(form || "").toUpperCase()]
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(Math.max(n, lo), hi) : d; };
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
@@ -746,7 +739,7 @@ ${docBlocks || "(no primary document was read for this window)"}`;
     // 5) SYNTHESIZE.
     let spent = 0;
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);

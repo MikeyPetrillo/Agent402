@@ -39,9 +39,9 @@
 // upstream cost read internally and never returned, WALLET_ONLY,
 // composite-guarded, not cached. 503 without OPENROUTER_API_KEY.
 import { stepProgress } from "../job-progress.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
-import { stoppedForLength, trimToCompleteBlock } from "../report-synthesis.js";
+import { stoppedForLength, trimToCompleteBlock, reportChat, costOf, textOf } from "../report-synthesis.js";
 import { checkReportGrounding, combineGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText } from "./edgar-kit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
@@ -113,13 +113,6 @@ const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.is
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 function edgarUserAgent() { return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools"; }
 
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 /** "4 x8, 144 x3, 10-K x1": the per-form tally of a filing list, in order of first appearance. */
 export function formCounts(list) {
   const m = new Map();
@@ -560,7 +553,7 @@ function defaultDeps() {
     probe13G,
     runDossier: makeDossierHandler("dossier"),
     runInsider: makeInsiderHandler("insider-report"),
-    synthesize: async (body, timeoutMs, user) => chat(body, timeoutMs, user),
+    synthesize: async (body, timeoutMs, user) => reportChat(body, timeoutMs, user),
     now: () => Date.now(),
   };
 }

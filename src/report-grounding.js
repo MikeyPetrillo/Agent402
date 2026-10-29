@@ -356,6 +356,30 @@ export function cleanSourceTitle(title, max = 200) {
     .trim();
 }
 
+// The grounded-search model cites its sources inline as [domain](url) or bare
+// [domain.com] tags. They are stripped from the sub-answers so the
+// synthesizer cites the numbered source list instead of copying them.
+export function stripInlineCites(s) {
+  return String(s || "")
+    .replace(/\[([^\]]+)\]\((?:https?:)?\/\/[^)]+\)/g, "$1")                           // [text](url) -> text
+    .replace(/\[[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}(?:\s*,\s*[a-z0-9][a-z0-9.\-]*\.[a-z]{2,})*\]/gi, "") // [domain.com] / [d1, d2] -> ""
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+// Sources from a grounded answer's url_citation annotations. A page title is
+// read outside the quoted blocks and served in the Sources list, so it is
+// cleaned to one plain line here, once; a URL must be a plain http(s) URL.
+export function webSourcesFrom(d) {
+  const anns = d?.choices?.[0]?.message?.annotations || [];
+  const out = [];
+  for (const a of anns) {
+    const c = a?.url_citation || a;
+    if (c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))) out.push({ title: cleanSourceTitle(c.title) || cleanSourceTitle(c.url), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
+  }
+  return out;
+}
+
 /** Text from a web page or a web-search answer, wrapped the way every
  *  synthesis prompt marks material that is evidence only. The markers are
  *  removed from the text first, so the text cannot close its own block. */

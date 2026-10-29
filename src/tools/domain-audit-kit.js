@@ -10,10 +10,10 @@
 // remediation plan. The probes are free (only the synthesis touches OpenRouter).
 // Settlement-safe (throws >=400 on failure), WALLET_ONLY, not cached. Gated on
 // OPENROUTER_API_KEY for the synthesis (503 without it).
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "../report-synthesis.js";
 import { stepProgress } from "../job-progress.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { KIT } from "./kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { NETWORK_TOOLS } from "./network-kit.js";
@@ -48,12 +48,6 @@ function H(slug) {
   if (!t) throw bad(`domain-audit: missing dependency '${slug}'`, 500);
   return t.handler;
 }
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
 // The DMARC facts separate what the record SAYS from what applies by default,
 // so the report never presents a default (sp, aspf, adkim, fo, ri) as a
 // setting the domain chose, and never invents a value for an absent tag.
@@ -70,14 +64,7 @@ export function dmarcFacts(d) {
   const ruf = tags.ruf ? "" : "; no ruf tag, so no failure reports are requested";
   return `p=${d.policy} at ${d.percent}% (valid=${d.valid}); record: "${raw.replace(/"/g, "'")}"; tags present: ${present || "none beyond v"}; not in the record (defaults apply): ${defaults || "none"}${ruf}`;
 }
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 
-async function settle(p, timeoutMs) {
-  try {
-    const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
-    return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
-}
 
 /** Mailboxes a domain already publishes for reports: DMARC rua + ruf, plus any
  *  CAA iodef contact.
@@ -249,16 +236,16 @@ export async function probeDomain(domain, { pro = false } = {}) {
   // slowest probe instead of the sum of three rounds.
   const [core, www, proTools] = await Promise.all([
     Promise.all([
-      settle(emailH({ domain }), PROBE_TIMEOUT_MS),
-      settle(tlsH({ host: domain }), PROBE_TIMEOUT_MS),
-      settle(hdrH({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
-      settle(probeDnsPosture(domain), PROBE_TIMEOUT_MS),
+      settleWithin(emailH({ domain }), PROBE_TIMEOUT_MS),
+      settleWithin(tlsH({ host: domain }), PROBE_TIMEOUT_MS),
+      settleWithin(hdrH({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
+      settleWithin(probeDnsPosture(domain), PROBE_TIMEOUT_MS),
     ]),
     probeWwwPair(domain, hdrH),
     pro ? Promise.all([
-      settle(H("cert-transparency")({ domain, limit: 200 }), PROBE_TIMEOUT_MS),
-      settle(H("tech-stack")({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
-      settle(H("whois")({ domain }), PROBE_TIMEOUT_MS),
+      settleWithin(H("cert-transparency")({ domain, limit: 200 }), PROBE_TIMEOUT_MS),
+      settleWithin(H("tech-stack")({ url: `https://${domain}` }), PROBE_TIMEOUT_MS),
+      settleWithin(H("whois")({ domain }), PROBE_TIMEOUT_MS),
     ]) : null,
   ]);
   const [emailR, tlsR, hdrR, dnsR] = core;
@@ -402,7 +389,7 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
 
     let spent = 0;
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     // The audited domain is the one source a link may name.
