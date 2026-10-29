@@ -299,5 +299,16 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor, checkToken: async () =
   ok(r.ok === false, "token check: with no secret key nothing passes");
 }
 
+// The server's own priceFor for the card gate marks a long-running route, so
+// gate G's refusal applies on the real server (the closure is not exported;
+// read from source like the other server wiring checks).
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = server.indexOf("const stripeGate = createStripeGate({");
+  const block = at >= 0 ? server.slice(at, server.indexOf("});", at)) : "";
+  ok(/priceFor:/.test(block) && /longRunning: isLongRunningSlug\(def\.slug\)/.test(block), "server: the card gate's priceFor marks long-running routes");
+}
+
 console.log(`\n${pass} passed, 0 failed`);
 process.exit(0);
