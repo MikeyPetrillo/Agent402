@@ -2899,7 +2899,9 @@ try {
     // _humanCheckout are wired below.
     onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id)
       : session?.metadata?.product && _humanCheckout ? _humanCheckout.fulfill(session.id) : null),
-    onChargeReversed: (paymentIntent, type) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded") : null),
+    // A refunded or disputed pack payment: the refunded amount leaves the key's
+    // balance; the key is disabled once the payment is fully reversed.
+    onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card

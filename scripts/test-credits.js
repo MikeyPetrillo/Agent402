@@ -307,9 +307,10 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const ls = {};
   const refunds = [];
   const fp = {}; // payment intent -> card fingerprint
+  const refundedCents = {}; // payment intent -> what Stripe has refunded of it
   const lstripe = {
     checkout: { sessions: { retrieve: async (id) => { if (!ls[id]) throw new Error("no"); return ls[id]; } } },
-    paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { payment_method_details: { card: { fingerprint: fp[id] || null } } } }) },
+    paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { amount_refunded: refundedCents[id] || 0, payment_method_details: { card: { fingerprint: fp[id] || null } } } }) },
     refunds: { create: async (a) => { refunds.push(a); return { id: "re_" + refunds.length }; } },
   };
   let t = Date.parse("2026-10-28T12:00:00Z");
@@ -328,6 +329,30 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   ok((await buy("cs_l4", { email: "other@x.com", card: "fp_a" })).status === "over_limit", "limit: the same card under another email is the same buyer");
   ok((await buy("cs_l5", { email: "A@X.com", card: "fp_z" })).status === "over_limit", "limit: the same email in another case, with another card, is the same buyer");
   ok((await buy("cs_l6", { email: "b@x.com", card: "fp_b" })).status === "minted", "limit: a different buyer is unaffected");
+  // ---- a payment Stripe refunded before the claim, and refunds after it ----
+  {
+    const refundsBefore = refunds.length;
+    refundedCents.pi_cs_rf1 = CREDIT_PACKS["credits-100"].cents;
+    const r1 = await buy("cs_rf1", { email: "rf@x.com", card: "fp_rf" });
+    ok(r1.status === "refunded" && !r1.key && !r1.keyId, "a pack refunded in full before its claim mints no key and answers refunded");
+    ok((await lc.claim("cs_rf1")).status === "refunded" && refunds.length === refundsBefore && !(await lc.refusalsToRefund()).includes("cs_rf1"), "claiming it again answers the same; nothing is refunded twice and nothing is owed");
+    refundedCents.pi_cs_rf2 = 2500;
+    const r2 = await buy("cs_rf2", { email: "rf@x.com", card: "fp_rf" });
+    ok(r2.status === "minted" && r2.balanceUsd === 75, `a pack partly refunded before its claim is minted net of the refund (${r2.balanceUsd})`);
+    // charge.refunded carries the charge's running refunded total: a partial
+    // refund lowers the balance and keeps the key; a full one disables it.
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 5000, fullyRefunded: false }) === r2.keyId && lc.balance(r2.key).balanceUsd === 50,
+      `a partial refund after minting takes only the new part off the balance (${lc.balance(r2.key).balanceUsd})`);
+    const held = lc.authorize(r2.key, 0.001);
+    ok(held.ok, "...and leaves the key usable");
+    lc.release(held.hash, held.heldMicro);
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 5000, fullyRefunded: false }) === r2.keyId && lc.balance(r2.key).balanceUsd === 50,
+      "the same refund delivered again takes nothing more");
+    ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r2.keyId && lc.authorize(r2.key, 0.001).reason === "disabled" && lc.balance(r2.key).balanceUsd === 0,
+      "a full refund takes the rest and disables the key");
+    const r3 = await buy("cs_rf3", { email: "rf2@x.com", card: "fp_rf2" });
+    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "disabled", "a dispute disables the key outright");
+  }
   ok((await buy("cs_l7", { email: "c@x.com", card: "fp_c", pack: "credits-20" })).status === "minted", "limit: a small purchase by a new buyer is issued");
   t += 86_400_001;
   ok((await buy("cs_l8")).status === "minted", "limit: after 24 hours the same buyer can buy again");

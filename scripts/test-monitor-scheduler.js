@@ -218,14 +218,32 @@ const capRow = capSch.status().subs.find((x) => x.subId === "sub_c");
 ok(fulls === MAX_FULL_PER_SUB_30D && capRow.capReached === true && capRow.fullsLast30d === MAX_FULL_PER_SUB_30D, `a flapping target is capped at ${MAX_FULL_PER_SUB_30D} paid runs per 30 days; further changes are alert-only`);
 active.delete("sub_c");
 
-// --- permanent failure notice (once) -----------------------------------------------------------
+// --- failure notice (once): at the welcome run's first failure, else at the fifth in a row -------
 active.set("sub_p", { subId: "sub_p", status: "active", product: "fund-monitor", target: "Nonexistent Fund", email: "p@x.com" });
 const failSch = mk({ resolveManager: async () => { const e = new Error("Could not confidently resolve"); e.statusCode = 404; throw e; } });
 const mP = calls.mail.length;
-for (let i = 0; i < 7; i++) { clock += DAY + 1; await failSch.tick({ force: true, subId: "sub_p" }); }
+clock += DAY + 1; await failSch.tick({ force: true, subId: "sub_p" });
+const firstMails = calls.mail.slice(mP).filter((x) => x.reason === "problem");
+ok(firstMails.length === 1 && firstMails[0].to === "p@x.com" && /Could not confidently resolve/.test(firstMails[0].changes[0]), "a welcome run that fails tells the subscriber at its FIRST failure (with the manage link): the thanks page promised a first report within minutes");
+for (let i = 0; i < 6; i++) { clock += DAY + 1; await failSch.tick({ force: true, subId: "sub_p" }); }
 const pMails = calls.mail.slice(mP).filter((x) => x.reason === "problem");
-ok(pMails.length === 1 && pMails[0].to === "p@x.com" && /Could not confidently resolve/.test(pMails[0].changes[0]), "after 5 consecutive failures the subscriber is told ONCE (with the manage link), not every day");
+ok(pMails.length === 1, "...and is told ONCE, not every day");
 active.delete("sub_p");
+// A monitor whose welcome report was delivered is told at the fifth failure in a row, once.
+active.set("sub_w", { subId: "sub_w", status: "active", product: "domain-monitor", target: "w.example.com", email: "w@x.com" });
+const laterSch = mk();
+clock += HOUR; await laterSch.tick({ force: true, subId: "sub_w" });
+const mW = calls.mail.length;
+ok(calls.mail[mW - 1].reason === "welcome" && calls.mail[mW - 1].to === "w@x.com", "its welcome report was delivered");
+probeFail = true;
+for (let i = 0; i < 4; i++) { clock += DAY + 1; await laterSch.tick({ force: true, subId: "sub_w" }); }
+ok(calls.mail.slice(mW).filter((x) => x.reason === "problem").length === 0, "four failures after a delivered report send no notice (the backoff retries quietly)");
+clock += DAY + 1; await laterSch.tick({ force: true, subId: "sub_w" });
+clock += DAY + 1; await laterSch.tick({ force: true, subId: "sub_w" });
+const wMails = calls.mail.slice(mW).filter((x) => x.reason === "problem");
+ok(wMails.length === 1 && wMails[0].to === "w@x.com", "the fifth consecutive failure tells the subscriber once");
+probeFail = false;
+active.delete("sub_w");
 
 // --- recall watch: welcome, free daily probe, paid run only on a NEW recall number ------------
 active.set("sub_r", { subId: "sub_r", status: "active", product: "recall-monitor", target: "losartan", email: "r@x.com" });

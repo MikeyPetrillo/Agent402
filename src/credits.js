@@ -69,7 +69,7 @@ export { creditsDailyMaxCents };
 // hand, raised as creditsRefunds on /api/gateway-status). Kinds: "refused"
 // (the daily purchase limit) and "refused-taxid" (an EU or UK billing address
 // with no business tax ID).
-const REFUSAL_KINDS = { limit: "refused", taxId: "refused-taxid" };
+const REFUSAL_KINDS = { limit: "refused", taxId: "refused-taxid", refunded: "refused-refunded" };
 const isRefused = (v) => typeof v === "string" && v.startsWith("refused");
 // "<kind>:pending@<ms>" carries when the refusal began, so a refund stuck
 // there (a crash between refusing and refunding) is owed after STUCK_MS.
@@ -332,20 +332,23 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // refunded: true (done), false (failed; we refund it by hand) or null (in progress).
   const overLimitAnswer = (refunded) => ({ status: "over_limit", refunded, limitUsd: creditsDailyMaxCents() / 100 });
   const taxIdAnswer = (refunded) => ({ status: "tax_id_required", refunded });
-  const refusedAnswer = (v) => (String(v).startsWith(REFUSAL_KINDS.taxId) ? taxIdAnswer(refusalRefunded(v)) : overLimitAnswer(refusalRefunded(v)));
+  // A payment Stripe had already refunded in full when it was claimed: no key.
+  const refundedAnswer = () => ({ status: "refunded" });
+  const refusedAnswer = (v) => (String(v).startsWith(REFUSAL_KINDS.taxId) ? taxIdAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.refunded) ? refundedAnswer() : overLimitAnswer(refusalRefunded(v)));
   // Who bought: lowercased email and the card's fingerprint, whichever the
-  // session carries. A read that fails leaves a field null; the other still
-  // matches.
+  // session carries, and how much of the payment Stripe has refunded already
+  // (cents). A read that fails leaves a field null; the other still matches.
   async function buyerOf(session, paymentIntent) {
     const email = String(session.customer_details?.email || session.customer_email || "").trim().toLowerCase() || null;
-    let cardFingerprint = null;
+    let cardFingerprint = null, refundedCents = 0;
     if (paymentIntent && stripe.paymentIntents?.retrieve) {
       try {
         const pi = await stripe.paymentIntents.retrieve(paymentIntent, { expand: ["latest_charge"] });
         cardFingerprint = pi?.latest_charge?.payment_method_details?.card?.fingerprint || null;
+        refundedCents = Math.max(0, Number(pi?.latest_charge?.amount_refunded) || 0);
       } catch { /* the email still matches */ }
     }
-    return { email, cardFingerprint };
+    return { email, cardFingerprint, refundedCents };
   }
   // Credits this buyer was issued in the 24 hours before `at`, in cents.
   // A key minted for `sessionId` itself never counts against that session.
@@ -503,6 +506,18 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (euUkTaxIdRequired() && EU_UK.has(country) && !hasTaxId) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.taxId, "eu_uk_tax_id_required");
     // The daily purchase limit, checked before anything is issued.
     if ((await boughtInDayCents(buyer, now(), sessionId)) + p.cents > creditsDailyMaxCents()) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.limit, "daily_purchase_limit");
+    // A payment already refunded in full mints nothing (claim-once, nothing
+    // to refund); a partial refund is minted net of what went back.
+    if (buyer.refundedCents >= p.cents) {
+      if (!(await refuseSession(sessionId, REFUSAL_KINDS.refunded))) {
+        const theirs = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
+        return isRefused(theirs[sessionId]) ? refusedAnswer(theirs[sessionId]) : claimedAnswer(theirs[sessionId] ? await readRec(theirs[sessionId]) : null);
+      }
+      await setRefusal(sessionId, "refunded").catch(() => {});
+      log(`[credits] session ${sessionId} was refunded before its claim; no key issued`);
+      return refundedAnswer();
+    }
+    const refundedMicro = buyer.refundedCents * 10_000;
     const key = `a402_${randomBytes(24).toString("base64url")}`;
     const hash = hashKey(key);
     const keyId = hash.slice(0, 12);
@@ -513,7 +528,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     // The buyer's answers to the required checkout fields (business use, terms).
     const fields = Object.fromEntries((Array.isArray(session.custom_fields) ? session.custom_fields : []).map((f) => [String(f?.key || ""), String(f?.dropdown?.value || "")]));
     const consent = { use: fields.use || null, terms: fields.terms === "agreed" ? session.metadata?.terms || null : null };
-    const rec = { keyId, balanceMicro: loadedMicro, loadedMicro, spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
       // another container won in between leaves an orphan row, removed here.
@@ -538,7 +553,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#111315"><h2 style="font-weight:700">Your Agent402 credits key</h2><p>$${(p.cents / 100).toFixed(2)} loaded. Keep the key secret - it is shown only here and on the thanks page.</p><pre style="background:#0c0d0f;color:#e9eaec;padding:14px 16px;border-radius:4px;font-size:13px;overflow:auto">${key}</pre><p>Use it on any paid tool:</p><pre style="background:#f3f4f5;padding:12px 14px;border-radius:4px;font-size:13px;overflow:auto">curl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com</pre><p style="color:#626970;font-size:13px">Balance: <code>GET ${baseUrl}/api/credits/balance</code> with the same header · Top up at <a href="${baseUrl}/credits">${baseUrl}/credits</a></p></div>` }).catch(() => {}); // design-tokens: literal (email body)
     }
     log(`[credits] minted key ${keyId} ($${(p.cents / 100).toFixed(2)}) for session ${sessionId}`);
-    return { status: "minted", key, keyId, balanceUsd: microToUsd(loadedMicro) };
+    return { status: "minted", key, keyId, balanceUsd: microToUsd(rec.balanceMicro) };
   }
 
   // ---- the money moves, as pure steps on one record --------------------------
@@ -664,13 +679,26 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     return false;
   }
 
-  // A refunded or disputed pack payment disables its key (clawback). Looked
-  // up by PaymentIntent id from the Stripe webhook (charge.refunded /
-  // charge.dispute.created). Returns the key id or null.
+  // A refunded or disputed pack payment claws its key back. Looked up by
+  // PaymentIntent id from the Stripe webhook (charge.refunded /
+  // charge.dispute.created). A refund with an amount takes that much (the
+  // charge's running total, so a second refund takes only its own part) off
+  // the balance, and disables the key only once the payment is fully
+  // refunded; a dispute, or a refund with no amount, disables it outright.
+  // Returns the key id or null.
   const paidBy = (r, paymentIntent) => r && Array.isArray(r.paymentIntents) && r.paymentIntents.includes(paymentIntent);
-  function disableByPaymentIntent(paymentIntent, reason = "refunded") {
+  function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null } = {}) {
     if (!paymentIntent) return answer(null);
-    const clawback = (r) => { r.disabled = true; r.disabledReason = reason; log(`[credits] key ${r.keyId} disabled (${reason}, ${paymentIntent})`); return r.keyId; };
+    const cents = amountRefundedCents == null ? null : Number(amountRefundedCents);
+    const clawback = (r) => {
+      if (reason === "refunded" && cents !== null && Number.isFinite(cents) && cents >= 0) {
+        const refundedMicro = Math.round(cents) * 10_000;
+        const delta = refundedMicro - (r.refundedMicro || 0);
+        if (delta > 0) { r.balanceMicro = Math.max(0, r.balanceMicro - delta); r.refundedMicro = refundedMicro; }
+        if (fullyRefunded !== true && refundedMicro < (r.loadedMicro || 0)) { log(`[credits] key ${r.keyId}: $${(cents / 100).toFixed(2)} refunded (${paymentIntent}), balance reduced`); return r.keyId; }
+      }
+      r.disabled = true; r.disabledReason = reason; log(`[credits] key ${r.keyId} disabled (${reason}, ${paymentIntent})`); return r.keyId;
+    };
     if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => paidBy(x.rec, paymentIntent)); return hit ? mutatePg(hit.hash, (r) => (paidBy(r, paymentIntent) ? { rec: r, result: clawback(r) } : { result: null })) : null; });
     for (const { hash, rec: r } of allKeys()) {
       if (paidBy(r, paymentIntent)) { const id = clawback(r); save(hash, r); return id; }
