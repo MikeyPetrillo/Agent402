@@ -52,6 +52,19 @@ let reads = 0;
 const C2 = cred("0x" + "cc".repeat(32));
 await noteVerifyFailure({ paymentPayload: C2, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", reason: REVERT, priceUsd: 0.005, now, balanceReader: async () => { reads++; return 1; } });
 ok(reads === 0 && hintForCredential(credentialKeyOf(C2), { now })?.retry === "fresh-authorization", "a non-Base network never reads the Base balance; the hint still says to sign fresh");
+// A Circle Gateway batched payment is paid from the signer's Gateway deposit:
+// a balance refusal from Gateway never reads the wallet's Base balance, and
+// the hint says to deposit, not to fund the wallet.
+{
+  const batched = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "5000", extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee" } }, payload: cred("0x" + "dd".repeat(32)).payload };
+  let gwReads = 0;
+  const g = await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
+  ok(gwReads === 0 && g.balanceUsd === null, "a batched payment on Base reads no wallet balance (the deposit is what paid)");
+  ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-wallet" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on eip155/.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with the price (${g.hint})`);
+  ok(hintFor({ reason: "insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).hint.includes("Fund the wallet") && !hintFor({ reason: "insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).hint.includes("Gateway"), "control: the same word on a plain payment still says to fund the wallet");
+  const other = await noteVerifyFailure({ paymentPayload: { ...batched, payload: cred("0x" + "ee".repeat(32)).payload }, network: "eip155:8453", reason: "invalid_signature", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
+  ok(gwReads === 0 && other.retry === "fresh-authorization" && !/Gateway/.test(other.hint), "another refusal of a batched payment reads no balance and keeps its own words");
+}
 
 // usdcBalanceOnBase: one multicall eth_call, cache, unreadable -> null
 const AGG3 = [{ type: "function", name: "aggregate3", stateMutability: "payable",
