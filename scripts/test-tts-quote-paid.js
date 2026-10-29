@@ -14,7 +14,10 @@
 //   - a text over the cap quotes the ceiling and, paid, is refused 400 before
 //     any speech call, with nothing settled;
 //   - /api/pricing, /openapi.json, the tool page and /llms-full.txt publish the
-//     range and the formula.
+//     range and the formula;
+//   - no card: with the Stripe card rail mounted, tts and tts-hd at the cap
+//     carry no stripe/charge challenge, while a metered chat quote that clears
+//     the card minimum still does.
 // Offline: a stub facilitator and a stub speech upstream (the OpenRouter
 // preload), a seeded credits key in a scratch store; no payment leaves the machine.
 import { spawn } from "node:child_process";
@@ -89,8 +92,9 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-prelo
     OPENROUTER_API_KEY: "test-key-stubbed", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`,
     MPP_SECRET_KEY: "test-tts-quote-paid-secret", TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY,
     TEMPO_API_BASE_URL: `http://127.0.0.1:${FAC_PORT}/tempo`,
-    // Credits run on the card switch; no Stripe call is made by a spend.
-    STRIPE_SECRET_KEY: "sk_test_tts_quote", STRIPE_PROFILE_ID: "",
+    // Credits run on the card switch; no Stripe call is made by a spend. The
+    // profile id mounts the stripe/charge appender (minting makes no API call).
+    STRIPE_SECRET_KEY: "sk_test_tts_quote", STRIPE_PROFILE_ID: "profile_test_tts_quote",
     SALES_LEDGER_DB: SALES_DB, POSTHOG_API_KEY: "",
     FACILITATOR_GAS_CHECK: "off", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", STATS_ALLOW_EPHEMERAL: "true",
@@ -193,6 +197,21 @@ try {
   const llmsFull = await (await fetch(`${B}/llms-full.txt`)).text();
   const line = llmsFull.split("\n").find((l) => l.startsWith("- tts | POST /api/tts |"));
   ok(line && line.includes("| from $0.005 |") && line.includes(ttsQuoteFormula("tts")), `/llms-full.txt: the catalog line reads "from" the floor and carries the formula`);
+
+  // 7. the card rail stays off tts and tts-hd at every length; a metered chat
+  // quote that clears the card minimum keeps its stripe/charge challenge.
+  const stripeChallenge = (r) => /method="stripe"/.test(r.headers.get("www-authenticate") || "");
+  for (const path of ["/api/tts", "/api/tts-hd"]) {
+    const r = await post(path, { text: text(2000) });
+    ok(r.status === 402 && !stripeChallenge(r) && /method="tempo"/.test(r.headers.get("www-authenticate") || ""), `${path} at 2,000 characters: Tempo is offered, no stripe/charge challenge (${r.status})`);
+  }
+  const costTable = !!(process.env.UPSTREAM_COSTS_JSON || process.env.UPSTREAM_COSTS_FILE);
+  if (!costTable && !process.env.CI) console.log("skip - the metered card control needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a quote past the card minimum");
+  else {
+    const big = { model: "anthropic/claude-opus-5", max_tokens: 8192, messages: [{ role: "user", content: "Summarize the history of payment protocols. ".repeat(400) }] };
+    const r = await post("/v1/metered/chat/completions", big);
+    ok(r.status === 402 && stripeChallenge(r), `control: a metered chat quote past the card minimum carries a stripe/charge challenge (${r.status})`);
+  }
 
   console.log(`\nPASS - ${pass} checks (tts quote, booted paid server)`);
   cleanup(); process.exit(0);

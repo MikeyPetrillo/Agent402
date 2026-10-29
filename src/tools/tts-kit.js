@@ -485,9 +485,11 @@ function makeRouteHandler(tierSlug) {
 }
 /** The tool fields of a quoted tier: its floor as the list price, the quote
  *  function every gate prices through, the ceiling at the cap, the formula in
- *  words, and the input check the Tempo gate runs before its relay. */
+ *  words, and the input check the Tempo gate runs before its relay. No card
+ *  offer: the card rail stays off these routes at every length. */
 const quotedFields = (tierSlug) => ({
   price: `$${(TTS_QUOTE[tierSlug].floorMilli / 1000).toFixed(3)}`,
+  cardOffer: false,
   quote: (body) => ttsQuoteUsd(tierSlug, ttsQuoteChars(body)),
   quoteMaxUsd: ttsQuoteUsd(tierSlug, TIERS[tierSlug].maxChars),
   quoteFormula: ttsQuoteFormula(tierSlug),

@@ -141,9 +141,12 @@ function paidUsdOf(def, req, res, caip2) {
 // the card processor's fee would turn small card charges into a loss (audit
 // 2026-08-26); the stripe/charge challenge on a quoted route
 // carries the fee grossed up (ceil to a cent), the same way per-chain premiums
-// price fee-charging rails. Flat routes keep their listed price.
+// price fee-charging rails. Flat routes keep their listed price. A route
+// whose def sets cardOffer: false gets no card price, so neither the
+// stripe/charge challenge nor the Stripe gate prices it.
 const CARD_FEE_RATE = 0.029, CARD_FEE_FIXED_USD = 0.30;
 function cardPriceUsd(def, req) {
+  if (def?.cardOffer === false) return 0;
   const q = quotedPriceUsd(def, req);
   if (typeof def?.quote !== "function" || !(q > 0)) return q;
   return Math.ceil(((q + CARD_FEE_FIXED_USD) / (1 - CARD_FEE_RATE)) * 100) / 100;
