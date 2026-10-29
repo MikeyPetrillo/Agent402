@@ -1,7 +1,9 @@
 // Unit-test the PDF transforms on in-memory buffers (no network — the fetch
 // layer is SSRF-guarded and tested separately). Covers the new pdf-* tools.
 import { PDFDocument } from "pdf-lib";
+import zlib from "node:zlib";
 import { pdfInfo, mergePdfs, extractPages, rotatePdf, imagesToPdf, parsePages } from "../src/tools/pdf-kit.js";
+import { runPdfOp } from "../src/tools/pdf-offthread.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 
@@ -64,6 +66,34 @@ if (!threw) fail("parsePages should reject out-of-range");
 try { await rotatePdf(a, 45); fail("rotate should reject 45°"); } catch {}
 try { await pdfInfo(Buffer.from("not a pdf")); fail("pdfInfo should reject non-PDF"); } catch {}
 console.log("validation ✓ (ranges, bad angle, non-PDF rejected)");
+
+// Decompression bound and the event loop. A small object stream that inflates
+// to hundreds of MB is refused with a 422 from the worker's decode cap, while
+// the main thread's loop stays free; the type name is also written with a
+// #-escape, which pdf-lib decodes, to show the cap does not depend on it.
+function objStmBomb(mb, typeName) {
+  const header = "1 0 ";
+  const comp = zlib.deflateSync(Buffer.concat([Buffer.from(header), Buffer.alloc(mb * 1048576, 0x20), Buffer.from("null")]), { level: 9 });
+  return Buffer.concat([
+    Buffer.from("%PDF-1.7\n2 0 obj\n<< /Type /Catalog /Pages 3 0 R >>\nendobj\n3 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"),
+    Buffer.from(`4 0 obj\n<< /Type /${typeName} /N 1 /First ${header.length} /Filter /FlateDecode /Length ${comp.length} >>\nstream\n`),
+    comp, Buffer.from("\nendstream\nendobj\ntrailer\n<< /Root 2 0 R >>\n%%EOF\n"),
+  ]);
+}
+for (const typeName of ["ObjStm", "Obj#53tm"]) {
+  const bomb = objStmBomb(200, typeName);
+  let worst = 0, last = performance.now();
+  const iv = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+  let err = null;
+  try { await pdfInfo(bomb); } catch (e) { err = e; }
+  clearInterval(iv);
+  if (!err || err.statusCode !== 422 || !/decode past/.test(err.message)) fail(`${typeName} bomb (${bomb.length} bytes) should be refused 422 by the decode cap (got ${err ? `${err.statusCode} ${err.message}` : "an answer"})`);
+  if (worst >= 150) fail(`${typeName} bomb held the event loop ${Math.round(worst)} ms (bound 150)`);
+}
+// The deadline terminates a job that overruns it.
+try { await runPdfOp("info", [a], [], { timeoutMs: 1 }); fail("a job past its deadline should be refused"); }
+catch (e) { if (e.statusCode !== 422 || !/longer than/.test(e.message)) fail(`deadline refusal should be 422 (got ${e.statusCode} ${e.message})`); }
+console.log("bounds ✓ (inflation bomb refused off-thread, deadline enforced)");
 
 console.log("\nPDF toolkit: all assertions passed");
 process.exit(0);
