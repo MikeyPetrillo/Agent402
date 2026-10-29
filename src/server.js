@@ -1277,7 +1277,7 @@ const SOR_EXTERNAL_ENABLED = /^(1|true|yes|on)$/i.test((process.env.SOR_EXTERNAL
 //      don't deliver a paid result (klymax 404s outright; coinstats 402s the
 //      probe then 404s the paid call). So on Base we route ONLY to sellers with
 //      proven settled volume: the leaderboard's callsSettled is real completed
-//      paid deliveries (buyers kept paying because they got results). MIN_SETTLED
+//      paid deliveries (buyers kept paying because they got results). SOR_MIN_SETTLED_TX
 //      gates out the unproven long tail. NOT an absolute across every chain since
 //      2026-09-02: Solana has a bounded unproven tier (SOR_SVM_UNPROVEN_MAX_USD,
 //      tried only after every proven candidate), and Base since 2026-09-30

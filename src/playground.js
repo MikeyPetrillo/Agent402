@@ -1,13 +1,13 @@
 // Playground — interactive tool-tester page.  Lets visitors pick any Agent402
 // tool, fill in its inputs, solve a proof-of-work challenge in the browser, and
-// see the live JSON response.  Entirely server-rendered HTML + inline vanilla JS
-// (no frameworks, no external scripts).
+// see the live JSON response.  Server-rendered HTML plus one same-origin
+// vanilla script, assets/js/playground.js (no frameworks, no third-party
+// scripts).
 //
-// NOTE: The inline highlightJson() function uses .innerHTML to render
-// syntax-highlighted JSON output. The input is pre-serialised JSON passed
-// through the inline escH() HTML-escaper before highlight regex runs, so
-// user-controlled values never reach the DOM un-escaped. This pattern is
-// carried over from the original pre-migration code.
+// NOTE: highlightJson() in assets/js/playground.js uses .innerHTML to render
+// syntax-highlighted JSON output. The input is pre-serialized JSON passed
+// through that file's escH() HTML-escaper before the highlight regex runs, so
+// user-controlled values never reach the DOM un-escaped.
 
 import { ledgerShell, ledgerFooterCompact, esc, jsonScriptTag, fmtNum } from "./ledger-chrome.js";
 import { toolList } from "./pages.js";

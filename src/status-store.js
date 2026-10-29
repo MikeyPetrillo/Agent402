@@ -11,7 +11,7 @@
 //   A consequence worth understanding: when production is down, the heartbeat's
 //   POST to this store fails too, so the outage appears as a GAP rather than a
 //   row of zeros. Gaps are therefore treated as unobserved, never as uptime.
-//   `dailyUptime` reports the observation count next to every percentage so a
+//   `dailyFrom` reports the observation count next to every percentage so a
 //   thinly-sampled day can never masquerade as a well-measured one.
 //
 // The table is idempotent by (source, component, ts) so the one-time GitHub

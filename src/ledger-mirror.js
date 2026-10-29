@@ -574,8 +574,8 @@ export function createLedgerWriter({ enqueue, ready, deadLetter, warnOnce, befor
 /** After this long on local disk an entry reads "stuck" (LEDGER_DEAD_LETTER_STUCK_MINUTES). */
 export const DEAD_LETTER_STUCK_MINUTES = Number(process.env.LEDGER_DEAD_LETTER_STUCK_MINUTES) || 20;
 /**
- * One word for the ledgers' dead-letters together (each state from a ledger's
- * deadLetterState()): "stuck" when any entry has been on local disk longer
+ * One word for the ledgers' dead-letters together (each state from
+ * journalStates(), one per journal's dead-letter): "stuck" when any entry has been on local disk longer
  * than `stuckMinutes` (a write that has not reached Postgres in that time,
  * kept only on this container's disk), "pending" when an entry waits for the
  * replay, "none" otherwise; "off" without a state database. An entry whose

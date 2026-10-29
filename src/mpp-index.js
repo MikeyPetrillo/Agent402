@@ -5,7 +5,7 @@
 // population - sellers that speak MPP, not necessarily x402.
 //
 // Discovery source: https://mpp.dev/api/services, the same registry mppx's own
-// CLI (`services list`) reads (see node_modules/mppx/src/cli/cli.ts). It ships
+// CLI (`services list`) reads (see node_modules/mppx/dist/cli/cli.js). It ships
 // rich, structured per-service data (description, categories, tags, docs,
 // priced endpoints) - unlike x402-index.js, which has to derive most of that
 // itself from raw manifest/OpenAPI crawling, this only needs to independently
