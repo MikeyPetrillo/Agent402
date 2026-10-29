@@ -96,21 +96,25 @@ LLC: credit the entity, never a personal name.
   the committed `src/generated/page-dates.json`: after editing a page module or a tool kit run
   `node scripts/gen-page-dates.js --write` (`scripts/test-page-dates.js` fails when it is stale).
 - Prices quoted in prose are derived from the catalog, never typed
-  (`scripts/test-price-prose.js`). Skill-pack prices are generated
-  (`node scripts/pack-prices.js --write`).
+  (`scripts/test-price-prose.js`); the "most tools" per-call band is `TYPICAL_PRICE_RANGE`
+  (`src/typical-price-range.js`), and a markdown surface that quotes it must match its `text`.
+  Skill-pack prices are generated (`node scripts/pack-prices.js --write`).
 - A list answer that is a page or a capped sample says so in fields (`src/partial-answer.js`),
   not only in a prose note.
 - Before adding a data source, read its terms.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
-- Public copy: first-party and affirmative, no competitor names, no em dashes.
+- Public copy: first-party and affirmative, no competitor names, no em dashes, US spelling
+  (`scripts/test-us-spelling.js` reads the markdown trees, the page modules and every tool
+  description; a quoted token or an object key is a contract value and is not read).
 - Copy that offers something reads the switch that sells it (`creditsSalesEnabled()`), and is
   guarded by test-static-pages, test-legal-dates, test-wire-count-copy, test-pack-copy-retired
   and copy-absolutes. No third-party seller or counterparty name in any tracked file
   (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`). No hidden
   character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
   instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
-  the READMEs and `src/mcp-http.js`; the same scan (`src/hidden-chars.js`) is a listing finding
+  the package READMEs, the adapter READMEs, `src/mcp-http.js`, `src/mcp-flagship.js`,
+  `src/server.js` and `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding
   in the index's injection screen.
 
 ## Key machine-readable surfaces (free)
