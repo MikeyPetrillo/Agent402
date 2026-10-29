@@ -14,7 +14,6 @@
 // it. The remaining tools here take a URL, so they are wallet-only and stay
 // inline. Shared primitives live in image-ops.js so both sides run one
 // implementation.
-import { loadJimp } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import {
   bad, MAX_DIM, declaredDimensions, posInt, readImage, sniffFormat, toBuffer, MIME,
@@ -300,8 +299,10 @@ export const IMAGE_TOOLS = [
     handler: async (i) => {
       const buf = await inputBuffer(i);
       const format = sniffFormat(buf);
-      let width = null, height = null;
-      try { const { Jimp } = await loadJimp(); const img = await Jimp.read(buf); width = img.width; height = img.height; } catch { /* dims stay null for undecodable containers */ }
+      // Size comes from the container header, never a decode: this tool reports
+      // metadata, so it has no reason to allocate the pixel canvas.
+      const dims = declaredDimensions(buf);
+      const width = dims ? dims.width : null, height = dims ? dims.height : null;
       const tiff = extractExifBuffer(buf);
       const parsed = tiff ? parseTiff(tiff) : null;
       const exif = parsed ? parsed.exif : {};

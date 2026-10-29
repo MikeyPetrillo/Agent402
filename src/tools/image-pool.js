@@ -80,6 +80,8 @@ function spawnSlot() {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
     if (msg.error) {
       settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));
+    } else if (msg.result !== undefined) {
+      settle(slot, slot.job.resolve, msg.result); // a JSON answer (op "barcode")
     } else {
       settle(slot, slot.job.resolve, {
         __binary: Buffer.from(msg.buffer.buffer, msg.buffer.byteOffset, msg.buffer.byteLength),
@@ -124,7 +126,8 @@ function pump() {
 
 /** Run one decode/transform/encode off the main thread. Resolves with the same
  *  { __binary, contentType } shape the inline implementation returned, and
- *  rejects with the same messages and statusCode values. */
+ *  rejects with the same messages and statusCode values. op "barcode" resolves
+ *  with the decoder's JSON answer instead. */
 export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MAX_SRC_PIXELS }) {
   // Kept ahead of the queue on purpose: the header pre-check is a few byte reads,
   // and refusing an oversized image here means a hostile small-file/huge-canvas

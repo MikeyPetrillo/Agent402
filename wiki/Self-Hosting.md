@@ -17,6 +17,7 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 - **git**
 - **Optional:** Redis (response caching), Postgres (the state database via `STATE_DATABASE_URL`, and analytics/call tracking)
 - **Optional:** Chromium + ffmpeg if you want browser/media tools (Chromium via `npx playwright install --with-deps chromium`, ffmpeg from your OS package manager; the project's own `Dockerfile` installs both)
+- **Optional:** OCR language data if you want `image-ocr`: `node scripts/fetch-tessdata.js` installs the pinned, hash-checked files into `tessdata/` (or pass a directory and set `OCR_TESSDATA_DIR`); the project's own `Dockerfile` runs it at build time
 
 ## Quick start
 

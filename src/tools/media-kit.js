@@ -8,6 +8,7 @@
 // Transforms are pure functions over Buffers (unit-testable); the catalog
 // handlers fetch then delegate.
 import { execFile } from "node:child_process";
+import { childEnv } from "./child-env.js";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,7 +60,7 @@ export function mediaInputArgs(buffer, inPath) {
 
 function run(bin, args) {
   return new Promise((resolve, reject) => {
-    execImpl(bin, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execImpl(bin, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() }, (err, stdout, stderr) => {
       if (err) {
         // A missing binary is OUR configuration, never the buyer's file: say
         // so as a 503 (uncharged). The 422 wording blamed the file for a
