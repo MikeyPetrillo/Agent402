@@ -177,6 +177,66 @@ try {
   // Held money with no entry (a build without entries placed it) comes back once the row is quiet.
   await sdb.stateQuery(`UPDATE ${RT} SET body = jsonb_set(body, '{heldMicro}', to_jsonb(30000)), updated_at = now() - interval '1 hour' WHERE collection = 'credits' AND id = $1`, [`k_${HASH}`]);
   ok((await E.sweepAbandonedHolds()).released === 1 && JSON.stringify(await bal()) === JSON.stringify([0.38, 0]), "held money no entry accounts for is returned once the row has been quiet for the window");
+  // ---- (8) a delivered 200 whose settle cannot land at once (a database
+  // failover): the settle is retried with backoff; a hold marked settling
+  // that no settle reached is debited by the sweep, never returned.
+  {
+    const { hookStatements } = await import("./lib/pg-statement-hook.js");
+    const sales = [];
+    const mkS = () => createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, onDebit: (d) => sales.push(d), log: quiet });
+    const G = mkS(), H = mkS(); // two containers
+    await G.ready(); await H.ready();
+    const gateG = G.gate((m, p) => (p === "/api/whois" ? { priceUsd: 0.01, slug: "whois" } : null));
+    let target = null, failSettles = 0, failed = 0;
+    const isSettleOf = (sql, values) => {
+      if (!target || !/^\s*UPDATE/i.test(sql)) return false;
+      try { const b = JSON.parse(values[2]); return !!b?.settledHolds?.[target] && !b.settledHolds[target].booked && !b?.holds?.[target]; } catch { return false; }
+    };
+    const unhook = hookStatements(await sdb.stateDb(), async (sql, values, run) => {
+      if (failSettles > 0 && isSettleOf(sql, values)) { failSettles--; failed++; throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }); }
+      return run();
+    });
+    try {
+      // (a) the settle throws three times, then lands.
+      const before = await rowRec(HASH);
+      const r1 = fakeRes();
+      await gateG({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, r1, () => {});
+      target = Object.keys((await rowRec(HASH)).holds)[0];
+      failSettles = 3;
+      r1.statusCode = 200; r1.end(); r1.emit("finish");
+      await until(async () => (await rowRec(HASH)).heldMicro === 0, 10_000);
+      const a1 = await rowRec(HASH);
+      ok(failed === 3 && a1.heldMicro === 0 && a1.spentMicro === before.spentMicro + 10_000 && a1.balanceMicro === before.balanceMicro - 10_000, `a settle that throws three times still debits the key (failed ${failed}, held ${a1.heldMicro}, spent +${a1.spentMicro - before.spentMicro}, balance ${a1.balanceMicro - before.balanceMicro})`);
+      ok(sales.length === 1 && sales[0].priceUsd === 0.01, `and books the sale once (${JSON.stringify(sales.map((s) => s.priceUsd))})`);
+
+      // (b) the settle never lands before its retries end: the hold was marked
+      // settling as the response ended, and another container's sweep turns
+      // it into spend and books it; a settle that lands afterwards books nothing.
+      process.env.CREDITS_ABANDONED_HOLD_MS = "1500";
+      const b0 = await rowRec(HASH);
+      const r2 = fakeRes();
+      await gateG({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, r2, () => {});
+      target = Object.keys((await rowRec(HASH)).holds)[0];
+      failSettles = Infinity; failed = 0;
+      r2.statusCode = 200; r2.end();
+      ok(await until(async () => !!(await rowRec(HASH)).holds?.[target]?.s), "a final 200 marks its hold settling as the response ends");
+      r2.emit("finish");
+      await wait(3_500); // the settle's retries end inside the window; the hold ages past it
+      const mid = await rowRec(HASH);
+      ok(failed >= 1 && mid.heldMicro === 10_000 && mid.balanceMicro === b0.balanceMicro - 10_000, `the settle gave up and the hold is still held, not returned (failed ${failed}, held ${mid.heldMicro})`);
+      const sw = await H.sweepAbandonedHolds();
+      const b1 = await rowRec(HASH);
+      ok(sw.settled === 1 && sw.released === 0 && b1.heldMicro === 0 && b1.balanceMicro === b0.balanceMicro - 10_000 && b1.spentMicro === b0.spentMicro + 10_000 && b1.calls === b0.calls + 1, `the sweep debits the settling hold: nothing returns to the balance (${JSON.stringify(sw)}, balance ${b1.balanceMicro - b0.balanceMicro}, spent +${b1.spentMicro - b0.spentMicro})`);
+      ok(sales.length === 2 && sales[1].priceUsd === 0.01 && sales[1].slug === "whois", `the sweep books the sale once (${JSON.stringify(sales.map((s) => s.priceUsd))})`);
+      failSettles = 0;
+      const lateS = await G.settle(HASH, 10_000, "whois", null, target);
+      const b2 = await rowRec(HASH);
+      ok(lateS.chargedUsd === 0.01 && b2.spentMicro === b1.spentMicro && b2.balanceMicro === b1.balanceMicro && sales.length === 2, `a settle that lands after the sweep moves nothing and books nothing (${sales.length} sales)`);
+    } finally {
+      unhook();
+      delete process.env.CREDITS_ABANDONED_HOLD_MS;
+    }
+  }
   // ---- refusals on the database: the claim-once marker, its refund outcome
   // (regexp_replace keeps the kind), stuck pending, and the daily limit
   // across two instances sharing the rows.
