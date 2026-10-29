@@ -96,11 +96,16 @@ if (!process.env.RENDER_EGRESS_PROXY_URL) {
   const priv = http.createServer((req, res) => { privHits.push(req.url); res.writeHead(200, { "content-type": "text/html" }); res.end("<html><body><article><h1>PRIVATE</h1></article></body></html>"); });
   await new Promise((r) => priv.listen(0, "127.0.0.1", r));
   const PRIV = `http://localhost:${priv.address().port}`;
+  const pubHits = [];
   const pub = http.createServer((req, res) => {
+    pubHits.push(req.url);
     if (req.url === "/ok") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<html><body><article><h1>Public page</h1><p>public body text</p></article></body></html>"); }
     if (req.url === "/redir") { res.writeHead(302, { location: `${PRIV}/via-redirect` }); return res.end(); }
     if (req.url === "/subredir") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><img src="/redir-img"><p>x</p></body></html>'); }
     if (req.url === "/redir-img") { res.writeHead(302, { location: `${PRIV}/via-subresource-redirect` }); return res.end(); }
+    if (req.url === "/popup-pub") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><p>x</p><script>window.open("/popup-target")</script></body></html>'); }
+    if (req.url === "/popup-target") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><body><p>t</p><script>setTimeout(() => { new Image().src = "/popup-alive"; }, 200)</script></body></html>'); }
+    if (req.url === "/popup-alive") { res.writeHead(204); return res.end(); }
     if (req.url === "/popup") { res.writeHead(200, { "content-type": "text/html" }); return res.end(`<html><body><p>x</p><script>window.open(${JSON.stringify(`${PRIV}/via-popup`)})</script></body></html>`); }
     res.writeHead(404); res.end();
   });
@@ -114,6 +119,9 @@ if (!process.env.RENDER_EGRESS_PROXY_URL) {
       await __test.withPage(`${PUB}${path}`, async (page) => { await page.waitForTimeout(500); return page.content(); }).catch(() => null);
     }
     ok(privHits.length === 0, `redirect hops and popups never reach a private host (private hits: ${JSON.stringify(privHits)})`);
+    // A popup to a public page is closed as it opens: its script never runs.
+    await __test.withPage(`${PUB}/popup-pub`, async (page) => { await page.waitForTimeout(1000); return page.content(); }).catch(() => null);
+    ok(pubHits.includes("/popup-pub") && !pubHits.includes("/popup-alive"), `a popup window is closed as it opens (public hits: ${JSON.stringify(pubHits.filter((u) => u.startsWith("/popup")))})`);
   } finally {
     __test.setNetworkGuard(null);
     pub.close();
