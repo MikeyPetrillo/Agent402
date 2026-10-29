@@ -31,6 +31,9 @@ const catalog = {
     { name: "Agent402.Tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
     { name: "Seller-One.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
     { name: "seller-two.example", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
+    // A name read from a crawled page can be that page's title; the row
+    // shows the seller's host instead.
+    { name: "Acme Tools - Home | preview of the API docs", origins: ["https://acme-tools.example/api"], homepage: "https://acme-tools.example", totalUsd: 9.5, callsSettled: 40, uniqueBuyers: 3 },
   ];
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
@@ -54,6 +57,15 @@ const catalog = {
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
   ok(/nothing deducted/i.test(sellSec) && /buyer wallet → your wallet/i.test(sellSec), "the neutrality claim a seller is asking about is still made, plainly");
   ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
+  ok(html.includes(">acme-tools.example<") && !html.includes("Acme Tools - Home"), "a seller whose name is a page title is labeled by its host");
+  {
+    const { sellerLabel } = await import("../src/ledger-home.js");
+    ok(sellerLabel({ name: "one two three four five six seven", origins: ["https://seven.example"] }) === "seven.example" && sellerLabel({ name: "Preview", homepage: "https://p.example" }) === "p.example", "a sentence or a preview page is a title, not a name");
+    ok(sellerLabel({ name: "seller-two.example" }) === "seller-two.example" && sellerLabel({ name: "Acme - Home" }) === "Acme - Home", "a plain name stays, and a title with no host to fall back to stays");
+  }
+  // The shell snippet beside the free-tier demo names the host, like the
+  // register snippet under it: a bare path is not a command anyone can run.
+  ok(html.includes(`curl -s '${BASE_URL}/api/pow/challenge?slug=hash'`) && html.includes(`curl -X POST ${BASE_URL}/api/hash`), "the proof-of-work shell snippet carries the base URL on both calls");
   {
     // The five-column mono table is ~520px wide; at a 375px viewport the card's
     // overflow:hidden clipped the usdc/calls/buyers columns with no way to reach
