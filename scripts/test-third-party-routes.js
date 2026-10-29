@@ -32,7 +32,13 @@ ok(paysThirdParty({ paysThirdPartySeller: true }) === true && paysThirdParty({ s
 
 // Both card-funded gates are handed the flag by the server.
 const server = src("server.js");
-ok(/identityBound: isIdentityBoundRoute\(def\), paysThirdParty: paysThirdParty\(def\) \} : null;\n    \},\n  \}\);/.test(server), "the Stripe card gate receives paysThirdParty");
+{
+  // Read inside the Stripe gate's own options, so a field added beside the
+  // flag (longRunning) does not hide it and another gate's copy cannot pass.
+  const at = server.indexOf("const stripeGate = createStripeGate({");
+  const block = at >= 0 ? server.slice(at, server.indexOf("if (stripeGate)", at)) : "";
+  ok(/priceUsd \? \{[^}]*\bpaysThirdParty: paysThirdParty\(def\)[^}]*\} : null;/.test(block), "the Stripe card gate receives paysThirdParty");
+}
 ok(/slug: def\.slug, identityBound: isIdentityBoundRoute\(def\), paysThirdParty: paysThirdParty\(def\)/.test(server), "the credits gate receives paysThirdParty");
 ok(/!item\.paysThirdParty && priceUsd >= STRIPE_MIN_USD/.test(src("mpp-stripe.js")), "the card challenge is not offered on a third-party route");
 
