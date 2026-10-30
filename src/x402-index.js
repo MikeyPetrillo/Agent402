@@ -8331,6 +8331,23 @@ function internToken(tok) {
   if (tokenIntern.size < TOKEN_INTERN_MAX) tokenIntern.set(tok, tok);
   return tok;
 }
+// The listing screen is a verdict on the exact text, so it is remembered by
+// text. A rebuilt tool object with unchanged text (every index rebuild makes new
+// objects) reuses the verdict instead of re-running the screen, which costs
+// about 2 microseconds a tool and ran for the whole catalog inside route
+// queries. The memo is bounded; a miss just re-screens, so the verdict is the
+// same either way.
+const INJECTION_VERDICT_MAX = 50_000;
+const injectionVerdicts = new Map();
+function screenedInjection(text) {
+  let v = injectionVerdicts.get(text);
+  if (v === undefined) {
+    if (injectionVerdicts.size >= INJECTION_VERDICT_MAX) injectionVerdicts.clear();
+    v = looksLikeListingInjection(text);
+    injectionVerdicts.set(text, v);
+  }
+  return v;
+}
 function toolStatics(t) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
@@ -8353,7 +8370,7 @@ function toolStatics(t) {
     // scripts/test-discovery-note.js asserts no local tool trips it.
     // The slug and route are seller-written too (an operationId, a path) and
     // are screened beside the text; they stay out of `hay`, which is scored.
-    injected: looksLikeListingInjection(hay) || looksLikeListingInjection(`${t.slug || ""} ${t.route || ""}`),
+    injected: screenedInjection(hay) || screenedInjection(`${t.slug || ""} ${t.route || ""}`),
     // A route in a category the router lists but never buys (personal data
     // about individuals, src/route-category.js): it stays in the index and on
     // /api/index?seller= with its category_excluded verdict, and is never

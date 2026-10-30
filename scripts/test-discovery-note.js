@@ -448,7 +448,10 @@ ok(!/t\.seller !== LOCAL_SELLER && looksLikeListingInjection/.test(src),
 // Both halves are asserted: the memo computes it, and the per-row scorer
 // (`scoreRow`, 2026-09-18, which every local row and every index candidate
 // passes through) refuses on it before any term is scored.
-ok(/injected: looksLikeListingInjection\(hay\)/.test(src) && /if \(st\.injected\) (?:continue|return);/.test(src),
+// The verdict is remembered by its exact text (screenedInjection, 2026-10-30),
+// so a rebuilt tool with the same text reuses it; the memo itself must call the
+// same screen on a miss, or the memo could hide a listing from the check.
+ok(/injected: screenedInjection\(hay\)/.test(src) && /function screenedInjection\(text\) \{[\s\S]*?looksLikeListingInjection\(text\)/.test(src) && /if \(st\.injected\) (?:continue|return);/.test(src),
   "router drops any listing that trips the injection check - it runs against every row, ours included");
 
 // Each disclosed advantage must still EXIST in the code. Removing one without
