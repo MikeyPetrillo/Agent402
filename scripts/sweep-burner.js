@@ -50,6 +50,15 @@ export function fitsPlan({ settledAtomic, nextAtomic, plannedAtomic }) {
   return settledAtomic + nextAtomic <= plannedAtomic;
 }
 
+/** The sweep's running totals after one buy's outcome: `settled` is what
+ *  landed, `committed` adds buys whose answer never arrived (they may have
+ *  settled), and the plan check reads `committed`. */
+export function tallyBuy(t, r) {
+  if (r?.settled) return { settled: t.settled + r.atomic, committed: t.committed + r.atomic };
+  if (r?.uncertain) return { settled: t.settled, committed: t.committed + r.atomic };
+  return t;
+}
+
 /** Base units -> a USD string with `dp` places (USDC, 6 decimals). */
 export function usd(atomic, dp = 4) {
   return (Number(atomic) / 10 ** USDC_DECIMALS).toFixed(dp);
@@ -126,23 +135,33 @@ async function main() {
     const payload = await client.createPaymentPayload({ ...q.pr, accepts: [q.accept] });
     const payHeaders = httpc.encodePaymentSignatureHeader(payload);
     const init = denomInit(i);
-    const paid = await fetch(DENOM_URL, { ...init, headers: { ...(init.headers || {}), ...payHeaders } });
+    // A signed buy whose answer never arrived (a reset or timeout) may have
+    // settled: it counts toward the plan as if it did, so the sweep cannot
+    // pass the planned total on buys it could not see land.
+    let paid;
+    try { paid = await fetch(DENOM_URL, { ...init, headers: { ...(init.headers || {}), ...payHeaders } }); }
+    catch (e) { return { settled: false, uncertain: true, atomic: BigInt(q.accept.amount), reason: String(e.message).slice(0, 60) }; }
     return paid.status < 400 ? { settled: true, atomic: BigInt(q.accept.amount) } : { settled: false, reason: `HTTP ${paid.status}` };
   }
 
-  let settled = 0, settledAtomic = 0n, fails = 0;
+  // settledAtomic is what landed; committedAtomic adds the buys in doubt, and
+  // is what the plan check reads.
+  let settled = 0, settledAtomic = 0n, committedAtomic = 0n, uncertain = 0, fails = 0;
   for (let i = 0; i < plan.buys; i++) {
     let r;
-    try { r = await payOnBase(i, settledAtomic); }
+    try { r = await payOnBase(i, committedAtomic); }
     catch (e) { r = { settled: false, reason: String(e.message).slice(0, 60) }; }
     if (r.stop) { console.log(`\nstopping: ${r.reason}`); break; }
-    if (r.settled) { settled++; settledAtomic += r.atomic; fails = 0; process.stdout.write(`.`); }
+    ({ settled: settledAtomic, committed: committedAtomic } = tallyBuy({ settled: settledAtomic, committed: committedAtomic }, r));
+    if (r.uncertain) uncertain++;
+    if (r.settled) { settled++; fails = 0; process.stdout.write(`.`); }
     else if (++fails >= 3) { console.log(`\nstopping: ${r.reason || "settlement failed"} (balance may be at float, or facilitator unavailable)`); break; }
   }
 
   const after = await baseUsdcBalance(account.address).catch(() => null);
   console.log(`\n\n============ SWEEP COMPLETE ============`);
   console.log(`Settled $${usd(settledAtomic, 6)} burner -> treasury (${settled} buys).`);
+  if (uncertain) console.log(`${uncertain} buy(s) got no answer and may have settled (up to $${usd(committedAtomic - settledAtomic, 6)} more); the balance below is the truth.`);
   if (after != null) console.log(`Burner balance now: $${usd(after)} USDC on Base (down $${usd(before - after, 6)}).`);
   console.log(`Treasury tally: ${TARGET}/api/stats`);
   process.exit(0);

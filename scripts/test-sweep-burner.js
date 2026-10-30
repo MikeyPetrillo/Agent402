@@ -2,7 +2,7 @@
 // per-buy amount comes from the tool's live 402, the number of buys from the
 // excess over the float, and a run MAX_CALLS cuts short says so. Importing the
 // script runs nothing (its main is guarded); no key, no network, no spend.
-import { planSweep, baseUsdcAccept, usd, fitsPlan } from "./sweep-burner.js";
+import { planSweep, baseUsdcAccept, usd, fitsPlan, tallyBuy } from "./sweep-burner.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -42,6 +42,17 @@ ok(usd(7_474_000n, 6) === "7.474000" && usd(37000n, 6) === "0.037000", "USDC bas
   ok(fitsPlan({ settledAtomic: plan.plannedAtomic - 37000n, nextAtomic: 37000n, plannedAtomic: plan.plannedAtomic }), "the last buy at the sized price fits the plan");
   ok(!fitsPlan({ settledAtomic: plan.plannedAtomic - 37000n, nextAtomic: 50000n, plannedAtomic: plan.plannedAtomic }), "a buy at a higher price past the plan is refused");
   ok(!fitsPlan({ settledAtomic: plan.plannedAtomic, nextAtomic: 1n, plannedAtomic: plan.plannedAtomic }), "nothing more once the plan is settled");
+}
+
+{
+  // A buy whose answer never arrived counts toward the plan, so the sweep
+  // stops before it can pass the planned total on buys it could not see.
+  let t = { settled: 0n, committed: 0n };
+  t = tallyBuy(t, { settled: true, atomic: 37000n });
+  t = tallyBuy(t, { settled: false, uncertain: true, atomic: 37000n });
+  ok(t.settled === 37000n && t.committed === 74000n, "an uncertain buy counts toward committed, not settled");
+  ok(fitsPlan({ settledAtomic: t.committed, nextAtomic: 37000n, plannedAtomic: 111000n }) && !fitsPlan({ settledAtomic: t.committed + 37000n, nextAtomic: 37000n, plannedAtomic: 111000n }), "with a 3-buy plan, one landed and one in doubt leave room for exactly one more");
+  ok(tallyBuy(t, { settled: false, reason: "HTTP 402" }) === t, "a refused buy (nothing signed moved) changes nothing");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
