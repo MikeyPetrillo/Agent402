@@ -141,10 +141,13 @@ const WARN_HEADER_BYTES = Number(process.env.WARN_CHALLENGE_HEADER_BYTES) || 9_0
 // paywall. The challenge shares that budget with the MPP challenge, CORS and
 // the security headers, so the bound is on the total. 16 offers and the MPP
 // challenge are fixed per route; the per-route part has its own budget
-// (CHALLENGE_VARIABLE_MAX_BYTES in src/payments.js). 15,900 leaves about 480
-// bytes under Node's 16,384, about one more rail; the watch line flags the
-// routes to look at before a rail is added.
-const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 15_900;
+// (CHALLENGE_VARIABLE_MAX_BYTES in src/payments.js). 16,200 leaves about 180
+// bytes under Node's 16,384: production's /v1 chat challenge is 16,000 with
+// both Tempo currencies kept (the second is the failover for a Tempo outage),
+// so the ceiling moved to fit it. That margin is less than one more rail; the
+// watch line flags the routes to look at before a rail is added, and a new
+// rail needs a new decision, not a higher ceiling.
+const MAX_TOTAL_HEADER_BYTES = Number(process.env.MAX_TOTAL_HEADER_BYTES) || 16_200;
 const WARN_TOTAL_HEADER_BYTES = Number(process.env.WARN_TOTAL_HEADER_BYTES) || 15_500;
 // The body that provokes the largest challenge on the gateway: a priced
 // model widens the MPP challenge (its quote rides in every method's request).
