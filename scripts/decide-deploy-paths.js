@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { importClosure, lastDeployedBase } from "./worker-deploy-paths.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXED = ["Dockerfile", "docker-entrypoint.sh", "start.js", "package.json", "package-lock.json", "src/tools/decide-kit.js"];
+const FIXED = ["Dockerfile", ".dockerignore", "docker-entrypoint.sh", "start.js", "package.json", "package-lock.json", "src/tools/decide-kit.js"];
 const DIRS = ["services/decide/", "src/decide/"];
 
 export function decideDeployPaths(root = ROOT) {

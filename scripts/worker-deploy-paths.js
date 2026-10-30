@@ -15,7 +15,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXED = ["Dockerfile.worker", "docker-entrypoint.sh", "package.json", "package-lock.json"];
+const FIXED = ["Dockerfile.worker", ".dockerignore", "docker-entrypoint.sh", "package.json", "package-lock.json"];
 const DIRS = ["worker/"];
 
 export function importClosure(entry, root = ROOT) {

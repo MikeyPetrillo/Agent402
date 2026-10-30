@@ -59,5 +59,7 @@ ok(!step["continue-on-error"] && !sel["continue-on-error"], "a failed selector o
 
 ok(/NFILES" -ge 300/.test(selRun) && /fail-open/.test(selRun), "a diff list long enough to be capped redeploys (fail-open)");
 
+ok(/--check 2>\/dev\/null \|\| echo yes\)" != "no"/.test(selRun), "a selector check that fails or prints anything but no redeploys (fail-open)");
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
