@@ -2,7 +2,8 @@
 // per-buy amount comes from the tool's live 402, the number of buys from the
 // excess over the float, and a run MAX_CALLS cuts short says so. Importing the
 // script runs nothing (its main is guarded); no key, no network, no spend.
-import { planSweep, baseUsdcAccept, usd, fitsPlan, tallyBuy } from "./sweep-burner.js";
+import { planSweep, baseUsdcAccept, usd, fitsPlan, tallyBuy, DENOM_PATH } from "./sweep-burner.js";
+import { SKILL_PACKS } from "../src/skills.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -53,6 +54,12 @@ ok(usd(7_474_000n, 6) === "7.474000" && usd(37000n, 6) === "0.037000", "USDC bas
   ok(t.settled === 37000n && t.committed === 74000n, "an uncertain buy counts toward committed, not settled");
   ok(fitsPlan({ settledAtomic: t.committed, nextAtomic: 37000n, plannedAtomic: 111000n }) && !fitsPlan({ settledAtomic: t.committed + 37000n, nextAtomic: 37000n, plannedAtomic: 111000n }), "with a 3-buy plan, one landed and one in doubt leave room for exactly one more");
   ok(tallyBuy(t, { settled: false, reason: "HTTP 402" }) === t, "a refused buy (nothing signed moved) changes nothing");
+}
+
+{
+  // The sweep buys a route that exists: a live skill pack at /api/skill/<slug>.
+  const m = /^\/api\/skill\/([a-z0-9-]+)$/.exec(DENOM_PATH);
+  ok(Boolean(m) && SKILL_PACKS.some((p) => p.slug === m[1]), `the sweep's route ${DENOM_PATH} is a live skill pack route`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
