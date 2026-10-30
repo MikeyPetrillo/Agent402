@@ -149,11 +149,15 @@ __hlShared.setClock({ pause: async () => {} });
   ok(count("metaAndAssetCtxs") === 2, `the retry is one more read (${count("metaAndAssetCtxs")})`);
 }
 {
-  // Warm, then past the live TTL every read is refused for rate.
+  // Warm, then past the live TTL every read is refused for rate. The clock
+  // is pinned mid-hour first: perp-funding keys its read on the hour, so a
+  // run whose shifted clock crossed the hour would ask for a new document
+  // with no last good read behind it.
+  const realNow = Date.now; const t0 = Math.floor(realNow() / 3_600_000) * 3_600_000 + 600_000;
+  Date.now = () => t0;
   __hlShared.clear(); mode = "ok";
   await hd("perp-basis")({ coin: "BTC" });
   await hd("perp-funding")({ coin: "BTC", limit: 24 });
-  const realNow = Date.now; const t0 = realNow();
   Date.now = () => t0 + HL_HISTORY_TTL_MS + 5_000;
   mode = "429"; sent.length = 0;
   const basis = await hd("perp-basis")({ coin: "BTC" });
