@@ -93,16 +93,16 @@ async function boot({ freeFails = false, tempoDays = [], tempoFails = false } = 
     pretendToBeVisual: true,
     beforeParse(w) {
       w.fetch = (url) => {
-        if (String(url).includes("/api/revenue/daily")) return Promise.resolve({ json: () => Promise.resolve({ days: REV_DAYS, buyers: BUYER_DAYS, buyersWeekly: BUYER_WEEKS, buyersMonthly: BUYER_MONTHS, concentration: CONC }) });
+        if (String(url).includes("/api/revenue/daily")) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: REV_DAYS, buyers: BUYER_DAYS, buyersWeekly: BUYER_WEEKS, buyersMonthly: BUYER_MONTHS, concentration: CONC }) });
         if (String(url).includes("/api/revenue/tempo-daily")) {
           return tempoFails ? Promise.reject(new Error("down"))
-            : Promise.resolve({ json: () => Promise.resolve({ days: tempoDays, recordingSince: tempoDays.length ? tempoDays[0].day : null }) });
+            : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: tempoDays, recordingSince: tempoDays.length ? tempoDays[0].day : null }) });
         }
         if (String(url).includes("/api/calls/daily")) {
           return freeFails ? Promise.reject(new Error("down"))
-            : Promise.resolve({ json: () => Promise.resolve({ days: FREE_DAYS, recordingSince: "2026-06-20" }) });
+            : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: FREE_DAYS, recordingSince: "2026-06-20" }) });
         }
-        return Promise.resolve({ json: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
       };
     },
   });
