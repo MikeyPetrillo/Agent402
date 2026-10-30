@@ -2896,6 +2896,7 @@ jobs:
           # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
           t node scripts/test-worker-deploy-step.js
           t node scripts/test-decide-deploy-step.js
+          t node scripts/test-heap-sampling.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
           t node scripts/test-deploy-has-status.js
           # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)

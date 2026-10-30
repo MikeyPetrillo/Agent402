@@ -1,4 +1,4 @@
-import "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
@@ -5777,6 +5777,13 @@ app.get("/__operator/perf.json", (req, res) => {
 // function names and file lines only.
 // Heap by V8 space plus what the index holds, counts only: sizes the next
 // memory change from production instead of a fixture.
+// Which code allocated the live heap (HEAP_SAMPLING=on; src/boot-profile.js):
+// function names, file lines and megabytes only.
+app.get("/__operator/heap-sampling.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  try { res.set("Cache-Control", "no-store").json(await heapSamplingReport({ top: Math.min(100, parseInt(req.query.top, 10) || 40) })); }
+  catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: String(e?.message || e).slice(0, 120) }); }
+});
 app.get("/__operator/heap.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const v8 = await import("node:v8");
