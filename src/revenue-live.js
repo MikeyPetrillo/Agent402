@@ -2064,9 +2064,13 @@ export function revenuePage(baseUrl, snap) {
     // OUR wallet's explorer page, never the payment's own transaction: a tx hash
     // names its payer on chain, and the amount and date already say which
     // payment it is. Our own runs are marked "ours".
-    const candidates = [...(Array.isArray(r.recent) ? r.recent : []), r.lastInbound].filter((t) => t && t.when && Number.isFinite(Date.parse(t.when)));
+    // A row is a settle only when it is ours or a per-call-sized outside payment
+    // (external). A large or plain inbound transfer (a swap, a treasury top-up)
+    // is neither, so it is not a settle and is never labelled "ours".
+    const candidates = [...(Array.isArray(r.recent) ? r.recent : []), r.lastInbound]
+      .filter((t) => t && t.when && Number.isFinite(Date.parse(t.when)) && (t.internal === true || t.external === true));
     const latest = candidates.reduce((best, t) => (!best || Date.parse(t.when) > Date.parse(best.when) ? t : best), null);
-    const ours = latest && (latest.internal === true || latest.external === false);
+    const ours = latest && latest.internal === true;
     const proof = latest
       ? `${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">` : ""}${latest.usd != null ? `$${esc(String(latest.usd))}` : "settled"}${r.explorer ? "</a>" : ""} <span style="color:var(--muted);">${esc(String(latest.when).slice(0, 10))}${ours ? " · ours" : ""}</span>`
       : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;

@@ -951,7 +951,9 @@ export function ledgerRecent(chain, wallets, { limit = 8 } = {}) {
       // when_ts is unix SECONDS; the card renders an ISO string.
       when: r.when_ts ? new Date(r.when_ts * 1000).toISOString() : null,
       external: Boolean(r.external),
-      internal: !r.external && r.payer != null,
+      // Ours means our own wallet paid. A large inbound transfer from anyone
+      // else is neither ours nor a per-call settle, so it must not read internal.
+      internal: r.payer != null && OUR_EVM_WALLETS.has(r.payer),
       asset: r.asset || null,
       fromLedger: true,
     }));
