@@ -8,7 +8,7 @@ const ENTRIES = [
       "Surfaces: an open /revenue page reads its figures again every minute while the tab is visible: the headline, the rail and MPP tables and the chart, for the same date range (a preset range moves with the day). A failed read keeps what is shown.",
       "Packages: agent402-mcp 0.13.25 accepts every rail by name in AGENT402_NETWORKS (monad, celo, avalanche, sei, optimism, stellar and algorand joined base, polygon, arbitrum, robinhood, arc and solana); a raw CAIP-2 id still works.",
       "Tools: dex-pair, dex-pool and dex-quote answer on a deployment without a provider key, reading public nodes the way evm-rpc does.",
-      "Payments: on Algorand the route-execute tiers settle to the router's own spending wallet, as they do on Base, so the wallet that buys from outside sellers is the one their payments refill. Every other route on Algorand settles to the treasury as before.",
+      "Payments: on Algorand the route-execute tiers settle to the router's own spending wallet, as they do on Base. Every other route on Algorand settles to the treasury as before.",
       "Surfaces: /revenue's timestamp line says when the payment figures were last read from the chains (every 5 minutes) apart from the rail status scan behind the Status column (every 4 hours).",
     ],
   },

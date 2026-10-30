@@ -24,8 +24,7 @@ Tools:
   key, reading public nodes the way evm-rpc does.
 Payments:
 - On Algorand the route-execute tiers settle to the router's own spending
-  wallet, as they do on Base, so the wallet that buys from outside sellers is
-  the one their payments refill. Every other route on Algorand settles to the
+  wallet, as they do on Base. Every other route on Algorand settles to the
   treasury as before.
 
 ### 2026-10-29 (metered default, speech quotes, sale paths)
