@@ -2083,7 +2083,7 @@ export function revenuePage(baseUrl, snap) {
   // The figures come from the ledger, which reads each chain on its own
   // cycle; the oldest chain's read time is when every figure was current.
   // snap.asOf is only the rail scan behind the Status column.
-  const synced = Object.values(at.perChain || {}).map((c) => Number(c?.syncedAt)).filter((n) => n > 0);
+  const synced = Object.values(at.perChain || {}).map((c) => Number(c?.oldestSyncedAt ?? c?.syncedAt)).filter((n) => n > 0);
   const ledgerAsOf = synced.length ? new Date(Math.min(...synced) * 1000).toISOString() : null;
   const railsSorted = [...snap.rails].sort((a, b) => (Number(perChainOf(b)?.inboundCount) || 0) - (Number(perChainOf(a)?.inboundCount) || 0));
   const partialNotes = snap.rails.filter((r) => r.scanNote).length;

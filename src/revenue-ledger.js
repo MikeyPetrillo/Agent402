@@ -1151,13 +1151,15 @@ function* ledgerSummarySteps(wallets) {
     const t = yield pairRead(chain, wallet, true);
     const cur = getCursor.get(chain, wallet);
     // Two wallets on one chain (treasury + spending) ACCUMULATE into one row.
-    const p = per[chain] || (per[chain] = { externalUsd: 0, externalCount: 0, inboundUsd: 0, inboundCount: 0, caughtUp: true, syncedAt: null });
+    const p = per[chain] || (per[chain] = { externalUsd: 0, externalCount: 0, inboundUsd: 0, inboundCount: 0, caughtUp: true, syncedAt: null, oldestSyncedAt: null });
     p.externalUsd = Number((p.externalUsd + t.extUsd).toFixed(6));
     p.externalCount += t.extN;
     p.inboundUsd = Number((p.inboundUsd + t.usd).toFixed(6));
     p.inboundCount += t.n;
     p.caughtUp = p.caughtUp && Boolean(cur?.caught_up);
     p.syncedAt = Math.max(p.syncedAt ?? 0, cur?.updated_ts ?? 0) || null;
+    // The chain's figures are only as fresh as its least recently read wallet.
+    p.oldestSyncedAt = cur?.updated_ts ? Math.min(p.oldestSyncedAt ?? Infinity, cur.updated_ts) : p.oldestSyncedAt;
     allTimeExternalUsd += t.extUsd;
     allTimeExternalCount += t.extN;
     allTimeInboundUsd += t.usd;

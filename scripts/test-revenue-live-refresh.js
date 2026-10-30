@@ -214,6 +214,11 @@ async function boot(query = { range: "7d" }) {
     assert.match(line, /payments read from the chains as of 2026-10-10T11:55:30\.000Z, refreshed every 5 minutes/, "the oldest chain's read, the ledger cadence");
     assert.match(line, /rail status as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
   });
+  await check("a chain with two wallets is as fresh as its older wallet", () => {
+    const sec = (iso) => Date.parse(iso) / 1000;
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: sec("2026-10-10T11:59:00Z"), oldestSyncedAt: sec("2026-10-10T11:40:00Z") }, solana: { syncedAt: sec("2026-10-10T11:58:00Z") } } });
+    assert.match(line, /payments read from the chains as of 2026-10-10T11:40:00\.000Z/);
+  });
   await check("with no ledger read times the line keeps the rail scan's", () => {
     const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: null } } });
     assert.match(line, /^rails read as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
