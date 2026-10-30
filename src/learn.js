@@ -284,7 +284,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.24")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.25")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -292,7 +292,7 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.24"],
+      "args": ["-y", "agent402-mcp@0.13.25"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
