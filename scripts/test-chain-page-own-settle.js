@@ -52,6 +52,20 @@ for (const [label, rail] of Object.entries(shapes)) {
   for (const t of page) ok(!html.includes(t.txHash), `${label}: outside buyer tx ${t.txHash.slice(0, 6)}… never rendered`);
 }
 
+// A plain treasury top-up (a swap's output, not a per-call payment) newer than
+// everything else is neither ours nor an outside per-call settle. It must not
+// become the latest settle, and must never read "ours".
+const bigTx = "0x" + "b9".repeat(32);
+recordTransfer({ chain: "base", wallet: W, txid: `${bigTx}:0`, tx_hash: bigTx, block: 900, when_ts: now, payer: "0x" + "f7".repeat(20), usd: 99.071221, asset: "USDC", external: false });
+{
+  const snap = withFreshRecent({ rails: [shapes["ledger-backed snapshot"]] }, ledgerRecent, ledgerNewestOwn);
+  const r = snap.rails[0];
+  const html = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [] }, rail: r, activity: null, wallet: W });
+  ok(!html.includes(bigTx), "a $99 treasury top-up is never the rendered latest settle");
+  ok(!/\$99\.07[^<]*<\/a>[^<]*<span[^>]*>[^<]*· ours/.test(html) && !html.includes("99.071221 "), "a $99 top-up never reads as ours");
+  ok(/OUR LATEST SETTLE<\/div><div[^>]*>\$0\.001/.test(html), "the OUR LATEST SETTLE card still shows our canary");
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
