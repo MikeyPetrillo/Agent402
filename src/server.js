@@ -5808,7 +5808,7 @@ app.get("/__operator/heap.json", async (req, res) => {
 app.get("/__operator/heap-sampling.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   try { res.set("Cache-Control", "no-store").json(await heapSamplingReport({ top: Math.max(1, Math.min(100, parseInt(req.query.top, 10) || 40)) })); }
-  catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: String(e?.message || e).slice(0, 120) }); }
+  catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) }); }
 });
 app.post("/__operator/stall-profile", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
