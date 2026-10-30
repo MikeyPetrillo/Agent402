@@ -57,8 +57,11 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const r1 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, full]), pauseMs: 0 });
   ok(calls.length === 2 && calls[0] === calls[1] && r1.hits.hits.length === 2, "an empty first page is read again with the same URL, and the second answer is used");
   calls = [];
-  const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty]), pauseMs: 0 });
-  ok(calls.length === 2 && r2.hits.hits.length === 0, "a search that is empty twice answers empty after one extra read");
+  const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty]), pauseMs: 0 });
+  ok(calls.length === 4 && r2.hits.hits.length === 0, "a search that is empty on every read answers empty after the bounded reads");
+  calls = [];
+  const r3 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, full]), pauseMs: 0 });
+  ok(calls.length === 3 && r3.hits.hits.length === 2, "an empty answer twice, then hits, returns the hits (the 2026-10-30 CI case)");
   calls = [];
   await eftsSearchWith({ forms: "S-1" }, { getJson: reader([full]), pauseMs: 0 });
   ok(calls.length === 1, "a first page with hits is read once");

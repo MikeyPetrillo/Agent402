@@ -577,13 +577,21 @@ export function dedupeByAccession(hits) {
 // A first page with no hits is read once more before it is believed: EDGAR's
 // full-text search has answered an empty first page for a query that returns
 // rows on the next read. A search that is really empty costs one extra read.
-export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750 } = {}) {
+// The same answer can come back empty more than once in a row (seen in CI on
+// 2026-10-30: two empty reads, then hits), so an empty first page is read up to
+// EFTS_EMPTY_READS times in all, pausing longer before each re-read. A search
+// that is really empty costs EFTS_EMPTY_READS reads; a page with hits costs one.
+export const EFTS_EMPTY_READS = 4;
+export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750, reads = EFTS_EMPTY_READS } = {}) {
   const url = eftsUrl(params);
-  const first = await getJson(url);
-  const empty = !(first?.hits?.hits?.length) && !(first?.hits?.total?.value);
-  if (!empty || params.from) return first;
-  await new Promise((r) => setTimeout(r, pauseMs));
-  return getJson(url);
+  let last = await getJson(url);
+  for (let i = 1; i < reads; i++) {
+    const empty = !(last?.hits?.hits?.length) && !(last?.hits?.total?.value);
+    if (!empty || params.from) return last;
+    await new Promise((r) => setTimeout(r, pauseMs * i));
+    last = await getJson(url);
+  }
+  return last;
 }
 
 async function eftsSearch(params) {
