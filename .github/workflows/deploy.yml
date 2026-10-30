@@ -6704,7 +6704,12 @@ jobs:
           DIFF_BASE=$(printf '%s' "$RUNS" | node scripts/worker-deploy-paths.js --base "$GITHUB_RUN_ID")
           if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
             if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
-              if [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check)" = "yes" ]; then
+              # The compare API caps the files it lists (300); a list that long
+              # may be cut, so it redeploys rather than trust a partial list.
+              NFILES=$(printf '%s\n' "$CHANGED" | grep -c . || true)
+              if [ "$NFILES" -ge 300 ]; then
+                echo "the diff lists $NFILES files (the API may cap the list) - redeploying agent402-worker (fail-open)"
+              elif [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check)" = "yes" ]; then
                 echo "worker files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker"
               else
                 echo "no worker file changed in $DIFF_BASE...$GITHUB_SHA - agent402-worker keeps its build"
@@ -6757,7 +6762,12 @@ jobs:
           DIFF_BASE=$(printf '%s' "$RUNS" | node scripts/decide-deploy-paths.js --base "$GITHUB_RUN_ID")
           if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
             if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
-              if [ "$(printf '%s\n' "$CHANGED" | node scripts/decide-deploy-paths.js --check)" = "yes" ]; then
+              # The compare API caps the files it lists (300); a list that long
+              # may be cut, so it redeploys rather than trust a partial list.
+              NFILES=$(printf '%s\n' "$CHANGED" | grep -c . || true)
+              if [ "$NFILES" -ge 300 ]; then
+                echo "the diff lists $NFILES files (the API may cap the list) - redeploying agent402-decide (fail-open)"
+              elif [ "$(printf '%s\n' "$CHANGED" | node scripts/decide-deploy-paths.js --check)" = "yes" ]; then
                 echo "decide files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-decide"
               else
                 echo "no decide file changed in $DIFF_BASE...$GITHUB_SHA - agent402-decide keeps its build"

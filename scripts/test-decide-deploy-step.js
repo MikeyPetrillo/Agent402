@@ -57,5 +57,7 @@ const waitIdx = steps.findIndex((s) => /Wait for the NEW deployment/.test(String
 ok(waitIdx >= 0 && selIdx > waitIdx, "the selector runs after the main app's rollout is confirmed");
 ok(!step["continue-on-error"] && !sel["continue-on-error"], "a failed selector or decide deploy fails the job");
 
+ok(/NFILES" -ge 300/.test(selRun) && /fail-open/.test(selRun), "a diff list long enough to be capped redeploys (fail-open)");
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

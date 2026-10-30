@@ -81,5 +81,7 @@ ok(!step["continue-on-error"] && !sel["continue-on-error"], "a failed selector o
 const setupNodeIdx = steps.findIndex((s) => /actions\/setup-node/.test(String(s.uses || "")));
 ok(setupNodeIdx >= 0 && setupNodeIdx < selIdx, "node is set up before the selector runs the script");
 
+ok(/NFILES" -ge 300/.test(selRun) && /fail-open/.test(selRun), "a diff list long enough to be capped redeploys (fail-open)");
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
