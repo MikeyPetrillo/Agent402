@@ -70,9 +70,16 @@ if (process.env.HEAP_SAMPLING === "on") {
   } catch (e) { heapSession = null; console.warn("[boot] heap sampling unavailable:", String(e?.message || e).slice(0, 120)); }
 }
 
-/** Live sampled allocations by function and by file, largest first. */
-export async function heapSamplingReport({ top = 40 } = {}) {
-  if (!heapSession) return { enabled: false, note: "set HEAP_SAMPLING=on and restart to sample" };
+/** Live sampled allocations by function and by file, largest first. A read
+ *  walks the whole sampled tree (it held the loop 0.4-1.3 s on a 400 MB heap),
+ *  so concurrent reads share one walk. */
+let heapReportInFlight = null;
+export function heapSamplingReport({ top = 40 } = {}) {
+  if (!heapSession) return Promise.resolve({ enabled: false, note: "set HEAP_SAMPLING=on and restart to sample" });
+  if (!heapReportInFlight) heapReportInFlight = heapSamplingWalk(top).finally(() => { heapReportInFlight = null; });
+  return heapReportInFlight;
+}
+async function heapSamplingWalk(top) {
   const { profile } = await new Promise((res, rej) => heapSession.post("HeapProfiler.getSamplingProfile", (e, r) => (e ? rej(e) : res(r))));
   const byFrame = new Map(), byFile = new Map();
   let total = 0;
