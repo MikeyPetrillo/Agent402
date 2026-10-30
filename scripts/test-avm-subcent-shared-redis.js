@@ -7,6 +7,7 @@
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-avm-subcent-shared-redis.js
 // Deliberately does not skip without REDIS_URL (CI provides the service container).
 import { spawn } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis; it deliberately does not skip.");
@@ -19,7 +20,7 @@ const PAYTO = "ALGOPAYTOTESTADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const req = { scheme: "exact", network: "algorand:mainnet", amount: "1000", payTo: PAYTO, asset: "31566704" };
 
 // One child process = one container: scripts/lib/avm-subcent-driver.js runs one
-// named operation (data only, never code) and prints its JSON result last.
+// named operation (data only, never code) and prints its JSON result as one line.
 const DRIVER = new URL("./lib/avm-subcent-driver.js", import.meta.url).pathname;
 function container(op, env = {}) {
   return new Promise((resolve) => {
@@ -28,8 +29,7 @@ function container(op, env = {}) {
     p.stdout.on("data", (d) => { out += d; });
     p.stderr.on("data", (d) => { err += d; });
     p.on("close", (code) => {
-      const last = out.trim().split("\n").pop();
-      try { resolve(JSON.parse(last)); } catch { resolve({ error: `exit ${code}: ${err.slice(-400)} ${out.slice(-200)}` }); }
+      try { resolve(childJson(out)); } catch { resolve({ error: `exit ${code}: ${err.slice(-400)} ${out.slice(-200)}` }); }
     });
   });
 }

@@ -33,6 +33,7 @@ import {
   defaultReasoningFor, validateReasoning, fitReasoningToCap,
   refuseCostVariants, refuseUnsupportedParams,
   assertUpstreamBody,
+  stripBilling,
 } from "./llm-gateway-kit.js";
 
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
@@ -265,13 +266,6 @@ export function isEmptyFilteredIncomplete(data) {
 function saidAnything(data) {
   const out = Array.isArray(data.output) ? data.output : [];
   return out.some((o) => o?.type === "function_call" || (o?.type === "message" && Array.isArray(o.content) && o.content.some((c) => c?.type === "output_text" && typeof c.text === "string" && c.text.trim() !== "")));
-}
-
-function stripBilling(usage) {
-  if (!usage || typeof usage !== "object") return null;
-  const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
-  delete usage.cost; delete usage.cost_details; delete usage.is_byok; delete usage.cache_discount;
-  return upstreamUsd;
 }
 
 export function makeResponsesHandler(routeTier) {

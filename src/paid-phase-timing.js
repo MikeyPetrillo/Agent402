@@ -175,6 +175,3 @@ export function paidPhaseSummary() {
   }
   return out;
 }
-
-/** Test hook. */
-export function _resetPaidPhases() { rings.clear(); }

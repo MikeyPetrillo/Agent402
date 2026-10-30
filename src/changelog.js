@@ -3,6 +3,17 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-10-29",
+    title: "The transactions page updates itself, every rail by name, a cleanup",
+    items: [
+      "Surfaces: an open /revenue page reads its figures again every minute while the tab is visible (the headline and the rail and MPP tables; the chart every fifth minute), for the same date range (a preset range moves with the day). A failed read keeps what is shown.",
+      "Surfaces: /revenue's timestamp line says when the payment figures were last read from the chains (every 5 minutes) apart from the rail status scan behind the Status column (every 4 hours).",
+      "Packages: agent402-mcp 0.13.25 accepts every rail by name in AGENT402_NETWORKS (monad, celo, avalanche, sei, optimism, stellar and algorand joined base, polygon, arbitrum, robinhood, arc and solana); a raw CAIP-2 id still works.",
+      "Tools: dex-pair, dex-pool and dex-quote answer on a deployment without a provider key, reading public nodes the way evm-rpc does.",
+      "Payments: on Algorand the route-execute tiers settle to the router's own spending wallet, as they do on Base. Every other route on Algorand settles to the treasury as before.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "The metered gateway leads, speech quoted from the text, each sale's arrival path",
     items: [
       "Surfaces: the metered gateway (/v1/metered/chat/completions and its Messages and Responses twins) is the default way to call a model on /llms.txt, the openapi guidance, SKILL.md, the connector's server.describe and payment.info, the home page, the FAQ, the x402 guide, the README and the wiki: the 402 quotes the request from its body (the input estimated from its tokens with headroom, plus max_tokens), and on x402, Tempo and credits settlement never exceeds that quote; a card payment adds the processor fee. The flat tiers stay as the predictable-price option, and a flat chat tier's unpaid 402 names its metered twin in meteredTwin.",

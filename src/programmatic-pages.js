@@ -41,7 +41,7 @@ import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInforma
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
 import { fitTitle } from "./seo-meta.js";
-import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formLabel, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
+import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.

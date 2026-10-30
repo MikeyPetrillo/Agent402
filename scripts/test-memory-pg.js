@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { requireTestPg } from "./lib/test-pg.js";
+import { childJson } from "./lib/child-json.js";
 
 const { url: PG_URL, schema: SCHEMA } = requireTestPg({ label: "test-memory-pg" });
 const DIR = mkdtempSync(join(tmpdir(), "memory-pg-"));
@@ -52,8 +53,7 @@ function child(script, env) {
     encoding: "utf8", timeout: 60_000,
   });
   if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr.slice(0, 400)}`);
-  const line = r.stdout.trim().split("\n").pop();
-  return JSON.parse(line);
+  return childJson(r.stdout);
 }
 
 // ---- 1) seed a genuine SQLite file through the module's own file mode ------

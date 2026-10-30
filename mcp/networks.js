@@ -10,27 +10,23 @@
 // USDG on Robinhood Chain unreachable no matter what the wallet holds.
 import tls from "node:tls";
 import { createHash, X509Certificate } from "node:crypto";
+import { NETWORK_NAMES, networkIdsOf } from "./known-assets.js";
 
-export const NETWORK_CAIP2 = {
-  base: "eip155:8453",
-  polygon: "eip155:137",
-  arbitrum: "eip155:42161",
-  "base-sepolia": "eip155:84532",
-  robinhood: "eip155:4663",
-  arc: "eip155:5042",
-  solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-  "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
-};
+/** Chain name -> its CAIP-2 id (the first id the known-asset table lists for
+ *  that name), derived so a chain added there is named here too. */
+export const NETWORK_CAIP2 = Object.freeze(Object.fromEntries(Object.entries(NETWORK_NAMES).map(([name, ids]) => [name, ids[0]])));
 
 /** Parse "robinhood,base" / "eip155:4663" into an ordered CAIP-2 list.
- *  Unknown names pass through verbatim so raw CAIP-2 ids (future chains)
- *  work without a package update. Returns [] when unset. */
+ *  A chain name maps to every id the known-asset table lists for it (both
+ *  Algorand spellings); unknown names pass through verbatim so raw CAIP-2
+ *  ids (future chains) work without a package update. Returns [] when unset. */
 export function parseNetworkPrefs(raw) {
-  return String(raw || "")
+  const ids = String(raw || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
-    .map((n) => NETWORK_CAIP2[n] || n);
+    .flatMap((n) => networkIdsOf(n));
+  return [...new Set(ids)];
 }
 
 /** Filter a 402's accepts to the preferred networks, ordered by preference

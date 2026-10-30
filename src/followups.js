@@ -25,6 +25,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
+import { headerText, escapeHtml } from "./email-text.js";
 
 const DAY = 24 * 60 * 60_000;
 export const STEP_DELAYS_MS = Object.freeze({ monitor: 2 * DAY, another: 7 * DAY });
@@ -54,8 +55,9 @@ export function scrubAddresses(seqs, at) {
   }
   return changed;
 }
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const hdr = (s, n = 120) => String(s ?? "").replace(/[\r\n\t]/g, " ").slice(0, n);
+const esc = escapeHtml;
+// Header and stored text: every control character becomes a space (email.js).
+const hdr = (s, n = 120) => headerText(s, n);
 
 export function defaultStorePath() {
   return join(existsSync("/data") ? "/data" : "/tmp", "followups.json");

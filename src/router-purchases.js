@@ -210,4 +210,3 @@ export function recordRouterPurchase(args) {
 export function routerPurchasesSnapshot() {
   try { return routerPurchaseStore().snapshot(); } catch { return new Map(); }
 }
-export function __setRouterPurchaseStoreForTest(store) { instance = store; }

@@ -67,6 +67,7 @@ ok(fu.markRepeat("Again@Example.com") === 1 && fu._store().seqs.cs_4.stopped && 
 mail.length = 0;
 ok(await fu.sendFailed({ email: "f@example.com", label: "FDA recall report", refunded: true }) && /could not be completed/.test(mail[0].subject) && /refunded in full/.test(mail[0].text), "a failed report emails the buyer at once with the refund state");
 ok(await fu.sendFailed({ email: "f@example.com", label: "FDA recall report", refunded: false }) && /being processed/.test(mail[1].text), "an owed refund says so instead of claiming it was paid");
+ok(await fu.sendFailed({ email: "f@example.com", label: "a\u0000b\u000bc\u001bd\u007fe report", refunded: true }) && !/[\x00-\x1f\x7f]/.test(mail[2].subject) && /a b c d e report/.test(mail[2].subject), "a subject carries no control character from the label");
 
 // mail failure leaves the step unsent for the next tick
 mailOk = false;

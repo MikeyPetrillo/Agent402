@@ -23,8 +23,6 @@ export const FIRST_MS = () => Math.max(0, Number(process.env.REDIS_PERSISTENCE_F
 /** A read that has not answered within this is a failure (REDIS_PERSISTENCE_OP_MS). */
 export const OP_MS = () => Math.max(50, Number(process.env.REDIS_PERSISTENCE_OP_MS) || 1_500);
 
-export const PERSISTENCE_WORDS = ["on", "degraded", "off", "unknown"];
-
 /**
  * The fields of an `INFO persistence` answer this module reads, or null when
  * the text is not one (no `aof_enabled` line). A field that is missing or not

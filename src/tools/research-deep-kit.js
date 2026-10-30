@@ -10,8 +10,8 @@
 // deterministic (LLM + live web) → WALLET_ONLY, lenient
 // NETWORK test set, never cached (the web moves). Gated on OPENROUTER_API_KEY
 // (503 without it), independent of Stripe keys.
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
+import { completeSynthesis, proseOf, reportChat, costOf, textOf } from "../report-synthesis.js";
+import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATERIAL_RULE, stripInlineCites, webSourcesFrom } from "../report-grounding.js";
 import { fetchOpenRouter, throwUpstreamError, RERANK_MODEL, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { extractArticle } from "./extract.js";
 import { stepProgress } from "../job-progress.js";
@@ -117,47 +117,15 @@ export function auditCitations(prose, sources, subAnswersText = "") {
   }
   return { prose: out, cited: [...cited].sort((a, b) => a - b), stripped, unverified };
 }
-// The grounded-search model cites inline as [domain](url) / [domain.com];
-// the synthesizer must cite our numbered list, so those tags are stripped
-// from the sub-answers (dossier and fund already did this).
-function stripInlineCites(str) {
-  return String(str || "")
-    .replace(/\[([^\]]+)\]\((?:https?:)?\/\/[^)]+\)/g, "$1")
-    .replace(/\[[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}(?:\s*,\s*[a-z0-9][a-z0-9.\-]*\.[a-z]{2,})*\]/gi, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
 const SEARCH_TIMEOUT_MS = 60_000;
 const SYNTH_TIMEOUT_MS = 120_000;
 
-async function chat(body, timeoutMs, user) {
-  // usage.include gets `usage.cost` back so we can meter margin; stripped
-  // before the buyer ever sees the response. `user` scopes OpenRouter abuse.
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
 async function rerankCall(query, documents, topN, user) {
   const res = await fetchOpenRouter({ model: RERANK_MODEL, query, documents, top_n: topN, ...(user ? { user } : {}) }, { url: RERANK_URL, timeoutMs: 30_000 });
   if (!res.ok) await throwUpstreamError(res);
   return res.json();
 }
-const costOf = (data) => Number(data?.usage?.cost) || 0;
-const textOf = (data) => (data?.choices?.[0]?.message?.content || "").trim();
 
-// Sources from a grounded answer: OpenRouter web plugin returns url_citation
-// annotations on message.annotations. The title is the page's own text and is
-// read outside the quoted blocks and served in the Sources list, so it is
-// cleaned to one plain line here, once; a URL must be a plain http(s) URL.
-export function sourcesFrom(data) {
-  const anns = data?.choices?.[0]?.message?.annotations || [];
-  const out = [];
-  for (const a of anns) {
-    const c = a?.url_citation || a;
-    if (c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))) out.push({ title: cleanSourceTitle(c.title) || cleanSourceTitle(c.url), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
-  }
-  return out;
-}
 
 function makeResearchHandlerInner(tierSlug) {
   const t = RESEARCH_TIERS[tierSlug];
@@ -180,7 +148,7 @@ function makeResearchHandlerInner(tierSlug) {
     const planPrompt = `${t.planFrame || "You are a research planner."} Break this question into ${t.subQ} focused, non-overlapping web-search sub-questions that together fully answer it. Return ONLY a JSON object: {"sub_questions": ["…"], "outline": ["section titles for the final report"]}.\n\nQuestion: ${query}${focus.length ? `\nEmphasize: ${focus.join(", ")}` : ""}${recency !== "any" ? `\nPrefer sources from the last ${recency}.` : ""}`;
     let plan, planError = null;
     try {
-      const pd = await chat({ model: M.plan, messages: [{ role: "user", content: planPrompt }], max_tokens: 600, response_format: { type: "json_object" }, reasoning: { enabled: false } }, 45_000, user);
+      const pd = await reportChat({ model: M.plan, messages: [{ role: "user", content: planPrompt }], max_tokens: 600, response_format: { type: "json_object" }, reasoning: { enabled: false } }, 45_000, user);
       spent += costOf(pd);
       plan = JSON.parse(textOf(pd) || "{}");
     } catch (e) {
@@ -223,8 +191,8 @@ function makeResearchHandlerInner(tierSlug) {
       max_tokens: 900,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
     });
-    const results = await Promise.all(toRun.map((q) => chat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(
-      (d) => ({ q, answer: textOf(d), sources: sourcesFrom(d), cost: costOf(d) }),
+    const results = await Promise.all(toRun.map((q) => reportChat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(
+      (d) => ({ q, answer: textOf(d), sources: webSourcesFrom(d), cost: costOf(d) }),
       () => null,
     )));
     const answered = results.filter(Boolean);
@@ -288,7 +256,7 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     // default, and reasoning tokens would eat the max_tokens budget before the
     // report is written (smoke test 2026-08-20: a 76-char "I'll write the
     // report now…" stub that still 200'd). We want every token on the report.
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: synthModel, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: synthModel, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose0 = proseOf(sd, cutShort);
     if (!prose0) throw bad("Synthesis produced no report - not charged", 502);

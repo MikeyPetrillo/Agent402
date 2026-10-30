@@ -3,16 +3,16 @@
 // and that payment is not charged, except a Tempo transfer the buyer sends
 // before the call, which is final when sent. Every published sentence that
 // says a repeat's payment "is not charged" names that exception.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { walk } from "./lib/shipped-files.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 
 const files = [join(ROOT, "README.md")];
-const walk = (d) => { for (const n of readdirSync(d)) { if (n === "node_modules" || n.startsWith(".")) continue; const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(js|md)$/.test(n)) files.push(f); } };
-for (const d of ["src", "wiki", "docs", "mcp", "client", "openclaw"]) { try { walk(join(ROOT, d)); } catch { /* absent */ } }
+for (const d of ["src", "wiki", "docs", "mcp", "client", "openclaw"]) { try { files.push(...walk(join(ROOT, d)).filter((f) => /\.(js|md)$/.test(f))); } catch { /* absent */ } }
 
 const missing = [];
 for (const f of files) {

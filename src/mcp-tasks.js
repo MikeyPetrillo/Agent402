@@ -66,6 +66,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkS
 import { basename, join, resolve, sep } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, records, leases, importOnce, trackStoreReady } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { positiveNum as num } from "./env-num.js";
 
 export const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 export const CLIENT_CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities";
@@ -107,7 +108,6 @@ const DEFAULT_DIR = () => join(DATA_ROOT(), "mcp-tasks");
 /** A sibling store directory on the same volume (the HTTP async jobs use "async-jobs"). */
 export const taskDataDir = (name) => join(DATA_ROOT(), name);
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** Rollout switch. On by default; `AGENT402_MCP_TASKS=off` disarms the whole
  *  extension without a code change (capability is not advertised, task methods

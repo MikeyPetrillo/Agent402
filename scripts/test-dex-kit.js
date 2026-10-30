@@ -9,7 +9,7 @@
 
 import { DEX_TOOLS, __test } from "../src/tools/dex-kit.js";
 
-const { priceFromSqrt, spotQuote, slots, decodeUint, decodeInt, decodeAddr, pad32, encAddr, encUint, NETWORKS } = __test;
+const { priceFromSqrt, spotQuote, slots, decodeUint, decodeInt, decodeAddr, pad32, encAddr, encUint } = __test;
 
 const h = (slug) => DEX_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -106,13 +106,40 @@ await throws(h("dex-quote")({ poolAddress: "0x" + "a".repeat(40), amountIn: 1 })
 await throws(h("dex-quote")({ poolAddress: "0x" + "a".repeat(40), amountIn: 1, zeroForOne: "yes" }), 400, "dex-quote: bad zeroForOne type");
 
 // ----------------------------------------------------------------------------
-// Missing key path — every Alchemy-backed tool returns 503 cleanly
+// No key: the node reads go through chain-kit's transport, which falls back to
+// keyless public nodes (stubbed here), so the tools answer instead of a 503.
 // ----------------------------------------------------------------------------
 const stashedKey = process.env.ALCHEMY_API_KEY;
 delete process.env.ALCHEMY_API_KEY;
-await throws(h("dex-pair")({ tokenA: "0x" + "a".repeat(40), tokenB: "0x" + "b".repeat(40), fee: 500 }), 503, "dex-pair: 503 without key");
-await throws(h("dex-pool")({ poolAddress: "0x" + "a".repeat(40) }), 503, "dex-pool: 503 without key");
-await throws(h("dex-quote")({ poolAddress: "0x" + "a".repeat(40), amountIn: 1, zeroForOne: true }), 503, "dex-quote: 503 without key");
+{
+  const realFetch = globalThis.fetch;
+  const urls = [];
+  const POOL = "0x" + "c".repeat(40);
+  globalThis.fetch = async (url, init) => {
+    urls.push(String(url));
+    const { id, params } = JSON.parse(init.body);
+    const word = (hex) => hex.padStart(64, "0");
+    const answer = {
+      "0x1698ee82": word("c".repeat(40)),                       // getPool
+      "0x3850c7bd": word((1n << 96n).toString(16)) + word("0").repeat(6), // slot0: price 1, tick 0
+      "0x1a686502": word("3e8"),                               // liquidity
+      "0x0dfe1681": word("a".repeat(40)),                       // token0
+      "0xd21220a7": word("b".repeat(40)),                       // token1
+      "0xddca3f43": word("1f4"),                               // fee 500
+      "0x313ce567": word("12"),                                // decimals 18
+    }[String(params?.[0]?.data || "").slice(0, 10)];
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: "0x" + (answer || word("0")) }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const pair = await h("dex-pair")({ tokenA: "0x" + "a".repeat(40), tokenB: "0x" + "b".repeat(40), fee: 500 }).catch((e) => ({ err: e }));
+  ok(pair?.poolAddress === POOL, `dex-pair answers without a key (${pair?.err ? `${pair.err.statusCode} ${pair.err.message}` : pair?.poolAddress})`);
+  ok(urls.length > 0 && urls.every((u) => !/alchemy/.test(u)), `dex-pair read a keyless public node (${urls[0]})`);
+  for (const [slug, input] of [["dex-pool", { poolAddress: POOL }], ["dex-quote", { poolAddress: POOL, amountIn: 1, zeroForOne: true }]]) {
+    urls.length = 0;
+    const r = await h(slug)(input).catch((e) => ({ err: e }));
+    ok(!r?.err && urls.length > 0 && urls.every((u) => !/alchemy/.test(u)), `${slug}: answers from public nodes without a key (${r?.err ? `${r.err.statusCode} ${r.err.message}` : JSON.stringify(r).slice(0, 80)})`);
+  }
+  globalThis.fetch = realFetch;
+}
 if (stashedKey) process.env.ALCHEMY_API_KEY = stashedKey;
 
 // dex-top-pools is keyless — doesn't require ALCHEMY_API_KEY. We don't hit

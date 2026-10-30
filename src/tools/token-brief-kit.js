@@ -20,7 +20,7 @@
 //   sol-token-lookup   Jupiter token index - profile, organic score, 24h stats
 //   sol-price          Jupiter price v3 - price of record with its block id
 //
-// Same skeleton as token-risk / recall-report: settle() fan-out -> thin-evidence
+// Same skeleton as token-risk / recall-report: settleWithin() fan-out -> thin-evidence
 // refusal -> grounding-strict Opus synthesis -> numbered sources -> data
 // appendix. Settlement-safe (throws >= 400 on failure, so the buyer is never
 // charged for an empty brief), WALLET_ONLY, composite-spend-guarded, not cached.
@@ -32,9 +32,9 @@
 // A changed fingerprint is what triggers a paid re-run + alert, exactly like
 // probeDomain / probeRecalls.
 import { stepProgress } from "../job-progress.js";
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -75,19 +75,6 @@ function H(slug) {
   const t = (_sol ||= SOLANA_INTEL_TOOLS).find((x) => x.slug === slug);
   if (!t) throw bad(`token-brief: missing dependency '${slug}'`, 500);
   return t.handler;
-}
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
-async function settle(p, timeoutMs) {
-  try {
-    const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
-    return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
 }
 
 /** A token price for prose: six significant digits, no float tail
@@ -210,11 +197,11 @@ function makeTokenBriefHandlerInner(tierSlug) {
 
     // 1) PROBES - keyless, parallel, each non-fatal.
     const [reportR, safetyR, pairsR, lookupR, priceR] = await Promise.all([
-      settle(H("sol-token-report")({ mint, marketLimit: t.markets, holderLimit: 20 }), PROBE_TIMEOUT_MS),
-      settle(H("sol-token-safety")({ mint }), PROBE_TIMEOUT_MS),
-      settle(H("sol-token-pairs")({ mint, limit: t.pairs }), PROBE_TIMEOUT_MS),
-      settle(H("sol-token-lookup")({ query: mint, limit: 1 }), PROBE_TIMEOUT_MS),
-      settle(H("sol-price")({ mints: [mint] }), PROBE_TIMEOUT_MS),
+      settleWithin(H("sol-token-report")({ mint, marketLimit: t.markets, holderLimit: 20 }), PROBE_TIMEOUT_MS),
+      settleWithin(H("sol-token-safety")({ mint }), PROBE_TIMEOUT_MS),
+      settleWithin(H("sol-token-pairs")({ mint, limit: t.pairs }), PROBE_TIMEOUT_MS),
+      settleWithin(H("sol-token-lookup")({ query: mint, limit: 1 }), PROBE_TIMEOUT_MS),
+      settleWithin(H("sol-price")({ mints: [mint] }), PROBE_TIMEOUT_MS),
     ]);
     const report = reportR.ok ? reportR.data : null;
     const safety = safetyR.ok ? safetyR.data : null;
@@ -368,7 +355,7 @@ ${riskBlock}`;
 
     let spent = 0;
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);

@@ -118,7 +118,6 @@ export function startHardCapSync() {
   timer = setInterval(() => { void syncHardCaps().catch(() => {}); }, SYNC_MS());
   timer.unref?.();
 }
-export function stopHardCapSync() { if (timer) { clearInterval(timer); timer = null; } }
 
 /** Counts only, for the operator view. */
 export function hardCapStatus(now = Date.now()) {

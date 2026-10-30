@@ -18,7 +18,7 @@
 // Boots the real server, because the value of the check is in the route wiring.
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { walk } from "./lib/shipped-files.js";
 import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
@@ -78,16 +78,7 @@ const postProbe = (token) =>
   //    draft of this test did type them, and eight of the fifteen turned out
   //    not to mount under FREE_MODE - so eight "refused (404)" lines were
   //    proving nothing at all. Hence the two-sided assertion below.
-  const srcFiles = [];
-  const walk = async (dir) => {
-    for (const e of await readdir(dir, { withFileTypes: true })) {
-      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
-      const p = `${dir}/${e.name}`;
-      if (e.isDirectory()) await walk(p);
-      else if (e.name.endsWith(".js")) srcFiles.push(p);
-    }
-  };
-  await walk("src");
+  const srcFiles = walk("src").filter((p) => p.endsWith(".js"));
   const routes = new Map(); // path -> "get" | "post"
   for (const f of srcFiles) {
     const text = await readFile(f, "utf8");

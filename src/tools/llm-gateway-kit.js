@@ -2300,6 +2300,20 @@ export function upstreamUserId(req) {
     : `a402:${createHash("sha256").update(basis).digest("hex").slice(0, 32)}`;
 }
 
+/** The upstream usage fields that are a bill (cost, its breakdown, BYOK
+ *  flag, cache saving). Every answer path deletes exactly these before a
+ *  buyer sees the body; a new private field is added here once. */
+export const BILLING_USAGE_FIELDS = Object.freeze(["cost", "cost_details", "is_byok", "cache_discount"]);
+
+/** Delete the billing fields from a usage object in place; returns the
+ *  upstream cost when it was a number (telemetry and metering), else null. */
+export function stripBilling(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
+  for (const k of BILLING_USAGE_FIELDS) delete usage[k];
+  return upstreamUsd;
+}
+
 /** Line-aware SSE pass-through that strips OpenRouter's billing fields from
  *  the usage frame. OpenRouter now includes full usage on EVERY response
  *  with no opt-in (their docs: `usage.include` "has no effect"; verified
@@ -2340,9 +2354,8 @@ export function createSseUsageScrubber({ onUsage } = {}) {
     if (!sites.length) return line;
     let had = false, reported = false;
     for (const u of sites) {
-      const rawCost = typeof u.cost === "number" ? u.cost : null;
-      if (("cost" in u) || ("cost_details" in u) || ("is_byok" in u) || ("cache_discount" in u)) had = true;
-      delete u.cost; delete u.cost_details; delete u.is_byok; delete u.cache_discount;
+      if (BILLING_USAGE_FIELDS.some((k) => k in u)) had = true;
+      const rawCost = stripBilling(u);
       if (!reported && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
         reported = true;
         try { onUsage?.(u, rawCost, obj); } catch { /* telemetry never breaks a stream */ }
@@ -3014,8 +3027,7 @@ async function rerankHandler(input, req) {
   if (!Array.isArray(data?.results)) throw bad("Upstream returned no results", 502);
   // Billing fields are operator telemetry, never buyer-visible; search_units stays (a count, not a bill).
   if (data.usage && typeof data.usage === "object") {
-    const upstreamUsd = typeof data.usage.cost === "number" ? data.usage.cost : null;
-    delete data.usage.cost; delete data.usage.cost_details; delete data.usage.is_byok; delete data.usage.cache_discount;
+    const upstreamUsd = stripBilling(data.usage);
     import("../posthog.js").then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({ tier: "v1-rerank", model: RERANK_MODEL, priceUsd: RERANK_PRICE, upstreamUsd, promptTokens: data.usage.search_units, completionTokens: 0 })).catch(() => {});
   }
   try {
@@ -3537,11 +3549,7 @@ function makeHandler(routeTier) {
         // field — capture it, then strip it before the response is cached or
         // returned. Standard token counts stay (OpenAI wire shape).
         if (data && typeof data === "object" && data.usage && typeof data.usage === "object") {
-          const upstreamUsd = typeof data.usage.cost === "number" ? data.usage.cost : null;
-          delete data.usage.cost;
-          delete data.usage.cost_details;
-          delete data.usage.is_byok;
-          delete data.usage.cache_discount; // a USD saving is a billing number too
+          const upstreamUsd = stripBilling(data.usage);
           await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"));
           // METERED SETTLEMENT: hand the real cost to the route binder, which
           // settles that plus the markup instead of the flat tier price when

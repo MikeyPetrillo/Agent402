@@ -317,6 +317,14 @@ heartbeat page on it under one issue that closes when nothing is owed.
   window is shorter than its lock wait plus receipt wait. A read failure (an unreadable receipt
   included) is a 402 with the authorization booked in the late-settlement book, which never
   closes a used authorization as not landed (`scripts/test-rh-outage.js`).
+- **Heap attribution:** `HEAP_SAMPLING=on` (exactly "on"; off by default) starts V8's sampling heap
+  profiler at the first import (`src/boot-profile.js`); `/__operator/heap-sampling.json` reports
+  live sampled bytes by function and file. A read holds the loop about a second on a large heap
+  (concurrent reads share one walk); turn it on for a measurement, then off.
+- **Deploy selectors:** the render worker and `decide` redeploy from CI only when the pushed range
+  touches their paths (`scripts/worker-deploy-paths.js`, `scripts/decide-deploy-paths.js`: image
+  inputs, import closure, and for decide its export row format and kit); an unreadable or capped
+  diff, or a check that fails, redeploys.
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.

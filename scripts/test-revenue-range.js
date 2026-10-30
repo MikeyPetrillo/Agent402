@@ -201,9 +201,9 @@ async function bootChart(query) {
         fetched.push(String(url));
         const u = new URL(String(url), "https://example.test");
         const win = P(Object.fromEntries(u.searchParams)).window;
-        if (u.pathname === "/api/revenue/daily") return Promise.resolve({ json: () => Promise.resolve(win ? rangedRevenueDaily(BODY, win, { tempo: TEMPO, concentration: { buyers: 4 } }) : BODY) });
-        if (u.pathname === "/api/revenue/tempo-daily") return Promise.resolve({ json: () => Promise.resolve({ days: TEMPO.days.filter((r) => !win || (r.day >= win.from && r.day <= win.to)) }) });
-        return Promise.resolve({ json: () => Promise.resolve({ days: [], recordingSince: null }) });
+        if (u.pathname === "/api/revenue/daily") return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(win ? rangedRevenueDaily(BODY, win, { tempo: TEMPO, concentration: { buyers: 4 } }) : BODY) });
+        if (u.pathname === "/api/revenue/tempo-daily") return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: TEMPO.days.filter((r) => !win || (r.day >= win.from && r.day <= win.to)) }) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: [], recordingSince: null }) });
       };
     },
   });

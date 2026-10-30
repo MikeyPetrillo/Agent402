@@ -6,7 +6,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.24`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.25`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -122,8 +122,8 @@ https://agent402.tools/mcp
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.13.24
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.24
+npx -y agent402-mcp@0.13.25
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.25
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -514,7 +514,7 @@ and it's live - routed, schema-published, MCP-exposed, and covered by the
   name: "Reverse text",
   slug: "reverse",
   category: "text",
-  price: "$0.001",                       // free via proof-of-work for pure-CPU tools
+  price: "$0.001",                       // free via proof-of-work once listed in src/free-tier.js
   description: "Reverse a string. Example: {\"text\":\"abc\"} → {\"reversed\":\"cba\"}",
   discovery: {
     inputSchema: { properties: { text: { type: "string" } }, required: ["text"] },
@@ -528,9 +528,9 @@ and it's live - routed, schema-published, MCP-exposed, and covered by the
 ```
 
 That's the whole contract: `handler(input)` returns a JSON-serializable object
-(or throws an `Error` with `.statusCode` for a 4xx). Pure-CPU tools are
-automatically free-via-proof-of-work; tools that hit the network or disk stay
-wallet-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full walkthrough.
+(or throws an `Error` with `.statusCode` for a 4xx). A new tool is wallet-only;
+a pure-CPU tool joins the free proof-of-work tier when its slug is added to
+`FREE_TIER_SLUGS` in `src/free-tier.js`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full walkthrough.
 
 ## Optional: charge per call with x402
 
@@ -681,7 +681,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing, per-chain marketplace pages (`/stellar`, `/algorand`) |
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |
 | `src/human-checkout.js` | Card front door for the report products: `/reports` (page in `src/human-reports-page.js`), `POST /api/buy`, delivery at `/r/:sessionId` (Stripe Checkout, generate-once, auto-refund on failure) |
-| `src/stripe-subscriptions.js` | `/monitors` - $5/month monitor subscriptions (`MONITOR_PRODUCTS`: domain, filing, token, fund, recall, insider, ipo), signature-verified webhook, Customer Portal |
+| `src/stripe-subscriptions.js` | `/monitors` - $5/month monitor subscriptions (`MONITOR_PRODUCTS`: domain, filing, token, fund, recall, insider, research, ipo), signature-verified webhook, Customer Portal |
 | `src/monitor-scheduler.js` | Fulfilment for the monitors: cheap daily probes, paid re-runs on change, email delivery, reports at `/m/:id` |
 | `src/credits.js` | Prepaid card credits: `/credits`, `a402_` bearer keys, the authorize-then-debit gate in front of every priced route |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |

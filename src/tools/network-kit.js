@@ -23,7 +23,7 @@ function bad(message, statusCode = 400) {
 // Normalize whatever the caller sends as a "domain" / "host" / "url" / "email"
 // down to a registrable hostname. Email gets the local-part stripped; URLs get
 // reduced to hostname; trailing dots and case are normalized.
-function normalizeHost(raw) {
+export function normalizeHost(raw) {
   if (typeof raw !== "string") return null;
   let s = raw.trim();
   if (!s) return null;

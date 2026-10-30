@@ -44,7 +44,6 @@ import { ownFirstAttemptOf } from "./robinhood-order.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
-const KEY_RE = /^eip155:[0-9]{1,12}\|0x[0-9a-f]{64}$/;
 const TEMPO_NETWORK = "eip155:4217";
 
 export const SETTLED_AFTER_402 = "settled_after_402";

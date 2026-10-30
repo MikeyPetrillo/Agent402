@@ -1,6 +1,7 @@
 // /.well-known/glama.json is the connector manifest Glama (the MCP listing
 // portal) reads when crawling agent402. It carries the maintainer contact
-// used to verify ownership. We expose it from src/server.js:586 with an env
+// used to verify ownership. We expose it from src/server.js (the
+// `/.well-known/glama.json` route) with an env
 // override (GLAMA_MAINTAINER_EMAIL) so forks can claim their own listing
 // without code changes.
 //

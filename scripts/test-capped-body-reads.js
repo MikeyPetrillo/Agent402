@@ -279,6 +279,27 @@ const buyer = await import("../src/x402-buyer.js");
   ok(!/\.toString\(\s*["']utf-?8["']\s*\)/i.test(readers.replace(/Buffer\.from\([^)]*\)\.toString\("utf8"\)/g, "")), "no capped seller body is decoded with Buffer#toString (which keeps a byte-order mark); decodeUtf8 decodes them all");
 }
 
+// ---------------------------------------------------------------------------
+// Data kits whose upstream answers carry no Content-Length: the stream stops at
+// the kit's cap and the call is the same 502 a declared oversize gets.
+{
+  const kits = [
+    ["crypto-signals-kit", "CRYPTO_SIGNALS_TOOLS", "crypto-indicators", { coin: "BTC", interval: "1h", limit: 200, points: 5 }, 2_000_000, /Hyperliquid response is larger than/],
+    ["defi-kit", "DEFI_TOOLS", "defi-protocols", { category: "Lending", limit: 5 }, HUGE, /response is larger than the 24MB cap/],
+    ["solana-intel-kit", "SOLANA_INTEL_TOOLS", "sol-token-search", { query: "JUP", limit: 5 }, HUGE, /DexScreener response is larger than the 24MB cap/],
+  ];
+  for (const [file, exp, slug, input, cap, msg] of kits) {
+    const mod = await import(`../src/tools/${file}.js`);
+    mod.__test?.resetCaches?.(); mod.__test?.resetCache?.();
+    const tool = mod[exp].find((t) => t.slug === slug);
+    const m = metered(HUGE + CHUNK);
+    globalThis.fetch = async () => new Response(m.stream, { status: 200, headers: { "content-type": "application/json" } });
+    let e = null;
+    try { await tool.handler(input); } catch (x) { e = x; }
+    ok(e && e.statusCode === 502 && msg.test(e.message) && bounded(m.pulled(), cap), `${slug}: a header-less oversized body is a 502 (${e?.statusCode} ${e?.message}) after ${m.pulled()} bytes pulled`);
+  }
+}
+
 console.warn = origWarn; console.log = origLog;
 globalThis.fetch = origFetch;
 console.log(`\n${pass} passed, ${fail} failed`);

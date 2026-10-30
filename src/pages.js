@@ -75,18 +75,6 @@ export function toolList(catalog) {
   });
 }
 
-function exampleCall(baseUrl, tool) {
-  const { method, path, discovery } = tool;
-  if (method === "GET") {
-    const qs = new URLSearchParams(
-      Object.entries(discovery?.input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])
-    ).toString();
-    return `curl -i "${baseUrl}${path}${qs ? `?${qs}` : ""}"`;
-  }
-  return `curl -i -X ${method} ${baseUrl}${path} \\
-  -H "Content-Type: application/json" \\
-  -d '${JSON.stringify(discovery?.input ?? {})}'`;
-}
 
 function payExample(baseUrl, tool) {
   const { method, path, discovery } = tool;
@@ -538,7 +526,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.24</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.25</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>

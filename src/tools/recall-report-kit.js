@@ -4,7 +4,7 @@
 // recalled, by whom, why, how widely, and what is still ongoing. Every fact
 // comes from the FDA records (deterministic probes); the synthesis only
 // organizes and explains them. Same skeleton as fund-report / domain-audit:
-// settle() fan-out -> grounding-strict Opus synthesis -> numbered sources ->
+// settleWithin() fan-out -> grounding-strict Opus synthesis -> numbered sources ->
 // data appendix. Settlement-safe (throws >= 400 on failure), WALLET_ONLY, not
 // cached. Gated on OPENROUTER_API_KEY (503 without it).
 //
@@ -12,9 +12,9 @@
 // no LLM, with a fingerprint of the recall numbers seen - a NEW recall number
 // for the subscriber's query is what triggers a paid re-run + alert.
 import { stepProgress } from "../job-progress.js";
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
@@ -44,19 +44,6 @@ function H(slug) {
   if (!t) throw bad(`recall-report: missing dependency '${slug}'`, 500);
   return t.handler;
 }
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
-async function settle(p, timeoutMs) {
-  try {
-    const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
-    return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
-}
 
 export function normRecallQuery(input) {
   const q = String(typeof input === "string" ? input : input?.query ?? input?.q ?? "").replace(/\s+/g, " ").trim();
@@ -74,7 +61,7 @@ export async function probeRecalls(query, { perFeed = 20, scope = "all" } = {}) 
   // `full: true` lifts the public tools' field caps (a report must not quote a
   // reason cut mid-sentence as if complete); rows come back NEWEST FIRST with
   // the feed's TOTAL so the report can say "showing N of TOTAL".
-  const legs = await Promise.all(feeds.map((f) => settle(H(f.slug)({ q: query, limit: perFeed, full: true }), PROBE_TIMEOUT_MS)));
+  const legs = await Promise.all(feeds.map((f) => settleWithin(H(f.slug)({ q: query, limit: perFeed, full: true }), PROBE_TIMEOUT_MS)));
   const items = [];
   const status = {};
   const totals = {};
@@ -184,7 +171,7 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
 
     let spent = 0;
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);

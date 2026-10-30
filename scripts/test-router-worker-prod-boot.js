@@ -9,6 +9,7 @@
 // guards never fire. This boots the real pool and worker that way.
 //
 //   node scripts/test-router-worker-prod-boot.js
+import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 
@@ -21,7 +22,6 @@ if (existsSync("/data")) {
 }
 process.env.ROUTER_WORKERS = "1";
 process.env.X402_INDEX_CRAWL = "off";
-delete process.env.STATE_DATABASE_URL;
 const { startRouterPool, stopRouterPool, routerPoolStatus, routerPoolLoaded } = await import("../src/router-pool.js");
 // Production's shape, set after this process's own imports (this test is not
 // the server; only the worker's environment, copied at spawn, matters).

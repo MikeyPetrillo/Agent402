@@ -11,6 +11,9 @@ export const LEADERBOARD_REFRESH_MS = Number(process.env.LEADERBOARD_REFRESH_MS)
 export const REVENUE_SNAPSHOT_DEFAULT_TTL_MS = 4 * 60 * 60_000;
 export const REVENUE_SNAPSHOT_TTL_MS = parseInt(process.env.REVENUE_SNAPSHOT_TTL_MS, 10) || REVENUE_SNAPSHOT_DEFAULT_TTL_MS;
 
+/** Revenue ledger chain sync once caught up (src/revenue-ledger.js). */
+export const REVENUE_LEDGER_SYNC_MS = 5 * 60_000;
+
 /** "hourly", "every 4 hours", or "every 30 minutes". */
 export function cadenceWords(ms) {
   const h = ms / 3_600_000;
@@ -25,3 +28,4 @@ export function cadenceBadge(ms) {
 }
 export const leaderboardCadence = () => cadenceWords(LEADERBOARD_REFRESH_MS);
 export const revenueSnapshotCadence = () => cadenceWords(REVENUE_SNAPSHOT_TTL_MS);
+export const revenueLedgerCadence = () => cadenceWords(REVENUE_LEDGER_SYNC_MS);

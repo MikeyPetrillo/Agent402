@@ -29,17 +29,16 @@
 // example request may be sent, bounded, as the probe body to that seller's own
 // route (src/probe-example.js, probeAttemptsFor). It is held only for that
 // crawl and never stored or projected; this file still projects no sample.
+
+// The composed-schema refusal is response-contract.js's own scan and keyword
+// set, so the two contracts refuse exactly the same constructs.
+import { UNSUPPORTED, hasUnsupported } from "./response-contract.js";
+
 const SAFE_NAME = /^[A-Za-z0-9_.\-\[\]]{1,64}$/;
 
 const LOCATIONS = ["path", "query", "header", "cookie"];
 const MAX_PER_LOCATION = 16;
 const MAX_BODY_DEPTH = 6;
-const UNSUPPORTED = new Set([
-  "$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not",
-  "if", "then", "else", "dependentSchemas", "patternProperties", "unevaluatedProperties",
-]);
-const MAX_SCAN_NODES = 20000;
-const MAX_SCAN_DEPTH = 64;
 
 const isRecord = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const typesOf = (s) => new Set(Array.isArray(s?.type) ? s.type.map(String) : s?.type === undefined ? [] : [String(s.type)]);
@@ -53,18 +52,6 @@ const typesOf = (s) => new Set(Array.isArray(s?.type) ? s.type.map(String) : s?.
 const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 export function safeName(n) {
   return typeof n === "string" && SAFE_NAME.test(n) && !RESERVED_NAMES.has(n) ? n : null;
-}
-
-function hasUnsupported(node, state = { seen: 0 }, depth = 0) {
-  if (depth > MAX_SCAN_DEPTH) return true;
-  if (++state.seen > MAX_SCAN_NODES) return true;
-  if (Array.isArray(node)) return node.some((n) => hasUnsupported(n, state, depth + 1));
-  if (!isRecord(node)) return false;
-  for (const [k, v] of Object.entries(node)) {
-    if (UNSUPPORTED.has(k)) return true;
-    if (hasUnsupported(v, state, depth + 1)) return true;
-  }
-  return false;
 }
 
 /** Dotted paths a request body REQUIRES. Truncation is reported, never

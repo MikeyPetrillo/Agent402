@@ -25,7 +25,7 @@
 // every 4 hours; the endpoint reads from cache so each request is sub-millisecond.
 
 import { existsSync } from "node:fs";
-import { createJsonDocument } from "./json-document.js";
+import { createDocumentCache } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 import { timedSync } from "./boot-timing.js";
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
@@ -1420,8 +1420,7 @@ export const LEADERBOARD_SNAPSHOT_FILE =
 // Each file is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once). Documents are made per
 // file name so tests that pass their own paths keep their own stores.
-const docs = new Map();
-const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+const { docs, docFor } = createDocumentCache();
 /** Best-effort persist of the full snapshot. No-op when the document store cannot be written. */
 function persistLeaderboardSnapshot(snapshot, file = LEADERBOARD_SNAPSHOT_FILE) {
   try {

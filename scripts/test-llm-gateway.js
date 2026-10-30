@@ -1895,5 +1895,33 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   }
 }
 
+// ---- one billing-field list for every answer path ----------------------
+// The chat, rerank and stream paths here, the Messages and Responses wires
+// and the fast image route all strip the upstream bill through stripBilling,
+// so a new private usage field is listed once and leaves every path at once.
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const { BILLING_USAGE_FIELDS, stripBilling, createSseUsageScrubber } = await import("../src/tools/llm-gateway-kit.js");
+  const full = () => ({ prompt_tokens: 3, completion_tokens: 4, ...Object.fromEntries(BILLING_USAGE_FIELDS.map((k, i) => [k, k === "cost" ? 0.5 : i])) });
+  const u = full();
+  ok(stripBilling(u) === 0.5 && BILLING_USAGE_FIELDS.every((k) => !(k in u)) && u.prompt_tokens === 3 && u.completion_tokens === 4, "stripBilling removes every listed field, keeps token counts and returns the cost");
+  ok(stripBilling(null) === null && stripBilling({ cost: "1" }) === null, "stripBilling returns null for no usage or a non-number cost");
+  for (const [where, shape] of [["top level", (x) => ({ usage: x })], ["response.usage", (x) => ({ type: "response.completed", response: { usage: x } })], ["message.usage", (x) => ({ type: "message_start", message: { usage: x } })]]) {
+    const out = createSseUsageScrubber().push(`data: ${JSON.stringify(shape(full()))}\n`);
+    ok(BILLING_USAGE_FIELDS.every((k) => !out.includes(`"${k}"`)), `the stream scrubber removes every listed field (${where})`);
+  }
+  const SITES = { "llm-gateway-kit.js": 3, "llm-messages-kit.js": 1, "llm-responses-kit.js": 1, "llm-images-fast-kit.js": 1 };
+  const dir = new URL("../src/tools/", import.meta.url);
+  for (const [f, want] of Object.entries(SITES)) {
+    const src = readFileSync(new URL(f, dir), "utf8");
+    const calls = (src.match(/\bstripBilling\(/g) || []).length - (src.match(/function stripBilling\(/g) || []).length;
+    ok(calls >= want, `${f}: strips the upstream bill through stripBilling (${calls} call sites, want ${want})`);
+  }
+  const strays = [];
+  const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = new URL(e.name + (e.isDirectory() ? "/" : ""), d); if (e.isDirectory()) walk(p); else if (e.name.endsWith(".js")) readFileSync(p, "utf8").split("\n").forEach((line, i) => { const code = line.replace(/\/\/.*$/, ""); if (/^\s*\*/.test(line)) return; if (/\bdelete\s+[\w.?\[\]"]+\.(cost|cost_details|is_byok|cache_discount)\b/.test(code) || (/\b(cost_details|is_byok|cache_discount)\b/.test(code) && !/BILLING_USAGE_FIELDS\s*=/.test(code))) strays.push(`${e.name}:${i + 1}`); }); } };
+  walk(new URL("../src/", import.meta.url));
+  ok(strays.length === 0, `no answer path deletes or names a billing field outside BILLING_USAGE_FIELDS (${strays.join(", ") || "none"})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

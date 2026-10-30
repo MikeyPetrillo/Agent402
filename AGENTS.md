@@ -30,7 +30,7 @@ are optional and no-op when their env vars are unset. `mcp/`, `tollbooth/`, and 
 - **`/mcp` is rate-limited at the server.** The MCP sweep `scripts/test-mcp-all.js`
   drives the whole 500+ catalog and WILL trip the limiter unless the raised limits are set on
   the **server at boot** (not on the test client). Boot it as:
-  `AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 FREE_MODE=true PORT=3000 node src/server.js`.
+  `AGENT402_MCP_MAX_PER_MIN=999999 AGENT402_MCP_MAX_PER_HOUR=9999999 FREE_MODE=true PORT=3000 node src/server.js`.
   Without this the sweep reports every tool as "no content" / "got EXECUTION" - that
   is the rate limiter, not a real failure. If you already tripped it, wait ~60s for
   the window to reset before rerunning.
@@ -39,9 +39,9 @@ are optional and no-op when their env vars are unset. `mcp/`, `tollbooth/`, and 
   `TARGET_URL=http://localhost:3000 node scripts/test-all.js` (every tool answers its
   own example), `node scripts/test-mcp-http.js`, and `node scripts/test-mcp-all.js`.
   Offline unit tests need no server: `npm test` (kit2/convert/memory) plus the other
-  `scripts/test-*.js`. `test-all.js` skips Brave (20) and E2B (2) routes when their
-  API keys are unset - expected in this environment; those are covered by the paid
-  canary/dedicated CI steps.
+  `scripts/test-*.js`. `test-all.js` skips Brave (20) and E2B (2) routes unless
+  `BRAVE_LIVE_TEST=1` / `E2B_LIVE_TEST=1` is set, keys or not; those are covered by
+  the paid canary/dedicated CI steps.
 
 - **No linter.** The project has no ESLint/Prettier config or `lint` script; its
   quality gate is the `scripts/test-*.js` suite above.

@@ -15,7 +15,7 @@
 // undercut that existing revenue boundary for free over HTML. Bounded to a
 // curated top N instead, with real "raw JSON" and "browse every seller"
 // escape hatches for the rest - matches the design's own top=12 live poll.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
@@ -24,7 +24,6 @@ import { ORG_SAME_AS } from "./repo-link.js";
 import { leaderboardCadence, cadenceBadge, LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
 const HTML_ROWS = 12;
 
-const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtUsd = (n) =>
   `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 

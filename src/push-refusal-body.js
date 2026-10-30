@@ -51,11 +51,6 @@ export function rewriteNotChargedForPush(text) {
   return out;
 }
 
-/** True when the text makes a "not charged" claim this module rewrites. */
-export function claimsNotCharged(text) {
-  return typeof text === "string" && rewriteNotChargedForPush(text) !== text;
-}
-
 const isPlainObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 
 /** The body a push payer is sent for a refusal: string fields rewritten

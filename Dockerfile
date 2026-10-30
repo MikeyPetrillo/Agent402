@@ -72,8 +72,9 @@ COPY src ./src
 # `node services/decide/server.js`) ships in the same image.
 COPY services ./services
 # start.js is the shared-image dispatcher; worker/ is the secretless browser+media
-# worker it boots when WORKER_MODE=true. Both services run THIS image (Railway
-# builds with a root Dockerfile whenever one exists); WORKER_MODE unset → the main API server.
+# worker it boots when WORKER_MODE=true. The hosted worker service builds its own
+# image from Dockerfile.worker; WORKER_MODE / DECIDE_MODE let a self-hoster run
+# every service from this one image. Neither set → the main API server.
 COPY start.js ./
 COPY worker ./worker
 # Only the two scripts the SERVER actually uses at runtime, never the whole
@@ -124,7 +125,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # makes boot fail without it. Unset, they run in this container (self-host default).
 ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 3000
-# start.js dispatches: WORKER_MODE=true → the secretless worker, else the API.
+# start.js dispatches: WORKER_MODE=true → the secretless worker, DECIDE_MODE=true
+# → the decide service, else the API.
 # Still `node <script>` so the gosu entrypoint keeps dropping to the node user.
 # V8 young generation 16 MB -> 64 MB per semi-space. Boot parses a ~50 MB JSON
 # cache into ~2,900 seller objects and the first-import CPU profile (2026-08-25)

@@ -24,11 +24,10 @@
 // pruned past 31 days, plus the sync cursor (ISO timestamp of the newest
 // transfer seen, minus a small overlap on the next sync; ids dedupe the
 // overlap). Persisted to /data so a redeploy does not start blind.
-import { createJsonDocument } from "./json-document.js";
+import { createDocumentCache } from "./json-document.js";
 // Each store is one JSON document: on the volume, or in the state database
 // when one is configured (imported from the file once).
-const docs = new Map();
-const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { redactSecrets } from "./tools/redact.js";
 

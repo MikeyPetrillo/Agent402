@@ -33,8 +33,6 @@ export const SHAPE_HAPPY_PATH_ONLY = new Set([
 
 const MAX_DEPTH = 4;      // deep enough for our shapes, shallow enough to bound the doc
 const MAX_PROPS = 40;     // a wide map (per-chain totals, per-model rows) is data, not shape
-const MAX_ARRAY_PROBE = 1; // items are homogeneous in every example we ship
-
 
 const ARRAY_SAMPLE = 8; // enough to catch a mixed array, cheap to walk
 

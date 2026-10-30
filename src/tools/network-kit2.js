@@ -15,6 +15,7 @@ import { promises as dnsPromises } from "node:dns";
 import { isIP } from "node:net";
 import { assertPublicUrl, ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 import { assertQueryableName } from "./dns-name-filter.js";
+import { normalizeHost } from "./network-kit.js";
 
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
@@ -24,28 +25,21 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-// Mirror of network-kit.js's input picker so an agent sending {url}, {host},
-// {hostname}, {domain}, or {email} all work the same way across the kit.
-function normalizeHost(raw) {
-  if (typeof raw !== "string") return null;
-  let s = raw.trim();
-  if (!s) return null;
-  if (s.includes("@")) s = s.split("@").pop();
-  if (/^https?:\/\//i.test(s)) {
-    try { s = new URL(s).hostname; } catch { return null; }
-  }
-  s = s.replace(/\.$/, "").toLowerCase();
-  if (!/^[a-z0-9.-]+$/.test(s)) return null;
-  return s;
-}
-
+// network-kit.js's host normalizer, so an agent sending {url}, {host},
+// {hostname}, {domain}, or {email} is read, and refused, the same way across
+// the kit. The first key that holds a valid name wins; null when no key holds
+// any text (each handler words its own 400). Text that is not a host name, or
+// a name that can only be internal, is a 400 that says so.
 function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) {
+  let invalid = null;
   for (const k of keys) {
     if (input && typeof input[k] === "string") {
       const h = normalizeHost(input[k]);
-      if (h) return h;
+      if (h) return assertQueryableName(h);
+      if (!invalid && input[k].trim()) invalid = k;
     }
   }
+  if (invalid) throw bad(`"${invalid}" is not a valid host name. Send a public name such as "example.com"`);
   return null;
 }
 

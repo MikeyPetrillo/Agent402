@@ -1,11 +1,10 @@
-// Crypto-hash kit — key derivation (PBKDF2, scrypt, HKDF), constant-time
-// comparison, and multi-digest checksumming. The primitives an agent needs
-// when building or verifying password hashing, token derivation, or file
-// integrity workflows.
+// Crypto-hash kit: multi-digest checksumming (MD5, SHA-1, SHA-256, SHA-512,
+// CRC32) for payload and file integrity workflows.
 //
 // Built entirely on node:crypto (stdlib, no new deps). All pure CPU, no
 // network, no LLM -> automatically proof-of-work eligible (free tier).
 import { createHash } from "node:crypto";
+import zlib from "node:zlib";
 
 function bad(message) {
   const err = new Error(message);
@@ -19,45 +18,8 @@ function need(input, field) {
   return v;
 }
 
-// Validate a positive integer within bounds, returning a default when absent.
-function intOpt(input, field, defaultVal, min, max) {
-  if (input[field] === undefined || input[field] === null) return defaultVal;
-  const n = Number(input[field]);
-  if (!Number.isInteger(n) || n < min || n > max)
-    throw bad(`"${field}" must be an integer between ${min} and ${max}`);
-  return n;
-}
-
-// Allowed hash digests for PBKDF2 / HKDF. node:crypto supports more, but
-// these cover every real-world use case and keep the attack surface small.
-const ALLOWED_DIGESTS = new Set(["sha1", "sha256", "sha384", "sha512"]);
-
-function validDigest(input, field, defaultVal) {
-  const v = (input[field] || defaultVal).toLowerCase();
-  if (!ALLOWED_DIGESTS.has(v))
-    throw bad(`"${field}" must be one of: ${[...ALLOWED_DIGESTS].join(", ")}`);
-  return v;
-}
-
-// ---------------------------------------------------------------------------
-// CRC32 — table-based implementation (IEEE polynomial 0xEDB88320)
-// ---------------------------------------------------------------------------
-const CRC32_TABLE = new Uint32Array(256);
-for (let i = 0; i < 256; i++) {
-  let c = i;
-  for (let j = 0; j < 8; j++) {
-    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-  }
-  CRC32_TABLE[i] = c;
-}
-
-function crc32(buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) {
-    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
-  }
-  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, "0");
-}
+// CRC-32 (IEEE) as 8 lowercase hex digits.
+const crc32 = (buf) => (zlib.crc32(buf) >>> 0).toString(16).padStart(8, "0");
 
 // ---------------------------------------------------------------------------
 export const CRYPTO_HASH_TOOLS = [

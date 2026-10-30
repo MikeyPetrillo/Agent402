@@ -5,15 +5,14 @@
 // With ROUTER_WORKERS=0 there is no worker to wait for and readiness answers
 // 200 at once.
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const freePort = () => new Promise((r) => { const s = createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function boot(env) {
-  const port = await freePort();
+  const port = await getFreePort();
   const child = spawn(process.execPath, ["src/server.js"], {
     env: { ...process.env, FREE_MODE: "true", PORT: String(port), ROUTER_WORKERS: "1", ROUTER_WORKER_TEST_HOOKS: "1", X402_INDEX_CRAWL: "off", ...env },
     stdio: ["ignore", "pipe", "pipe"],

@@ -11,7 +11,7 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
-import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -46,9 +46,8 @@ const ROSTER_CSS = `
 .mkt-search-wrap{border:1px solid var(--hairline)}
 .mkt-search-wrap:focus-within{border-color:var(--accent)}`;
 
-const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-// Crawled manifests are third-party input: only http(s) may become an href.
-const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
+// Crawled manifests are third-party input: only http(s) may become an href
+// (safeHref, from ledger-chrome.js).
 // A seller with no declared homepage links to its API origin, which often
 // answers a browser with a 404; the link says what it is.
 const apiOriginTitle = (s) => (!s?.local && s?.origin && String(s.homepage || "").replace(/\/+$/, "") === String(s.origin).replace(/\/+$/, "") ? ' title="API origin: this seller declares no homepage"' : "");
@@ -342,12 +341,6 @@ export const LEADERBOARD_CHAIN = "base";
 // by the server from the same configured set the router reads.
 const SPEND_CHAIN_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
 export const spendChainName = (c) => SPEND_CHAIN_NAMES[c] || CHAIN_PAGES[c]?.chainName || String(c);
-/** A seller name with a trailing parenthetical (an ENS name) sets the
- * parenthetical on its own smaller line, so the name never splits mid-label. */
-function sellerNameHtml(name) {
-  const m = String(name || "").match(/^(.+?) \(([^()]+)\)$/);
-  return m ? `${esc(m[1])}<span style="display:block;font-weight:400;font-size:var(--fs-sm);color:var(--muted);">${esc(m[2])}</span>` : esc(name);
-}
 
 export function routerChainsProse(routerChains) {
   const list = (Array.isArray(routerChains) && routerChains.length ? routerChains : ["base"]).map(spendChainName);
@@ -1109,7 +1102,7 @@ function economyStripHtml(economySnap) {
 // Default render caps the roster at the top ALL_ROW_CAP rows (the roster is
 // sorted local-first then by settled calls, so the cap keeps the sellers worth
 // reading); ?all=1 opts back into the full 700+-row table. Same speed
-// rationale + honest-disclosure pattern as x402-index.js's INDEX_ROW_CAP.
+// rationale + honest-disclosure pattern as the other capped seller tables.
 const ALL_ROW_CAP = 100;
 
 // The all-chains page walks every seller several times (the leaderboard join,

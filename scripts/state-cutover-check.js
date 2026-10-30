@@ -24,6 +24,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { ledgerChecksums } from "./state-ledger-checksum.js";
+import { childJson } from "./lib/child-json.js";
 
 const args = process.argv.slice(2);
 const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
@@ -64,8 +65,7 @@ function run(mode, copy) {
   else { env.STATE_DATABASE_URL = url; env.STATE_DB_SCHEMA = schema; env.CUTOVER_KEEP_SCHEMA = "1"; }
   const r = spawnSync(process.execPath, [child, copy.decide ? "with-decide" : "no-decide"], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`${mode} mode failed:\n${(r.stderr || "").slice(-2000)}`);
-  const line = r.stdout.split("\n").filter(Boolean).pop();
-  return JSON.parse(line);
+  return childJson(r.stdout);
 }
 async function cleanup() {
   const c = new pg.Client({ connectionString: url });

@@ -8,9 +8,10 @@
 // status token such as "cancelled" is a contract and stays as it is.
 //
 //   node scripts/test-us-spelling.js
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { walk } from "./lib/shipped-files.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -57,14 +58,6 @@ const isToken = (text, m) => {
 const lineOf = (text, index) => text.slice(0, index).split("\n").length;
 const isComment = (line) => /^\s*(\/\/|\*|\/\*)/.test(line);
 
-const walk = (dir, out = []) => {
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (name === "node_modules" || name.startsWith(".")) continue;
-    if (statSync(p).isDirectory()) walk(p, out); else out.push(p);
-  }
-  return out;
-};
 const md = (dir) => walk(join(ROOT, dir)).filter((f) => f.endsWith(".md"));
 
 // Markdown trees: every line is prose.

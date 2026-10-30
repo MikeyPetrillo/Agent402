@@ -108,9 +108,6 @@ export function whyPointsPlain() {
   return WHY_POINTS.map((w) => `${w.h} ${w.p}`);
 }
 
-/** Where the seven points are published: the #why section of the home page. */
-export const WHY_PATH = "/#why";
-
 /** JSON-LD for the #why section: the seven points as an ItemList anchored
  * on the home page. */
 export function whyJsonLd(baseUrl) {

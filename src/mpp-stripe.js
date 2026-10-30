@@ -26,7 +26,8 @@
 // Rollout switch = STRIPE_SECRET_KEY + STRIPE_PROFILE_ID both present. Unset =
 // not mounted, no stripe challenge on any 402 (pure evm/tempo/x402).
 import Stripe from "stripe";
-import { Challenge, Credential, Expires, Method, Receipt } from "mppx";
+import { Challenge, Credential, Expires, Method } from "mppx";
+import { receiptHeader as stripeReceiptHeader, txFromReceiptHeader as stripeTxFromReceiptHeader } from "./mpp-receipt.js";
 import { stripe as stripeMethods } from "mppx/server";
 import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
@@ -234,12 +235,8 @@ export async function settleStripeCredential(authorizationHeader) {
   }
 }
 
-export function stripeReceiptHeader(receipt) {
-  try { return Receipt.serialize(receipt); } catch { return null; }
-}
-export function stripeTxFromReceiptHeader(header) {
-  try { return Receipt.deserialize(String(header)).reference || null; } catch { return null; }
-}
+// The Payment-Receipt header and its reverse: the method-agnostic pair in mpp-receipt.js.
+export { stripeTxFromReceiptHeader };
 
 // ---------------------------------------------------------------------------
 // OUTBOUND: append a stripe/charge challenge to a 402, next to evm/tempo. Only

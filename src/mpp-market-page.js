@@ -5,15 +5,14 @@
 // necessarily on our own leaderboard - we don't have call/volume data for
 // them), just what the mpp.dev registry advertises plus our own live
 // verification of it (src/mpp-index.js).
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, safeHref } from "./ledger-chrome.js";
 import { mppChallengeRails } from "./mpp-shim.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { mppCrawlIntervalLabel } from "./mpp-index.js";
 import { hostRowHtml } from "./host-entry.js";
 
-// Crawled seller data is third-party input: only http(s) may become an href,
-// same rule market-page.js uses for the exact same reason.
-const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
+// Crawled seller data is third-party input: only http(s) may become an href
+// (safeHref, from ledger-chrome.js, the rule market-page.js uses too).
 
 const CSS = `
 .mpr-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start;padding:14px 16px;border:1px solid var(--hairline);background:var(--card)}

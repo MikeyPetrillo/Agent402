@@ -1,6 +1,6 @@
 // /api/skill-packs.json is the machine-readable surface the stdio
 // agent402-mcp npm package fetches at startup to register its prompts
-// (per src/skills.js:1708 — `skillPacksJson()`). It deliberately strips
+// (per `skillPacksJson()` in src/skills.js). It deliberately strips
 // internal-only fields like `substitute` (a render hint) and exposes only
 // the public schema the npm package + any MCP client consumes.
 //

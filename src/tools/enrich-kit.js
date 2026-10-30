@@ -192,7 +192,7 @@ const GH_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // handler instead.
 const GH_REPO_RE = /^[A-Za-z0-9._-]+$/;
 
-function ghHeaders() {
+export function ghHeaders() {
   const h = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2026-03-10",

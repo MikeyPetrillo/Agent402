@@ -8,6 +8,7 @@ import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, stateDbEnabled } from "./state-db.js";
 import { upgradeOffer } from "./report-upgrade.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
+import { headerText, escapeHtml } from "./email-text.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 // ZeptoMail region base (api.zeptomail.com default; .eu / .in for those regions).
@@ -178,8 +179,8 @@ export async function sendEmail({ to, subject, html, text, headers = null }) {
 }
 
 /** "Here's your report" email with the durable link. Best-effort. */
-// Header material: no control characters (header injection) and a hard length.
-const hdr = (s, n = 100) => String(s ?? "").replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, n);
+// Header material: no control characters and a hard length (email-text.js).
+const hdr = headerText;
 // Origin of a delivered-report URL, so the upgrade link is absolute even when
 // the caller did not pass a base URL. Never throws on junk.
 function originOf(url) {
@@ -285,7 +286,4 @@ export async function sendMonitorEmail({ to, ...rest }) {
   return sendEmail({ to, subject, html, text });
 }
 
-// Escapes quotes too: these values are text nodes today, but one move into an
-// attribute would otherwise be an injection.
-function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function escapeAttr(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }

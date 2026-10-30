@@ -11,10 +11,11 @@
 // rather than a wrong number.
 import { strict as assert } from "node:assert";
 import { standingBand, standingCountsExcludingHost } from "../src/standing.js";
+import { pageText } from "./lib/html-text.js";
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
-const text = (html) => String(html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const text = (html) => pageText(html).trim();
 
 // --- a cold or half-loaded index must stay silent ---------------------------
 // The crawl cache warm-starts incrementally and holds only our own entry for

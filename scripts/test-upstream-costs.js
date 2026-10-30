@@ -232,12 +232,12 @@ U.setUpstreamCostsForTest(null);
 
 // ---- no upstream rate is committed: scan the shipped trees for the shapes the tables had ----
 {
-  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const { readFileSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
+  const { walk } = await import("./lib/shipped-files.js");
   const files = [];
-  const walk = (d) => { for (const n of readdirSync(d)) { if (n === "node_modules" || n.startsWith(".")) continue; const f = join(d, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(js|mjs|md|json)$/.test(f)) files.push(f); } };
   const root = new URL("..", import.meta.url).pathname;
-  for (const d of ["src", "scripts", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) walk(join(root, d)); } catch { /* absent */ } }
+  for (const d of ["src", "scripts", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) files.push(...walk(join(root, d)).filter((f) => /\.(js|mjs|md|json)$/.test(f))); } catch { /* absent */ } }
   const SHAPES = [
     [/\{ ?prompt: ?[0-9.]+, ?(cached: ?[0-9.]+, ?)?completion: ?[0-9.]+ ?\}/, (l) => !/maxPrice|max_price/.test(l)], // a model rate row (tier caps are ours)
     [/costPerChar: ?[0-9.]/, () => true],

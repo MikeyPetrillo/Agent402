@@ -133,7 +133,3 @@ export function blockMs(chain, { now = Date.now(), env = process.env } = {}) {
 export function blocksForSeconds(chain, seconds, opts = {}) {
   return Math.max(1, Math.ceil((Number(seconds) * 1000) / blockMs(chain, opts)));
 }
-/** Seconds of chain time `blocks` covers at the current rate. */
-export function secondsForBlocks(chain, blocks, opts = {}) {
-  return (Number(blocks) * blockMs(chain, opts)) / 1000;
-}

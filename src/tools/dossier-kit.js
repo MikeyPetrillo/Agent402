@@ -11,9 +11,9 @@
 // charged), cost read for the internal accumulator and never returned,
 // WALLET_ONLY, not cached. Gated on OPENROUTER_API_KEY (503 without it).
 import { stepProgress } from "../job-progress.js";
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
-import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, QUOTED_MATERIAL_RULE } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { completeSynthesis, proseOf, reportChat, costOf, textOf, settleWithin } from "../report-synthesis.js";
+import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATERIAL_RULE, stripInlineCites, webSourcesFrom } from "../report-grounding.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
@@ -40,47 +40,13 @@ const SEARCH_TIMEOUT_MS = 60_000;
 const SYNTH_TIMEOUT_MS = 120_000;
 const DATA_TIMEOUT_MS = 25_000;
 
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
-// The grounded-search model cites its sources inline as [domain](url) or bare
-// [domain.com] tags. Strip them from the sub-answers so the synthesizer doesn't
-// COPY those tags (it must cite our numbered [n] list instead).
-function stripInlineCites(s) {
-  return String(s || "")
-    .replace(/\[([^\]]+)\]\((?:https?:)?\/\/[^)]+\)/g, "$1")                           // [text](url) -> text
-    .replace(/\[[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}(?:\s*,\s*[a-z0-9][a-z0-9.\-]*\.[a-z]{2,})*\]/gi, "") // [domain.com] / [d1, d2] -> ""
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-// A page title is read outside the quoted blocks and served in the Sources
-// list, so it is cleaned to one plain line here, once.
-export function webSourcesFrom(d) {
-  const anns = d?.choices?.[0]?.message?.annotations || [];
-  const out = [];
-  for (const a of anns) {
-    const c = a?.url_citation || a;
-    if (c?.url && /^https?:\/\/[^\s<>"]+$/i.test(String(c.url))) out.push({ title: cleanSourceTitle(c.title) || cleanSourceTitle(c.url), url: String(c.url), snippet: String(c.content || c.snippet || "").slice(0, 500) });
-  }
-  return out;
-}
 function getHandler(kit, slug) {
   const t = kit.find((x) => x.slug === slug);
   if (!t) throw bad(`dossier: missing dependency '${slug}' - sub-kit renamed`, 500);
   return t.handler;
 }
-// settle: never throw from a data leg; return {ok,data} | {ok:false,error}.
-async function settle(fn, input, timeoutMs) {
-  try {
-    const p = fn(input);
-    const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
-    return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e), status: Number.isInteger(e?.statusCode) ? e.statusCode : null }; }
-}
+// settle: never throw from a data leg; return {ok,data} | {ok:false,error,status}.
+const settle = (fn, input, timeoutMs) => settleWithin(() => fn(input), timeoutMs);
 
 function fmtUsd(v) {
   if (v == null || !Number.isFinite(Number(v))) return "?";
@@ -364,7 +330,7 @@ function makeDossierHandlerInner(tierSlug) {
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
     });
     steps.next("searching the web");
-    const webResults = await Promise.all(queries.map((q) => chat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(
+    const webResults = await Promise.all(queries.map((q) => reportChat(searchBody(q), SEARCH_TIMEOUT_MS, user).then(
       (d) => ({ q, answer: textOf(d), sources: webSourcesFrom(d), cost: costOf(d) }),
       () => null,
     )));
@@ -437,7 +403,7 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
 === WEB SOURCES (numbered, with snippet content) ===\n${webSourceLines}`;
 
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);

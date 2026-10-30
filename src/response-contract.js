@@ -21,7 +21,7 @@
 // document reaches us through JSON.parse it is a tree, so with no ref
 // resolution there is no cycle to defend against and no visited-set to get
 // wrong. The bound is depth and breadth alone.
-const UNSUPPORTED = new Set([
+export const UNSUPPORTED = new Set([
   "$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not",
   "if", "then", "else", "dependentSchemas", "patternProperties", "unevaluatedProperties",
 ]);
@@ -49,11 +49,13 @@ const typesOf = (schema) => {
  *
  *  A node BUDGET is the right bound for a flat scan looking for forbidden keys.
  *  Exhausting it refuses the schema, on the same principle as everything else
- *  here: we do not report on a document we stopped reading. */
+ *  here: we do not report on a document we stopped reading.
+ *
+ *  request-contract.js refuses with this same scan and keyword set. */
 const MAX_SCAN_NODES = 20000;   // far beyond any real response schema
 const MAX_SCAN_DEPTH = 64;      // a backstop; the node budget is the real bound
 
-function hasUnsupported(node, state = { seen: 0 }, depth = 0) {
+export function hasUnsupported(node, state = { seen: 0 }, depth = 0) {
   if (depth > MAX_SCAN_DEPTH) return true;
   if (++state.seen > MAX_SCAN_NODES) return true;
   if (Array.isArray(node)) return node.some((n) => hasUnsupported(n, state, depth + 1));

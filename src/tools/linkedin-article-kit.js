@@ -21,7 +21,8 @@
 // LinkedIn has no public API for publishing personal articles; this delivers
 // the package to paste, never posts.
 import { stepProgress } from "../job-progress.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { reportChat, costOf, textOf } from "../report-synthesis.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { makeResearchHandler } from "./research-deep-kit.js";
@@ -57,13 +58,6 @@ const SYNTH_TIMEOUT_MS = 150_000;
 const IMAGE_TIMEOUT_MS = 60_000;
 const MAX_TOPIC = 600, MAX_ANGLE = 400, MAX_SHORT = 200;
 
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
 const str = (v, max, name) => { if (v == null) return ""; if (typeof v !== "string") throw bad(`"${name}" must be a string`); const s = v.replace(/\s+/g, " ").trim(); if (s.length > max) throw bad(`"${name}" too long (max ${max} chars)`); return s; };
 // House style: no em dashes anywhere in delivered copy.
@@ -127,7 +121,7 @@ function defaultDeps() {
   return {
     research: makeResearchHandler(LINKEDIN_TIERS["linkedin-article"].researchTier),
     generateImage: (input) => IMAGES_FAST_TOOLS.find((t) => t.slug === "v1-images-fast").handler(input),
-    synthesize: (body, timeoutMs, user) => chat(body, timeoutMs, user),
+    synthesize: (body, timeoutMs, user) => reportChat(body, timeoutMs, user),
     resize: defaultResize,
   };
 }

@@ -18,7 +18,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
-import { RAILS, railKey, liveRails } from "./rails.js";
+import { railKey, liveRails } from "./rails.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";

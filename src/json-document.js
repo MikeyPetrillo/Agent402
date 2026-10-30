@@ -49,6 +49,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
+import { envPositive as envMs } from "./env-num.js";
 
 /** Returned by an update() mutator to leave the stored body unchanged. */
 export const SKIP_UPDATE = Symbol("json-document.skip-update");
@@ -66,9 +67,6 @@ export function emptyBody(b) {
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9._:-]{0,120}$/;
-// Kept for callers that still import it; json-document itself no longer
-// compares a file's mtime with the database clock (see reimportIfFileNewer).
-export const NEWER_FILE_GRACE_MS = 60_000;
 /** Backoff between load attempts (ms); the first load at boot tries 1 + length times. */
 export const LOAD_RETRY_DELAYS_MS = Object.freeze([250, 1000, 3000]);
 
@@ -97,7 +95,6 @@ export async function flushJsonDocuments({ timeoutMs = 5_000 } = {}) {
   await Promise.race([Promise.allSettled(docs.map((d) => d.flush())), deadline]).finally(() => clearTimeout(timer));
   return unsavedDocuments();
 }
-const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** The volume's own name for a document: the file's basename. */
 export function documentNameOf(file) {
@@ -115,6 +112,15 @@ function writeJsonFile(file, body) {
   writeFileSync(tmp, raw);
   renameSync(tmp, file);
   return raw;
+}
+
+/** Documents made once per file name, for a module that keeps several: the
+ *  first `docFor(file)` creates the document (quiet log) and later calls return
+ *  it. `docs` is the map, for the module's memory-store registration. */
+export function createDocumentCache() {
+  const docs = new Map();
+  const docFor = (file) => { let d = docs.get(file); if (!d) { d = createJsonDocument({ file, log: () => {} }); docs.set(file, d); } return d; };
+  return { docs, docFor };
 }
 
 /**

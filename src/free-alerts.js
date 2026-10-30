@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
+import { headerText, escapeHtml } from "./email-text.js";
 
 export const ALERT_KINDS = Object.freeze({
   insider: { product: "insider-monitor", family: "insider", noun: "insider filings", cta: (t) => `Email me when ${t} insiders file a Form 4`, subject: (t, n) => `${n} new Form 4 filing${n === 1 ? "" : "s"} for ${t}`, what: (t) => `Form 4 insider filings against ${t}` },
@@ -44,8 +45,9 @@ export const PENDING_TTL_MS = 3 * DAY; // an unconfirmed signup is forgotten
 export const MAX_FAILURES = 5;        // then the alert pauses until a probe succeeds
 export const TICK_PROBE_CAP = 200;    // per tick
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const hdr = (s, n = 120) => String(s ?? "").replace(/[\r\n\t]/g, " ").slice(0, n);
+const esc = escapeHtml;
+// Header and stored text: every control character becomes a space (email.js).
+const hdr = (s, n = 120) => headerText(s, n);
 
 export function defaultStorePath() {
   return join(existsSync("/data") ? "/data" : "/tmp", "free-alerts.json");

@@ -397,8 +397,6 @@ function refreshStatus(now = Date.now(), { force = false } = {}) {
     .finally(() => { statusRefreshing = null; });
   return statusRefreshing;
 }
-/** Re-read the stored status now (another replica may have run since boot). */
-export const backupStatusRefresh = () => { loadStatus(); statusRefreshedAt = 0; return refreshStatus() || Promise.resolve(); };
 /** True while the database copy of the status has not been read (the word is unknown, not stale). */
 function statusUnread() {
   const d = statusStore();

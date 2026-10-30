@@ -262,7 +262,7 @@ export const EVM = {
 // src/solana-history-rpc.js, which also routes getTransaction (an immutable
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
-import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence } from "./refresh-cadence.js";
+import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence, revenueLedgerCadence } from "./refresh-cadence.js";
 import { registerMemoryStore } from "./memory-stores.js";
 export { SOLANA_RPCS };
 
@@ -2080,6 +2080,11 @@ export function revenuePage(baseUrl, snap) {
       <td>${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">explorer</a>` : "-"}</td>
     </tr>`;
   };
+  // The figures come from the ledger, which reads each chain on its own
+  // cycle; the oldest chain's read time is when every figure was current.
+  // snap.asOf is only the rail scan behind the Status column.
+  const synced = Object.values(at.perChain || {}).map((c) => Number(c?.oldestSyncedAt ?? c?.syncedAt)).filter((n) => n > 0);
+  const ledgerAsOf = synced.length ? new Date(Math.min(...synced) * 1000).toISOString() : null;
   const railsSorted = [...snap.rails].sort((a, b) => (Number(perChainOf(b)?.inboundCount) || 0) - (Number(perChainOf(a)?.inboundCount) || 0));
   const partialNotes = snap.rails.filter((r) => r.scanNote).length;
 
@@ -2117,7 +2122,7 @@ export function revenuePage(baseUrl, snap) {
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">
-    <section>
+    <section data-rv-live="head">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.05;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0;">
@@ -2126,12 +2131,12 @@ export function revenuePage(baseUrl, snap) {
     ${standing}
     ${hero}
     <p style="font-size:var(--fs-xs);line-height:1.55;color:var(--muted);margin:2px 0 14px;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers${gwBatched ? ", Circle Gateway batched buyers" : ""}, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">${ledgerAsOf ? `payments read from the chains as of ${esc(ledgerAsOf)}, refreshed ${revenueLedgerCadence()} · rail status as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}` : `rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}`} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection(snap.range)}
     </section>
-    <section>
+    <section data-rv-live="rails">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:36px 0 6px;">
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
@@ -2144,10 +2149,10 @@ export function revenuePage(baseUrl, snap) {
     ${gwBatched ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">Circle Gateway batched: <strong style="color:var(--ink);">${Number(gwBatched.count).toLocaleString()}</strong> transaction${Number(gwBatched.count) === 1 ? "" : "s"}, ${Number(gwBatched.externalCount).toLocaleString()} external, ${esc(usdCell(gwBatched.externalUsd))} external. Settled off chain at Circle Gateway and withdrawn on chain separately, so they are not in the chain rows above; a withdrawal is not counted again.</p>` : ""}
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (the rail stays live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
     </section>
-    <section>
+    <section data-rv-live="mpp">
     ${mppRailsSection(snap.mpp, { wallets: mppWallets(snap.rails) })}
     </section>
-    <section>
+    <section data-rv-live="decide">
     ${decideSection(snap.decide)}
     </section>
     <section>

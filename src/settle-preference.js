@@ -53,9 +53,6 @@ export function registerSettlePreference(name, client, label = name) {
 /** For tests: forget every registered preference. */
 export function resetSettlePreferences() { preferences.clear(); }
 
-/** The names a tagged request may carry. */
-export function settlePreferenceNames() { return [...preferences.keys()]; }
-
 /** The header's value, lowercased, or null. One header read; never throws. */
 export function settleViaOf(req) {
   const v = req?.headers?.[SETTLE_VIA_HEADER];
@@ -63,9 +60,6 @@ export function settleViaOf(req) {
   const s = v.trim().toLowerCase();
   return s || null;
 }
-
-/** The active preference for the current async scope, or null. */
-export function activeSettlePreference() { return scope.getStore() || null; }
 
 /**
  * Express middleware. `authed(req)` decides whether the request may name a

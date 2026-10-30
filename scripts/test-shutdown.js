@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getFreePort } from "./lib/free-port.js";
 
 // Each server this test starts gets its own stats database. Without one they
 // all open /tmp/agent402-stats.db, and a lock held there by any other process
@@ -25,7 +26,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- 1. Real server: SIGTERM drains and exits 0 (redeploy path intact) ----
 async function testSigterm() {
-  const port = 3400 + (process.pid % 500);
+  const port = await getFreePort();
   const child = spawn(process.execPath, ["src/server.js"], {
     // No lame duck: deploys overlap, so the replacement is already serving
     // new calls when SIGTERM lands (see the shutdown comment in
@@ -111,7 +112,7 @@ async function testFatalFileModeDeadline() {
   const dir = mkdtempSync(join(tmpdir(), "a402-fatal-srv-"));
   const preload = join(dir, "throw-on-usr2.mjs");
   writeFileSync(preload, `process.on("SIGUSR2", () => { throw new Error("boom from the test"); });\n`);
-  const port = 3900 + (process.pid % 500);
+  const port = await getFreePort();
   // Both index crawlers off: their outbound reads and parses are background
   // work on the event loop that has nothing to do with the drain being timed.
   const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", ...ownStats() };

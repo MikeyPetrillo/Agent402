@@ -19,6 +19,7 @@
 // Egress -> wallet-only by default (src/free-tier.js does not list the slug).
 
 import { safeFetch } from "./fetch-guard.js";
+import { ghHeaders } from "./enrich-kit.js";
 import { partialFields } from "../partial-answer.js";
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -147,14 +148,6 @@ function encodeName(name) {
 
 function parseJson(text, what) {
   try { return JSON.parse(text); } catch { throw bad(`${what} returned a document that is not JSON`, 502); }
-}
-
-function ghHeaders() {
-  const h = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" };
-  // Optional, like github-repo: keyless reads share one per-IP ceiling; a
-  // token raises it and changes nothing else.
-  if (process.env.GITHUB_TOKEN) h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  return h;
 }
 
 /**
@@ -432,7 +425,7 @@ export const MCP_PACKAGE_TOOLS = [
       input: { package: "@modelcontextprotocol/server-filesystem" },
       inputSchema: {
         properties: {
-          package: { type: "string", description: "npm package name, name@version, or an npx / npm exec command line (\"npx -y agent402-mcp@0.13.24\")." },
+          package: { type: "string", description: "npm package name, name@version, or an npx / npm exec command line (\"npx -y agent402-mcp@0.13.25\")." },
           version: { type: "string", description: "Exact version or dist-tag to check (default latest). Must agree with any version in `package`." },
         },
         required: ["package"],

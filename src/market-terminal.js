@@ -29,9 +29,8 @@
 // and a cycle between two render modules is the kind that resolves fine until
 // someone reorders an import and a const reads undefined at module scope. The
 // two fields needed from the chain descriptor are passed in instead.
+import { esc, fmtNum as num } from "./ledger-chrome.js";
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const num = (n) => Number(n || 0).toLocaleString("en-US");
 /** Compact money for a column: $1.2k / $12.3k / $1.23M, two significant
  *  decimals under a thousand so sub-cent rails stay readable. */
 export function compactUsd(n) {

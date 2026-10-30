@@ -89,9 +89,6 @@ export const FAMILY_SOURCES = [
   ["/skills/", ["src/skills.js"]],
 ];
 
-/** The files whose tool definitions (`slug: "..."`) date the /tools pages. */
-export const TOOL_SOURCE_GLOBS = ["src/tools/*.js", "src/skills.js"];
-
 /** Every module the generator must date: the page sources above (the tool
  *  kits are globbed by the generator itself). */
 export function pageSourceFiles() {

@@ -27,7 +27,7 @@ Tools that fetch user-supplied URLs (`extract`, `meta`, `render`, `screenshot`, 
 
 ## Why some tools are wallet-only
 
-Proof-of-work proves *effort*, not *cost coverage*. Anything that spends real resources per call - Chromium time, network egress, the paid search index, disk (memory), ffmpeg CPU - would otherwise be farmable through the free tier. The `WALLET_ONLY_SLUGS` set in `src/pow.js` is the explicit, reviewable list.
+Proof-of-work proves *effort*, not *cost coverage*. Anything that spends real resources per call - Chromium time, network egress, the paid search index, disk (memory), ffmpeg CPU - would otherwise be farmable through the free tier. So the free tier is an allowlist: `FREE_TIER_SLUGS` in `src/free-tier.js` names the pure-CPU tools that are free, a new tool is wallet-only until it is listed there, and `WALLET_ONLY_SLUGS` in `src/pow.js` is a reviewed override that wins over it. `scripts/test-free-tier-egress.js` proves every listed tool makes no outbound call.
 
 ## Proof-of-work hardening
 

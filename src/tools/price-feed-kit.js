@@ -1,7 +1,6 @@
-// Price-feed kit — three deterministic gateway tools that surface public price
+// Price-feed kit: two deterministic gateway tools that surface public price
 // + TVL data feeds without requiring a key in our deployment:
 //
-//   • price-pyth      — Pyth Hermes API (keyless, sub-second updates, 400+ feeds)
 //   • price-coingecko — CoinGecko public simple/price (keyless free tier)
 //   • defi-tvl        — DeFiLlama protocol TVL (keyless, refreshed every 5m)
 //
@@ -87,15 +86,12 @@ async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {
   return { text, data };
 }
 
-// Pyth quotes prices as { price, expo } where the human value is price * 10**expo.
-// expo is almost always negative (e.g. -8 means the integer is in 1e-8 units).
-
 // price-pyth was RETIRED 2026-08-26: Pyth put Hermes behind a Bearer key at
-// 16:00 UTC that day (keyless = 401), the base API plan is $500/month, and the
-// tool had zero external use in the ledger's history (retirement rule, CLAUDE.md).
+// 16:00 UTC that day (keyless = 401), and the tool had zero external use in
+// the ledger's history (retirement rule, CLAUDE.md).
 export const PRICE_FEED_TOOLS = [
   // ===========================================================================
-  // price-pyth — by Pyth feed ID (or a small set of well-known aliases).
+  // price-coingecko, spot price by CoinGecko coin id.
   // ===========================================================================
   {
     route: "POST /api/price-coingecko",

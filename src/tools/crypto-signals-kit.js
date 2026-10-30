@@ -21,15 +21,19 @@
 // hand-computed indicator values).
 
 import { markUntrusted } from "./provenance.js";
-// Refuse an over-large body BEFORE reading it into a string: `res.text()` has
-// no cap of its own, so a broken or hostile upstream could push an unbounded
-// buffer into memory once per concurrent call.
-function assertBodyWithinCap(res, capBytes, label) {
+import { readBytesCapped, decodeUtf8 } from "../capped-body.js";
+// Read a body under a byte cap: `res.text()` has no cap of its own, so a
+// broken or hostile upstream could push an unbounded buffer into memory once
+// per concurrent call. A declared Content-Length over the cap is refused before
+// reading; a body without one stops at the cap (src/capped-body.js). Either is
+// a 502.
+async function readBodyWithinCap(res, capBytes, label) {
+  const tooLarge = () => Object.assign(new Error(`${label} response is larger than the ${Math.round(capBytes / 1048576)}MB cap`), { statusCode: 502 });
   const declared = Number(res.headers?.get?.("content-length") || 0);
-  if (declared && declared > capBytes) {
-    const e = new Error(`${label} response is larger than the ${Math.round(capBytes / 1048576)}MB cap`);
-    e.statusCode = 502; throw e;
-  }
+  if (declared && declared > capBytes) throw tooLarge();
+  const { bytes, truncated } = await readBytesCapped(res, capBytes);
+  if (truncated) throw tooLarge();
+  return decodeUtf8(bytes);
 }
 
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -130,8 +134,7 @@ async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept, s
     body,
   }, ctx);
   let text = "";
-  assertBodyWithinCap(res, FEED_MAX_BYTES, "Feed");
-  try { text = await bodyUnderDeadline(res.text(), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
+  try { text = await bodyUnderDeadline(readBodyWithinCap(res, FEED_MAX_BYTES, label), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
   if (res.status === 429) throw Object.assign(bad(`${label} rate limit reached upstream - retry shortly`, 503), { rateLimited: true, retryAfter: 5 });
   return { status: res.status, text };
 }

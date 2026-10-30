@@ -62,7 +62,7 @@ ok(typeof sel.id === "string" && sel.id && String(step.if || "") === `steps.${se
 ok(/echo "run=\$RUN" >> "\$GITHUB_OUTPUT"/.test(selRun) && /RUN=yes/.test(selRun) && /RUN=no/.test(selRun), "the selector writes run=yes|no to its step output, yes by default (fail-open)");
 ok(!/github\.event\.before/.test(JSON.stringify(sel)) && !/github\.event\.before/.test(JSON.stringify(step)), "neither step diffs from the push's before");
 ok(/gh run list [^\n]*--workflow deploy\.yml[^\n]*--branch main[^\n]*--status success/.test(selRun) && /worker-deploy-paths\.js --base "\$GITHUB_RUN_ID"/.test(selRun), "the selector takes its base from the last successful deploy run on main");
-ok(/gh api "repos\/\$GITHUB_REPOSITORY\/compare\/\$DIFF_BASE\.\.\.\$GITHUB_SHA"/.test(selRun) && /worker-deploy-paths\.js --check\)" = "yes"/.test(selRun), "the selector diffs base...head through the API and asks the script whether the worker is touched");
+ok(/gh api "repos\/\$GITHUB_REPOSITORY\/compare\/\$DIFF_BASE\.\.\.\$GITHUB_SHA"/.test(selRun) && /worker-deploy-paths\.js --check 2>\/dev\/null \|\| echo yes\)" != "no"/.test(selRun), "the selector diffs base...head through the API and asks the script whether the worker is touched");
 // Every job-level secret is shadowed with "" in the selector's env (it runs
 // repository code), and the token it does hold is the workflow's own.
 const jobSecrets = Object.entries(wf.jobs.deploy.env || {}).filter(([, v]) => /secrets\./.test(String(v))).map(([k]) => k);
@@ -80,6 +80,10 @@ ok(waitIdx >= 0 && selIdx > waitIdx, "the selector runs after the main app's rol
 ok(!step["continue-on-error"] && !sel["continue-on-error"], "a failed selector or worker deploy fails the job");
 const setupNodeIdx = steps.findIndex((s) => /actions\/setup-node/.test(String(s.uses || "")));
 ok(setupNodeIdx >= 0 && setupNodeIdx < selIdx, "node is set up before the selector runs the script");
+
+ok(/NFILES" -ge 300/.test(selRun) && /fail-open/.test(selRun), "a diff list long enough to be capped redeploys (fail-open)");
+
+ok(/--check 2>\/dev\/null \|\| echo yes\)" != "no"/.test(selRun), "a selector check that fails or prints anything but no redeploys (fail-open)");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

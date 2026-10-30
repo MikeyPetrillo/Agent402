@@ -68,8 +68,8 @@ import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
+import { positiveNum as num } from "./env-num.js";
 
-const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
 /** Rolling window, and the length of a global pause. */

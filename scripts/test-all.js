@@ -216,8 +216,8 @@ const NETWORK = new Set([
   // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama).
   // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
   "/api/price-coingecko", "/api/defi-tvl",
-  // Dex-kit: 3 Alchemy-backed (dex-pair / dex-pool / dex-quote) — 503 without
-  // ALCHEMY_API_KEY, same as chain-kit. dex-top-pools hits DeFiLlama keylessly.
+  // Dex-kit: dex-pair / dex-pool / dex-quote read chain-kit's RPC transport
+  // (Alchemy, then keyless public nodes). dex-top-pools hits DeFiLlama keylessly.
   "/api/dex-pair", "/api/dex-pool", "/api/dex-quote", "/api/dex-top-pools",
   // Prediction-market-kit: Kalshi's keyless public API. Per-IP rate-limited;
   // tolerate transient 429/502/503/504.

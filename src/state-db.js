@@ -26,6 +26,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, createHash } from "node:crypto";
 import { dbSsl } from "./db-ssl.js";
 import { runAsJob } from "./active-jobs.js";
+import { envPositive as envMs } from "./env-num.js";
 
 const { Pool } = pg;
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,40}$/;
@@ -116,7 +117,6 @@ export function lastStateDbError() { return lastError; }
 // client-side read limit a little above it (a black-holed socket never
 // answers the server's cancel), a limit on a transaction left idle, TCP
 // keepalive, and a connect limit that also bounds waiting for a free client.
-const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
 export function stateDbTimeouts() {
   const statementMs = envMs("STATE_DB_STATEMENT_TIMEOUT_MS", 10_000);
   return {

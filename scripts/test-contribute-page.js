@@ -10,13 +10,14 @@
 // Offline.
 import { existsSync, readFileSync } from "node:fs";
 import { contributePage } from "../src/contribute.js";
+import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const root = new URL("../", import.meta.url);
 
 const html = contributePage("https://agent402.tools");
-const text = html.replace(/<\/?(code|a|strong|em)\b[^>]*>/g, "").replace(/<[^>]+>/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const text = decodeEntities(stripTags(stripInlineTags(html))).replace(/\s+/g, " ");
 
 const scripts = [...new Set([...text.matchAll(/node (scripts\/[a-z0-9-]+\.js)/g)].map((m) => m[1]))];
 ok(scripts.length >= 5, `the page names ${scripts.length} scripts to run`);

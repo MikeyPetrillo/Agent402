@@ -2661,6 +2661,7 @@ jobs:
           t node scripts/test-revenue-chart.js
           # Revenue date ranges (parser, ranged daily APIs with 400s, first-paint window, URL round trip; fixture ledger, port from the kernel, offline)
           t node scripts/test-revenue-range.js
+          t node scripts/test-revenue-live-refresh.js
           # Prices quoted in PROSE match real prices (meta + og descriptions, which docs-truth cannot see - offline)
           t node scripts/test-price-prose.js
           # "Live 402 quote (a priceless row learns its price from the challenge; unpriceable never becomes $0; PUT/PATCH/DELETE never probed — offline)"
@@ -2762,6 +2763,8 @@ jobs:
           # AVM validity guard (short-window Algorand payment rejected pre-handler, no upstream burn — offline)
           t node scripts/test-avm-validity.js
           t node scripts/test-decide-index.js
+          # Decide BM25 index in typed arrays: same scores, tie order, filtered searches and suite plans as the Map-and-Set index it replaced, over a mutation sequence (offline)
+          t node scripts/test-decide-lexical.js
           t node scripts/test-decide-planner.js
           # Decide specialized planners: one seam each, router threshold and fallback, seller neutrality, synthetic suite plan-only (offline)
           t node scripts/test-decide-harness.js
@@ -2894,6 +2897,12 @@ jobs:
           t node scripts/test-load-shed-warmup.js
           # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
           t node scripts/test-worker-deploy-step.js
+          t node scripts/test-decide-deploy-step.js
+          t node scripts/test-heap-sampling.js
+          t node scripts/test-network-names-own-keys.js
+          t node scripts/test-email-text.js
+          t node scripts/test-mcp-version-pins.js
+          t node scripts/test-env-num.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
           t node scripts/test-deploy-has-status.js
           # ffmpeg/ffprobe read a downloaded body as a local file of a named format (stub runner, offline)
@@ -3324,8 +3333,12 @@ jobs:
           t node scripts/test-mpp-discovery-agreement.js
           # /openapi.json payment prose (MPP rails per route, creditsKey) read from the 402's own config (offline)
           t node scripts/test-openapi-mpp-clause.js
-          # Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
+          # Util-kit tests (geo-distance)
           t node scripts/test-util-kit.js
+          # webhook-verify: per-provider HMAC vectors, tamper, replay tolerance, secret never echoed (offline)
+          t node scripts/test-webhook-verify.js
+          # Burner sweep sizing: per-buy amount from the live 402, buys from the excess over the float (offline, no spend)
+          t node scripts/test-sweep-burner.js
           # x-data kit (offline)
           t node scripts/test-x-data-kit.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
@@ -6038,7 +6051,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       MPP_SECRET_KEY: ${{ secrets.MPP_SECRET_KEY }}
-      X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
       # The offsite backup's bucket variables (BACKUP_S3_*) are not here: the
       # bucket is a Railway bucket whose credentials Railway issues and can
       # regenerate, so the service variables (`railway bucket credentials`) are
@@ -6086,7 +6098,6 @@ jobs:
           [ -n "$FRED_API_KEY" ] && echo "::add-mask::$FRED_API_KEY"
           [ -n "$FRED_API_KEY_V2" ] && echo "::add-mask::$FRED_API_KEY_V2"
           [ -n "$MPP_SECRET_KEY" ] && echo "::add-mask::$MPP_SECRET_KEY"
-          [ -n "$X_BEARER_TOKEN" ] && echo "::add-mask::$X_BEARER_TOKEN"
           # Not a credential, but a project id narrows a target and has no
           # reader in a public log.
           [ -n "$RAILWAY_PROJECT_ID" ] && echo "::add-mask::$RAILWAY_PROJECT_ID"
@@ -6311,12 +6322,9 @@ jobs:
           if [ -n "$MPP_SECRET_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg v "$MPP_SECRET_KEY" '. + {MPP_SECRET_KEY:$v}')
           fi
-          # X app-only bearer (the five x-data tools' rollout switch). Minted and
-          # first written by x-bearer-sync.yml; rides here too if it is ever
-          # added as an Actions secret, so a rotation flows with the deploy.
-          if [ -n "$X_BEARER_TOKEN" ]; then
-            VARS=$(echo "$VARS" | jq --arg v "$X_BEARER_TOKEN" '. + {X_BEARER_TOKEN:$v}')
-          fi
+          # X_BEARER_TOKEN (the x-data tools' rollout switch) is not upserted
+          # here: x-bearer-sync.yml mints it and writes it to Railway, which
+          # holds its only copy.
           # Never a variable whose source of truth is Railway itself (the
           # backup bucket's BACKUP_S3_* credentials): this upsert replaces the
           # service's value, so a copy held here would overwrite a credential
@@ -6698,8 +6706,14 @@ jobs:
           DIFF_BASE=$(printf '%s' "$RUNS" | node scripts/worker-deploy-paths.js --base "$GITHUB_RUN_ID")
           if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
             if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
-              if [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check)" = "yes" ]; then
-                echo "worker files changed in $DIFF_BASE...$GITHUB_SHA - redeploying agent402-worker"
+              # The compare API caps the files it lists (300); a list that long
+              # may be cut, so it redeploys rather than trust a partial list.
+              NFILES=$(printf '%s\n' "$CHANGED" | grep -c . || true)
+              if [ "$NFILES" -ge 300 ]; then
+                echo "the diff lists $NFILES files (the API may cap the list) - redeploying agent402-worker (fail-open)"
+              elif [ "$(printf '%s\n' "$CHANGED" | node scripts/worker-deploy-paths.js --check 2>/dev/null || echo yes)" != "no" ]; then
+                # Only a clean "no" keeps the old build; a check that fails redeploys.
+                echo "worker files changed in $DIFF_BASE...$GITHUB_SHA (or the check could not run) - redeploying agent402-worker"
               else
                 echo "no worker file changed in $DIFF_BASE...$GITHUB_SHA - agent402-worker keeps its build"
                 RUN=no
@@ -6725,6 +6739,52 @@ jobs:
           tar -xzf "$CLI_DIR/cli.tgz" -C "$CLI_DIR"
           "$CLI_DIR/railway" up --service agent402-worker --environment production --project "$RAILWAY_PROJECT_ID" --ci
 
+      # The decide service redeploys only when the pushed range touches a file
+      # scripts/decide-deploy-paths.js lists (its image inputs, its import
+      # closure, and the export row format and kit it shares with the main
+      # app); tools reach it as data at runtime. Same base and FAIL-OPEN rules
+      # as the worker selector above: an unreadable diff or no base redeploys.
+      - name: Decide whether the decide service's code changed
+        id: decide-diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          set -euo pipefail
+          RUN=yes
+          RUNS=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy.yml --branch main --event push --status success --limit 30 --json databaseId,headSha,conclusion 2>/dev/null || true)
+          DIFF_BASE=$(printf '%s' "$RUNS" | node scripts/decide-deploy-paths.js --base "$GITHUB_RUN_ID")
+          if [ -n "${DIFF_BASE:-}" ] && ! echo "$DIFF_BASE" | grep -qE '^0+$'; then
+            if CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DIFF_BASE...$GITHUB_SHA" --paginate --jq '.files[].filename' 2>/dev/null); then
+              # The compare API caps the files it lists (300); a list that long
+              # may be cut, so it redeploys rather than trust a partial list.
+              NFILES=$(printf '%s\n' "$CHANGED" | grep -c . || true)
+              if [ "$NFILES" -ge 300 ]; then
+                echo "the diff lists $NFILES files (the API may cap the list) - redeploying agent402-decide (fail-open)"
+              elif [ "$(printf '%s\n' "$CHANGED" | node scripts/decide-deploy-paths.js --check 2>/dev/null || echo yes)" != "no" ]; then
+                # Only a clean "no" keeps the old build; a check that fails redeploys.
+                echo "decide files changed in $DIFF_BASE...$GITHUB_SHA (or the check could not run) - redeploying agent402-decide"
+              else
+                echo "no decide file changed in $DIFF_BASE...$GITHUB_SHA - agent402-decide keeps its build"
+                RUN=no
+              fi
+            else
+              echo "could not read the diff $DIFF_BASE...$GITHUB_SHA - redeploying agent402-decide (fail-open)"
+            fi
+          else
+            echo "no successful deploy run to diff from - redeploying agent402-decide (fail-open)"
+          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
       # The decide service (DECIDE_MODE=true, same image) builds from the same
       # commit, AFTER the main app is verified: its index syncs from the main
       # app's internal export, which this commit's main build serves. It runs
@@ -6733,6 +6793,7 @@ jobs:
       # step so a decide failure cannot skip a check of the main app, and it
       # still fails the job.
       - name: Deploy the decide service at the same commit
+        if: steps.decide-diff.outputs.run == 'yes'
         run: |
           gql() {
             curl -s -X POST https://backboard.railway.app/graphql/v2 \

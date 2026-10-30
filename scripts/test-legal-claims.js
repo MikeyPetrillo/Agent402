@@ -11,11 +11,12 @@
 // says that, so changing the code without the page (or the page without the
 // code) fails here.
 import { readFileSync } from "node:fs";
+import { pageText } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const src = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
-const text = (html) => String(html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+const text = pageText;
 
 const { privacyPage } = await import("../src/privacy.js");
 const { termsPage } = await import("../src/terms.js");

@@ -1,6 +1,6 @@
 // Calendar kit — ISO week numbers, leap-year checks, Easter computation,
 // epoch conversion, day-of-year. Pure-CPU date utilities that complement
-// date-time-kit (which covers formatting, diffs, cron, business days).
+// date-time-kit (which covers timezone conversion and formatting).
 // All deterministic, no dependencies, no network.
 
 function bad(message) {

@@ -1,5 +1,4 @@
-// Text-analysis kit — readability scores, word frequency, text diff, lorem ipsum,
-// slug generation. All pure-CPU, no network, no LLM — proof-of-work eligible.
+// Text-analysis kit: readability scores. Pure-CPU, no network, no LLM, proof-of-work eligible.
 // Covered by scripts/test-text-analysis-kit.js.
 
 function bad(message, statusCode = 400) {
@@ -33,57 +32,6 @@ function tokenize(text) {
 // Sentence splitter: split on .!? followed by space or end-of-string.
 function splitSentences(text) {
   return text.split(/[.!?]+(?:\s|$)/).map((s) => s.trim()).filter(Boolean);
-}
-
-// Stop words (~50 common English stop words).
-const STOP_WORDS = new Set([
-  "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
-  "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-  "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-  "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-  "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-  "is", "are", "was", "were", "been", "has", "had", "its", "can", "no",
-]);
-
-// Lorem ipsum vocabulary (~200 words).
-const LOREM_WORDS = [
-  "lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit",
-  "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore",
-  "magna", "aliqua", "enim", "ad", "minim", "veniam", "quis", "nostrud",
-  "exercitation", "ullamco", "laboris", "nisi", "aliquip", "ex", "ea", "commodo",
-  "consequat", "duis", "aute", "irure", "in", "reprehenderit", "voluptate",
-  "velit", "esse", "cillum", "fugiat", "nulla", "pariatur", "excepteur", "sint",
-  "occaecat", "cupidatat", "non", "proident", "sunt", "culpa", "qui", "officia",
-  "deserunt", "mollit", "anim", "id", "est", "laborum", "ac", "accumsan",
-  "adipisci", "aliquam", "ante", "aptent", "arcu", "at", "auctor", "augue",
-  "bibendum", "blandit", "class", "condimentum", "congue", "consequat", "conubia",
-  "convallis", "cras", "cubilia", "curabitur", "dapibus", "dictum", "dignissim",
-  "donec", "egestas", "elementum", "euismod", "facilisi", "facilisis", "fames",
-  "faucibus", "felis", "fermentum", "feugiat", "fringilla", "fusce", "gravida",
-  "habitant", "habitasse", "hac", "hendrerit", "himenaeos", "iaculis", "imperdiet",
-  "inceptos", "integer", "interdum", "justo", "lacinia", "lacus", "laoreet",
-  "lectus", "leo", "libero", "ligula", "litora", "lobortis", "luctus", "maecenas",
-  "massa", "mattis", "mauris", "metus", "mi", "morbi", "nam", "nec", "neque",
-  "nibh", "nunc", "odio", "orci", "ornare", "pellentesque", "pharetra", "placerat",
-  "platea", "porta", "porttitor", "posuere", "potenti", "praesent", "pretium",
-  "primis", "proin", "pulvinar", "purus", "quam", "quisque", "rhoncus", "risus",
-  "rutrum", "sagittis", "sapien", "scelerisque", "semper", "senectus", "sociis",
-  "sodales", "sollicitudin", "suscipit", "suspendisse", "taciti", "tellus",
-  "torquent", "tortor", "tristique", "turpis", "ullamcorper", "ultrices",
-  "ultricies", "urna", "varius", "vehicula", "vel", "vestibulum", "vitae",
-  "vivamus", "viverra", "volutpat", "vulputate",
-];
-
-// Seeded PRNG (Mulberry32) for deterministic lorem ipsum given no seed (uses
-// a fixed seed so the same params always produce the same text).
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6d2b79f5) | 0;
-    let x = Math.imul(t ^ (t >>> 15), 1 | t);
-    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,230 @@
+#!/usr/bin/env node
+// Offline test: the open /revenue page keeps itself current.
+//
+//   * every minute while the tab is visible, the page reads its own URL again
+//     and swaps in the sections marked data-rv-live, then reloads the series
+//     for the same window
+//   * a hidden tab reads nothing; a failed read keeps what is shown (the chart
+//     is not blanked); a page with no live sections (the warm-up answer)
+//     changes nothing
+//   * a section holding focus is left alone until the next minute
+//   * a preset range rolls over when the server's day moves on
+//
+// The page is rendered from the same helpers the route calls and driven in
+// jsdom with the interval captured, so no server or chain is read.
+import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
+import { revenuePageRange } from "../src/revenue-range.js";
+import { revenuePage } from "../src/revenue-live.js";
+
+let pass = 0, fail = 0;
+const check = async (name, fn) => {
+  try { await fn(); pass++; console.log(`ok - ${name}`); }
+  catch (e) { fail++; console.log(`FAIL - ${name}\n       ${e.message}`); }
+};
+
+const FIRST = "2026-06-15";
+const DAY_MS = 86_400_000;
+const NOW = Date.parse("2026-10-10T12:00:00Z");
+const pageAt = (now, query, extCount) => revenuePage("https://example.test", {
+  asOf: new Date(now).toISOString(),
+  rails: [],
+  allTime: { allTimeInboundCount: 10 + extCount, allTimeExternalCount: extCount, allTimeExternalUsd: extCount / 100 },
+  mpp: {},
+  standing: {},
+  range: revenuePageRange(query, { firstDay: FIRST, now }),
+});
+const CHART_JS = readFileSync(new URL("../assets/js/revenue-chart.js", import.meta.url), "utf8");
+const inline = (html) => html.replace('<script src="/js/revenue-chart.js"></script>', `<script>${CHART_JS}</script>`);
+const settle = () => new Promise((r) => setTimeout(r, 40));
+
+async function boot(query = { range: "7d" }) {
+  const env = { page: null, pageStatus: 200, pageFails: false, seriesFails: false, seriesStatus: 200, fetched: [], ticks: [] };
+  const search = Object.keys(query).length ? "?" + new URLSearchParams(query) : "";
+  const dom = new JSDOM(inline(pageAt(NOW, query, 4)), {
+    url: `https://example.test/revenue${search}`,
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+    beforeParse(w) {
+      w.setInterval = (fn, ms) => { env.ticks.push({ fn, ms }); return env.ticks.length; };
+      w.fetch = (url, init) => {
+        const u = new URL(String(url), "https://example.test");
+        env.fetched.push(u.pathname + u.search);
+        if (u.pathname === "/revenue") {
+          if (env.pageFails) return Promise.reject(new Error("offline"));
+          return Promise.resolve({ ok: env.pageStatus === 200, status: env.pageStatus, text: () => Promise.resolve(env.page), init });
+        }
+        if (env.seriesFails) return Promise.reject(new Error("offline"));
+        if (env.seriesStatus !== 200) return Promise.resolve({ ok: false, status: env.seriesStatus, json: () => Promise.resolve({ error: "Too many requests" }) });
+        if (env.laneStatus && env.laneStatus !== 200 && u.pathname !== "/api/revenue/daily") return Promise.resolve({ ok: false, status: env.laneStatus, json: () => Promise.resolve({ error: "Too many requests" }) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: [{ day: "2026-10-09", extUsd: 0.01, ext: 1, tx: 1, chains: {} }], recordingSince: null }) });
+      };
+    },
+  });
+  await settle();
+  const w = dom.window;
+  const tick = async () => { for (const t of env.ticks) t.fn(); await settle(); };
+  // Ticks until the series is read (every fifth minute), at most `max` ticks.
+  const untilSeries = async (max = 6) => { for (let i = 0; i < max; i++) { const n = env.fetched.length; await tick(); if (env.fetched.slice(n).some((u) => u.startsWith("/api/revenue/daily"))) return i + 1; } return 0; };
+  const text = (sel) => w.document.querySelector(sel).textContent;
+  return { w, env, tick, text, untilSeries };
+}
+
+{
+  const { w, env, tick, text, untilSeries } = await boot();
+  await check("one live timer, once a minute", () => {
+    assert.equal(env.ticks.length, 1);
+    assert.equal(env.ticks[0].ms, 60_000);
+  });
+  await check("the server-rendered figures are marked for refresh", () => {
+    const names = [...w.document.querySelectorAll("[data-rv-live]")].map((e) => e.getAttribute("data-rv-live"));
+    assert.deepEqual(names, ["head", "rails", "mpp", "decide"]);
+    assert.equal(w.document.querySelector("[data-rv-live] #rvz"), null, "the chart and its range control are never swapped");
+  });
+  await check("a tick swaps in new figures; the series is read every fifth minute for the same window", async () => {
+    assert.match(text('[data-rv-live="head"]'), /\b4\b external payments/);
+    env.page = pageAt(NOW + 60_000, { range: "7d" }, 9);
+    env.fetched.length = 0;
+    await tick();
+    assert.match(text('[data-rv-live="head"]'), /\b9\b external payments/);
+    assert.deepEqual(env.fetched, ["/revenue?range=7d"], "the first minute reads only its own URL, range kept");
+    for (let i = 0; i < 3; i++) await tick();
+    assert.equal(env.fetched.filter((u) => u.startsWith("/api/")).length, 0, "no series read in minutes two to four");
+    env.fetched.length = 0;
+    await tick();
+    const series = env.fetched.slice(1);
+    assert.equal(series.length, 3, `the fifth minute reads the three series (${env.fetched.join(", ")})`);
+    for (const u of series) assert.ok(u.endsWith("?from=2026-10-04&to=2026-10-10"), u);
+  });
+  await check("the page read asks for a fresh copy", async () => {
+    let init = null;
+    const f = w.fetch;
+    w.fetch = (url, i) => { if (String(url).startsWith("/revenue")) init = i; return f(url, i); };
+    await tick();
+    w.fetch = f;
+    assert.equal(init?.cache, "no-store");
+  });
+  await check("a hidden tab reads nothing", async () => {
+    Object.defineProperty(w.document, "visibilityState", { configurable: true, get: () => "hidden" });
+    env.fetched.length = 0;
+    await tick();
+    assert.equal(env.fetched.length, 0);
+    delete w.document.visibilityState;
+  });
+  await check("a failed page read keeps the figures; a failed series read keeps the chart", async () => {
+    const before = text('[data-rv-live="head"]');
+    const svg = w.document.getElementById("rvzSvg").outerHTML;
+    env.pageFails = true; env.seriesFails = true;
+    assert.ok(await untilSeries(), "a series read was attempted");
+    assert.equal(text('[data-rv-live="head"]'), before);
+    assert.ok(w.document.getElementById("rvzSvg"), "the chart is still there");
+    assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg);
+    assert.equal(w.document.querySelector(".rvz-empty"), null, "no 'series unavailable' on a background read");
+    env.pageFails = false; env.seriesFails = false;
+  });
+  await check("a refused (429) series read keeps the chart instead of drawing zeros", async () => {
+    const svg = w.document.getElementById("rvzSvg").outerHTML;
+    env.seriesStatus = 429;
+    assert.ok(await untilSeries(), "a series read was attempted");
+    assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg, "the chart is unchanged");
+    env.seriesStatus = 200;
+  });
+  await check("a refused side lane (free or Tempo) keeps the drawn chart too", async () => {
+    const svg = w.document.getElementById("rvzSvg").outerHTML;
+    env.laneStatus = 429;
+    assert.ok(await untilSeries(), "a series read was attempted");
+    assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg, "the chart is unchanged");
+    env.laneStatus = 0;
+  });
+  await check("a refused (429) page read backs off five minutes", async () => {
+    env.pageStatus = 429; env.page = pageAt(NOW, { range: "7d" }, 4);
+    await tick();
+    env.pageStatus = 200;
+    env.fetched.length = 0;
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(env.fetched.length, 0, `nothing read for five minutes after a 429 (${env.fetched.length} reads)`);
+    await tick();
+    assert.ok(env.fetched[0]?.startsWith("/revenue"), "the sixth minute reads again");
+  });
+  await check("a non-200 answer and the warm-up page change nothing", async () => {
+    const before = text('[data-rv-live="head"]');
+    env.pageStatus = 429; env.page = pageAt(NOW, { range: "7d" }, 50);
+    await tick();
+    assert.equal(text('[data-rv-live="head"]'), before);
+    env.pageStatus = 200; for (let i = 0; i < 5; i++) await tick(); // the 429 backs off five minutes
+    env.page = '<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body><h2>Warming up</h2></body>';
+    await tick();
+    assert.equal(text('[data-rv-live="head"]'), before);
+  });
+  await check("a section holding focus waits; the others refresh", async () => {
+    const link = w.document.querySelector('[data-rv-live="head"] a');
+    link.focus();
+    assert.equal(w.document.activeElement, link);
+    const head = text('[data-rv-live="head"]');
+    env.page = pageAt(NOW, { range: "7d" }, 12);
+    await tick();
+    assert.equal(text('[data-rv-live="head"]'), head, "focused section untouched");
+    link.blur();
+    await tick();
+    assert.match(text('[data-rv-live="head"]'), /\b12\b external payments/);
+  });
+  await check("a section with text selected in it waits", async () => {
+    const head = w.document.querySelector('[data-rv-live="head"]');
+    const sel = w.getSelection();
+    sel.selectAllChildren(head.querySelector("h1"));
+    assert.equal(sel.isCollapsed, false);
+    const before = head.textContent;
+    env.page = pageAt(NOW, { range: "7d" }, 15);
+    await tick();
+    assert.equal(head.textContent, before, "selected section untouched");
+    sel.removeAllRanges();
+    await tick();
+    assert.match(head.textContent, /\b15\b external payments/);
+  });
+  await check("a preset range rolls over when the server's day moves on", async () => {
+    env.page = pageAt(NOW + DAY_MS, { range: "7d" }, 12);
+    env.fetched.length = 0;
+    await tick();
+    assert.equal(w.document.getElementById("rvzWindowText").textContent, "2026-10-05 to 2026-10-11 (7 days, UTC)");
+    for (const u of env.fetched.slice(1)) assert.ok(u.endsWith("?from=2026-10-05&to=2026-10-11"), u);
+  });
+}
+{
+  const { w, env, tick } = await boot({ from: "2026-09-10", to: "2026-09-20" });
+  await check("a custom range stays put across a day change", async () => {
+    env.page = pageAt(NOW + DAY_MS, { from: "2026-09-10", to: "2026-09-20" }, 5);
+    env.fetched.length = 0;
+    await tick();
+    assert.equal(env.fetched[0], "/revenue?from=2026-09-10&to=2026-09-20");
+    for (const u of env.fetched.slice(1)) assert.ok(u.endsWith("?from=2026-09-10&to=2026-09-20"), u);
+    assert.match(w.document.getElementById("rvzWindowText").textContent, /^2026-09-10 to 2026-09-20/);
+  });
+}
+
+{
+  const asOf = "2026-10-10T08:00:00.000Z";
+  const lineOf = (allTime) => {
+    const d = new JSDOM(revenuePage("https://example.test", { asOf, rails: [], allTime, mpp: {}, standing: {} })).window.document;
+    return [...d.querySelectorAll('[data-rv-live="head"] p')].map((p) => p.textContent).find((t) => /as of/.test(t)) || "";
+  };
+  await check("the timestamp line names the payments' read time apart from the rail status scan", () => {
+    const sec = (iso) => Date.parse(iso) / 1000;
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: sec("2026-10-10T11:58:00Z") }, solana: { syncedAt: sec("2026-10-10T11:55:30Z") } } });
+    assert.match(line, /payments read from the chains as of 2026-10-10T11:55:30\.000Z, refreshed every 5 minutes/, "the oldest chain's read, the ledger cadence");
+    assert.match(line, /rail status as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
+  });
+  await check("a chain with two wallets is as fresh as its older wallet", () => {
+    const sec = (iso) => Date.parse(iso) / 1000;
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: sec("2026-10-10T11:59:00Z"), oldestSyncedAt: sec("2026-10-10T11:40:00Z") }, solana: { syncedAt: sec("2026-10-10T11:58:00Z") } } });
+    assert.match(line, /payments read from the chains as of 2026-10-10T11:40:00\.000Z/);
+  });
+  await check("with no ledger read times the line keeps the rail scan's", () => {
+    const line = lineOf({ allTimeInboundCount: 3, perChain: { base: { syncedAt: null } } });
+    assert.match(line, /^rails read as of 2026-10-10T08:00:00\.000Z, refreshed every 4 hours/);
+    assert.ok(!/payments read/.test(line));
+  });
+}
+
+console.log(`\ntest-revenue-live-refresh: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

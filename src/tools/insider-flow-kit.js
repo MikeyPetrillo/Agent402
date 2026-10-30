@@ -14,10 +14,11 @@
 // daily probe (one EDGAR full-text query, no XML fetch) whose fingerprint is
 // the set of Form 4 accession numbers - a new one = paid re-run + email.
 import { stepProgress } from "../job-progress.js";
-import { completeSynthesis, proseOf } from "../report-synthesis.js";
+import { completeSynthesis, proseOf, reportChat, costOf } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
-import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
+import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany, eftsSearch, fetchXmlText, issuerHits } from "./edgar-kit.js";
+import { mapLimit } from "./map-limit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
@@ -47,13 +48,6 @@ const CODES = {
   X: "exercise of in-the-money derivative", J: "other (see filing)", W: "acquired by will/inheritance", I: "discretionary transaction",
 };
 
-async function chat(body, timeoutMs, user) {
-  const res = await fetchOpenRouter({ ...body, ...(user ? { user } : {}), usage: { include: true } }, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res);
-  return res.json();
-}
-const costOf = (d) => Number(d?.usage?.cost) || 0;
-const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
 const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(Math.max(n, lo), hi) : d; };
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
@@ -152,11 +146,6 @@ export function form4FilingsFromHits(allHits, issuerCik, limit = 40) {
   }).filter((f) => f.accessionNumber);
 }
 
-async function mapLimit(items, n, fn) {
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
-  return out;
-}
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("timeout")), ms))]);
 const fmtUsd = (v) => `$${Math.round(v).toLocaleString("en-US")}`;
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
@@ -261,7 +250,7 @@ NOTE: a gap in this material is never a finding about the company or an insider 
 
     let spent = 0;
     steps.next("writing report");
-    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
+    const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);

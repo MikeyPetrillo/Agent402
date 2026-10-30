@@ -1,10 +1,7 @@
-// Util-kit — deterministic gap-fillers that round out the catalog's existing
-// families: jwt-sign (completes decode/verify/sign), uuid-v5 (deterministic IDs
-// to pair with the random uuid/ulid), group-by (the data-wrangling aggregate
-// agents reach for), json-to-xml (reverse of xml-to-json), geo-distance
-// (haversine), color-contrast (WCAG), and webhook-verify (per-provider HMAC
-// signature check: GitHub/Stripe/Shopify/Slack). All pure-CPU, no network, no
-// LLM — proof-of-work eligible. Covered by scripts/test-util-kit.js and
+// Util-kit - deterministic gap-fillers: jwt-sign (completes decode/verify/sign),
+// geo-distance (haversine), and webhook-verify (per-provider HMAC signature
+// check: GitHub/Stripe/Shopify/Slack). All pure-CPU, no network, no LLM -
+// proof-of-work eligible. Covered by scripts/test-util-kit.js and
 // scripts/test-webhook-verify.js.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -26,54 +23,6 @@ const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/\+/g, "-").
 
 // ---------------------------------------------------------------------------
 const HS = { HS256: "sha256", HS384: "sha384", HS512: "sha512" };
-
-// uuid-v5: namespace (a UUID, or a well-known alias) + name → deterministic UUID.
-const NS_ALIASES = {
-  dns: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-  url: "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
-  oid: "6ba7b812-9dad-11d1-80b4-00c04fd430c8",
-  x500: "6ba7b814-9dad-11d1-80b4-00c04fd430c8",
-};
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function uuidToBytes(uuid) {
-  const hex = uuid.replace(/-/g, "");
-  const out = Buffer.alloc(16);
-  for (let i = 0; i < 16; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
-function bytesToUuid(b) {
-  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
-
-// json-to-xml: minimal, correct serializer (escapes text + attribute-free).
-const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const safeTag = (k) => (/^[A-Za-z_][\w.-]*$/.test(k) ? k : "item");
-function toXml(value, tag, indent) {
-  const pad = "  ".repeat(indent);
-  if (value === null || value === undefined) return `${pad}<${tag}/>`;
-  if (Array.isArray(value)) return value.map((v) => toXml(v, tag, indent)).join("\n");
-  if (typeof value === "object") {
-    const inner = Object.entries(value).map(([k, v]) => toXml(v, safeTag(k), indent + 1)).join("\n");
-    return `${pad}<${tag}>\n${inner}\n${pad}</${tag}>`;
-  }
-  return `${pad}<${tag}>${xmlEsc(value)}</${tag}>`;
-}
-
-// color-contrast: parse #rgb / #rrggbb → relative luminance → WCAG ratio.
-function hexToRgb(hex) {
-  const m = String(hex).trim().replace(/^#/, "");
-  const full = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
-  if (!/^[0-9a-f]{6}$/i.test(full)) throw bad(`invalid hex color "${hex}" (use #rgb or #rrggbb)`);
-  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
-}
-function relLuminance([r, g, b]) {
-  const lin = [r, g, b].map((v) => {
-    const s = v / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-}
 
 // webhook-verify: each provider signs the RAW request body with its own base
 // string + encoding. Getting the base string wrong fails silently, so this

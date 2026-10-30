@@ -6,13 +6,13 @@
 //
 // Per kind:
 // - domain  (domain-monitor): full graded audit on first sight and every
-//   FULL_MS (30d). Every CHECK_MS (24h) a FREE re-probe (probeDomain: the same
+//   DOMAIN_FULL_MS (30d). Every DOMAIN_CHECK_MS (24h) a FREE re-probe (probeDomain: the same
 //   function the paid handler grades with, no LLM) whose fingerprint is compared
 //   to the last one; a change (grade, SPF/DMARC/DKIM/MX, header set, TLS issuer
 //   or renewal) or a certificate inside TLS_ALERT_DAYS triggers a full re-run +
 //   an alert email. A flapping domain is bounded by MIN_FULL_GAP_MS (one paid
 //   re-run per 12h); a TLS-expiry alert is sent once per certificate.
-// - fund    (fund-monitor): resolve the manager once, then every CHECK_MS read
+// - fund    (fund-monitor): resolve the manager once, then every FUND_CHECK_MS read
 //   the latest 13F-HR accession (one small EDGAR JSON read); a NEW accession
 //   triggers the full report + a "new filing" email. First sight = welcome
 //   report. The accession only advances after a SUCCESSFUL report, so a failed
