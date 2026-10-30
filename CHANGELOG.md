@@ -9,8 +9,8 @@ carries its own version on npm.
 ### 2026-10-29 (transactions page updates itself, cleanup)
 Surfaces:
 - An open /revenue page reads its figures again every minute while the tab
-  is visible: the headline, the rail and MPP tables and the chart, for the
-  same date range (a preset range moves with the day). A failed read keeps
+  is visible (the headline and the rail and MPP tables; the chart every fifth
+  minute), for the same date range (a preset range moves with the day). A failed read keeps
   what is shown.
 - /revenue's timestamp line says when the payment figures were last read
   from the chains (every 5 minutes) apart from the rail status scan behind
