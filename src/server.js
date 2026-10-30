@@ -5777,13 +5777,6 @@ app.get("/__operator/perf.json", (req, res) => {
 // function names and file lines only.
 // Heap by V8 space plus what the index holds, counts only: sizes the next
 // memory change from production instead of a fixture.
-// Which code allocated the live heap (HEAP_SAMPLING=on; src/boot-profile.js):
-// function names, file lines and megabytes only.
-app.get("/__operator/heap-sampling.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  try { res.set("Cache-Control", "no-store").json(await heapSamplingReport({ top: Math.min(100, parseInt(req.query.top, 10) || 40) })); }
-  catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: String(e?.message || e).slice(0, 120) }); }
-});
 app.get("/__operator/heap.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const v8 = await import("node:v8");
@@ -5809,6 +5802,13 @@ app.get("/__operator/heap.json", async (req, res) => {
       return { key, ...(typeof v === "string" ? { mb: Math.round((v.length / 1048576) * 10) / 10 } : Array.isArray(v) ? { rows: v.length } : { type: typeof v }), ageS: Math.round((Date.now() - (hit?.at || 0)) / 1000) };
     }),
   });
+});
+// Which code allocated the live heap (HEAP_SAMPLING=on; src/boot-profile.js):
+// function names, file lines and megabytes only.
+app.get("/__operator/heap-sampling.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  try { res.set("Cache-Control", "no-store").json(await heapSamplingReport({ top: Math.max(1, Math.min(100, parseInt(req.query.top, 10) || 40)) })); }
+  catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: String(e?.message || e).slice(0, 120) }); }
 });
 app.post("/__operator/stall-profile", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });

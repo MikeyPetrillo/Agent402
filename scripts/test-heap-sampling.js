@@ -33,6 +33,8 @@ const read = (base, token) => fetch(`${base}/__operator/heap-sampling.json`, { h
     ok(j.sampledLiveMb > 0 && Array.isArray(j.byFunction) && j.byFunction.length > 0 && Array.isArray(j.byFile) && j.byFile.length > 0, `on: live allocations are attributed (${j.sampledLiveMb} MB sampled, ${j.byFunction.length} functions)`);
     ok(j.byFunction.every((x) => typeof x.at === "string" && typeof x.mb === "number") && !JSON.stringify(j).includes(TOKEN), "on: entries carry a location and megabytes only");
     ok(j.byFunction.every((x, i, a) => i === 0 || a[i - 1].mb >= x.mb), "on: largest first");
+    const neg = await (await fetch(`${base}/__operator/heap-sampling.json?top=-5`, { headers: { "X-Operator-Token": TOKEN } })).json();
+    ok(neg.byFunction.length >= 1, `a negative top still returns entries (${neg.byFunction.length})`);
   } finally { child.kill(); }
 }
 {
