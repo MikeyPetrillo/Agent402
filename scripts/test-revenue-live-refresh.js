@@ -40,7 +40,7 @@ const inline = (html) => html.replace('<script src="/js/revenue-chart.js"></scri
 const settle = () => new Promise((r) => setTimeout(r, 40));
 
 async function boot(query = { range: "7d" }) {
-  const env = { page: null, pageStatus: 200, pageFails: false, seriesFails: false, fetched: [], ticks: [] };
+  const env = { page: null, pageStatus: 200, pageFails: false, seriesFails: false, seriesStatus: 200, fetched: [], ticks: [] };
   const search = Object.keys(query).length ? "?" + new URLSearchParams(query) : "";
   const dom = new JSDOM(inline(pageAt(NOW, query, 4)), {
     url: `https://example.test/revenue${search}`,
@@ -53,22 +53,26 @@ async function boot(query = { range: "7d" }) {
         env.fetched.push(u.pathname + u.search);
         if (u.pathname === "/revenue") {
           if (env.pageFails) return Promise.reject(new Error("offline"));
-          return Promise.resolve({ ok: env.pageStatus === 200, text: () => Promise.resolve(env.page), init });
+          return Promise.resolve({ ok: env.pageStatus === 200, status: env.pageStatus, text: () => Promise.resolve(env.page), init });
         }
         if (env.seriesFails) return Promise.reject(new Error("offline"));
-        return Promise.resolve({ json: () => Promise.resolve({ days: [{ day: "2026-10-09", extUsd: 0.01, ext: 1, tx: 1, chains: {} }], recordingSince: null }) });
+        if (env.seriesStatus !== 200) return Promise.resolve({ ok: false, status: env.seriesStatus, json: () => Promise.resolve({ error: "Too many requests" }) });
+        if (env.laneStatus && env.laneStatus !== 200 && u.pathname !== "/api/revenue/daily") return Promise.resolve({ ok: false, status: env.laneStatus, json: () => Promise.resolve({ error: "Too many requests" }) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ days: [{ day: "2026-10-09", extUsd: 0.01, ext: 1, tx: 1, chains: {} }], recordingSince: null }) });
       };
     },
   });
   await settle();
   const w = dom.window;
   const tick = async () => { for (const t of env.ticks) t.fn(); await settle(); };
+  // Ticks until the series is read (every fifth minute), at most `max` ticks.
+  const untilSeries = async (max = 6) => { for (let i = 0; i < max; i++) { const n = env.fetched.length; await tick(); if (env.fetched.slice(n).some((u) => u.startsWith("/api/revenue/daily"))) return i + 1; } return 0; };
   const text = (sel) => w.document.querySelector(sel).textContent;
-  return { w, env, tick, text };
+  return { w, env, tick, text, untilSeries };
 }
 
 {
-  const { w, env, tick, text } = await boot();
+  const { w, env, tick, text, untilSeries } = await boot();
   await check("one live timer, once a minute", () => {
     assert.equal(env.ticks.length, 1);
     assert.equal(env.ticks[0].ms, 60_000);
@@ -78,15 +82,19 @@ async function boot(query = { range: "7d" }) {
     assert.deepEqual(names, ["head", "rails", "mpp", "decide"]);
     assert.equal(w.document.querySelector("[data-rv-live] #rvz"), null, "the chart and its range control are never swapped");
   });
-  await check("a tick swaps in new figures and reloads the series for the same window", async () => {
+  await check("a tick swaps in new figures; the series is read every fifth minute for the same window", async () => {
     assert.match(text('[data-rv-live="head"]'), /\b4\b external payments/);
     env.page = pageAt(NOW + 60_000, { range: "7d" }, 9);
     env.fetched.length = 0;
     await tick();
     assert.match(text('[data-rv-live="head"]'), /\b9\b external payments/);
-    assert.equal(env.fetched[0], "/revenue?range=7d", "reads its own URL, range kept");
+    assert.deepEqual(env.fetched, ["/revenue?range=7d"], "the first minute reads only its own URL, range kept");
+    for (let i = 0; i < 3; i++) await tick();
+    assert.equal(env.fetched.filter((u) => u.startsWith("/api/")).length, 0, "no series read in minutes two to four");
+    env.fetched.length = 0;
+    await tick();
     const series = env.fetched.slice(1);
-    assert.equal(series.length, 3);
+    assert.equal(series.length, 3, `the fifth minute reads the three series (${env.fetched.join(", ")})`);
     for (const u of series) assert.ok(u.endsWith("?from=2026-10-04&to=2026-10-10"), u);
   });
   await check("the page read asks for a fresh copy", async () => {
@@ -108,19 +116,44 @@ async function boot(query = { range: "7d" }) {
     const before = text('[data-rv-live="head"]');
     const svg = w.document.getElementById("rvzSvg").outerHTML;
     env.pageFails = true; env.seriesFails = true;
-    await tick();
+    assert.ok(await untilSeries(), "a series read was attempted");
     assert.equal(text('[data-rv-live="head"]'), before);
     assert.ok(w.document.getElementById("rvzSvg"), "the chart is still there");
     assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg);
     assert.equal(w.document.querySelector(".rvz-empty"), null, "no 'series unavailable' on a background read");
     env.pageFails = false; env.seriesFails = false;
   });
+  await check("a refused (429) series read keeps the chart instead of drawing zeros", async () => {
+    const svg = w.document.getElementById("rvzSvg").outerHTML;
+    env.seriesStatus = 429;
+    assert.ok(await untilSeries(), "a series read was attempted");
+    assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg, "the chart is unchanged");
+    env.seriesStatus = 200;
+  });
+  await check("a refused side lane (free or Tempo) keeps the drawn chart too", async () => {
+    const svg = w.document.getElementById("rvzSvg").outerHTML;
+    env.laneStatus = 429;
+    assert.ok(await untilSeries(), "a series read was attempted");
+    assert.equal(w.document.getElementById("rvzSvg").outerHTML, svg, "the chart is unchanged");
+    env.laneStatus = 0;
+  });
+  await check("a refused (429) page read backs off five minutes", async () => {
+    env.pageStatus = 429; env.page = pageAt(NOW, { range: "7d" }, 4);
+    await tick();
+    env.pageStatus = 200;
+    env.fetched.length = 0;
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(env.fetched.length, 0, `nothing read for five minutes after a 429 (${env.fetched.length} reads)`);
+    await tick();
+    assert.ok(env.fetched[0]?.startsWith("/revenue"), "the sixth minute reads again");
+  });
   await check("a non-200 answer and the warm-up page change nothing", async () => {
     const before = text('[data-rv-live="head"]');
     env.pageStatus = 429; env.page = pageAt(NOW, { range: "7d" }, 50);
     await tick();
     assert.equal(text('[data-rv-live="head"]'), before);
-    env.pageStatus = 200; env.page = '<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body><h2>Warming up</h2></body>';
+    env.pageStatus = 200; for (let i = 0; i < 5; i++) await tick(); // the 429 backs off five minutes
+    env.page = '<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body><h2>Warming up</h2></body>';
     await tick();
     assert.equal(text('[data-rv-live="head"]'), before);
   });
