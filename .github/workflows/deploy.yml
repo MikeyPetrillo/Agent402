@@ -2898,6 +2898,8 @@ jobs:
           # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
           t node scripts/test-worker-deploy-step.js
           t node scripts/test-decide-deploy-step.js
+          # variable upsert never starts its own deploy; ClawHub publishes last (offline)
+          t node scripts/test-deploy-release-order.js
           t node scripts/test-heap-sampling.js
           t node scripts/test-network-names-own-keys.js
           t node scripts/test-email-text.js
@@ -5494,58 +5496,6 @@ jobs:
             echo "published agent402-openclaw@$VERSION → https://www.npmjs.com/package/agent402-openclaw"
           fi
 
-      # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
-      # clawhub:agent402-openclaw`); their docs keep no static third-party
-      # catalog, so this release is the listing. Token-authenticated (repo secret
-      # CLAWHUB_TOKEN, a ClawHub CLI token on the publisher account; the CLI reads
-      # it from its config file, written under a job-scoped path so nothing lands
-      # in the runner home). Idempotent: an already-published version is skipped,
-      # never re-uploaded. A missing token skips loudly instead of failing the
-      # npm publish that already happened.
-      #
-      # This is the one `npx` in the id-token job. The CLI's pinned tree
-      # (47 packages, measured 2026-09-03) carries no preinstall/install/
-      # postinstall script - only `prepare` entries, which npm never runs for a
-      # registry install - so nothing executes at install time today. The env
-      # below makes that a rule rather than an observation: a future version
-      # of a transitive dependency that grows an install hook is skipped, not
-      # run, beside the OIDC credential. The CLI itself still runs (verified:
-      # `--help` under NPM_CONFIG_IGNORE_SCRIPTS=true).
-      - name: Publish agent402-openclaw to ClawHub
-        env:
-          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
-          NPM_CONFIG_IGNORE_SCRIPTS: "true"
-        run: |
-          if [ -z "$CLAWHUB_TOKEN" ]; then echo "::warning::CLAWHUB_TOKEN not set - ClawHub release skipped"; exit 0; fi
-          VERSION=$(node -p "require('./openclaw/package.json').version")
-          npx -y clawhub@0.23.3 login --token "$CLAWHUB_TOKEN" --no-browser --label "github-actions deploy.yml" >/dev/null
-          if npx -y clawhub@0.23.3 package inspect agent402-openclaw --version "$VERSION" >/dev/null 2>&1; then
-            echo "agent402-openclaw@$VERSION is already on ClawHub — nothing to do"
-          else
-            # --manual-override-reason: the package carries a trusted-publisher config
-            # (set 2026-08-27), which makes a token publish a "manual" one that
-            # ClawHub refuses without a stated reason. OIDC publishing needs
-            # ClawHub's reusable workflow, whose actions are tag-pinned, and this
-            # repository requires full-SHA pinning for every action - so the token
-            # path stays until ClawHub pins its workflow.
-            # A version still under ClawHub review is hidden from inspect, so a
-            # re-run reaches publish and is refused "already exists": that is
-            # the no-op the check above means, not a failure (run 36433008854).
-            if OUT=$(npx -y clawhub@0.23.3 package publish ./openclaw \
-              --manual-override-reason "repository policy requires SHA-pinned actions; ClawHub's reusable OIDC workflow is tag-pinned" \
-              --source-repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA" --source-ref "$GITHUB_REF_NAME" --source-path openclaw \
-              --changelog "agent402-openclaw $VERSION (see the package README and CHANGELOG at https://agent402.tools/changelog)" 2>&1); then
-              printf '%s\n' "$OUT"
-              echo "published agent402-openclaw@$VERSION → https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)"
-            elif printf '%s' "$OUT" | grep -q "already exists"; then
-              echo "agent402-openclaw@$VERSION is already on ClawHub (hidden while under review) — nothing to do"
-            else
-              printf '%s\n' "$OUT"; rm -f "$CLAWHUB_CONFIG_PATH"; exit 1
-            fi
-          fi
-          rm -f "$CLAWHUB_CONFIG_PATH"
-
       - name: Publish agent402-openai-tools to npm
         run: |
           cd adapters/openai-tools
@@ -5750,6 +5700,65 @@ jobs:
               && echo "deprecated superseded version $PREV_LATEST" \
               || echo "::warning::failed to deprecate superseded version $PREV_LATEST (non-fatal)"
           fi
+
+      # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
+      # clawhub:agent402-openclaw`); their docs keep no static third-party
+      # catalog, so this release is the listing. Token-authenticated (repo secret
+      # CLAWHUB_TOKEN, a ClawHub CLI token on the publisher account; the CLI reads
+      # it from its config file, written under a job-scoped path so nothing lands
+      # in the runner home). Idempotent: an already-published version is skipped,
+      # never re-uploaded. A missing token skips loudly instead of failing the
+      # npm publish that already happened. It runs last in the job, so a
+      # refusal on ClawHub's side never holds back the npm and MCP Registry
+      # releases above.
+      #
+      # This is the one `npx` in the id-token job. The CLI's pinned tree
+      # (47 packages, measured 2026-09-03) carries no preinstall/install/
+      # postinstall script - only `prepare` entries, which npm never runs for a
+      # registry install - so nothing executes at install time today. The env
+      # below makes that a rule rather than an observation: a future version
+      # of a transitive dependency that grows an install hook is skipped, not
+      # run, beside the OIDC credential. The CLI itself still runs (verified:
+      # `--help` under NPM_CONFIG_IGNORE_SCRIPTS=true).
+      - name: Publish agent402-openclaw to ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          if [ -z "$CLAWHUB_TOKEN" ]; then echo "::warning::CLAWHUB_TOKEN not set - ClawHub release skipped"; exit 0; fi
+          VERSION=$(node -p "require('./openclaw/package.json').version")
+          npx -y clawhub@0.23.3 login --token "$CLAWHUB_TOKEN" --no-browser --label "github-actions deploy.yml" >/dev/null
+          if npx -y clawhub@0.23.3 package inspect agent402-openclaw --version "$VERSION" >/dev/null 2>&1; then
+            echo "agent402-openclaw@$VERSION is already on ClawHub — nothing to do"
+          else
+            # --manual-override-reason: the package carries a trusted-publisher config
+            # (set 2026-08-27), which makes a token publish a "manual" one that
+            # ClawHub refuses without a stated reason. OIDC publishing needs
+            # ClawHub's reusable workflow, whose actions are tag-pinned, and this
+            # repository requires full-SHA pinning for every action - so the token
+            # path stays until ClawHub pins its workflow.
+            # A version still under ClawHub review is hidden from inspect, so a
+            # re-run reaches publish and is refused "already exists": that is
+            # the no-op the check above means, not a failure (run 36433008854).
+            if OUT=$(npx -y clawhub@0.23.3 package publish ./openclaw \
+              --manual-override-reason "repository policy requires SHA-pinned actions; ClawHub's reusable OIDC workflow is tag-pinned" \
+              --source-repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA" --source-ref "$GITHUB_REF_NAME" --source-path openclaw \
+              --changelog "agent402-openclaw $VERSION (see the package README and CHANGELOG at https://agent402.tools/changelog)" 2>&1); then
+              printf '%s\n' "$OUT"
+              echo "published agent402-openclaw@$VERSION → https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)"
+            elif printf '%s' "$OUT" | grep -q "already exists"; then
+              echo "agent402-openclaw@$VERSION is already on ClawHub (hidden while under review) — nothing to do"
+            elif printf '%s' "$OUT" | grep -q "is staged by failed publish attempt"; then
+              # ClawHub's own scan failed on a version it holds staged; a re-run
+              # gets the same refusal, so this is theirs to clear (run 41002809052).
+              printf '%s\n' "$OUT"
+              echo "::warning::agent402-openclaw@$VERSION is staged on ClawHub behind a failed ClawHub scan; npm and the MCP Registry are published"
+            else
+              printf '%s\n' "$OUT"; rm -f "$CLAWHUB_CONFIG_PATH"; exit 1
+            fi
+          fi
+          rm -f "$CLAWHUB_CONFIG_PATH"
 
   probe:
     needs: markers
@@ -6269,7 +6278,7 @@ jobs:
           WALLET_ADDRESS: ""
         run: node scripts/deploy-quiet-gate.js
 
-      - name: Set environment variables (triggers deploy)
+      - name: Set environment variables
         env:
           RAILWAY_DOMAIN: ${{ steps.domain.outputs.domain }}
         run: |
@@ -6338,8 +6347,12 @@ jobs:
           if [ -n "$ALGORAND_UPSTREAM_BUYER_ADDRESS" ]; then
             VARS=$(echo "$VARS" | jq --arg v "$ALGORAND_UPSTREAM_BUYER_ADDRESS" '. + {ALGORAND_UPSTREAM_BUYER_ADDRESS:$v}')
           fi
+          # skipDeploys: a write that changes a value otherwise starts Railway's
+          # own deploy, which races the trigger below (two deployments of one
+          # commit a second apart; Railway stops the first and marks it FAILED,
+          # run 40999198917). The trigger below is the one deploy.
           RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --argjson v "$VARS" \
-            '{query:"mutation($p:String!, $e:String!, $s:String!, $v:EnvironmentVariables!) { variableCollectionUpsert(input: { projectId: $p, environmentId: $e, serviceId: $s, variables: $v }) }", variables:{p:$p,e:$e,s:$s,v:$v}}' | gql)
+            '{query:"mutation($p:String!, $e:String!, $s:String!, $v:EnvironmentVariables!) { variableCollectionUpsert(input: { projectId: $p, environmentId: $e, serviceId: $s, variables: $v, skipDeploys: true }) }", variables:{p:$p,e:$e,s:$s,v:$v}}' | gql)
           echo "$RESP"
           echo "$RESP" | jq -e '.data.variableCollectionUpsert' >/dev/null || { echo "Variable upsert failed"; exit 1; }
 
