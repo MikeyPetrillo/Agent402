@@ -157,7 +157,7 @@ const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 
 function resolveNetwork(name) {
   const key = String(name || "base").toLowerCase();
-  const net = NETWORKS[key];
+  const net = Object.hasOwn(NETWORKS, key) ? NETWORKS[key] : null;
   if (!net) throw bad(`unknown network "${name}". Supported: ${NETWORK_NAMES.join(", ")}`);
   return { key, ...net };
 }

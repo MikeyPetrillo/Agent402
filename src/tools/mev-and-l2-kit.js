@@ -71,7 +71,7 @@ function requireAlchemyKey() {
 
 function pickNetwork(value, dflt = "ethereum") {
   const n = typeof value === "string" ? value.toLowerCase().trim() : dflt;
-  const def = NETWORKS[n];
+  const def = Object.hasOwn(NETWORKS, n) ? NETWORKS[n] : null;
   if (!def) throw bad(`Unsupported network "${value}" - supported: ${Object.keys(NETWORKS).join(", ")}`);
   return { name: n, ...def };
 }
@@ -330,7 +330,7 @@ async function l2GasComparison({ networks } = {}) {
   const named = Array.isArray(networks) && networks.length ? networks.map((n) => String(n).toLowerCase().trim()) : null;
   // An unknown name used to be dropped silently, so ["base","narnia"] answered
   // with base alone and the caller never learned (corpus, 2026-09-06).
-  const unknown = (named || []).filter((n) => !NETWORKS[n]);
+  const unknown = (named || []).filter((n) => !Object.hasOwn(NETWORKS, n));
   if (unknown.length) throw bad(`Unknown network(s): ${unknown.join(", ")}; supported: ${Object.keys(NETWORKS).join(", ")}`);
   const requested = named || Object.keys(NETWORKS);
   // Fail-fast on missing key so 503 surfaces cleanly instead of being

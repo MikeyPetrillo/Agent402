@@ -121,7 +121,7 @@ function requireKey() {
 
 export function pickNetwork(value, dflt = "ethereum") {
   const n = typeof value === "string" && value.trim() ? value.toLowerCase().trim() : dflt;
-  const def = NETWORKS[n];
+  const def = Object.hasOwn(NETWORKS, n) ? NETWORKS[n] : null;
   if (!def) throw bad(`Unsupported network "${value}" - supported: ${NETWORK_NAMES.join(", ")}`);
   return { name: n, ...def };
 }

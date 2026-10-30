@@ -60,7 +60,7 @@ function requireKey() {
 
 export function pickNetwork(value, dflt = "base") {
   const n = typeof value === "string" ? value.toLowerCase().trim() : dflt;
-  const def = NETWORKS[n];
+  const def = Object.hasOwn(NETWORKS, n) ? NETWORKS[n] : null;
   if (!def) throw bad(`Unsupported network "${value}" - supported: ${Object.keys(NETWORKS).join(", ")}`);
   return { name: n, ...def };
 }
