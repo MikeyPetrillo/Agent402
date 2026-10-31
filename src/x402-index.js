@@ -570,48 +570,9 @@ export function indexCacheVersion() { return cacheVersion; }
 // installs it, and in the worker itself (which is the copy).
 let replicaObserver = null;
 export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === "function" ? fn : null; }
-// Short strings repeated across sellers' tools (an asset address, "eip155:8453",
-// "USD Coin", "POST", a category or tag) arrive as a fresh copy per parsed
-// field: on the production snapshot, 7.3 million string objects held 225 MB of
-// duplicate copies (2026-10-31). Every entry stored here has its short strings
-// swapped for one shared copy, so a warm start, a crawl and a pull all land
-// interned. The values are equal, so nothing that reads them can tell; long
-// text (descriptions) is left as is. INDEX_INTERN_STRINGS=off stores entries
-// untouched.
-const INTERN_STRINGS = String(process.env.INDEX_INTERN_STRINGS || "").toLowerCase() !== "off";
-const INTERN_MAX_LEN = 64;
-const INTERN_MAX_DEPTH = 8;
-const internedStrings = new Map();
-function internString(s) {
-  if (s.length > INTERN_MAX_LEN) return s;
-  const held = internedStrings.get(s);
-  if (held !== undefined) return held;
-  internedStrings.set(s, s);
-  return s;
-}
-function internStringsIn(o, depth) {
-  if (depth > INTERN_MAX_DEPTH || Object.isFrozen(o)) return;
-  if (Array.isArray(o)) {
-    for (let i = 0; i < o.length; i++) {
-      const x = o[i];
-      if (typeof x === "string") o[i] = internString(x);
-      else if (x && typeof x === "object") internStringsIn(x, depth + 1);
-    }
-    return;
-  }
-  for (const k of Object.keys(o)) {
-    const x = o[k];
-    // Always assigned: === compares string contents, not which copy it is.
-    if (typeof x === "string") { try { o[k] = internString(x); } catch { /* read-only property: left as is */ } }
-    else if (x && typeof x === "object") internStringsIn(x, depth + 1);
-  }
-}
-/** Distinct interned strings held (tests and the operator heap read). */
-export function _internedStringCount() { return internedStrings.size; }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
-    if (INTERN_STRINGS && v && typeof v === "object") internStringsIn(v, 0);
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);

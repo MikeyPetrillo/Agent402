@@ -1828,8 +1828,6 @@ jobs:
           t node scripts/test-router-worker.js
           t node scripts/test-router-worker-prod-boot.js
           t node scripts/test-route-index-compaction.js
-          # Index cache interns short strings per stored entry: values unchanged, shared once, long text and frozen entries left alone (offline)
-          t node scripts/test-index-intern-strings.js
           t node scripts/test-health-router-warming.js
           t node scripts/test-plan-sketch.js
           # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
