@@ -4,7 +4,9 @@
 // one interned string however many tools carry it, that long text is left
 // alone, and that a frozen object is skipped without throwing.
 process.env.X402_INDEX_CRAWL = "off";
-const { __testSeedCache, _internedStringCount, _cacheForTests } = await import("../src/x402-index.js");
+const { __testSeedCache, _internedStringCount, _cacheForTests, _internPending } = await import("../src/x402-index.js");
+// Tools are interned in the background, a few milliseconds per turn.
+const drained = async () => { while (_internPending()) await new Promise((r) => setImmediate(r)); };
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -19,16 +21,18 @@ const expectedA = JSON.parse(JSON.stringify(entryA));
 
 const before = _internedStringCount();
 __testSeedCache([["https://a.example", entryA]]);
+await drained();
 const afterA = _internedStringCount();
 __testSeedCache([["https://b.example", entryB]]);
+await drained();
 const afterB = _internedStringCount();
 
 const stored = _cacheForTests().get("https://a.example");
 ok(JSON.stringify(stored) === JSON.stringify(expectedA), "a stored entry reads exactly as it was given");
 ok(afterA > before, "storing an entry interns its short strings");
 // entryB repeats every shared short value of entryA; only its own new short
-// values ("https://b.example", "Tool 3") may be added.
-ok(afterB - afterA === 2, `a second seller repeating the same short values adds only its own new ones (added ${afterB - afterA})`);
+// value ("https://b.example") may be added. Names are near unique and skipped.
+ok(afterB - afterA === 1, `a second seller repeating the same short values adds only its own new ones (added ${afterB - afterA})`);
 ok(stored.tools[0].description.length === 201, "long text is kept whole");
 
 const frozen = Object.freeze({ origin: "https://c.example", tools: Object.freeze([Object.freeze(tool(4))]) });

@@ -581,6 +581,12 @@ export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === 
 const INTERN_STRINGS = String(process.env.INDEX_INTERN_STRINGS || "").toLowerCase() !== "off";
 const INTERN_MAX_LEN = 64;
 const INTERN_MAX_DEPTH = 8;
+// Fields whose values are close to unique per tool (a name, slug, route or
+// path; measured near 200k distinct each on the production snapshot) save
+// almost nothing and would fill the table, which every major GC walks: on the
+// production snapshot interning them grew the table to 697k strings and
+// lengthened route-query tails. They are left as they arrive.
+const INTERN_SKIP_KEYS = new Set(["name", "slug", "route", "path", "url", "endpoint", "resource", "href", "operationId", "summary", "title", "description", "id", "example", "examples", "pattern"]);
 const internedStrings = new Map();
 function internString(s) {
   if (s.length > INTERN_MAX_LEN) return s;
@@ -589,6 +595,42 @@ function internString(s) {
   internedStrings.set(s, s);
   return s;
 }
+// An entry's own fields are interned when it is stored; its tools (80,000 on
+// one seller) are interned in the background, a few milliseconds per turn, so
+// a large seller never holds the event loop (scripts/test-route-perf.js pins
+// the gap). An entry replaced before its turn is still interned: harmless.
+const INTERN_SLICE_MS = 4;
+const internQueue = []; // [{ tools, i }]
+let internScheduled = false;
+function internEntry(v) {
+  for (const k of Object.keys(v)) {
+    if (k === "tools" || INTERN_SKIP_KEYS.has(k)) continue;
+    const x = v[k];
+    if (typeof x === "string") { try { v[k] = internString(x); } catch { /* read-only property */ } }
+    else if (x && typeof x === "object") internStringsIn(x, 1);
+  }
+  if (Array.isArray(v.tools) && v.tools.length && !Object.isFrozen(v.tools)) {
+    internQueue.push({ tools: v.tools, i: 0 });
+    if (!internScheduled) { internScheduled = true; setImmediate(drainInternQueue); }
+  }
+}
+function drainInternQueue() {
+  const until = performance.now() + INTERN_SLICE_MS;
+  while (internQueue.length) {
+    const job = internQueue[0];
+    while (job.i < job.tools.length) {
+      const t = job.tools[job.i++];
+      if (t && typeof t === "object") internStringsIn(t, 1);
+      if ((job.i & 63) === 0 && performance.now() >= until) break;
+    }
+    if (job.i >= job.tools.length) internQueue.shift();
+    if (performance.now() >= until) break;
+  }
+  if (internQueue.length) setImmediate(drainInternQueue);
+  else internScheduled = false;
+}
+/** Entries whose tools are still waiting to be interned (tests). */
+export function _internPending() { return internQueue.length; }
 function internStringsIn(o, depth) {
   if (depth > INTERN_MAX_DEPTH || Object.isFrozen(o)) return;
   if (Array.isArray(o)) {
@@ -600,6 +642,7 @@ function internStringsIn(o, depth) {
     return;
   }
   for (const k of Object.keys(o)) {
+    if (INTERN_SKIP_KEYS.has(k)) continue;
     const x = o[k];
     // Always assigned: === compares string contents, not which copy it is.
     if (typeof x === "string") { try { o[k] = internString(x); } catch { /* read-only property: left as is */ } }
@@ -611,7 +654,7 @@ export function _internedStringCount() { return internedStrings.size; }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
-    if (INTERN_STRINGS && v && typeof v === "object") internStringsIn(v, 0);
+    if (INTERN_STRINGS && v && typeof v === "object" && !Object.isFrozen(v)) internEntry(v);
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
