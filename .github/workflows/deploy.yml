@@ -1822,6 +1822,8 @@ jobs:
           t node scripts/test-settle-preference.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
+          # Reader searches find the article extractor through its aliases, on the real catalog (booted free-mode server)
+          t node scripts/test-find-reader-aliases.js
           # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
           t node scripts/test-discovery-deadline.js
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
