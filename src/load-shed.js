@@ -20,25 +20,62 @@
 // loopback replay, the Stripe webhook, every priced catalog route and the /v1
 // gateway, paid or unpaid - the unpaid 402 is the first step of a purchase.
 
+import { PerformanceObserver, performance } from "node:perf_hooks";
 import { recentLagMs, lateTicksRecent } from "./loop-lag.js";
 
 const BUDGET_WINDOW_MS = 1000;
+
+// A search slice is timed by the wall clock, so a garbage-collection pause that
+// lands inside it was charged to the budget as search work: on one replica a
+// single 300 ms pause filled a third of a second's budget and shed every other
+// search in that second (2026-10-31). Node reports a pause a moment after it
+// ends, so a budget that asks for it (gcCredit) gives the pause back to every
+// slice it overlapped as soon as the report arrives. The cap is unchanged; it
+// now counts search work only.
+const gcCreditBudgets = new Set();
+let gcObserver = null;
+function watchGcPauses() {
+  if (gcObserver) return;
+  try {
+    gcObserver = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        const start = performance.timeOrigin + e.startTime;
+        for (const b of gcCreditBudgets) b.creditPause(start, start + e.duration);
+      }
+    });
+    gcObserver.observe({ entryTypes: ["gc"] });
+  } catch { gcObserver = null; /* no gc entries on this runtime: budgets charge wall time as before */ }
+}
 
 // 800 ms of search per rolling second across all callers: one router query
 // costs about 200 ms, so a caller that asks route and then find inside a
 // second is served, while a burst past four queries a second is still shed.
 // The per-client share and the in-flight cap in server.js keep one caller
 // from spending the whole budget.
-export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CPU_BUDGET_MS) || 800, windowMs = BUDGET_WINDOW_MS } = {}) {
-  const samples = []; // [at, ms]
+export function createComputeBudget({ budgetMs = Number(process.env.DISCOVERY_CPU_BUDGET_MS) || 800, windowMs = BUDGET_WINDOW_MS, gcCredit = false } = {}) {
+  const samples = []; // [at, ms, startedAt]: a slice that ran from startedAt to at, ms still charged
   let sum = 0;
   const prune = (now) => { while (samples.length && now - samples[0][0] > windowMs) sum -= samples.shift()[1]; };
-  return {
+  const budget = {
     over(now = Date.now()) { prune(now); return sum >= budgetMs; },
-    record(ms, now = Date.now()) { if (!(ms > 0)) return; prune(now); samples.push([now, ms]); sum += ms; },
+    record(ms, now = Date.now()) { if (!(ms > 0)) return; prune(now); samples.push([now, ms, now - ms]); sum += ms; },
     spent(now = Date.now()) { prune(now); return Math.round(sum); },
+    /** Give back the part of each slice that a pause from `start` to `end`
+     *  (epoch ms) overlapped. */
+    creditPause(start, end) {
+      if (!(end > start)) return;
+      for (const s of samples) {
+        const overlap = Math.min(s[0], end) - Math.max(s[2], start);
+        if (overlap <= 0) continue;
+        const credit = Math.min(overlap, s[1]);
+        s[1] -= credit;
+        sum -= credit;
+      }
+    },
     budgetMs,
   };
+  if (gcCredit) { gcCreditBudgets.add(budget); watchGcPauses(); }
+  return budget;
 }
 
 const LAG_SHED_MS = Number(process.env.SHED_LAG_MS) || 250;

@@ -18,6 +18,23 @@ const b = createComputeBudget({ budgetMs: 100, windowMs: 1000 });
 b.record(60, 1000); ok(!b.over(1000), "under budget: not over");
 b.record(50, 1100); ok(b.over(1100), "110 ms of compute inside the window is over a 100 ms budget");
 ok(!b.over(2200), "the window rolls: a second later the budget is free again");
+// A garbage-collection pause inside a search slice is given back (gcCredit):
+// the budget counts search work, not GC. Credits are capped at the slice and
+// measured from the slice's own start, however many pauses land in it.
+{
+  const g = createComputeBudget({ budgetMs: 100, windowMs: 1000 });
+  g.record(80, 5000); // slice 4920-5000
+  g.creditPause(5100, 5200); ok(g.spent(5000) === 80, "a pause outside every slice gives nothing back");
+  g.record(30, 5010); // slice 4980-5010
+  ok(g.over(5010), "110 ms charged is over a 100 ms budget");
+  g.creditPause(4950, 4990); // 40 ms of the first slice, 10 ms of the second
+  ok(g.spent(5010) === 60, `a pause gives back its overlap with every slice (spent ${g.spent(5010)})`);
+  ok(!g.over(5010), "with the pause given back, the budget admits the next search");
+  const h = createComputeBudget({ budgetMs: 100, windowMs: 1000 });
+  h.record(80, 7000); // slice 6920-7000
+  h.creditPause(6930, 6950); h.creditPause(6960, 6990); ok(h.spent(7000) === 30, `two pauses in one slice are each measured from the slice's start (spent ${h.spent(7000)})`);
+  h.creditPause(6000, 8000); ok(h.spent(7000) === 0, "a pause longer than the slice gives back the slice, never more");
+}
 ok(shouldShedFree({ inFlight: 0, lagMs: 0 }) === null, "a healthy server sheds nothing");
 ok(shouldShedFree({ inFlight: 0, lagMs: 5000, lateTicks: 4, now: Date.now() + 120_000 }) === "lag", "a saturated event loop sheds free traffic (after the boot warm-up)");
 ok(shouldShedFree({ inFlight: 0, lagMs: 5000, lateTicks: 4 }) === null, "lag does not shed during the boot warm-up");

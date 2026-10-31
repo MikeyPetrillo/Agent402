@@ -6942,7 +6942,9 @@ const discoveryComputeLimiter = createRateLimiter("discovery-compute", {
   perHour: Number(process.env.DISCOVERY_COMPUTE_PER_HOUR) || 600,
 });
 const isLoopbackIp = (ip) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
-const discoveryCpuBudget = createComputeBudget();
+// gcCredit: a garbage-collection pause inside a search slice is given back
+// (src/load-shed.js), so the shared budget counts search work, not GC.
+const discoveryCpuBudget = createComputeBudget({ gcCredit: true });
 // Each client's own share of discovery CPU (2026-10-01). One client sending
 // bursts of about twenty distinct uncached /api/route searches every fifteen
 // minutes (about 0.5 s of CPU each) stayed under the per-minute limiter above
