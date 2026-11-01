@@ -8,10 +8,11 @@ carries its own version on npm.
 
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:
-- The server and agent402-mcp 0.13.26 run the x402 2.29 libraries (core,
-  express, evm, svm, stellar, avm, fetch, extensions) and mppx 0.13.6. The
-  402 challenge a buyer echoes back is unchanged in size, and a free-tier
-  tool's 402 body still leads with its proof-of-work option.
+- The server runs the x402 2.29 libraries (core, express, evm, svm,
+  stellar, avm, fetch, extensions) and mppx 0.13.6, and agent402-mcp 0.13.26
+  runs x402 2.29 core, evm, svm and fetch. The 402 challenge a buyer echoes
+  back is unchanged in size, and a free-tier tool's 402 body still leads with
+  its proof-of-work option.
 - The router pays an Algorand seller that advertises the full genesis-hash
   network id, echoing the seller's own accept.
 Gateway:
