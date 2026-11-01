@@ -179,7 +179,7 @@ const rev = await import("../src/revenue-ledger.js");
     const a = whole();
     const b = await blockOf(sliced);
     ok(isDeepStrictEqual(b.value, a), `${name}Async equals ${name} (same figures, same order) on ${TRANSFER_ROWS} transfers`);
-    ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms)`);
+    ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms; longest gap ${b.raw} ms, ${b.gc} ms of it the collector)`);
   }
 }
 
