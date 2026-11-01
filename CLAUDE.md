@@ -21,7 +21,8 @@ LLC: credit the entity, never a personal name.
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
   `src/mcp-mpp.js` makes wallet-only tools payable on the connector by replaying the call as a
-  loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks.
+  loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks;
+  `src/mcp-skills.js` serves skill packs over the Skills extension (`MCP_SKILLS=on`, negotiated only).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).

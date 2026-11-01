@@ -16,6 +16,10 @@ Gateway:
 Surfaces:
 - server.describe, llms.txt and the README offer the hosted connector at
   https://agent402.tools/mcp in place of an add-server form that has closed.
+- The hosted connector can serve every skill pack as an Agent Skill over the
+  MCP Skills extension (skills/list, skills/get, resources/read of
+  skill://agent402/<pack>/SKILL.md), offered only to a client that declares
+  the extension; off until MCP_SKILLS=on. Prompts are unchanged.
 Packages:
 - agent402-mcp 0.13.27 carries the same server.describe install text, and
   every install pin names it.

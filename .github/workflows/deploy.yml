@@ -4014,10 +4014,12 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (2 scripts, one process each)
+      - name: Offline suites (3 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          # MCP Skills on /mcp (io.modelcontextprotocol/skills behind MCP_SKILLS - negotiated only, manifests verify, prompts unchanged - offline)
+          t node scripts/test-mcp-skills.js
           # MCP Tasks on /mcp (io.modelcontextprotocol/tasks - handle then poll to completed, failures never a silent empty success, cancel aborts the paid run, restart resolves orphans, composites only, no task without payment - offline)
           t node scripts/test-mcp-tasks.js
           # PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)

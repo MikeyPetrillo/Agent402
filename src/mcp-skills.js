@@ -77,7 +77,7 @@ function skillBody(pack, { freeSlugs, priceOf }) {
     lines.push(
       "## Run it in one call",
       "",
-      "```json",
+      "```text",
       `${call} ${JSON.stringify({ slug: bundled, params: exampleParams })}`,
       "```",
       "",
