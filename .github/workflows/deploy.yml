@@ -2695,6 +2695,9 @@ jobs:
           #  (verified first-party against prod, 2026-08-29). Boots the real server against a
           #  local /supported stub; no payment is made."
           t node scripts/test-bazaar-contracts.js
+          # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
+          # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
+          t node scripts/test-own-listing-screen.js
           # Every accept of every 402 asks list plus the chain's premium, raised to its
           # floor, as /api/pricing publishes them (three rails, a stub facilitator).
           t node scripts/test-accept-prices.js

@@ -127,7 +127,7 @@ const CASES = [
   { slug: "csv-to-json", method: "POST", path: "/api/csv-to-json", body: { csv: 'a,b\n1,"x,y"' }, check: (b) => b.rows?.[0]?.b === "x,y", show: (b) => `${b.count} rows` },
   { slug: "yaml-to-json", method: "POST", path: "/api/yaml-to-json", body: { yaml: "name: Ada\ntags:\n  - eng" }, check: (b) => b.json?.name === "Ada", show: () => "parsed" },
   { slug: "json-to-yaml", method: "POST", path: "/api/json-to-yaml", body: { json: { a: 1 } }, check: (b) => b.yaml.includes("a: 1"), show: () => "dumped" },
-  { slug: "xml-to-json", method: "POST", path: "/api/xml-to-json", body: { xml: "<user id='1'><name>Ada</name></user>" }, check: (b) => b.json?.user?.name === "Ada", show: () => "parsed" },
+  { slug: "xml-to-json", method: "POST", path: "/api/xml-to-json", body: { xml: "<person id='1'><name>Ada</name></person>" }, check: (b) => b.json?.person?.name === "Ada", show: () => "parsed" },
   { slug: "markdown-to-html", method: "POST", path: "/api/markdown-to-html", body: { markdown: "# Hi\n\n**bold**" }, check: (b) => b.html.includes("<h1>"), show: () => "rendered" },
   { slug: "html-to-markdown", method: "POST", path: "/api/html-to-markdown", body: { html: "<h1>Hi</h1><p><b>bold</b></p>" }, check: (b) => b.markdown.includes("# Hi"), show: () => "converted" },
   { slug: "json-diff", method: "POST", path: "/api/json-diff", body: { a: { x: 1, y: 2 }, b: { x: 1, y: 3 } }, check: (b) => b.equal === false && b.differences.length === 1, show: (b) => `${b.differences.length} difference` },
