@@ -2906,6 +2906,8 @@ jobs:
           t node scripts/test-network-names-own-keys.js
           t node scripts/test-email-text.js
           t node scripts/test-mcp-version-pins.js
+          # The heartbeat's MCP install-pin check: a served agent402-mcp version npm lacks reads missing; an unreadable site or registry reads unknown (offline, stub site + stub registry)
+          t node scripts/test-mcp-pin-on-npm.js
           t node scripts/test-env-num.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
           t node scripts/test-deploy-has-status.js
