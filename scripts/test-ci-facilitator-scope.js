@@ -58,5 +58,6 @@ ok((step.match(/fail-open/g) || []).length >= 2, "both the no-base and the unrea
 ok(/grep -qE '\^0\+\$'/.test(step), "an all-zero before SHA (first push / force-push) counts as no base");
 const env = yml.slice(yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}"), yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}") + 400);
 ok(/GH_TOKEN: \$\{\{ github\.token \}\}/.test(env) && /DIFF_BASE: .*pull_request\.base\.sha.*github\.event\.before/.test(env), "step env carries GH_TOKEN and DIFF_BASE (PR base or push before)");
+ok(/DIFF_BASE: .*github\.ref == 'refs\/heads\/main' && github\.event\.before \|\| 'main'/.test(env), "a dev-branch push diffs the batch against main, so a cancelled run never hides a facilitator change");
 
 console.log(`ci-facilitator-scope: ${passed} passed, 0 failed`);

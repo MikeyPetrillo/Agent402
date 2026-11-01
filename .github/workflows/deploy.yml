@@ -4938,6 +4938,9 @@ jobs:
         # this scoping is dishonest and CI fails). So it runs only when the push
         # touched facilitator/** or Dockerfile.facilitator.
         # FAIL-OPEN: an unreadable diff (first push, force-push, API error) RUNS it.
+        # A dev-branch push diffs the whole batch against main (main...SHA), not
+        # the previous push: a push whose run a newer one cancelled would
+        # otherwise hide a facilitator change from every later run (2026-11-01).
         run: |
           if [ -z "$TEST_PAYER_STELLAR_SECRET" ]; then
             echo "TEST_PAYER_STELLAR_SECRET unset - skipping facilitator/test.js (see facilitator/README.md)"
@@ -4965,7 +4968,7 @@ jobs:
         env:
           TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}
           GH_TOKEN: ${{ github.token }}
-          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before || 'main') }}
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
