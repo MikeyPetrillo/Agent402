@@ -92,10 +92,12 @@ updates:
         update-types: ["version-update:semver-major"]
       # mppx is the MPP wire (Tempo and Stripe charges); ox above is pinned to
       # the copy it resolves, so the two move together, deliberately, with the
-      # MPP paid suites and a paid-canary run. No update-types qualifier: for a
-      # 0.x package the middle digit is read as minor (0.13 -> 0.16 arrived in
-      # the grouped minor/patch PR #1823).
+      # MPP paid suites and a paid-canary run. A version range, not update-types:
+      # for a 0.x package the middle digit is read as minor (0.13 -> 0.16 arrived
+      # in the grouped minor/patch PR #1823). Ignore rules also apply to security
+      # PRs, so only the next lines are held and a 0.13.x patch still comes in.
       - dependency-name: "mppx"
+        versions: [">=0.14.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
