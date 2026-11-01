@@ -39,7 +39,7 @@ import { registerSettlementClaimHooks, registerSettlementClaimRelease, recovered
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
-import { ARC_CAIP2, ARC_USDC, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment } from "./circle-facilitator.js";
+import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
 import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
 import { shared } from "./shared-limits.js";
@@ -1306,44 +1306,26 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // its own probe below: unlike the other rails it is never offered on the
   // all-probes-failed fail-open path, or when the boot probe is skipped.
   let circleClient = null;
+  // A settlement Circle leaves pending past the client's window is booked
+  // by paymentId and resolved by a leased reconcile pass (src/circle-pending.js).
+  // One book for the Arc rail and the Base/Polygon settle fallback.
+  const book = async () => {
+    if (circlePendingBook) return circlePendingBook;
+    const { createCirclePendingBook } = await import("./circle-pending.js");
+    const { saleByTxFresh } = await import("./sales-ledger.js");
+    const { txServedElsewhere } = await import("./settlement-claims.js");
+    // Served after all: a sale recorded for the tx, or a request holding its
+    // settlement claim. Checking also takes the claim, so nothing can serve
+    // that tx after it is booked owed.
+    circlePendingBook = createCirclePendingBook({
+      wasServed: async ({ tx, network, paymentId }) =>
+        !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `circle-pending:${paymentId}`)),
+    });
+    return circlePendingBook;
+  };
+  const bookPending = async (entry) => (await book()).book(entry);
   if (evmCaip2.includes(ARC_CAIP2)) {
-    // A settlement Circle leaves pending past the client's window is booked
-    // by paymentId and resolved by a leased reconcile pass (src/circle-pending.js).
-    const book = async () => {
-      if (circlePendingBook) return circlePendingBook;
-      const { createCirclePendingBook } = await import("./circle-pending.js");
-      const { saleByTxFresh } = await import("./sales-ledger.js");
-      const { txServedElsewhere } = await import("./settlement-claims.js");
-      // Served after all: a sale recorded for the tx, or a request holding its
-      // settlement claim. Checking also takes the claim, so nothing can serve
-      // that tx after it is booked owed.
-      circlePendingBook = createCirclePendingBook({
-        wasServed: async ({ tx, network, paymentId }) =>
-          !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `circle-pending:${paymentId}`)),
-      });
-      return circlePendingBook;
-    };
-    const bookPending = async (entry) => (await book()).book(entry);
     circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
-    if (circleClient && process.env.X402_SYNC_ON_START !== "false") {
-      const { leased } = await import("./state-db.js");
-      const { RECONCILE_LEASE_MS } = await import("./circle-pending.js");
-      const client = circleClient;
-      void book();
-      const tick = leased("circle-pending-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
-        const b = await book();
-        await b.ready;
-        // The shared store, not this process's memory: another replica may
-        // hold every entry.
-        await b.refresh();
-        if (!b.list().length) return null;
-        const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
-        if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
-        return r;
-      });
-      const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
-      if (typeof t.unref === "function") t.unref();
-    }
     if (!circleClient) {
       console.warn(
         "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
@@ -1372,6 +1354,62 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     });
     // Counted per host by the failure monitor like every facilitator.
     registerFacilitatorUpstream(process.env.SOLVADOR_FACILITATOR_URL || "https://api.solvador.com");
+  }
+  // The stablecoin issuer's facilitator as the LAST settle fallback on Base
+  // and Polygon (CIRCLE_FACILITATOR_EVM_FALLBACK=on with the Arc key; off by
+  // default). Never in facilitatorClients: it never verifies, never wins a
+  // route, and CDP stays first-tried on every chain it advertises. It is
+  // reached only through the settle-fallback chain below, after the primary
+  // and every earlier fallback refused before broadcasting. Same client as
+  // Arc: errors reduced to a status and a reason code, exact USDC only (an
+  // upto payment is refused before anything is sent), a local signature
+  // check under the chain's own domain, and fail closed: a network is tried
+  // only once that facilitator's /supported has listed exact for it.
+  const circleEvmWanted = CIRCLE_EVM_FALLBACK_NETWORKS.filter((c) => evmCaip2.includes(c));
+  const circleEvm = circleEvmWanted.length ? circleEvmFallbackFromEnv(process.env, { networks: circleEvmWanted, onPending: bookPending }) : null;
+  const circleEvmConfirmed = new Set();
+  if (circleEvmFallbackEnabled() && !circleEvm) {
+    console.warn(`WARNING: CIRCLE_FACILITATOR_EVM_FALLBACK=on but ${circleKeyConfigured() ? "neither Base nor Polygon is offered" : "CIRCLE_FACILITATOR_API_KEY is unset"} - the Base/Polygon settle fallback is off`);
+  }
+  if (circleEvm) {
+    const confirm = (attempt = 0) => {
+      Promise.resolve().then(() => circleEvm.getSupported()).then((sup) => {
+        const listed = (Array.isArray(sup?.kinds) ? sup.kinds : []).filter((k) => k?.scheme === "exact").map((k) => k.network);
+        for (const n of circleEvmWanted) if (listed.includes(n)) circleEvmConfirmed.add(n);
+        const missing = circleEvmWanted.filter((n) => !circleEvmConfirmed.has(n));
+        console.log(`${CIRCLE_EVM_LABEL}: last settle fallback on ${[...circleEvmConfirmed].join(", ") || "(none)"}${missing.length ? `; not listed for ${missing.join(", ")}, never tried there` : ""}`);
+      }).catch((e) => {
+        // Only our own reason code is printed (src/circle-facilitator.js).
+        if (attempt === 0) console.warn(`WARNING: ${CIRCLE_EVM_LABEL} /supported failed (${String(e?.reason || "error").slice(0, 40)}); not tried until it answers (re-checked in the background)`);
+        setTimeout(() => confirm(attempt + 1), ROBINHOOD_FALLBACK_RECHECK_MS).unref?.();
+      });
+    };
+    confirm();
+    if (!/^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim())) {
+      console.warn(`WARNING: CIRCLE_FACILITATOR_EVM_FALLBACK=on has no effect while PAYMENT_SETTLE_FALLBACK is off`);
+    }
+  }
+  // Pending settlements on any of those networks are reconciled by one leased
+  // pass, read through a status-only client that accepts each one's network.
+  if ((circleClient || circleEvm) && process.env.X402_SYNC_ON_START !== "false") {
+    const { leased } = await import("./state-db.js");
+    const { RECONCILE_LEASE_MS } = await import("./circle-pending.js");
+    const statusProfiles = [...(circleClient ? [ARC_PROFILE] : []), ...CIRCLE_EVM_FALLBACK_PROFILES.filter((p) => circleEvm && circleEvm.networks.includes(p.caip2))];
+    const client = circleClientFromEnv(process.env, { profiles: statusProfiles });
+    void book();
+    const tick = leased("circle-pending-reconcile", { ttlMs: RECONCILE_LEASE_MS }, async () => {
+      const b = await book();
+      await b.ready;
+      // The shared store, not this process's memory: another replica may
+      // hold every entry.
+      await b.refresh();
+      if (!b.list().length) return null;
+      const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
+      if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
+      return r;
+    });
+    const t = setInterval(() => { tick().catch(() => {}); }, Number(process.env.CIRCLE_PENDING_RECONCILE_MS) > 0 ? Number(process.env.CIRCLE_PENDING_RECONCILE_MS) : 10 * 60_000);
+    if (typeof t.unref === "function") t.unref();
   }
   // Solvador as PRIMARY, network-filtered. For chains where Solvador is our
   // ONLY facilitator (Optimism today; Unichain/World Chain/Linea are the
@@ -1910,6 +1948,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // boot check may still confirm or drop one.
     // Our own relayer, when configured, comes after them.
     ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
+    // Base and Polygon: the chain they always had, then the issuer's
+    // facilitator last, once its /supported listed the network.
+    ...(circleEvm ? lastResortFallbackOverrides({ networks: circleEvmWanted, payAiClient, solvadorClient, last: { name: CIRCLE_EVM_LABEL, client: circleEvm }, confirmed: circleEvmConfirmed }) : {}),
   }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
@@ -2468,6 +2509,22 @@ export function fallbackCandidatesFor(network, payAiClient, solvadorClient, over
   if (solvadorAdvertises) out.push({ name: "Solvador", client: solvadorClient });
   if (payAiClient && PAYAI_SETTLE_NETWORKS.has(network)) out.push({ name: "PayAI", client: payAiClient });
   if (solvadorClient && !solvadorAdvertises) out.push({ name: "Solvador", client: solvadorClient });
+  return out;
+}
+
+/**
+ * Settle-fallback overrides that append one settler AFTER a network's default
+ * chain (fallbackCandidatesFor), on each of `networks`, while `confirmed`
+ * (read at each settle) holds that network. It never replaces or reorders an
+ * earlier candidate, and the hook reaches it only past the same double-settle
+ * gate as every other fallback: each earlier settler must have refused
+ * before broadcasting.
+ */
+export function lastResortFallbackOverrides({ networks, payAiClient, solvadorClient, last, confirmed }) {
+  const out = {};
+  for (const n of networks) {
+    out[n] = () => [...fallbackCandidatesFor(n, payAiClient, solvadorClient), ...(confirmed.has(n) ? [last] : [])];
+  }
   return out;
 }
 

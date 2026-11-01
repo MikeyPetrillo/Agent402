@@ -26,6 +26,11 @@ Packages:
 Tools:
 - exa-search accepts type "lite": the fastest search, served from cached
   pages, with every filter the tool takes. Its published example runs it.
+Payments:
+- Self-hosters can add the stablecoin issuer's facilitator as the last
+  settle fallback on Base and Polygon (`CIRCLE_FACILITATOR_EVM_FALLBACK=on`,
+  off by default): exact USDC only, reached only after every earlier settler
+  refused before broadcasting.
 Facilitator:
 - On pubnet an RPC already on version 30 is tried first, ahead of the
   Protocol 30 vote, and startup logs each RPC's version with a warning for one below protocol 30.
