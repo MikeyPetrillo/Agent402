@@ -710,6 +710,10 @@ function canonicalModelRaw(model) {
   // colon (CodeQL js/polynomial-redos #121). split/join is linear.
   const m = String(model || "").split(":").map((part) => part.trim()).join(":");
   if (!m) return m;
+  // "default" names no model: it is read as a missing model, so each wire
+  // serves the tier default (2026-10-31: 2,991 refusals in a day from one
+  // client sending model "default" to the metered route).
+  if (m.toLowerCase() === "default") return "";
   if (m.includes("/")) return m; // already an OpenRouter id
   if (/^(gpt|o[0-9])/i.test(m)) return `openai/${m}`;
   if (/^claude/i.test(m)) {

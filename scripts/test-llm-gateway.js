@@ -1501,6 +1501,15 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(explicit.model === "openai/gpt-4o-mini" && explicit.__defaultedModel === undefined, "an explicit model is never marked as defaulted");
   const routed = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-auto", { clamp: false });
   ok(routed.__defaultedModel === undefined, "the auto tier routes; it does not default");
+  // model "default" names no model: served as the tier default, not refused
+  for (const sent of ["default", "DEFAULT", " default "]) {
+    const d = vr({ model: sent, messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-metered", { clamp: false });
+    ok(d.model === T["v1-chat-metered"].defaultModel && d.__defaultedModel === d.model, `model ${JSON.stringify(sent)} -> the metered tier default`);
+  }
+  const dn = vr({ model: "default", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-nano", { clamp: false });
+  ok(dn.model === T["v1-chat-nano"].defaultModel, 'model "default" -> the nano tier default');
+  const da = vr({ model: "default", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-auto", { clamp: false });
+  ok(da.__defaultedModel === undefined && typeof da.model === "string" && da.model.includes("/"), 'model "default" on the auto tier is routed like no model');
 }
 
 // ---- GPT-6 Astra + Claude Fable 5.1 on premium (2026-09-18 audit) ----
