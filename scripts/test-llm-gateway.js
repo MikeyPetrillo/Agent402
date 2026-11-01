@@ -1502,14 +1502,16 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const routed = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-auto", { clamp: false });
   ok(routed.__defaultedModel === undefined, "the auto tier routes; it does not default");
   // model "default" names no model: served as the tier default, not refused
+  const tryVr = (model, slug) => { try { return vr({ model, messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false }); } catch (e) { return { refused: e.message }; } };
   for (const sent of ["default", "DEFAULT", " default "]) {
-    const d = vr({ model: sent, messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-metered", { clamp: false });
-    ok(d.model === T["v1-chat-metered"].defaultModel && d.__defaultedModel === d.model, `model ${JSON.stringify(sent)} -> the metered tier default`);
+    const d = tryVr(sent, "v1-chat-metered");
+    ok(d.model === T["v1-chat-metered"].defaultModel && d.__defaultedModel === d.model, `model ${JSON.stringify(sent)} -> the metered tier default (${d.refused || d.model})`);
   }
-  const dn = vr({ model: "default", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-nano", { clamp: false });
-  ok(dn.model === T["v1-chat-nano"].defaultModel, 'model "default" -> the nano tier default');
-  const da = vr({ model: "default", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-auto", { clamp: false });
-  ok(da.__defaultedModel === undefined && typeof da.model === "string" && da.model.includes("/"), 'model "default" on the auto tier is routed like no model');
+  const dn = tryVr("default", "v1-chat-nano");
+  ok(dn.model === T["v1-chat-nano"].defaultModel, `model "default" -> the nano tier default (${dn.refused || dn.model})`);
+  const da = tryVr("default", "v1-chat-auto");
+  ok(da.__defaultedModel === undefined && typeof da.model === "string" && da.model.includes("/"), `model "default" on the auto tier is routed like no model (${da.refused || da.model})`);
+  for (const sent of ["default:online", "default:nitro"]) ok(Boolean(tryVr(sent, "v1-chat-metered").refused), `model ${JSON.stringify(sent)} is still refused`);
 }
 
 // ---- GPT-6 Astra + Claude Fable 5.1 on premium (2026-09-18 audit) ----
