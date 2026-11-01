@@ -11,7 +11,7 @@
 // The key authorizations here are REAL: signed with viem accounts and verified
 // through mppx's own verifySubscriptionKeyAuthorization, so the payer this
 // engine records is cryptographically recovered, not asserted by the test.
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Challenge, Credential } from "mppx";
@@ -839,6 +839,63 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const methodArgs = src.slice(methodStart, src.indexOf("resolve:", methodStart));
   ok(methodStart > 0 && /clientOverride\(\)/.test(methodArgs) && !/tempoRenewalClient/.test(methodArgs), "activation keeps the shared client");
   ok(!/withRenewalValidity|tempoRenewalClient/.test(readFileSync(new URL("../src/mpp-tempo.js", import.meta.url), "utf8")), "the buyer-side tempo/charge gate never touches the renewal window");
+}
+
+// --- a store written before mppx 0.15 keeps working ---------------------------
+// 0.15 moved mppx's OWN anonymous subscription challenges to a sealed key token
+// and a persistent sealing key, and 0.17 activation retains the access key under
+// the subscription's lookup key. This engine mints its own offers through
+// getOrCreateAccessKey, so the keys it holds are in the pre-0.15 layout. A store
+// file written in exactly that layout (key names as mppx 0.13 wrote them) must
+// still serve, renew and destroy its keys after the upgrade.
+{
+  const name = "legacy-0-13";
+  const first = makeEngine({ name });
+  const offer = await first.engine.mintOffer({ product: "domain-monitor", target: "legacy.example" });
+  const { header } = await signCredential(Challenge.deserialize(offer.header));
+  const sub = await first.engine.activateFromCredential(header);
+  const path = join(tmp, `${name}.json`);
+  const written = JSON.parse(readFileSync(path, "utf8"));
+  const OLD_PREFIXES = ["tempo:subscription:record:", "tempo:subscription:key:", "tempo:subscription:activation:", "tempo:subscription:access-key:", "tempo:subscription:credential:"];
+  const mppxKeys = Object.keys(written).filter((k) => !k.startsWith("a402:"));
+  ok(mppxKeys.length > 0 && mppxKeys.every((k) => OLD_PREFIXES.some((p) => k.startsWith(p)) && !k.includes("pending-access-key")),
+    `minting and activating write only the key names mppx 0.13 used, no sealing key (${mppxKeys.length} keys)`);
+
+  // Rebuild the file by hand in the 0.13 layout: our own records as written,
+  // mppx's from literal key names, so nothing in it comes from 0.17's writer.
+  const rec = first.engine.get(sub.subId);
+  const mppxRec = await first.engine._subStore.get(rec.mppxSubscriptionId);
+  const keyEntry = written[`tempo:subscription:access-key:address:${rec.accessKeyAddress}`];
+  ok(keyEntry?.privateKey && Object.keys(keyEntry).sort().join(",") === "accessKeyAddress,keyType,privateKey", "the held access key is the 0.13 record shape { accessKeyAddress, keyType, privateKey }");
+  const legacy = Object.fromEntries(Object.entries(written).filter(([k]) => k.startsWith("a402:")));
+  const offerNonce = Object.keys(written).find((k) => k.startsWith("tempo:subscription:access-key:offer:"));
+  legacy[offerNonce] = { ...keyEntry };
+  legacy[`tempo:subscription:access-key:address:${rec.accessKeyAddress}`] = { ...keyEntry };
+  legacy[`tempo:subscription:record:${mppxRec.subscriptionId}`] = mppxRec;
+  legacy[`tempo:subscription:key:${mppxRec.lookupKey}`] = mppxRec.subscriptionId;
+  writeFileSync(path, JSON.stringify(legacy));
+
+  // A fresh engine on that file: the process after the upgrade.
+  const after = makeEngine({ name });
+  const E = after.engine;
+  await E.warm();
+  ok(E.get(sub.subId)?.status === "active" && E.listActive("domain").length === 1, "after the upgrade the subscriber written before it is active and served");
+  ok((await E._subStore.getByKey(mppxRec.lookupKey))?.subscriptionId === mppxRec.subscriptionId && (await E._subStore.get(mppxRec.subscriptionId))?.lastChargedPeriod === 0,
+    "mppx 0.17 reads the 0.13 subscription record by id and by lookup key");
+  // The exact lookup 0.17's submitSubscriptionPayment makes before signing a
+  // renewal: by address, with the record's own (absent) key token.
+  const held = await E._subStore.getAccessKeyByAddress(mppxRec.accessKey.accessKeyAddress, mppxRec.accessKey.keyToken);
+  ok(held?.privateKey === keyEntry.privateKey, "the renewal's access-key lookup finds the 0.13 private key with no key token");
+  ok((await E._subStore.getOrCreateAccessKey(offerNonce.slice("tempo:subscription:access-key:".length)))?.privateKey === keyEntry.privateKey, "getOrCreateAccessKey returns the 0.13 key for its offer instead of minting another");
+  advance(PERIOD);
+  ok(await E.refreshStatus(sub.subId) === "active" && after.calls.charge === 1 && E.get(sub.subId).lastChargedPeriod === 1, "the next period renews from the 0.13 records");
+
+  // 0.17 activation also retains the key under the lookup key, a third copy
+  // that destroyAccessKey finds by content, never by key name.
+  await E._subStore.retainAccessKey(mppxRec.lookupKey, held);
+  const copies = () => Object.values(JSON.parse(readFileSync(path, "utf8"))).filter((v) => v && typeof v === "object" && v.privateKey === keyEntry.privateKey).length;
+  ok(copies() >= 3, `the key is held under offer, address and lookup key (${copies()} copies)`);
+  ok(!Object.keys(JSON.parse(readFileSync(path, "utf8"))).some((k) => k.includes("pending-access-key")), "no sealing key is ever written: our challenges carry no key token");
 }
 
 rmSync(tmp, { recursive: true, force: true });

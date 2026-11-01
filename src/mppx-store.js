@@ -108,6 +108,9 @@ export function createMppxStore({ getClient = getSharedRedisClient, prefix = MPP
     },
     /** Atomic first-use claim through `expires` (ms): SET NX with that TTL. */
     async tryClaim(key, expires) {
+      // mppx 0.15+ store contract: a claim whose expiry has passed is refused,
+      // so a credential cannot be claimed after its challenge window closes.
+      if (!Number.isFinite(expires) || expires <= Date.now()) return false;
       const c = await redis();
       if (c) {
         try {

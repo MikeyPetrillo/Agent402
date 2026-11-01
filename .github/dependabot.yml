@@ -37,10 +37,12 @@ updates:
       # update-types qualifier on purpose: for 0.x packages Dependabot reads the
       # middle digit as minor, so a "semver-major" ignore would never match
       # (the @zxing note below).
-      # ox is pinned to the exact version mppx resolves (0.14.33): our Tempo
-      # sender imports it directly and must agree with the copy mppx signs
-      # with. It moves when mppx moves, never on its own (#1561 proposed 1.8
-      # and failed two lanes).
+      # ox is pinned to the exact version mppx declares (scripts/
+      # test-ox-single-copy.js reads it from the lockfile): our Tempo sender
+      # imports it directly and must agree with the copy mppx signs with. It
+      # moves only when an mppx release declares a new ox, never on its own
+      # (#1561 proposed 1.8 and failed two lanes). Not every mppx release does:
+      # 0.13.6 through 0.17.0 all declare 0.14.45.
       - dependency-name: "ox"
       - dependency-name: "@solana-program/*"
       # @solana/kit itself: @solana-program/* declare a peer of kit ^5 and
@@ -95,14 +97,15 @@ updates:
       # a Node upgrade; scripts/test-undici-dispatcher.js is the check.
       - dependency-name: "undici"
         update-types: ["version-update:semver-major"]
-      # mppx is the MPP wire (Tempo and Stripe charges); ox above is pinned to
-      # the copy it resolves, so the two move together, deliberately, with the
-      # MPP paid suites and a paid-canary run. A version range, not update-types:
-      # for a 0.x package the middle digit is read as minor (0.13 -> 0.16 arrived
-      # in the grouped minor/patch PR #1823). Ignore rules also apply to security
-      # PRs, so only the next lines are held and a 0.13.x patch still comes in.
+      # mppx is the MPP wire (Tempo and Stripe charges). Each minor moves
+      # deliberately, with the MPP paid suites and a paid-canary run, and ox
+      # above moves in the same change only when the new mppx declares another
+      # ox. A version range, not update-types: for a 0.x package the middle
+      # digit is read as minor (0.13 -> 0.16 arrived in the grouped minor/patch
+      # PR #1823). Ignore rules also apply to security PRs, so only the next
+      # lines are held and a 0.17.x patch still comes in.
       - dependency-name: "mppx"
-        versions: [">=0.14.0"]
+        versions: [">=0.18.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
