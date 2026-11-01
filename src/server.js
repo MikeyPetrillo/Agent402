@@ -10044,15 +10044,20 @@ if (FREE_MODE) {
     const origJson = res.json.bind(res);
     res.json = (body) => {
       if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.altPayment) {
-        body.altPayment = {
-          protocol: "proof-of-work",
-          summary: "No wallet? This retired converter is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
-          challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${RETIRED_CONVERT_POW_SLUG}`,
-          info: `${BASE_URL}/api/pow`,
-        };
-        body.replacement = {
-          route: `POST /api/${RETIRED_CONVERT_POW_SLUG}`,
-          note: "This pairwise route is retired but still served. The replacement takes { value, from, to } for every pair at the same price.",
+        // First key, ahead of the paywall's own `error` (an error-first
+        // reader shows the free route, not "Payment required").
+        body = {
+          altPayment: {
+            protocol: "proof-of-work",
+            summary: "No wallet? This retired converter is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
+            challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${RETIRED_CONVERT_POW_SLUG}`,
+            info: `${BASE_URL}/api/pow`,
+          },
+          ...body,
+          replacement: {
+            route: `POST /api/${RETIRED_CONVERT_POW_SLUG}`,
+            note: "This pairwise route is retired but still served. The replacement takes { value, from, to } for every pair at the same price.",
+          },
         };
       }
       return origJson(body);
@@ -10072,11 +10077,15 @@ if (FREE_MODE) {
         const origJson = res.json.bind(res);
         res.json = (body) => {
           if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.altPayment) {
-            body.altPayment = {
-              protocol: "proof-of-work",
-              summary: "No wallet? This tool is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
-              challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${encodeURIComponent(def.slug)}`,
-              info: `${BASE_URL}/api/pow`,
+            // First key, ahead of the paywall's own `error` (see above).
+            body = {
+              altPayment: {
+                protocol: "proof-of-work",
+                summary: "No wallet? This tool is also payable with a few ms of CPU: solve a sha256 puzzle instead - no money, no tokens.",
+                challengeUrl: `${BASE_URL}/api/pow/challenge?slug=${encodeURIComponent(def.slug)}`,
+                info: `${BASE_URL}/api/pow`,
+              },
+              ...body,
             };
           }
           return origJson(body);
