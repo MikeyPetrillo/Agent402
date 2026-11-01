@@ -133,7 +133,7 @@ const heldUnder = (ms, limit) => ms < limit;
     const sync = sales.salesSummary({ days });
     const sliced = await blockOf(() => sales.salesSummaryAsync({ days }));
     ok(isDeepStrictEqual(sliced.value, sync), `salesSummaryAsync({ days: ${days} }) equals salesSummary`);
-    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) on ${SALES_ROWS} rows (worst ${sliced.ms} ms)`);
+    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) on ${SALES_ROWS} rows (worst ${sliced.ms} ms; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector)`);
     const nSync = sales.externalByNetwork({ days });
     const nSliced = await blockOf(() => sales.externalByNetworkAsync({ days }));
     ok(isDeepStrictEqual(nSliced.value, nSync), `externalByNetworkAsync({ days: ${days} }) equals externalByNetwork (worst ${nSliced.ms} ms)`);
