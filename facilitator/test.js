@@ -63,7 +63,7 @@ import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "
 import { withTimeout, TimeoutError } from "./timeout.js";
 import { decodeErrorResultXdr, describeRpcRejection } from "./rpc-diagnostics.js";
 import { ensureRpcTimeout, installRpcRequestTimeout, RpcRequestTimeoutError } from "./rpc-timeout.js";
-import { installRpcFailover, isTransportFailure, resolveFallbackUrls, DEFAULT_FALLBACKS } from "./rpc-failover.js";
+import { installRpcFailover, isTransportFailure, resolveFallbackUrls, DEFAULT_FALLBACKS, checkRpcVersions, rpcVersionVerdict, resolveMinRpcMajor, EXPECTED_RPC_MAJOR } from "./rpc-failover.js";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const NETWORK = "stellar:testnet";
@@ -280,6 +280,40 @@ const sorobanRpc = getRpcClient(NETWORK);
   }
   ok(resolveFallbackUrls("stellar:pubnet", " https://a.example/ , https://b.example, junk, https://a.example ").join(",") === "https://a.example,https://b.example", "resolveFallbackUrls: env CSV wins, trimmed, deduped, junk dropped");
   ok(resolveFallbackUrls("stellar:pubnet", "off").length === 0 && resolveFallbackUrls("stellar:pubnet", "none").length === 0, "resolveFallbackUrls: off/none disables");
+  // Protocol 30 (mainnet vote 2026-11-23): the first pubnet fallback is the node read at RPC 30.0.0
+  // on 2026-11-01; the 29.0.1 node stays a later hop.
+  ok(DEFAULT_FALLBACKS["stellar:pubnet"][0] === "https://rpc.ankr.com/stellar_soroban", "DEFAULT_FALLBACKS: the first pubnet fallback is the v30 RPC");
+  ok(DEFAULT_FALLBACKS["stellar:pubnet"].includes("https://mainnet.sorobanrpc.com") && DEFAULT_FALLBACKS["stellar:pubnet"].indexOf("https://mainnet.sorobanrpc.com") > 0, "DEFAULT_FALLBACKS: the v29 RPC is kept as a later fallback");
+
+  // RPC version check: a verdict per node, a warning only for one behind.
+  ok(EXPECTED_RPC_MAJOR === 30 && resolveMinRpcMajor(undefined) === 30 && resolveMinRpcMajor("31") === 31 && resolveMinRpcMajor("off") === null && resolveMinRpcMajor("junk") === 30, "resolveMinRpcMajor: default 30, an integer overrides, off skips, junk reads the default");
+  {
+    const v29 = rpcVersionVerdict({ version: "29.0.1-055dc9c7", protocolVersion: 29 }, { protocolVersion: 29 }, 30);
+    const v30 = rpcVersionVerdict({ version: "30.0.0-13e53516", protocolVersion: 29 }, { protocolVersion: 29 }, 30);
+    const lagging = rpcVersionVerdict({ version: "29.0.1" }, { protocolVersion: 30 }, 0);
+    ok(v29.behind === true && v29.major === 29 && v30.behind === false && v30.major === 30, "rpcVersionVerdict: 29.x is behind protocol 30, 30.x is not");
+    ok(lagging.behind === true && lagging.floor === 30, "rpcVersionVerdict: an RPC below the network's own protocol is behind even with no minimum");
+    ok(rpcVersionVerdict({}, null, 30).behind === null, "rpcVersionVerdict: no version is unread, not a verdict");
+  }
+  {
+    const answers = {
+      "https://v29.example": { getVersionInfo: { version: "29.0.1-x", protocolVersion: 29 }, getNetwork: { protocolVersion: 29 } },
+      "https://v30.example": { getVersionInfo: { version: "30.0.0-y", protocolVersion: 29 }, getNetwork: { protocolVersion: 29 } },
+    };
+    const seen = [];
+    const fetchImpl = async (url, opts) => {
+      const { method } = JSON.parse(opts.body);
+      seen.push(`${url} ${opts.method} ${method}`);
+      if (url === "https://down.example") throw new Error("connect ECONNREFUSED");
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: answers[url][method] }) };
+    };
+    const logs = [], warns = [];
+    const rows = await checkRpcVersions(["https://v29.example/", "https://v30.example", "https://down.example", "https://v30.example"], { minMajor: 30, fetchImpl, log: (m) => logs.push(m), warn: (m) => warns.push(m) });
+    ok(rows.length === 3 && seen.every((s) => / POST (getVersionInfo|getNetwork)$/.test(s)), "checkRpcVersions: one read per distinct node, JSON-RPC POSTs only");
+    ok(warns.some((w) => w.includes("v29.example") && w.includes("29.0.1") && w.includes("below protocol 30")) && !warns.some((w) => w.includes("v30.example")), "checkRpcVersions: warns for the v29 node, not the v30 one");
+    ok(logs.some((l) => l.includes("v30.example runs 30.0.0")), "checkRpcVersions: logs the v30 node's version");
+    ok(warns.some((w) => w.includes("down.example") && w.includes("unread")) && rows.find((r) => r.host === "down.example").behind === null, "checkRpcVersions: an unreachable node is a warning, never a throw");
+  }
 
   const { createServer } = await import("node:http");
   const { rpc } = await import("@stellar/stellar-sdk");

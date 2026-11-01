@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search)
+### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search, Stellar RPC)
 Gateway:
 - The pro tier serves openai/gpt-6.1-terra (and its -pro twin) and
   moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.
@@ -22,6 +22,9 @@ Packages:
 Tools:
 - exa-search accepts type "lite": the fastest search, served from cached
   pages, with every filter the tool takes. Its published example runs it.
+Facilitator:
+- On pubnet an RPC already on version 30 is tried first, ahead of the
+  Protocol 30 vote, and startup logs each RPC's version with a warning for one below protocol 30.
 
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:

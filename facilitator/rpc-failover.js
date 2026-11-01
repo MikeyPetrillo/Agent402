@@ -48,9 +48,13 @@ const TRANSPORT_CODES = new Set(["ECONNABORTED", "ECONNRESET", "ETIMEDOUT", "ENO
  *  Each entry is a different operator's host from the network's primary (the
  *  vendor default on testnet, FACILITATOR_MAINNET_RPC_URL on pubnet): a
  *  fallback equal to the primary is skipped by failover() and disables the
- *  hedge, so it would leave nowhere to go. */
+ *  hedge, so it would leave nowhere to go.
+ *  Pubnet order (2026-11-01, getVersionInfo): rpc.ankr.com runs RPC 30.0.0
+ *  and mainnet.sorobanrpc.com 29.0.1. Protocol 30's mainnet vote is
+ *  2026-11-23 17:00 UTC and an RPC must run v30 to follow it, so the v30 node
+ *  is first (it also takes the hedged reads); the other stays a later hop. */
 export const DEFAULT_FALLBACKS = {
-  "stellar:pubnet": ["https://mainnet.sorobanrpc.com", "https://rpc.ankr.com/stellar_soroban"],
+  "stellar:pubnet": ["https://rpc.ankr.com/stellar_soroban", "https://mainnet.sorobanrpc.com"],
   "stellar:testnet": ["https://rpc.ankr.com/stellar_testnet_soroban"],
 };
 
@@ -210,6 +214,70 @@ function patchPrototype() {
     patched++;
   }
   return patched;
+}
+
+// ---- RPC version check (startup only, never on a settle) -------------------
+// An RPC whose software major is below the network's protocol cannot follow
+// that ledger, and one below the next scheduled protocol stops at its vote.
+// Read once after listen with plain JSON-RPC POSTs (not rpc.Server, so none of
+// the patches above run and nothing is hedged); the answer is a log line.
+/** The protocol every RPC should already run: the next scheduled upgrade.
+ *  FACILITATOR_RPC_MIN_VERSION overrides it; "off" skips the check. */
+export const EXPECTED_RPC_MAJOR = 30;
+
+export function resolveMinRpcMajor(envValue) {
+  const raw = String(envValue ?? "").trim();
+  if (/^(off|none|false)$/i.test(raw)) return null;
+  const n = Number(raw);
+  return raw && Number.isInteger(n) && n > 0 ? n : EXPECTED_RPC_MAJOR;
+}
+
+/** One RPC's verdict from its getVersionInfo and getNetwork answers. */
+export function rpcVersionVerdict(versionInfo, network, minMajor) {
+  const version = String(versionInfo?.version || "");
+  const major = Number.parseInt(version, 10);
+  const networkProtocol = Number(network?.protocolVersion ?? versionInfo?.protocolVersion);
+  if (!Number.isFinite(major)) return { version: version || null, major: null, networkProtocol: Number.isFinite(networkProtocol) ? networkProtocol : null, behind: null };
+  const floor = Math.max(Number.isFinite(networkProtocol) ? networkProtocol : 0, Number.isFinite(minMajor) ? minMajor : 0);
+  return { version, major, networkProtocol: Number.isFinite(networkProtocol) ? networkProtocol : null, behind: major < floor, floor };
+}
+
+async function jsonRpc(url, method, { timeoutMs, fetchImpl }) {
+  const res = await fetchImpl(url, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = await res.json();
+  if (j?.error) throw new Error(`JSON-RPC ${j.error.code ?? "error"}`);
+  return j?.result;
+}
+
+/** Reads every URL's version and logs a warning for one that is behind.
+ *  Resolves with the per-host rows; never throws. */
+export async function checkRpcVersions(urls, { minMajor = EXPECTED_RPC_MAJOR, timeoutMs = 5_000, log = console.log, warn = console.warn, fetchImpl = globalThis.fetch } = {}) {
+  const rows = await Promise.all([...new Set((urls || []).filter(Boolean).map((u) => String(u).replace(/\/$/, "")))].map(async (url) => {
+    const host = hostOf(url);
+    try {
+      const [info, network] = await Promise.all([
+        jsonRpc(url, "getVersionInfo", { timeoutMs, fetchImpl }),
+        jsonRpc(url, "getNetwork", { timeoutMs, fetchImpl }).catch(() => null),
+      ]);
+      return { host, ...rpcVersionVerdict(info, network, minMajor) };
+    } catch (err) {
+      return { host, version: null, major: null, networkProtocol: null, behind: null, error: String(err?.message || err).slice(0, 120) };
+    }
+  }));
+  for (const r of rows) {
+    if (r.behind) {
+      const when = r.networkProtocol !== null && r.major < r.networkProtocol ? "it cannot follow the current ledger" : `it stops following the ledger when protocol ${r.floor} activates`;
+      warn(`[startup] RPC ${r.host} runs ${r.version}, below protocol ${r.floor} (network at ${r.networkProtocol ?? "unknown"}); ${when} - move it later in FACILITATOR_RPC_FALLBACK_URLS or replace it`);
+    }
+    else if (r.major === null) warn(`[startup] RPC ${r.host} version unread (${r.error || "no version in getVersionInfo"})`);
+    else log(`[startup] RPC ${r.host} runs ${r.version} (network protocol ${r.networkProtocol ?? "unknown"})`);
+  }
+  return rows;
 }
 
 /** Test seam: forget the installed state (the prototype stays patched). */

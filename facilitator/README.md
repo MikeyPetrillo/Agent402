@@ -89,13 +89,18 @@ FACILITATOR_STELLAR_SECRET=S... npm start
   next settle starts.
 - `FACILITATOR_RPC_FALLBACK_URLS`: optional CSV of Soroban RPC URLs tried, in
   order, when the primary fails at the TRANSPORT level (timeout, connection
-  error, HTTP 5xx/429). Default on pubnet: `https://mainnet.sorobanrpc.com,
-  https://rpc.ankr.com/stellar_soroban` (public, keyless; probed 2026-08-26);
+  error, HTTP 5xx/429). Default on pubnet: `https://rpc.ankr.com/stellar_soroban,
+  https://mainnet.sorobanrpc.com` (public, keyless; the RPC 30 node first, read
+  2026-11-01);
   on testnet `https://rpc.ankr.com/stellar_testnet_soroban` (a different
   operator from the default testnet primary). `off` disables. A JSON-RPC
   error (failed simulation, rejected transaction) is an answer and is never
   retried elsewhere. Each hop inherits the per-request timeout, so the worst
   case is (1 + fallbacks) x `FACILITATOR_RPC_TIMEOUT_MS`.
+- `FACILITATOR_RPC_MIN_VERSION`: optional, default `30`. Once after startup
+  (never during a settle) every configured RPC is read with `getVersionInfo`,
+  and a node whose software major is below this or below the network's
+  protocol is logged as a warning. `off` skips the read.
 - `FACILITATOR_RPC_TIMEOUT_MS`: optional, default `10000`. Per-request
   timeout on every Soroban RPC round-trip the Stellar SDK makes (simulate,
   send, poll). The endpoint bounds above are the last line; this one makes a
