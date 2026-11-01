@@ -139,6 +139,20 @@ try {
   const chat = await post("/v1/metered/chat/completions", { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 8 });
   ok(chat.status === 402, `/v1/metered/chat/completions still 402s unpaid (got ${chat.status})`);
 
+  // 6. model "default" names no model: each metered wire quotes it exactly as
+  //    an omitted model (the tier default), above the floor at 4000 tokens.
+  for (const [path, mk] of [
+    ["/v1/metered/chat/completions", (m) => ({ ...(m === undefined ? {} : { model: m }), messages: [{ role: "user", content: "hi" }], max_tokens: 4000 })],
+    ["/v1/metered/messages", (m) => ({ ...(m === undefined ? {} : { model: m }), messages: [{ role: "user", content: "hi" }], max_tokens: 4000 })],
+    ["/v1/metered/responses", (m) => ({ ...(m === undefined ? {} : { model: m }), input: "hi", max_output_tokens: 4000 })],
+  ]) {
+    const omitted = amountOf(decode402(await post(path, mk(undefined))));
+    const floor = amountOf(decode402(await post(path, mk("not-a-model/x"))));
+    const named = amountOf(decode402(await post(path, mk("default"))));
+    ok(omitted !== null && Number(omitted) > Number(floor), `${path}: an omitted model quotes above the floor (${omitted} > ${floor})`);
+    ok(named === omitted, `${path}: model "default" quotes the same as an omitted model (${named} = ${omitted})`);
+  }
+
   console.log(`\nPASS - ${pass} checks (Anthropic SDK base-URL alias + metered body limit)`);
   proc.kill("SIGKILL");
   facilitator.close();

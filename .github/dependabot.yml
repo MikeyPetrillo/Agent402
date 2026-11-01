@@ -10,6 +10,11 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
+    # A version update proposes only releases at least 7 days old (#1823
+    # carried releases published hours earlier, one on the signing path).
+    # Security updates are not delayed by a cooldown.
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     groups:
@@ -83,6 +88,21 @@ updates:
       # That is exactly how 0.23 landed in the grouped minor/patch PR (#531) and
       # failed it.
       - dependency-name: "@zxing/library"
+      # undici major: src/tools/fetch-guard.js hands an undici Agent to Node's
+      # built-in fetch as its dispatcher, and Node 22's fetch (bundled undici
+      # 6.x) refuses an undici 8 Agent with UND_ERR_INVALID_ARG (checked
+      # 2026-11-01 for #1824), so every guarded fetch would fail. It moves with
+      # a Node upgrade; scripts/test-undici-dispatcher.js is the check.
+      - dependency-name: "undici"
+        update-types: ["version-update:semver-major"]
+      # mppx is the MPP wire (Tempo and Stripe charges); ox above is pinned to
+      # the copy it resolves, so the two move together, deliberately, with the
+      # MPP paid suites and a paid-canary run. A version range, not update-types:
+      # for a 0.x package the middle digit is read as minor (0.13 -> 0.16 arrived
+      # in the grouped minor/patch PR #1823). Ignore rules also apply to security
+      # PRs, so only the next lines are held and a 0.13.x patch still comes in.
+      - dependency-name: "mppx"
+        versions: [">=0.14.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -46,6 +46,18 @@ ok(lines.some((l) => /connect timeouts/.test(l)), "and says why that matters, fo
   ok(withGc.worstGcMs === Math.min(after.worstMs, base + 150) && withGc.worstMs === after.worstMs, `a pause inside the worst block adds to its collector share, one outside it does not (${base} -> ${withGc.worstGcMs}ms of ${withGc.worstMs}ms)`);
 }
 
+// Many short pauses inside one window all count, and later pauses never evict
+// them (a 256-entry ring did: a CI spin's scavenges filled it, 160 read 159).
+{
+  const { noteGcEntry, gcDuring } = await import("../src/loop-lag.js");
+  const w0 = Date.now() - 5_000;
+  for (let i = 0; i < 300; i++) noteGcEntry(w0 + i * 2, 1, 1);
+  const full = gcDuring(w0, w0 + 1_000);
+  noteGcEntry(Date.now(), 1, 1); noteGcEntry(Date.now(), 1, 1);
+  const later = gcDuring(w0, w0 + 1_000);
+  ok(full.count === 300 && full.ms === 300 && later.ms === 300, `300 pauses in one window are all counted, and later pauses evict none (${full.ms} -> ${later.ms}ms)`);
+}
+
 resetLoopLag();
 ok(loopLagStatus().worstMs === 0 && loopLagStatus().worstGcMs === 0 && loopLagStatus().stalls === 0, "reset clears the high-water mark and its collector share");
 
