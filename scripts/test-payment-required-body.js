@@ -364,6 +364,7 @@ try {
     ok(r.status === 402, `B3 retired converter -> 402 (got ${r.status})`);
     const [body, decoded] = assertMirror("B3", r, await r.text());
     ok(!!body.altPayment && !!body.replacement?.route, "B3 altPayment and replacement are kept");
+    ok(Object.keys(body)[0] === "altPayment", `B3 the proof-of-work altPayment is the first key (${Object.keys(body).slice(0, 3).join(",")})`);
     ok(body.resource?.url === decoded.resource?.url, `B3 body.resource.url is the header's (${body.resource?.url})`);
   }
 

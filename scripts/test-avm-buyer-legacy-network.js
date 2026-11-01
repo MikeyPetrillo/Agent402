@@ -54,6 +54,16 @@ const short = await tryPay(avmSchemeAcceptingLegacyNetwork(new ExactAvmScheme(si
 ok(!short.error && short.accepted?.network === ALGORAND_MAINNET_CAIP2, `a seller on the CAIP-2 id is paid as before (${short.error || short.accepted?.network})`);
 ok(JSON.stringify(legacy.payload) !== undefined && Object.keys(legacy.payload).join() === Object.keys(short.payload).join(), "both spellings produce the same payload shape");
 
+// The router's own entry point: the buyer built by getUpstreamBuyerAvm pays a
+// legacy-id seller too (a bare scheme there would throw).
+process.env.ALGORAND_UPSTREAM_BUYER_MNEMONIC = algosdk.secretKeyToMnemonic(account.sk);
+process.env.ALGORAND_ALGOD_URL = `http://127.0.0.1:${algod.address().port}`;
+delete process.env.ALGORAND_RELAY_URL; delete process.env.ALGORAND_RELAY_TOKEN;
+const { getUpstreamBuyerAvm } = await import("../src/x402-buyer.js");
+let viaRouter;
+try { viaRouter = await (await getUpstreamBuyerAvm()).client.createPaymentPayload(required(ALGORAND_MAINNET_LEGACY_CAIP2)); } catch (e) { viaRouter = { error: String(e?.message || e) }; }
+ok(!viaRouter.error && viaRouter.accepted?.network === ALGORAND_MAINNET_LEGACY_CAIP2, `the router's buyer (getUpstreamBuyerAvm) pays a legacy-id seller and echoes its accept (${viaRouter.error || viaRouter.accepted?.network})`);
+
 algod.close();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

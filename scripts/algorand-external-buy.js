@@ -76,7 +76,9 @@ let client, http, payerAddress = "(dry)";
     const { AlgorandClient } = await import("@algorandfoundation/algokit-utils/algorand-client");
     const algorandClient = AlgorandClient.fromConfig({ algodConfig: { server: algodUrl, token: "" } })
       .setDefaultValidityWindow(1000);
-    client.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
+    // A seller on the legacy network id (full genesis hash) is paid as the router pays it.
+    const { avmSchemeAcceptingLegacyNetwork } = await import("../src/x402-buyer.js");
+    client.register("algorand:*", avmSchemeAcceptingLegacyNetwork(new ExactAvmScheme(signer, { algorandClient })));
     payerAddress = account.addr.toString();
   }
   http = new x402HTTPClient(client);
