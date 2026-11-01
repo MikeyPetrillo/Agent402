@@ -1492,7 +1492,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // ---- a missing model is served as the tier default, never refused (2026-08-28) ----
 {
   const { validateRequest: vr, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
-  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-4.5"]]) {
+  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
     const b = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false });
     ok(b.model === expect && b.__defaultedModel === expect && !Object.keys(b).includes("__defaultedModel") && T[slug].defaultModel === expect, `${slug}: no model -> ${expect} (marker non-enumerable)`);
     ok(T[slug].prefixes.some((p) => expect === p || expect.startsWith(p.endsWith("/") ? p : p + "-") || expect === p), `${slug}: the default is inside the tier's own allowlist`);
@@ -1856,7 +1856,33 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const K = await import("../src/tools/llm-gateway-kit.js");
   const H5 = "anthropic/claude-haiku-5.5", H4 = "anthropic/claude-haiku-4.5";
   const m1 = [{ role: "user", content: "hi" }];
-  ok(K.canonicalModel("anthropic/claude-haiku") === H4 && TIERS["v1-chat-metered"].defaultModel === H4, "the bare haiku family name and the metered default stay on Haiku 4.5 (5.5 kept off the defaults by the side-by-side)");
+  ok(K.canonicalModel("anthropic/claude-haiku") === H4, "the bare haiku family name stays on Haiku 4.5");
+  ok(TIERS["v1-chat-metered"].defaultModel === H5 && TIERS["v1-chat-metered"].defaultModelCompat === H4, "the metered default is Haiku 5.5, with Haiku 4.5 for default calls that send what 5.5 refuses (2026-11-01)");
+  // A call that names no model never gets a 400 for a parameter the default
+  // refuses: it is served by the compat model; one naming 5.5 still gets the 400.
+  {
+    const M = TIERS["v1-chat-metered"];
+    const base = { messages: m1, max_tokens: 64 };
+    const plain = validateRequest(base, "v1-chat-metered", { clamp: false });
+    ok(plain.model === H5 && plain.__defaultedModel === H5, `no model, no sampling -> ${H5} (${plain.model})`);
+    for (const extra of [{ temperature: 0.2 }, { top_p: 0.5 }, { top_k: 5 }, { reasoning: { max_tokens: 32 } }]) {
+      const v = validateRequest({ ...base, ...extra }, "v1-chat-metered", { clamp: false });
+      ok(v.model === H4 && v.__defaultedModel === H4, `no model + ${Object.keys(extra)[0]} -> ${H4}, not a 400 (${v.model})`);
+    }
+    const prefill = validateRequest({ messages: [...m1, { role: "assistant", content: "Sure" }], max_tokens: 64 }, "v1-chat-metered", { clamp: false });
+    ok(prefill.model === H4, `no model + an assistant prefill -> ${H4} (${prefill.model})`);
+    let named = null; try { validateRequest({ ...base, model: H5, temperature: 0.2 }, "v1-chat-metered", { clamp: false }); } catch (e) { named = e; }
+    ok(named?.statusCode === 400, "a caller naming Haiku 5.5 with temperature still gets the explaining 400");
+    ok(K.defaultModelFor(M, {}) === H5 && K.defaultModelFor({ defaultModel: H5 }, { sampling: { temperature: 1 } }) === H5 && K.defaultModelFor({}, {}) === null, "defaultModelFor: compat only when the tier names one");
+    const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+    const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+    const mm = validateMessagesRequest({ messages: m1, max_tokens: 64, temperature: 0.3 }, "v1-chat-metered");
+    ok(mm.body.model === H4, `Messages wire: no model + temperature -> ${H4} (${mm.body.model})`);
+    const rr = validateResponsesRequest({ input: "hi", max_output_tokens: 64, top_p: 0.4 }, "v1-chat-metered");
+    ok(rr.body.model === H4, `Responses wire: no model + top_p -> ${H4} (${rr.body.model})`);
+    const mp = validateMessagesRequest({ messages: m1, max_tokens: 64 }, "v1-chat-metered");
+    ok(mp.body.model === H5, `Messages wire: no model, no sampling -> ${H5} (${mp.body.model})`);
+  }
   ok(tierFor(H5) === "v1-chat" && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on base and metered");
   ok(K.costFor(H5) === ROW(H5) && K.costFor(H4) === ROW(H4), "Haiku 5.5 is priced by its own row, never by the 4.5 row or the family fallback");
   ok(K.adaptiveOnlyClaude(H5) && !K.adaptiveOnlyClaude(H4) && !K.adaptiveOnlyClaude("anthropic/claude-sonnet-5.5") && !K.adaptiveOnlyClaude("anthropic/claude-haiku"), "the Haiku 5 parameter rules apply to Haiku 5 only");

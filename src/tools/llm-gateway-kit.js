@@ -646,9 +646,13 @@ const METERED_PREFIXES = [...new Set(Object.values(TIERS)
   .filter((t) => !t.router && !t.lockedModel && !t.stealth)
   .flatMap((t) => t.prefixes || []))];
 TIERS["v1-chat-metered"] = {
-  // Haiku 5.5 is served by its explicit id (refuseUnsupportedParams covers the
-  // parameters it does not take); the default stays Haiku 4.5.
-  defaultModel: "anthropic/claude-haiku-4.5", // served when the caller names no model (quoted like any explicit model)
+  // The default is Haiku 5.5 (measured 2026-11-01 against 4.5 on metered-shaped
+  // traffic: no errors, equal or better answers, faster, a lower quote). It
+  // takes no sampling parameters, prefill or fixed reasoning budget, so a
+  // default call that sends one is served by defaultModelCompat instead of a
+  // 400 (defaultModelFor). A caller naming either model gets that model.
+  defaultModel: "anthropic/claude-haiku-5.5", // served when the caller names no model (quoted like any explicit model)
+  defaultModelCompat: "anthropic/claude-haiku-4.5",
   metered: true,
   reasoningDefault: "lowest", // the buyer pays for reasoning tokens: default to the cheapest effort, opt up explicitly
   route: "POST /v1/metered/chat/completions",
@@ -1169,6 +1173,16 @@ export function adaptiveOnlyClaude(model) {
  *  refuse with an unexplained upstream error, is named in a 400 before any
  *  upstream call (a 400 cancels settlement, so nothing is charged).
  *  `effortField` is how this wire spells the depth control. */
+/** The model a request that names none is served: the tier's default, or its
+ *  defaultModelCompat when the request carries a parameter the default refuses
+ *  (refuseUnsupportedParams), so a default call is never refused for it. */
+export function defaultModelFor(tier, ctx = {}) {
+  if (!tier?.defaultModel) return null;
+  if (!tier.defaultModelCompat) return tier.defaultModel;
+  try { refuseUnsupportedParams(tier.defaultModel, ctx); return tier.defaultModel; }
+  catch { return tier.defaultModelCompat; }
+}
+
 export function refuseUnsupportedParams(model, { sampling = {}, endsWithAssistant = false, reasoningBudget = false, effortField = "reasoning.effort" } = {}) {
   if (noSamplingKnobs(model)) {
     for (const k of ["temperature", "top_p"]) {
@@ -1787,7 +1801,12 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     throw bad('"quality" applies only when the gateway picks the model - omit "model" (or send "auto") to use it');
   }
   let defaultedModel = null;
-  if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // serve the tier default, never refuse a missing model (2026-08-28)
+  if (!model && tier.defaultModel) {
+    // serve the tier default, never refuse a missing model (2026-08-28)
+    const msgs = Array.isArray(input.messages) ? input.messages : [];
+    model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant", reasoningBudget: input.reasoning?.max_tokens !== undefined });
+    defaultedModel = model;
+  }
   if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints

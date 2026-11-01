@@ -31,7 +31,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning, fitReasoningToCap,
-  refuseCostVariants, refuseUnsupportedParams,
+  refuseCostVariants, refuseUnsupportedParams, defaultModelFor,
   assertUpstreamBody,
   stripBilling,
 } from "./llm-gateway-kit.js";
@@ -114,7 +114,11 @@ export function validateResponsesRequest(input, tierSlug) {
   let defaultedModel = null;
   if (!isRouted) {
     refuseCostVariants(model);
-    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // see llm-messages-kit: serve the tier default, never refuse a missing model
+    if (!model && tier.defaultModel) { // see llm-messages-kit: serve the tier default, never refuse a missing model
+      const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
+      model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant", reasoningBudget: input.reasoning?.max_tokens !== undefined });
+      defaultedModel = model;
+    }
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
       // "auto" when not gated at the auto price: name the auto route.

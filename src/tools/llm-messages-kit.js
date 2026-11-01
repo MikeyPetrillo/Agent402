@@ -38,7 +38,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, smallBudgetEffort,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, smallBudgetEffort,
   stripBilling,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
@@ -158,7 +158,11 @@ export function validateMessagesRequest(input, tierSlug) {
     // No model named: serve the tier's default instead of refusing (30 days of
     // real callers: 82 refusals for a missing "model" across the LLM wires -
     // agents posting to a tier route expect that tier's model, 2026-08-28).
-    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; }
+    if (!model && tier.defaultModel) {
+      const msgs = Array.isArray(input.messages) ? input.messages : [];
+      model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant", reasoningBudget: input.thinking?.type === "enabled" });
+      defaultedModel = model;
+    }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
       // "auto" when not gated at the auto price: name the auto route.
