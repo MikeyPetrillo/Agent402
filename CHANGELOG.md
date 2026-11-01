@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text)
+### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search)
 Gateway:
 - The pro tier serves openai/gpt-6.1-terra (and its -pro twin) and
   moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.
@@ -19,6 +19,9 @@ Surfaces:
 Packages:
 - agent402-mcp 0.13.27 carries the same server.describe install text, and
   every install pin names it.
+Tools:
+- exa-search accepts type "lite": the fastest search, served from cached
+  pages, with every filter the tool takes. Its published example runs it.
 
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:

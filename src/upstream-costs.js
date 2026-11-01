@@ -42,7 +42,7 @@ let dropped = [];
 // so both count as gaps.
 const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
-  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
+  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
   // The direct image model (USD per 1M tokens: prompt for text input,

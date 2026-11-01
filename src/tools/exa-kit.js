@@ -93,7 +93,7 @@ function requireKey() {
 // ever a gate, never the accounting. In memory: a restart resets the day,
 // exactly like the other spend guards, and the prepaid balance is the outer
 // bound.
-// Exa's card (search and instant per request at <= 10 results, answer per
+// Exa's card (search, instant and lite per request at <= 10 results, answer per
 // request, content per page per type) is private: src/upstream-costs.js,
 // `vendor.exa`. Without it the cap cannot be enforced, so calls refuse 503.
 function exaRate(k) {
@@ -134,7 +134,9 @@ export function estimateExaUsd(path, body = {}) {
     const n = Math.max(1, Number(body.numResults) || MAX_RESULTS);
     // Content types requested alongside a search bill per returned page.
     const types = ["text", "highlights", "summary"].filter((k) => body?.contents?.[k]).length;
-    const base = path === "/search" && body?.type === "instant" ? exaRate("instant") : exaRate("search");
+    const base = path === "/search" && body?.type === "instant" ? exaRate("instant")
+      : path === "/search" && body?.type === "lite" ? exaRate("lite")
+      : exaRate("search");
     return base + n * types * exaRate("content");
   }
   if (path === "/answer") return exaRate("answer");
@@ -211,7 +213,33 @@ export function _exaLifetimeReset() { lifetime.micro = 0; lifetime.since = Date.
 
 const EXA_RELEASE_STATUSES = new Set([400, 401, 402, 403, 404, 429]);
 
-async function exaPost(path, body) {
+// type "lite" (2026-10-19) serves cached pages only and answers 400 for any
+// parameter it does not take, so a lite body carries only the ones its docs
+// list. A key outside these sets is dropped before the call, never sent.
+export const LITE_SEARCH_PARAMS = new Set([
+  "query", "type", "numResults", "contents", "category", "includeDomains", "excludeDomains",
+  "startPublishedDate", "endPublishedDate", "userLocation", "moderation", "objective",
+  "userIdentifier", "compliance",
+]);
+export const LITE_CONTENTS_PARAMS = new Set(["text", "highlights", "snapshotAsOf"]);
+/** The body a lite search may send: only listed keys, null treated as unset. */
+export function liteSearchBody(body) {
+  const out = {};
+  for (const [k, v] of Object.entries(body || {})) {
+    if (v === null || v === undefined || !LITE_SEARCH_PARAMS.has(k)) continue;
+    if (k === "contents") {
+      const c = Object.fromEntries(Object.entries(v || {}).filter(([ck, cv]) => cv !== null && cv !== undefined && LITE_CONTENTS_PARAMS.has(ck)));
+      if (Object.keys(c).length) out.contents = c;
+      continue;
+    }
+    if (k === "compliance" && v !== "hipaa") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+async function exaPost(path, rawBody) {
+  const body = path === "/search" && rawBody?.type === "lite" ? liteSearchBody(rawBody) : rawBody;
   const key = requireKey();
   const cap = EXA_DAILY_MAX_USD();
   const estimate = estimateExaUsd(path, body);
@@ -356,16 +384,16 @@ export const EXA_TOOLS = [
     category: "web",
     price: "$0.012",
     description:
-      "Neural (embedding-based) web search over a curated web index, which finds pages by meaning rather than keyword overlap. Use it when a keyword engine returns the wrong thing: conceptual questions, 'pages like this one', or niche technical writing. Returns up to 10 results with title, URL, published date and author. Complements the keyword web search rather than replacing it.",
+      "Neural (embedding-based) web search over a curated web index, which finds pages by meaning rather than keyword overlap. Use it when a keyword engine returns the wrong thing: conceptual questions, 'pages like this one', or niche technical writing. Returns up to 10 results with title, URL, published date and author. Set type to lite for the fastest search, served from cached pages. Complements the keyword web search rather than replacing it.",
     tags: [...SHARED_TAGS, "neural", "semantic"],
     discovery: {
       bodyType: "json",
-      input: { query: "how agent-to-agent micropayment protocols settle onchain", numResults: 5 },
+      input: { query: "how agent-to-agent micropayment protocols settle onchain", numResults: 5, type: "lite" },
       inputSchema: {
         properties: {
           query: { type: "string", description: "What to search for, in natural language (max 1000 chars)." },
           numResults: { type: "number", description: `Results to return, 1 to ${MAX_RESULTS} (default ${MAX_RESULTS}).` },
-          type: { type: "string", description: "auto (default), neural, keyword, fast, or instant (lowest latency, some depth traded for speed)." },
+          type: { type: "string", description: "auto (default), neural, keyword, lite (cached pages only, lowest latency), or the older fast and instant." },
           category: { type: "string", description: `Optional category filter: ${EXA_CATEGORIES.join(", ")} ("research paper" is accepted as an alias of "publication"; pdf, github and tweet were retired upstream on 2026-07-23 and are refused with this list).` },
           includeDomains: { type: "array", description: "Only return results from these domains." },
           excludeDomains: { type: "array", description: "Never return results from these domains." },
@@ -379,7 +407,7 @@ export const EXA_TOOLS = [
           source: "exa",
           fetchedAt: "2026-09-13T20:00:00.000Z",
           query: "how agent-to-agent micropayment protocols settle onchain",
-          searchType: "neural",
+          searchType: "lite",
           count: 1,
           results: [RESULT_EXAMPLE],
         },
@@ -391,7 +419,7 @@ export const EXA_TOOLS = [
       const body = { query, numResults };
       if (i.type !== undefined && i.type !== null && i.type !== "") {
         const t = String(i.type);
-        if (!["auto", "neural", "keyword", "fast", "instant"].includes(t)) throw bad('"type" must be auto, neural, keyword, fast or instant');
+        if (!["auto", "neural", "keyword", "lite", "fast", "instant"].includes(t)) throw bad('"type" must be auto, neural, keyword, lite, fast or instant');
         body.type = t;
       }
       const category = takeCategory(i.category);
