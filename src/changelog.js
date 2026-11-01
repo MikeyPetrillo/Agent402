@@ -8,6 +8,7 @@ const ENTRIES = [
       "Gateway: the pro tier serves openai/gpt-6.1-terra (and its -pro twin) and moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.",
       "Gateway: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro are served as themselves until 2026-12-11, then by their named gpt-5.6 successors on the same tier, the swap named in agent402_model_substituted.",
       "Surfaces: server.describe, llms.txt and the README offer the hosted connector at https://agent402.tools/mcp in place of an add-server form that has closed.",
+      "Packages: agent402-mcp 0.13.27 carries the same server.describe install text, and every install pin names it.",
     ],
   },
   {

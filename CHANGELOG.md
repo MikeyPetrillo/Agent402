@@ -16,6 +16,9 @@ Gateway:
 Surfaces:
 - server.describe, llms.txt and the README offer the hosted connector at
   https://agent402.tools/mcp in place of an add-server form that has closed.
+Packages:
+- agent402-mcp 0.13.27 carries the same server.describe install text, and
+  every install pin names it.
 
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:

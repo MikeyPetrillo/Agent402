@@ -8,10 +8,14 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
+// Fixture versions, built from a name so the release pin guard
+// (test-mcp-version-pins.js) never reads them as install pins.
+const PKG = "agent402-mcp";
+const A = "9.0.1", B = "9.0.2", C = "9.0.3";
 const listen = (handler) => new Promise((r) => { const s = createServer(handler).listen(0, "127.0.0.1", () => r(s)); });
 
-let served = { llms: "npx -y agent402-mcp@0.13.26", describe: "agent402-mcp@0.13.26", siteUp: true };
-const published = new Set(["0.13.25", "0.13.26"]);
+let served = { llms: `npx -y ${PKG}@${B}`, describe: `${PKG}@${B}`, siteUp: true };
+const published = new Set([A, B]);
 let registryUp = true;
 
 const site = await listen((req, res) => {
@@ -35,21 +39,21 @@ const check = async () => {
 };
 
 let r = await check();
-ok(r.word === "ok" && r.versions.join() === "0.13.26", `a pin npm has reads ok (${JSON.stringify(r)})`);
+ok(r.word === "ok" && r.versions.join() === B, `a pin npm has reads ok (${JSON.stringify(r)})`);
 
-served = { ...served, llms: "npx -y agent402-mcp@0.13.27", describe: "agent402-mcp@0.13.27" };
+served = { ...served, llms: `npx -y ${PKG}@${C}`, describe: `${PKG}@${C}` };
 r = await check();
-ok(r.word === "missing" && r.missing.join() === "0.13.27", `a pin npm lacks reads missing (${JSON.stringify(r)})`);
+ok(r.word === "missing" && r.missing.join() === C, `a pin npm lacks reads missing (${JSON.stringify(r)})`);
 
-served = { ...served, llms: "npx -y agent402-mcp@0.13.26", describe: "agent402-mcp@0.13.27" };
+served = { ...served, llms: `npx -y ${PKG}@${B}`, describe: `${PKG}@${C}` };
 r = await check();
-ok(r.word === "missing" && r.versions.join() === "0.13.26,0.13.27" && r.missing.join() === "0.13.27", `one surface on an unpublished pin is enough to read missing (${JSON.stringify(r)})`);
+ok(r.word === "missing" && r.versions.join() === `${B},${C}` && r.missing.join() === C, `one surface on an unpublished pin is enough to read missing (${JSON.stringify(r)})`);
 
 served = { ...served, siteUp: false };
 r = await check();
 ok(r.word === "unknown", `an unreadable site reads unknown, not missing (${r.word})`);
 
-served = { llms: "npx -y agent402-mcp@0.13.26", describe: "agent402-mcp@0.13.26", siteUp: true };
+served = { llms: `npx -y ${PKG}@${B}`, describe: `${PKG}@${B}`, siteUp: true };
 registryUp = false;
 r = await check();
 ok(r.word === "unknown", `an unreadable registry reads unknown, not missing (${r.word})`);
