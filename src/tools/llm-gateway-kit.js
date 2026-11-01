@@ -319,6 +319,7 @@ export const TIERS = {
     fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
+      // gpt-5-nano shuts down 2026-12-11 (RETIRING_MODELS serves gpt-5.6-luna from then); this prefix goes before that day.
       "openai/gpt-5-nano",
       // gpt-5.6-luna: frontier-lab model in the nano class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
@@ -478,6 +479,8 @@ export const TIERS = {
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
       // 2026-10-23 removal; o4-mini left the upstream catalog 2026-10-27 and a
       // request naming it is served by gpt-5.6-terra (RETIRING_MODELS).
+      // gpt-5 (and -mini, -nano, -pro), o3 and o3-pro shut down 2026-12-11:
+      // RETIRING_MODELS serves the gpt-5.6 successors from then.
       "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
@@ -783,6 +786,18 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
   "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
   "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  // OpenAI shuts down GPT-5, GPT-5 mini, GPT-5 nano, GPT-5 pro, o3 and o3-pro on
+  // 2026-12-11 (OpenAI's deprecations page, notice of 2026-06-11). SCHEDULED
+  // like the entries above; each successor is the replacement that notice
+  // names (pro mode for the -pro ids is the -pro listing) and is admitted on
+  // the tier that serves the retiring id today: gpt-5-nano on nano, the rest
+  // on premium. Before the date, the tier prefixes that admit these ids go.
+  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-5.6-terra", asItselfUntil: true },
+  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true },
+  "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
+  "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
   // Gone from the upstream catalog 2026-10-27 (the live-catalog guard). Its
   // family successor on premium, the one the /api/llm-premium proxy already
   // serves for the retired o3-mini and o4-mini ids (llm-kit.js).
@@ -816,9 +831,11 @@ export const AVAILABILITY_SUCCESSORS = Object.freeze({
   // Each value is an ordered list: the first entry the serving tier admits is used.
   "deepseek/deepseek-chat": ["deepseek/deepseek-v4-flash"],
   "qwen/qwen-2.5-7b-instruct": ["qwen/qwen3-235b-a22b-2507"],
-  // Not gpt-4.1-nano: OpenAI removes it 2026-10-23. Pro admits no current
-  // OpenAI model at or under gpt-4o-mini's cost, so pro keeps no successor.
-  "openai/gpt-4o-mini": ["openai/gpt-5-nano"],
+  // Not gpt-4.1-nano (removed 2026-10-23) or gpt-5-nano (removed 2026-12-11):
+  // gpt-6-luna lists below gpt-4o-mini, takes tools, and is served on the
+  // tiers that serve both (auto, grounded, metered). Base admits no current
+  // OpenAI model at or under gpt-4o-mini's cost, so base keeps its fallbacks.
+  "openai/gpt-4o-mini": ["openai/gpt-6-luna"],
   // gpt-4.1 shuts down with gpt-4o on 2027-01-14; from then canonicalModel
   // serves gpt-4o's scheduled successor, so this entry stops mattering.
   "openai/gpt-4o": ["openai/gpt-4.1"],

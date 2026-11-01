@@ -1753,6 +1753,32 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(after.model === use && after.__substitutedFrom === id, `from 2026-11-30 the dated Anthropic id is served as ${use}, the swap named (${after.model}, from ${after.__substitutedFrom})`);
     K.setRetiringClockForTest(null);
   }
+  // OpenAI's 2026-12-11 shutdown of GPT-5 (mini, nano, pro), o3 and o3-pro:
+  // each served as itself on its tier until the day, then by the named
+  // successor on that same tier, the swap named, a dated snapshot following.
+  {
+    const sched = [
+      ["openai/gpt-5", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/gpt-5-mini", "openai/gpt-5.6-terra", "v1-chat-premium"],
+      ["openai/gpt-5-nano", "openai/gpt-5.6-luna", "v1-chat-nano"], ["openai/gpt-5-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
+      ["openai/o3", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/o3-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
+    ];
+    const m1 = [{ role: "user", content: "hi" }];
+    for (const [id, use, home] of sched) {
+      ok(RETIRING_MODELS[id]?.until === "2026-12-11" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true && tierAllows(home, use), `${id}: scheduled to retire 2026-12-11, successor ${use} admitted on ${home}`);
+      K.setRetiringClockForTest(() => Date.parse("2026-12-10T23:59:59Z"));
+      const before = validateRequest({ model: id, messages: m1 }, home);
+      ok(!retiringModel(id) && tierFor(id) === home && before.model === id && before.__substitutedFrom === undefined, `${id}: the day before, served as itself on ${home}`);
+      K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+      const after = validateRequest({ model: id, messages: m1 }, home);
+      ok(after.model === use && after.__substitutedFrom === id && retiringModel(`${id}-2025-08-07`)?.use === use, `${id}: from 2026-12-11 served as ${use} on ${home}, the swap named, a dated snapshot retiring with it`);
+      K.setRetiringClockForTest(null);
+    }
+    // gpt-4o-mini's availability successor is not itself retiring, and serves
+    // where gpt-4o-mini does on the budget router.
+    const succ = K.AVAILABILITY_SUCCESSORS["openai/gpt-4o-mini"] || [];
+    ok(succ.length > 0 && succ.every((m) => !Object.hasOwn(RETIRING_MODELS, m)), `gpt-4o-mini's availability successors (${succ.join(", ")}) are not on the retirement table`);
+    ok(K.failoverChain("openai/gpt-4o-mini", "v1-chat-auto")[1] === "openai/gpt-6-luna", "on auto, gpt-4o-mini fails over to gpt-6-luna first");
+  }
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
   // and wire, the successor live on a tier we serve, gone from flex and pricing.
   for (const id of ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]) {

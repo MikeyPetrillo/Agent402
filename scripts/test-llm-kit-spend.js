@@ -86,7 +86,10 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   // OpenAI retired o3-mini and then o4-mini; both are served by gpt-5.6-terra.
   ok(retiredSuccessor("o3-mini", Date.now()) === "gpt-5.6-terra" && retiredSuccessor("o4-mini", Date.now()) === "gpt-5.6-terra", "o3-mini and o4-mini, both retired, are served by gpt-5.6-terra");
   ok(retiredSuccessor("o4-mini-2025-04-16", Date.now()) === "gpt-5.6-terra", "a dated o4-mini snapshot follows its family");
-  ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("o3", on) === null, "dated snapshots follow their family; other ids are untouched");
+  ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("gpt-5.6-terra", on) === null, "dated snapshots follow their family; other ids are untouched");
+  // o3 and o3-pro shut down 2026-12-11: served as themselves until then, then by the tier default.
+  const o3Before = Date.parse("2026-12-10T23:59:59Z"), o3On = Date.parse("2026-12-11T00:00:00Z");
+  ok(["o3", "o3-pro", "o3-2025-04-16"].every((k) => retiredSuccessor(k, o3Before) === null && retiredSuccessor(k, o3On) === "gpt-5.6-terra"), "o3, o3-pro and a dated o3 snapshot are served as themselves until 2026-12-11, then by gpt-5.6-terra");
 }
 
 console.log(`test-llm-kit-spend: ${n} assertions OK`);

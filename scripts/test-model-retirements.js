@@ -2,6 +2,8 @@
 // that appears in live code after its retirement date fails the build; before
 // the date the guard only reports how many days are left. Comments are not
 // matched: only quoted strings, which is where a request would name the model.
+// A retirement-table key ("id": { until: ... }) is not a use: it is what keeps
+// a caller naming the retired id served by its successor, so it stays.
 //
 //   node scripts/test-model-retirements.js
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -10,7 +12,7 @@ import { join } from "node:path";
 const RETIRING = [
   { vendor: "OpenAI", ids: ["gpt-image-1", "openai/gpt-image-1", "gpt-4o-2024-05-13", "gpt-4.1-nano-2025-04-14"], retires: "2026-10-23" },
   { vendor: "OpenAI", ids: ["gpt-image-1-mini", "openai/gpt-image-1-mini", "gpt-image-1.5", "openai/gpt-image-1.5"], retires: "2026-12-01" },
-  { vendor: "OpenAI", ids: ["gpt-5", "openai/gpt-5", "gpt-5-mini", "openai/gpt-5-mini", "gpt-5-nano", "openai/gpt-5-nano"], retires: "2026-12-11" },
+  { vendor: "OpenAI", ids: ["gpt-5", "openai/gpt-5", "gpt-5-mini", "openai/gpt-5-mini", "gpt-5-nano", "openai/gpt-5-nano", "gpt-5-pro", "openai/gpt-5-pro", "o3", "openai/o3", "o3-pro", "openai/o3-pro"], retires: "2026-12-11" },
   { vendor: "OpenAI", ids: ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"], retires: "2027-01-06" },
   { vendor: "Anthropic", ids: ["claude-sonnet-4-5-20250929", "anthropic/claude-sonnet-4-5-20250929"], retires: "2026-11-30" },
 ];
@@ -24,7 +26,8 @@ function sources(dir, out = []) {
   return out;
 }
 const files = sources(new URL("../src", import.meta.url).pathname);
-const text = new Map(files.map((f) => [f, readFileSync(f, "utf8")]));
+const RETIREMENT_KEY = /(["'`])[^"'`\n]+\1:\s*\{\s*until:/g;
+const text = new Map(files.map((f) => [f, readFileSync(f, "utf8").replace(RETIREMENT_KEY, "")]));
 const now = Date.now();
 let fail = 0, pass = 0;
 for (const r of RETIRING) {
