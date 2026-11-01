@@ -87,7 +87,7 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 | `POST /v1/judge/locate` | $0.002 | Preview. One `image` and up to 4 `targets`; each comes back with `present` (a probability), `found`, `box` and `boxConfidence`. A box is always returned, so read `found` first. |
 | `POST /v1/judge/long` | $0.02 | Preview. `/v1/judge`'s questions over a document of up to 900,000 bytes (about 262k tokens). |
 
-`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.13.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged on x402.
+`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.14.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged on x402.
 
 ## Retired model ids
 

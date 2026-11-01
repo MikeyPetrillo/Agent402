@@ -23,7 +23,7 @@ import { upstreamCosts } from "../../src/upstream-costs.js";
 
 const ENDPOINT = () => (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 // Pinned to the tested Jev version, as the main service is (JEV_PINNED).
-const MODEL = () => (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.13.0").trim();
+const MODEL = () => (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.14.0").trim();
 export const jevApiKey = () => (process.env.DECIDE_TYPESAFE_API_KEY || process.env.TYPESAFE_API_KEY || "").trim();
 // Decide may carry its own OpenRouter key, as llm.js does.
 export const decisionOneApiKey = () => (process.env.DECIDE_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || "").trim();

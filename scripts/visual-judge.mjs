@@ -18,7 +18,7 @@ const DEFAULT_PAGES = ["/", "/tools", "/pricing", "/reports", "/marketplace", "/
 const PAGES = arg("pages", "") ? arg("pages", "").split(",") : DEFAULT_PAGES;
 const KEY = (process.env.TYPESAFE_API_KEY || "").trim();
 if (!KEY) { console.error("visual-judge: set TYPESAFE_API_KEY"); process.exit(2); }
-const MODEL = (process.env.JEV_MODEL || "jev-1.13.0").trim();
+const MODEL = (process.env.JEV_MODEL || "jev-1.14.0").trim();
 
 const QUESTIONS = {
   // A code block or table that scrolls sideways is cut at its edge by design;

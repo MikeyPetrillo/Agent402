@@ -152,7 +152,7 @@ export function buildQuestions(questions, { allowBox = false } = {}) {
 // "jev-latest" moves when TypeSafe promotes a release, so a paid answer could
 // change model with no comparison on our side. The default backend is pinned
 // to the version we tested; "jev-preview" stays the buyer's explicit opt-in.
-export const JEV_PINNED = (process.env.JEV_MODEL || "jev-1.13.0").trim();
+export const JEV_PINNED = (process.env.JEV_MODEL || "jev-1.14.0").trim();
 export const upstreamJevModel = (m) => (m === "jev-preview" ? "jev-preview" : JEV_PINNED);
 async function callJev(body, fetchImpl = fetch) {
   return post(ENDPOINT, keyOf(), { ...body, model: upstreamJevModel(body.model) }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
@@ -483,7 +483,7 @@ export const JUDGE_TOOLS = [{
     // probabilities are keyed by level INDEX with a legend beside them, not an
     // array, and the model echoes its concrete version.
     example: {
-      model: "jev-1.13.0",
+      model: "jev-1.14.0",
       answers: {
         severity: {
           type: "score", score: 1.48, confidence: 0.27,

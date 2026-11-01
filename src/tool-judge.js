@@ -13,7 +13,7 @@ import { createSharedDailySpend } from "./shared-limits.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 // Pinned to the tested Jev version (see JEV_PINNED in src/tools/judge-kit.js).
-const MODEL = (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.13.0").trim();
+const MODEL = (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.14.0").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 
 export const NONE = "none_of_these";
