@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-02 (two new pro models, 2026-12-11 retirements)
+Gateway:
+- The pro tier serves openai/gpt-6.1-terra (and its -pro twin) and
+  moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.
+- gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro are served as
+  themselves until 2026-12-11, then by their named gpt-5.6 successors on the
+  same tier, the swap named in agent402_model_substituted.
+
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:
 - The server runs the x402 2.29 libraries (core, express, evm, svm,

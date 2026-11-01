@@ -422,6 +422,15 @@ export const TIERS = {
       // entry: prefix matching is boundary-aware, so gpt-6-sol does not admit it.
       // The prefix also admits gpt-6.1-sol-pro (same price).
       "openai/gpt-6.1-sol",
+      // gpt-6.1-terra (live 2026-10-26, 1M context, tools, flex endpoint):
+      // the 6.1 generation's mid model, listed below gpt-6.1-sol, so the pro
+      // caps leave it more output room under the clamp. The prefix also admits
+      // gpt-6.1-terra-pro (same price; reasoning mandatory, see REASONING_MODELS).
+      "openai/gpt-6.1-terra",
+      // Kimi K3.1 Pro (live 2026-10-23, 1M context, tools, text/image/video
+      // in): listed at gpt-6.1-sol's price, inside this tier's bound on both
+      // of its endpoints. Exact id: the moonshotai/ family is not admitted.
+      "moonshotai/kimi-k3.1-pro",
     ],
   },
   "v1-chat-premium": {
@@ -1992,6 +2001,8 @@ export const FLEX_MODELS = [
   "openai/gpt-6-luna", "openai/gpt-6-sol",
   // openai/flex endpoint tag on gpt-6.1-sol (live endpoints 2026-10-06).
   "openai/gpt-6.1-sol",
+  // openai/flex endpoint tag on gpt-6.1-terra and -pro (live endpoints 2026-11-01).
+  "openai/gpt-6.1-terra",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -2156,6 +2167,14 @@ export const REASONING_MODELS = [
   { prefix: "openai/gpt-6-sol", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   // gpt-6.1-sol and -pro: reasoning mandatory, no "none" (live catalog 2026-10-06).
   { prefix: "openai/gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // gpt-6.1-terra: reasoning default-on at medium, "none" supported; its -pro
+  // twin is mandatory with no "none" (live catalog 2026-11-01), so exact rows.
+  { id: "openai/gpt-6.1-terra", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  { id: "openai/gpt-6.1-terra-pro", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Kimi K3.1 Pro: reasoning default-on at "max", efforts none/low/high/max
+  // (live catalog 2026-11-01). Without this row a small budget is spent
+  // reasoning at "max" and comes back empty; pro injects "low".
+  { id: "moonshotai/kimi-k3.1-pro", efforts: ["none", "low", "high", "max"] },
   // Grok 4.5 / 4.6 / 4.7 (pro, via the x-ai/grok prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-24). Without a row a small
   // budget is spent reasoning at "high" and comes back empty.
