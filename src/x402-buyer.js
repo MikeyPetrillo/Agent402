@@ -11,7 +11,7 @@
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
-import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetwork } from "./avm-network.js";
 
 // What a seller sees in their logs when our router buys from them. Points at
 // the same page as the crawler's string: one place that says who we are.
@@ -133,6 +133,25 @@ export function avmBuyerConfigured() {
  *  slow seller a guaranteed dead-txn burn (the image-gen-premium lesson,
  *  sweep run 29974531159). algod rides the CF relay when configured — Nodely
  *  403s Railway's egress IP outright, so prod cannot reach the public bases. */
+/**
+ * The Algorand client scheme, reading a seller's legacy network id (the full
+ * genesis hash) as the CAIP-2 one. @x402/avm 2.29 refuses the legacy spelling
+ * when it picks the algod client and asset; the id selects only those, so it is
+ * folded on the way in. The core client still echoes the seller's own accept
+ * (`accepted`), so the payment matches the requirement the seller rebuilds.
+ */
+export function avmSchemeAcceptingLegacyNetwork(inner) {
+  const fold = (req) => (req && canonicalAvmNetwork(req.network) !== req.network ? { ...req, network: canonicalAvmNetwork(req.network) } : req);
+  return new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (prop === "createPaymentPayload") return (version, requirements, opts) => target.createPaymentPayload(version, fold(requirements), opts);
+      if (prop === "findDefaultAsset" && typeof target.findDefaultAsset === "function") return (asset, network) => target.findDefaultAsset(asset, canonicalAvmNetwork(network));
+      const v = Reflect.get(target, prop, receiver);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+}
+
 export async function getUpstreamBuyerAvm() {
   const mnemonic = (process.env.ALGORAND_UPSTREAM_BUYER_MNEMONIC || "").trim();
   if (!mnemonic) throw bad("Algorand upstream buyer wallet not configured (ALGORAND_UPSTREAM_BUYER_MNEMONIC) - this path pays an Algorand x402 seller and cannot run without a funded AVM spending wallet", 503);
@@ -149,7 +168,7 @@ export async function getUpstreamBuyerAvm() {
       : { server: (process.env.ALGORAND_ALGOD_URL || "https://mainnet-api.algonode.cloud").trim(), token: "" };
     const algorandClient = AlgorandClient.fromConfig({ algodConfig }).setDefaultValidityWindow(1000);
     const client = disableVendorSpendControls(new x402Client());
-    client.register("algorand:*", new ExactAvmScheme(toClientAvmSigner(Buffer.from(account.sk).toString("base64")), { algorandClient }));
+    client.register("algorand:*", avmSchemeAcceptingLegacyNetwork(new ExactAvmScheme(toClientAvmSigner(Buffer.from(account.sk).toString("base64")), { algorandClient })));
     return { client, http: new x402HTTPClient(client), address: account.addr.toString() };
   })();
   return avmBuyerPromise;

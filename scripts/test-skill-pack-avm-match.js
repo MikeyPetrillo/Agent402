@@ -22,7 +22,8 @@ import { readFileSync } from "node:fs";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+// The id every 402 carries and the server registers (src/avm-network.js).
+const { ALGORAND_MAINNET_CAIP2: ALGO } = await import("../src/avm-network.js");
 const PAYTO = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
 const FEE_PAYER = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const TREASURY = "0x" + "ab".repeat(20);

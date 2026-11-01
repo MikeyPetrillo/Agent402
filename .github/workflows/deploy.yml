@@ -4762,6 +4762,8 @@ jobs:
           t node scripts/test-payto-by-route.js
           # Every skill pack's Algorand accept matches the requirement the paid request rebuilds; a refusal for the buyer's balance is insufficient-funds to the buyer and funding (not a rail failure) to the sweep (offline, stub facilitator kinds)
           t node scripts/test-skill-pack-avm-match.js
+          # The Algorand buyer pays a seller on the legacy network id (full genesis hash): folded inside the scheme, the seller's own accept echoed (offline, stub algod)
+          t node scripts/test-avm-buyer-legacy-network.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
           # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
