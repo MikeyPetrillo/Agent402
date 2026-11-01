@@ -23,7 +23,6 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![npm](https://img.shields.io/npm/v/agent402-tollbooth?label=agent402-tollbooth)](https://www.npmjs.com/package/agent402-tollbooth)
 [![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![Smithery](https://img.shields.io/badge/Smithery-listed-blue)](https://smithery.ai/servers/mike-kq9d/agent402)
 
 ## What Agent402 is
 
@@ -107,7 +106,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
-🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
+🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Hosted MCP connector](https://agent402.tools/mcp)**
 
 ## Run it yourself in 30 seconds
 

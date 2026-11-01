@@ -507,7 +507,7 @@ export function mcpJsonResult(obj) {
 
 /**
  * Install one-liners agents can copy without leaving the connector.
- * Hosted URL is parameterized; npm / Claude Code / Cursor / Smithery notes
+ * Hosted URL is parameterized; npm / Claude Code / Cursor notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
 export const AGENT402_MCP_VERSION = "0.13.26";
@@ -548,7 +548,6 @@ export function mcpInstallHints(baseUrl) {
       },
     },
     npm: "npx -y agent402-mcp@0.13.26",
-    smithery: `Paste ${hosted} into the add-server form at https://smithery.ai/new. Submission is external; Agent402 does not auto-publish.`,
     maintainer: "Havok Holdings LLC",
   };
 }
