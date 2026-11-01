@@ -10,6 +10,11 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
+    # A version update proposes only releases at least 7 days old (#1823
+    # carried releases published hours earlier, one on the signing path).
+    # Security updates are not delayed by a cooldown.
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     groups:
