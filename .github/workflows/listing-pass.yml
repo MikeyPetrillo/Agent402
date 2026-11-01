@@ -101,7 +101,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0 @x402/svm@2.28.0 @solana/kit@8.5.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 @x402/svm@2.29.0 @solana/kit@8.5.0 viem@2.52.2
       - name: Download the purchase memory (records of the last 14 days)
         # The workflow token reads artifacts only; no wallet secret here. A
         # failure stops the job before the step that spends.

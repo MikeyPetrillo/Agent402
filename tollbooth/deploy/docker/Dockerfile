@@ -9,7 +9,7 @@ WORKDIR /app
 # Exact versions: the tollbooth release this tree builds and the x402 packages
 # the repository's lockfile tests it against (test-supply-chain-guards keeps
 # them equal), so a rebuild never picks up a release nobody here ran.
-RUN npm init -y >/dev/null 2>&1 && npm install agent402-tollbooth@0.10.8 @x402/express@2.28.0 @x402/core@2.28.0 @x402/evm@2.28.0
+RUN npm init -y >/dev/null 2>&1 && npm install agent402-tollbooth@0.10.8 @x402/express@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0
 ENV PORT=4021
 EXPOSE 4021
 # Reverse-proxy mode (needs TOLLBOOTH_UPSTREAM); serves the operator dashboard at /__tollbooth.
