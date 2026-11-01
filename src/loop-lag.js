@@ -117,14 +117,23 @@ export function lateTicksRecent(ms) { return recentLate.filter((x) => x >= ms).l
 // a stall line can say whether the time went to collection or to our code.
 // Before this a [loop-lag] line could not tell the two apart: an 18.5 s stall
 // on 2026-09-30 at no CPU-limit pressure left nothing to read. Kept as a small
-// ring of [startEpochMs, durationMs, kind]; summed over a stall's window.
-const GC_RING = 256;
+// [startEpochMs, durationMs, kind] for the last GC_KEEP_MS, summed over a
+// stall's window. Kept by age, not by count: a long block made of many short
+// scavenges filled a 256-entry ring, and the next pauses evicted ones inside
+// the window, so the stall under-reported its collector share (2026-11-01).
+// GC_RING_MAX bounds memory on a pathological pause rate.
+const GC_KEEP_MS = 120_000;
+const GC_RING_MAX = 8192;
 const gcEntries = [];
 let gcMinute = { ms: 0, majorMs: 0, count: 0 };
 const GC_MAJOR = perfConstants?.NODE_PERFORMANCE_GC_MAJOR ?? 4;
 export function noteGcEntry(startEpochMs, durationMs, kind) {
   gcEntries.push([startEpochMs, durationMs, kind]);
-  if (gcEntries.length > GC_RING) gcEntries.shift();
+  const horizon = Math.max(startEpochMs, Date.now()) - GC_KEEP_MS;
+  let drop = 0;
+  while (drop < gcEntries.length - 1 && gcEntries[drop][0] + gcEntries[drop][1] < horizon) drop++;
+  if (gcEntries.length - drop > GC_RING_MAX) drop = gcEntries.length - GC_RING_MAX;
+  if (drop) gcEntries.splice(0, drop);
   gcMinute.ms += durationMs; gcMinute.count++;
   if (kind === GC_MAJOR) gcMinute.majorMs += durationMs;
 }
