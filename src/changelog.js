@@ -2,6 +2,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-01",
+    title: "Payment libraries on x402 2.29, model \"default\" served",
+    items: [
+      "Payments: the server runs the x402 2.29 libraries (core, express, evm, svm, stellar, avm, fetch, extensions) and mppx 0.13.6, and agent402-mcp 0.13.26 runs x402 2.29 core, evm, svm and fetch. The 402 challenge a buyer echoes back is unchanged in size, and a free-tier tool's 402 body still leads with its proof-of-work option.",
+      "Payments: the router pays an Algorand seller that advertises the full genesis-hash network id, echoing the seller's own accept.",
+      "Gateway: model \"default\" on any chat wire is served as the tier's default model, exactly as an omitted model is, and the metered 402 quotes it that way.",
+    ],
+  },
+  {
     date: "2026-10-29",
     title: "The transactions page updates itself, every rail by name, a cleanup",
     items: [

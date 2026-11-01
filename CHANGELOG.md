@@ -6,6 +6,19 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-01 (x402 2.29 libraries, model "default")
+Payments:
+- The server runs the x402 2.29 libraries (core, express, evm, svm,
+  stellar, avm, fetch, extensions) and mppx 0.13.6, and agent402-mcp 0.13.26
+  runs x402 2.29 core, evm, svm and fetch. The 402 challenge a buyer echoes
+  back is unchanged in size, and a free-tier tool's 402 body still leads with
+  its proof-of-work option.
+- The router pays an Algorand seller that advertises the full genesis-hash
+  network id, echoing the seller's own accept.
+Gateway:
+- Model "default" on any chat wire is served as the tier's default model,
+  exactly as an omitted model is, and the metered 402 quotes it that way.
+
 ### 2026-10-29 (transactions page updates itself, cleanup)
 Surfaces:
 - An open /revenue page reads its figures again every minute while the tab
