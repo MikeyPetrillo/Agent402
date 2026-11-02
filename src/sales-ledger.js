@@ -733,6 +733,36 @@ export function claimedSettlements(since, until = Date.now()) {
   return qClaimedSettlements.all(since, until);
 }
 
+// The summaries' window passes (salesSummary, externalByNetwork) read the
+// ledger one page of row ids at a time: a page is a bounded piece of work
+// however many rows the window holds, so the Async exports yield between pages
+// on elapsed time (runStepsAsync) instead of holding the loop for a whole pass,
+// which a slow host stretched past 100 ms on 60k rows. Counts and sums add
+// across pages; the sync and Async exports walk the same pages in the same
+// order, so they return the same value. NOT INDEXED keeps each page on the
+// rowid range (the rowid stays usable); an index would walk the whole window
+// once per page.
+const SUMMARY_PAGE_IDS = 2000;
+const WINDOW_PAGE = "FROM sales NOT INDEXED WHERE id >= ? AND id < ? AND ts >= ?";
+// The first id the window can hold and the last id on the books when the walk
+// starts (a row recorded during the walk is read by the next summary).
+const qWindowIdSpan = db.prepare("SELECT (SELECT MIN(id) FROM sales WHERE ts >= ?) AS lo, (SELECT MAX(id) FROM sales) AS hi");
+let pageCostForTests = null;
+/** Test hook: extra work run after every page (a slow host, simulated). */
+export function _setSummaryPageCostForTests(fn) { pageCostForTests = typeof fn === "function" ? fn : null; }
+function* windowPages(since, readPage) {
+  const { lo, hi } = qWindowIdSpan.get(since) || {};
+  if (lo == null || hi == null) return;
+  for (let a = lo; a <= hi; a += SUMMARY_PAGE_IDS) {
+    readPage(a, Math.min(a + SUMMARY_PAGE_IDS, hi + 1));
+    if (pageCostForTests) pageCostForTests();
+    yield;
+  }
+}
+// GROUP BY's order (NULL first, then ascending), so a figure keyed by these
+// values keeps the key order the one-query read gave it.
+const groupOrder = (a, b) => (a === b ? 0 : a == null ? -1 : b == null ? 1 : a < b ? -1 : 1);
+
 // TRUE distinct counts. These must NOT be derived from the ranked lists below:
 // those carry LIMIT 20 / LIMIT 10 for display, so `list.length` silently
 // becomes min(actual, limit) and can never report more. That is exactly what
@@ -742,12 +772,14 @@ export function claimedSettlements(since, until = Date.now()) {
 // "20 of 627 tools had any external use" was the measurement that justified
 // retiring 40 tools and 29 skill packs on 2026-08-25. A ceiling that looks like
 // a count is worse than no count: it reads as a finding.
-const qExtDistinctSlugs = db.prepare(`
-  SELECT COUNT(DISTINCT slug) AS n
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`);
-const qExtDistinctPayers = db.prepare(`
-  SELECT COUNT(DISTINCT payer) AS n
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
+//
+// The window passes behind the summaries read the ledger one page of row ids at
+// a time (windowPages below), so these are gathered as sets across the pages
+// and counted once at the end: a distinct count is never added.
+const qExtDistinctSlugsPage = db.prepare(`
+  SELECT DISTINCT slug ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}`).pluck();
+const qExtDistinctPayersPage = db.prepare(`
+  SELECT DISTINCT payer ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`).pluck();
 const qExtByPayer = db.prepare(`
   SELECT payer, COUNT(*) AS sales, SUM(price_usd) AS revenue, MAX(ts) AS last_ts
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
@@ -762,9 +794,9 @@ const qExtBuyersBySlug = db.prepare(`
   FROM sales
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY slug ORDER BY buyers DESC, sales DESC LIMIT ?`);
-const qTotals = db.prepare(`
+const qTotalsPage = db.prepare(`
   SELECT internal, rail, COUNT(*) AS n, SUM(price_usd) AS usd
-  FROM sales WHERE ts >= ? GROUP BY internal, rail`);
+  ${WINDOW_PAGE} GROUP BY internal, rail`);
 const qFirstTs = db.prepare("SELECT MIN(ts) AS ts FROM sales");
 // Per-slug external paid aggregation over a half-open window [since, until) —
 // the bestsellers tool's data feed. COUNT(DISTINCT payer) skips NULLs, so
@@ -831,30 +863,33 @@ const qPayerByNetwork = db.prepare(`
 // per canonical rail. Row count is bounded by buyers x rails, and NULL payers
 // (SVM/Stellar rows carry none) are skipped exactly as COUNT(DISTINCT) did -
 // they still count toward settlements, never toward buyers.
-const qExternalByNetwork = db.prepare(`
+const qExternalByNetworkPage = db.prepare(`
   SELECT network, COUNT(*) AS n
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}
   GROUP BY network`);
-const qExternalByNetworkPayers = db.prepare(`
+const qExternalByNetworkPayersPage = db.prepare(`
   SELECT DISTINCT network, payer
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalByNetwork({ days = 30 } = {}) { return runSteps(externalByNetworkSteps({ days })); }
-/** externalByNetwork, one query per event-loop turn (same answer). */
+/** externalByNetwork, spread over event-loop turns on elapsed time (same answer). */
 export function externalByNetworkAsync({ days = 30 } = {}) { return runStepsAsync(externalByNetworkSteps({ days })); }
 function* externalByNetworkSteps({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
+  const byNetwork = new Map();
+  const payersByRail = new Map();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qExternalByNetworkPage.all(a, b, since)) byNetwork.set(r.network, (byNetwork.get(r.network) || 0) + r.n);
+    for (const r of qExternalByNetworkPayersPage.all(a, b, since)) {
+      const key = canonRail(r.network);
+      let set = payersByRail.get(key);
+      if (!set) payersByRail.set(key, (set = new Set()));
+      set.add(r.payer);
+    }
+  });
   const out = {};
   const row = (key) => out[key] || (out[key] = { settlements: 0, buyers: 0 });
-  for (const r of qExternalByNetwork.all(since)) row(canonRail(r.network)).settlements += r.n;
-  yield;
-  const payersByRail = new Map();
-  for (const r of qExternalByNetworkPayers.all(since)) {
-    const key = canonRail(r.network);
-    let set = payersByRail.get(key);
-    if (!set) payersByRail.set(key, (set = new Set()));
-    set.add(r.payer);
-  }
+  for (const network of [...byNetwork.keys()].sort(groupOrder)) row(canonRail(network)).settlements += byNetwork.get(network);
   for (const [key, set] of payersByRail) row(key).buyers = set.size;
   return out;
 }
@@ -1352,23 +1387,45 @@ export function externalDailyRevenue({ days = 60 } = {}) {
 }
 
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-// Each summary is a few full passes over the ledger window. The steps below
-// run them one per yield, so the sync export runs them back to back and the
-// Async export puts each on its own event-loop turn: a reader that builds a
-// shared figure in the background never holds the loop for all of them.
+// Each summary is a few passes over the ledger window, read a page at a time
+// (windowPages). The steps yield after every page and query: the sync export
+// runs them back to back, and the Async export yields to the event loop
+// whenever SUMMARY_SLICE_MS of work has run, so a turn holds at most one slice
+// plus one page whatever the host's speed (a count of steps per turn would
+// stretch with a slower host).
+const SUMMARY_SLICE_MS = 8;
 function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
 async function runStepsAsync(gen) {
+  let start = performance.now();
   let r = gen.next();
-  while (!r.done) { await new Promise((ok) => setImmediate(ok)); r = gen.next(); }
+  while (!r.done) {
+    if (performance.now() - start >= SUMMARY_SLICE_MS) {
+      await new Promise((ok) => setImmediate(ok));
+      start = performance.now();
+    }
+    r = gen.next();
+  }
   return r.value;
 }
 export function salesSummary({ days = 30, detailed = false } = {}) { return runSteps(salesSummarySteps({ days, detailed })); }
-/** salesSummary, one query per event-loop turn (same answer). */
+/** salesSummary, spread over event-loop turns on elapsed time (same answer). */
 export function salesSummaryAsync({ days = 30, detailed = false } = {}) { return runStepsAsync(salesSummarySteps({ days, detailed })); }
 function* salesSummarySteps({ days = 30, detailed = false } = {}) {
   const since = Date.now() - days * 86_400_000;
+  const groups = new Map();
+  const extPayers = new Set(), extSlugs = new Set();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qTotalsPage.all(a, b, since)) {
+      const key = `${r.internal}\u0000${r.rail}`;
+      const g = groups.get(key);
+      if (g) { g.n += r.n; g.usd += r.usd; } else groups.set(key, { internal: r.internal, rail: r.rail, n: r.n, usd: r.usd });
+    }
+    for (const p of qExtDistinctPayersPage.all(a, b, since)) extPayers.add(p);
+    for (const s of qExtDistinctSlugsPage.all(a, b, since)) extSlugs.add(s);
+  });
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
-  for (const r of qTotals.all(since)) {
+  const ordered = [...groups.values()].sort((x, y) => groupOrder(x.internal, y.internal) || groupOrder(x.rail, y.rail));
+  for (const r of ordered) {
     const side = r.internal ? "internal" : "external";
     // Free-tier (pow) rows count as usage, not revenue — price is what it
     // WOULD have cost; only money rails add to revenueUsd. Shared with the SQL
@@ -1383,13 +1440,11 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
   }
   totals.external.revenueUsd = +totals.external.revenueUsd.toFixed(4);
   totals.internal.revenueUsd = +totals.internal.revenueUsd.toFixed(4);
-  yield;
   const recordingSince = qFirstTs.get()?.ts ?? null;
   // Counts, never rosters or rankings: enough to show the market is real
   // without naming a single buyer or ranking a single tool.
-  const distinctExternalBuyers = qExtDistinctPayers.get(since)?.n ?? 0;
-  yield;
-  const distinctToolsSoldExternal = qExtDistinctSlugs.get(since)?.n ?? 0;
+  const distinctExternalBuyers = extPayers.size;
+  const distinctToolsSoldExternal = extSlugs.size;
   const base = { days, persistent: salesPersistent, recordingSince, totals, distinctExternalBuyers, distinctToolsSoldExternal };
   if (!detailed) return base;
   // The payer ranking is read only for the detailed view that shows it.
