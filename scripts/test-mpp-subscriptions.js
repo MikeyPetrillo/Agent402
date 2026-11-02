@@ -27,6 +27,7 @@ import {
   subscriptionFeePayerPolicy, SUB_FEE_PAYER_MAX_GAS,
   isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo,
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
+  guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 
@@ -130,7 +131,7 @@ function makeEngine(opts = {}) {
     findRenewalOnChain: async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
     chargePeriod: async (rec, { periodIndex }) => {
       calls.charge++;
-      const r = chargeBehaviour(rec, periodIndex);
+      const r = await chargeBehaviour(rec, periodIndex);
       if (r instanceof Error) throw r;
       // A real renewal advances mppx's own counter; mirror that so the engine
       // reads the authority rather than trusting our return value.
@@ -719,6 +720,118 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok((await engine._readRec(real.subId)).status === "active", "nor a real subscriber inside the paid period of a cancel");
   const again = await engine.sweepStaleCanaries({ olderThanMs: 30 * 60 * 1000 });
   ok(again.swept.length === 0, "the sweep is idempotent");
+}
+
+// ---------------------------------------------------------------------------
+// Group 9c: a canary cancel that lands while a renewal is in flight. mppx 0.17
+// reads the private key before signing and, once the transfer is sent,
+// rewrites it (retainAccessKey: under the lookup key and the address). A
+// cancel's destroy that runs between those two steps must stay destroyed.
+// ---------------------------------------------------------------------------
+{
+  const h = makeEngine({ name: "canary-race" });
+  const { engine } = h;
+  const privKeysFor = (addr) => Object.values(engine._store._snapshot()).filter((v) => v && typeof v === "object" && v.privateKey && String(v.accessKeyAddress || "").toLowerCase() === String(addr).toLowerCase()).length;
+  const offer = await engine.mintOffer({ product: CANARY_PRODUCT_KEY, target: "canary-race", canary: true });
+  const { header } = await signCredential(Challenge.deserialize(offer.header));
+  const sub = await engine.activateFromCredential(header);
+  const rec = await engine._readRec(sub.subId);
+  const addr = rec.accessKeyAddress;
+  ok(privKeysFor(addr) > 0, "control: the canary's access key is held before the race");
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let signedIn = null;
+  const inSend = new Promise((r) => { signedIn = r; });
+  // What 0.17's submitSubscriptionPayment does, in its order: read the key,
+  // sign and send (the gate), then retain the key it read.
+  h.setCharge(async (r) => {
+    const mppxRec = await engine._subStore.get(r.mppxSubscriptionId);
+    const stored = await engine._subStore.getAccessKeyByAddress(mppxRec.accessKey.accessKeyAddress, mppxRec.accessKey.keyToken);
+    signedIn();
+    await gate;
+    await engine._subStore.retainAccessKey(mppxRec.lookupKey, stored);
+    return { reference: "0xracetx" };
+  });
+  // The harness's activation writes the record on the 30-day period.
+  advance(PERIOD + 1000);
+  const pulling = engine.refreshStatus(sub.subId);
+  const early = await Promise.race([inSend.then(() => "sending"), pulling.then((s) => `returned ${s}`)]);
+  ok(early === "sending", `control: the renewal reached its send (${early})`);
+  const closed = await engine.cancel(sub.subId, sub.manageToken);
+  ok(closed.status === "canceled" && privKeysFor(addr) === 0, "the cancel closes the record and destroys the key while the renewal is still sending");
+  release();
+  await pulling;
+  ok(privKeysFor(addr) === 0, `the renewal finishing after the cancel does not write the private key back (${privKeysFor(addr)} copies)`);
+  ok((await engine._readRec(sub.subId)).status === "canceled", "and the record stays canceled");
+  // The same race against the stale-canary sweep.
+  const offer2 = await engine.mintOffer({ product: CANARY_PRODUCT_KEY, target: "canary-race-2", canary: true });
+  const sub2 = await engine.activateFromCredential((await signCredential(Challenge.deserialize(offer2.header))).header);
+  const addr2 = (await engine._readRec(sub2.subId)).accessKeyAddress;
+  let release2; const gate2 = new Promise((r) => { release2 = r; });
+  let in2; const inSend2 = new Promise((r) => { in2 = r; });
+  h.setCharge(async (r) => {
+    const mppxRec = await engine._subStore.get(r.mppxSubscriptionId);
+    const stored = await engine._subStore.getAccessKeyByAddress(mppxRec.accessKey.accessKeyAddress, mppxRec.accessKey.keyToken);
+    in2(); await gate2;
+    await engine._subStore.retainAccessKey(mppxRec.lookupKey, stored);
+    return { reference: "0xracetx2" };
+  });
+  advance(PERIOD + 1000);
+  const pulling2 = engine.refreshStatus(sub2.subId);
+  ok(await Promise.race([inSend2.then(() => "sending"), pulling2.then((s) => `returned ${s}`)]) === "sending", "control: the second renewal reached its send");
+  const swept = await engine.sweepStaleCanaries({ olderThanMs: 1 });
+  ok(swept.swept.some((s) => s.subId === sub2.subId) && privKeysFor(addr2) === 0, "the sweep closes it mid-renewal and destroys the key");
+  release2();
+  await pulling2;
+  ok(privKeysFor(addr2) === 0, "and the late rewrite does not bring it back");
+  // A key never destroyed is still rewritten as before (a real subscriber's
+  // renewal keeps the key it bills with).
+  const offer3 = await engine.mintOffer({ product: "domain-monitor", target: "race-real.example" });
+  const sub3 = await engine.activateFromCredential((await signCredential(Challenge.deserialize(offer3.header))).header);
+  const addr3 = (await engine._readRec(sub3.subId)).accessKeyAddress;
+  const before3 = privKeysFor(addr3);
+  h.setCharge(async (r) => {
+    const mppxRec = await engine._subStore.get(r.mppxSubscriptionId);
+    const stored = await engine._subStore.getAccessKeyByAddress(mppxRec.accessKey.accessKeyAddress, mppxRec.accessKey.keyToken);
+    await engine._subStore.retainAccessKey(mppxRec.lookupKey, stored);
+    return { reference: "0xrealtx" };
+  });
+  advance(PERIOD);
+  ok(await engine.refreshStatus(sub3.subId) === "active", "a real subscriber renews");
+  ok(privKeysFor(addr3) >= before3 && privKeysFor(addr3) > 0, "and its key is retained by the renewal as mppx writes it");
+  const markers = () => engine._store._keys().filter((k) => k.startsWith(KEY_GONE_PREFIX));
+  // The first race's marker went with the offer sweep a 30-day period later.
+  ok(markers().length === 1 && markers()[0] === `${KEY_GONE_PREFIX}${addr2}`, `the swept key's marker is held (${markers().length})`);
+  advance(8 * 24 * 60 * 60 * 1000);
+  await engine.mintOffer({ product: "domain-monitor", target: "after-markers.example" });
+  ok(markers().length === 0, "markers are dropped by the offer sweep once far past any renewal");
+
+  // The view itself, on its own store: put and update are both refused for a
+  // marked address, a destroy landing between put's check and its write is
+  // undone, and nothing else is touched.
+  const raw = createFileStore(join(tmp, "guard.json"));
+  const view = guardDestroyedKeys(raw);
+  const k = { accessKeyAddress: privateKeyToAccount(generatePrivateKey()).address.toLowerCase(), keyType: "secp256k1", privateKey: generatePrivateKey() };
+  await view.put("tempo:subscription:access-key:x", k);
+  ok(!!(await raw.get("tempo:subscription:access-key:x")), "control: an unmarked key is written");
+  await raw.put(`${KEY_GONE_PREFIX}${k.accessKeyAddress}`, { at: new Date(clock).toISOString() });
+  await raw.delete("tempo:subscription:access-key:x");
+  await view.put("tempo:subscription:access-key:y", k);
+  await view.update("tempo:subscription:access-key:z", () => ({ op: "set", value: k, result: k }));
+  ok(!(await raw.get("tempo:subscription:access-key:y")) && !(await raw.get("tempo:subscription:access-key:z")), "a marked key is written by neither put nor update");
+  await view.put("tempo:subscription:record:r", { subscriptionId: "r", accessKey: { accessKeyAddress: k.accessKeyAddress } });
+  ok(!!(await raw.get("tempo:subscription:record:r")), "a record that names the address but holds no private key is written");
+  const k2 = { ...k, accessKeyAddress: privateKeyToAccount(generatePrivateKey()).address.toLowerCase() };
+  const racing = Object.create(raw);
+  let first = true;
+  racing.get = async (key) => {
+    // The destroy lands right after put's first check.
+    if (key === `${KEY_GONE_PREFIX}${k2.accessKeyAddress}` && first) { first = false; return null; }
+    if (key === `${KEY_GONE_PREFIX}${k2.accessKeyAddress}`) return { at: "x" };
+    return raw.get(key);
+  };
+  await guardDestroyedKeys(racing).put("tempo:subscription:access-key:w", k2);
+  ok(!(await raw.get("tempo:subscription:access-key:w")), "a destroy between the check and the write is undone");
 }
 
 // ---------------------------------------------------------------------------
