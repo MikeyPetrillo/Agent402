@@ -89,7 +89,13 @@ const SUPPORTED = {
   ],
   extensions: [], signers: {},
 };
-const TX = `0x${"c1".repeat(32)}`;
+// Unique to this run: with REDIS_URL inherited, a recovered transaction is
+// claimed in the shared Redis for 30 days, so a fixed hash another run or
+// suite claimed there would read as already served.
+const TX = `0x${randomBytes(32).toString("hex")}`;
+// The pending book below is this run's own: with STATE_DATABASE_URL inherited
+// it would be the shared Postgres document every earlier run also booked into.
+delete process.env.STATE_DATABASE_URL;
 const settleOk = (init) => { const b = JSON.parse(init.body); return json(200, { success: true, transaction: TX, network: b.paymentRequirements.network, payer: b.paymentPayload.payload.authorization.from }); };
 
 console.log("part 1: the client and the hook");
