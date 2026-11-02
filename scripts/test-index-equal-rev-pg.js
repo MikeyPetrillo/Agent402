@@ -37,23 +37,31 @@ try {
   // ---- equal revision, different content, either write order ---------------
   // Two copies of one revision, written A-then-B on one origin and B-then-A
   // on the other. Each pair is chosen so the FIRST writer's copy has the
-  // higher hash: "last write wins" would keep the other copy on both. And
-  // so a language collation orders the two hashes the other way (as an
-  // en_US database compares text by default): the SQL must compare bytes,
-  // as JavaScript does, or the table and the pull disagree.
+  // higher hash: "last write wins" would keep the other copy on both. And,
+  // where the database's default collation is a language one (en_US, as a
+  // stock image is), so that collation orders the two hashes the other way:
+  // the SQL must compare bytes, as JavaScript does, or the table and the
+  // pull disagree.
   const R = 1_700_000_000_000;
   const P = "https://seller-p.example", Q = "https://seller-q.example";
   const { persistedHashOf } = A.__testSlices();
-  const lang = new Intl.Collator("en-US");
-  const firstWins = (o) => {
-    for (let i = 1; i < 10_000; i++) {
+  const candidates = (o) => {
+    const out = [];
+    for (let i = 1; i < 2_000; i++) {
       const first = `$0.${10_000 + i}`, second = "$0.0100";
       const h1 = persistedHashOf(o, entry(first, R)), h2 = persistedHashOf(o, entry(second, R));
-      if (h1 > h2 && lang.compare(h1, h2) < 0) return [first, second];
+      if (h1 > h2) out.push([first, second, h1, h2]);
     }
-    throw new Error("no pair found");
+    return out;
   };
-  const [pFirst, pSecond] = firstWins(P), [qFirst, qSecond] = firstWins(Q);
+  const firstWins = async (o) => {
+    const all = candidates(o);
+    const r = await sdb.stateQuery("SELECT i FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS u(a, b, i) WHERE a < b LIMIT 1", [all.map((c) => c[2]), all.map((c) => c[3])]);
+    const pick = r.rows.length ? all[Number(r.rows[0].i) - 1] : all[0];
+    if (!r.rows.length) console.log("# the database collates these hashes bytewise; the collation case is not exercised here");
+    return pick.slice(0, 2);
+  };
+  const [pFirst, pSecond] = await firstWins(P), [qFirst, qSecond] = await firstWins(Q);
   A.__testSeedCache([[P, entry(pFirst, R)], [Q, entry(qSecond, R)]]);
   B.__testSeedCache([[P, entry(pSecond, R)], [Q, entry(qFirst, R)]]);
   // The upsert alone (no pull first). It deletes the rows of origins it is not
