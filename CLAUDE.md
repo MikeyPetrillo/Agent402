@@ -287,7 +287,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`. The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`,
   `server.describe` and the unpaid 402 body; the access line names coins and wires from the rails
-  list and the MPP config. `FRONT_DOOR_402=off` leaves the 402 body as the offer alone.
+  list and the MPP config. The 402 body carries it only with `FRONT_DOOR_402=on` (exactly); otherwise the body is the offer alone.
 - **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)

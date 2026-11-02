@@ -10172,11 +10172,12 @@ if (FREE_MODE) {
       // A first-contact unpaid 402 leads its body with the front door
       // (src/front-door.js): the access line /llms.txt and /agents.md lead
       // with, and the /agents.md link (the recovery lines live there only).
-      // FRONT_DOOR_402=off leaves the body as the offer alone.
+      // Opt-in: only FRONT_DOOR_402=on adds it; otherwise the body is the
+      // offer alone.
       // Body only (the PAYMENT-REQUIRED header is untouched), behind the
       // proof-of-work altPayment where that is offered, and never on a
       // refused payment or proof, which keeps its own explanation.
-      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 !== "off") {
+      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 === "on") {
         const origJson = res.json.bind(res);
         res.json = (body) => {
           if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.frontDoor) {
