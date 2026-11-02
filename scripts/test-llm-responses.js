@@ -265,6 +265,24 @@ delete process.env.OPENROUTER_API_KEY;
   ok(pre?.statusCode === 400 && /assistant prefill/.test(pre.message), "Responses: a trailing assistant message on Haiku 5.5 is a 400 before upstream");
   ok(refused({ model: H5, input: [{ role: "user", content: "hi" }, { type: "function_call", name: "f", call_id: "c1", arguments: "{}" }, { type: "function_call_output", call_id: "c1", output: "ok" }] }) === null, "Responses: a function_call_output last is not a prefill");
   ok(refused({ model: "anthropic/claude-haiku-4.5", input: "hi", temperature: 0.2 }) === null && refused({ model: "openai/gpt-6-astra", input: "hi", temperature: 0.2 }, "v1-chat-premium")?.statusCode === 400, "Responses: Haiku 4.5 keeps temperature; GPT-6 Astra's sampling refusal now holds on this wire too");
+  // Every trigger, both ways: a metered call naming no model is served by the
+  // compat model, the same call naming 5.5 is the 400 (one ctx feeds both).
+  const { TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  const H4 = T["v1-chat-metered"].defaultModelCompat;
+  ok(T["v1-chat-metered"].defaultModel === H5 && H4 === "anthropic/claude-haiku-4.5", "Responses: the metered default and compat models are the ones these checks read");
+  const triggers = [
+    ["temperature", { temperature: 0.2 }],
+    ["top_p", { top_p: 0.5 }],
+    ["top_k", { top_k: 5 }],
+    ["prefill", { input: [{ role: "user", content: "hi" }, { role: "assistant", content: "Sure," }] }],
+    ["fixed reasoning budget", { reasoning: { max_tokens: 32 } }],
+  ];
+  for (const [name, extra] of triggers) {
+    const body = { input: "hi", max_output_tokens: 64, ...extra };
+    let served = null; try { served = validateResponsesRequest(body, "v1-chat-metered").body.model; } catch (e) { served = `${e.statusCode} ${e.message}`; }
+    const e = refused({ ...body, model: H5 }, "v1-chat-metered");
+    ok(served === H4 && e?.statusCode === 400, `Responses, ${name}: no model -> ${H4} (${served}); naming ${H5} -> 400 (${e?.statusCode})`);
+  }
 }
 
 // ---- a reasoning budget is checked against the cap, and follows the clamp ----

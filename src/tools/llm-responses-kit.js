@@ -112,11 +112,20 @@ export function validateResponsesRequest(input, tierSlug) {
   let model = canonicalModel(input.model);
   const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = (() => {
+    const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
+    return {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant",
+      reasoningBudget: input.reasoning?.max_tokens !== undefined,
+    };
+  })();
   if (!isRouted) {
     refuseCostVariants(model);
     if (!model && tier.defaultModel) { // see llm-messages-kit: serve the tier default, never refuse a missing model
-      const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
-      model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant", reasoningBudget: input.reasoning?.max_tokens !== undefined });
+      model = defaultModelFor(tier, paramCtx);
       defaultedModel = model;
     }
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
@@ -186,14 +195,7 @@ export function validateResponsesRequest(input, tierSlug) {
   // Parameters the model does not take (GPT-6 Astra sampling; Claude Haiku 5
   // sampling and assistant prefill): named before any upstream call, as on the
   // chat and Messages wires.
-  if (!isRouted) {
-    const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
-    refuseUnsupportedParams(model, {
-      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
-      endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant",
-      reasoningBudget: input.reasoning?.max_tokens !== undefined,
-    });
-  }
+  if (!isRouted) refuseUnsupportedParams(model, paramCtx);
   for (const k of ["temperature", "top_p", "metadata", "tool_choice", "parallel_tool_calls", "truncation", "text"]) if (input[k] !== undefined) body[k] = input[k];
   // tool_choice mirrors the tools guard (function tools only): Responses wire
   // is "none"|"auto"|"required" or {type:"function", name} - a hosted-tool

@@ -153,14 +153,24 @@ export function validateMessagesRequest(input, tierSlug) {
   let model = canonicalModel(input.model);
   const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = (() => {
+    const msgs = Array.isArray(input.messages) ? input.messages : [];
+    return {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant",
+      reasoningBudget: input.thinking?.type === "enabled",
+      effortField: "effort",
+    };
+  })();
   if (!isRouted) {
     refuseCostVariants(model);
     // No model named: serve the tier's default instead of refusing (30 days of
     // real callers: 82 refusals for a missing "model" across the LLM wires -
     // agents posting to a tier route expect that tier's model, 2026-08-28).
     if (!model && tier.defaultModel) {
-      const msgs = Array.isArray(input.messages) ? input.messages : [];
-      model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant", reasoningBudget: input.thinking?.type === "enabled" });
+      model = defaultModelFor(tier, paramCtx);
       defaultedModel = model;
     }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
@@ -221,12 +231,7 @@ export function validateMessagesRequest(input, tierSlug) {
   // silently upstream), refuses an assistant prefill and a fixed thinking
   // budget: named here, before any upstream call (refuseUnsupportedParams).
   if (!isRouted) {
-    refuseUnsupportedParams(model, {
-      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
-      endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
-      reasoningBudget: input.thinking?.type === "enabled",
-      effortField: "effort",
-    });
+    refuseUnsupportedParams(model, paramCtx);
   }
   const strictSampling = isPostOpus46(model);
   if (strictSampling) {

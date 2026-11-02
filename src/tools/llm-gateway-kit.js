@@ -353,7 +353,9 @@ export const TIERS = {
     maxPrice: { prompt: 2.5, completion: 8 }, // catastrophe bound above the priciest family prefix
     // Server-chosen failover after the requested model's own successor, as on
     // nano: a base call whose model has no available host is answered by one
-    // of these (both priced under every base model) instead of an error.
+    // of these instead of an error. Each fallback is re-clamped at its own
+    // price (clampToMargin runs per link), so a dearer one gets a smaller
+    // output budget or is skipped, never served at a loss.
     fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-chat"],
     prefixes: [
       // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
@@ -432,8 +434,10 @@ export const TIERS = {
       // gpt-6.1-terra-pro (same price; reasoning mandatory, see REASONING_MODELS).
       "openai/gpt-6.1-terra",
       // Kimi K3.1 Pro (live 2026-10-23, 1M context, tools, text/image/video
-      // in): listed at gpt-6.1-sol's price, inside this tier's bound on both
-      // of its endpoints. Exact id: the moonshotai/ family is not admitted.
+      // in): its standard endpoint lists at gpt-6.1-sol's standard price; its
+      // high-speed endpoint lists at this tier's completion bound, so
+      // provider.max_price still admits it. Exact id: the moonshotai/ family
+      // is not admitted.
       "moonshotai/kimi-k3.1-pro",
     ],
   },
@@ -1172,19 +1176,39 @@ export function adaptiveOnlyClaude(model) {
   return /^anthropic\/claude-haiku-(?:[5-9]|\d{2,})(?=[.:-]|$)/.test(canonicalModel(model).toLowerCase());
 }
 
-/** One refusal for the parameters a model does not take, shared by the chat,
- *  Messages and Responses wires: a knob the upstream would drop silently, or
- *  refuse with an unexplained upstream error, is named in a 400 before any
- *  upstream call (a 400 cancels settlement, so nothing is charged).
- *  `effortField` is how this wire spells the depth control. */
 /** The model a request that names none is served: the tier's default, or its
  *  defaultModelCompat when the request carries a parameter the default refuses
- *  (refuseUnsupportedParams), so a default call is never refused for it. */
+ *  (refuseUnsupportedParams), so a default call is never refused for it. Each
+ *  wire builds ONE ctx and passes the same object here and to
+ *  refuseUnsupportedParams, so the two can never read the request apart. */
 export function defaultModelFor(tier, ctx = {}) {
   if (!tier?.defaultModel) return null;
   if (!tier.defaultModelCompat) return tier.defaultModel;
   try { refuseUnsupportedParams(tier.defaultModel, ctx); return tier.defaultModel; }
   catch { return tier.defaultModelCompat; }
+}
+
+/** The plain clause every machine-readable surface carries beside a tier's
+ *  default when the tier names a compat model; null otherwise. Names come
+ *  from the tier object, never typed twice. */
+export function defaultModelCompatNote(tier) {
+  if (!tier?.defaultModel || !tier.defaultModelCompat) return null;
+  return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget) is served by ${tier.defaultModelCompat}.`;
+}
+
+/** One refusal for the parameters a model does not take, shared by the chat,
+ *  Messages and Responses wires: a knob the upstream would drop silently, or
+ *  refuse with an unexplained upstream error, is named in a 400 before any
+ *  upstream call (a 400 cancels settlement, so nothing is charged).
+ *  `effortField` is how this wire spells the depth control. */
+/** The chat wire's refuseUnsupportedParams context, read once from the body. */
+function chatParamCtx(input) {
+  const msgs = Array.isArray(input.messages) ? input.messages : [];
+  return {
+    sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+    endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant",
+    reasoningBudget: input.reasoning?.max_tokens !== undefined,
+  };
 }
 
 export function refuseUnsupportedParams(model, { sampling = {}, endsWithAssistant = false, reasoningBudget = false, effortField = "reasoning.effort" } = {}) {
@@ -1805,10 +1829,12 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     throw bad('"quality" applies only when the gateway picks the model - omit "model" (or send "auto") to use it');
   }
   let defaultedModel = null;
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = chatParamCtx(input);
   if (!model && tier.defaultModel) {
     // serve the tier default, never refuse a missing model (2026-08-28)
-    const msgs = Array.isArray(input.messages) ? input.messages : [];
-    model = defaultModelFor(tier, { sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k }, endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant", reasoningBudget: input.reasoning?.max_tokens !== undefined });
+    model = defaultModelFor(tier, paramCtx);
     defaultedModel = model;
   }
   if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
@@ -1889,11 +1915,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // knob that did nothing. Say so, the way the Messages wire already does for
   // the post-Opus-4.6 Claude models. Claude Haiku 5 adds top_k, an assistant
   // prefill and a fixed reasoning budget (adaptiveOnlyClaude).
-  refuseUnsupportedParams(model, {
-    sampling: { temperature: body.temperature, top_p: body.top_p, top_k: input.top_k },
-    endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
-    reasoningBudget: input.reasoning?.max_tokens !== undefined,
-  });
+  refuseUnsupportedParams(model, paramCtx);
   // Buyer reasoning preference (changes the answer -> normalized body).
   const reasoning = validateReasoning(input, tier);
   if (reasoning !== undefined) body.reasoning = reasoning;

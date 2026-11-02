@@ -1873,6 +1873,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(prefill.model === H4, `no model + an assistant prefill -> ${H4} (${prefill.model})`);
     let named = null; try { validateRequest({ ...base, model: H5, temperature: 0.2 }, "v1-chat-metered", { clamp: false }); } catch (e) { named = e; }
     ok(named?.statusCode === 400, "a caller naming Haiku 5.5 with temperature still gets the explaining 400");
+    // Every trigger, both ways: the default call is served by the compat model,
+    // the same call naming 5.5 is the 400 (one ctx feeds both decisions).
+    const triggers = [
+      ["temperature", { temperature: 0.2 }],
+      ["top_p", { top_p: 0.5 }],
+      ["top_k", { top_k: 5 }],
+      ["prefill", { messages: [...m1, { role: "assistant", content: "Sure" }] }],
+      ["reasoning budget", { reasoning: { max_tokens: 32 } }],
+    ];
+    for (const [name, extra] of triggers) {
+      const d = validateRequest({ ...base, ...extra }, "v1-chat-metered", { clamp: false });
+      let e = null; try { validateRequest({ ...base, ...extra, model: H5 }, "v1-chat-metered", { clamp: false }); } catch (x) { e = x; }
+      ok(d.model === H4 && e?.statusCode === 400, `chat wire, ${name}: no model -> ${H4} (${d.model}); naming ${H5} -> 400 (${e?.statusCode})`);
+    }
     ok(K.defaultModelFor(M, {}) === H5 && K.defaultModelFor({ defaultModel: H5 }, { sampling: { temperature: 1 } }) === H5 && K.defaultModelFor({}, {}) === null, "defaultModelFor: compat only when the tier names one");
     const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
     const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");

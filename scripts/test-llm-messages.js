@@ -383,6 +383,23 @@ delete process.env.OPENROUTER_API_KEY;
   ok(bud?.statusCode === 400 && /adaptive/.test(bud.message) && /effort/.test(bud.message), "Messages: thinking.budget_tokens on Haiku 5.5 is a 400 naming effort");
   ok(validateMessagesRequest({ model: H5, max_tokens: 64, messages: m, thinking: { type: "adaptive" }, effort: "low" }, "v1-chat").body.effort === "low", "Messages: Haiku 5.5 takes adaptive thinking and effort");
   ok(refused({ max_tokens: 64, messages: m, temperature: 0.2 }, "v1-chat-metered") === null, "Messages: a metered call with no model keeps temperature (the default stays Haiku 4.5)");
+  // Every trigger, both ways: a metered call naming no model is served by the
+  // compat model, the same call naming 5.5 is the 400 (one ctx feeds both).
+  const M = TIERS["v1-chat-metered"];
+  ok(M.defaultModel === H5 && M.defaultModelCompat === H4, "Messages: the metered default and compat models are the ones these checks read");
+  const triggers = [
+    ["temperature", { temperature: 0.2 }],
+    ["top_p", { top_p: 0.5 }],
+    ["top_k", { top_k: 5 }],
+    ["prefill", { messages: [...m, { role: "assistant", content: "Sure," }] }],
+    ["fixed thinking budget", { max_tokens: 4096, thinking: { type: "enabled", budget_tokens: 1024 } }],
+  ];
+  for (const [name, extra] of triggers) {
+    const body = { max_tokens: 64, messages: m, ...extra };
+    let served = null; try { served = validateMessagesRequest(body, "v1-chat-metered").body.model; } catch (e) { served = `${e.statusCode} ${e.message}`; }
+    const e = refused({ ...body, model: H5 }, "v1-chat-metered");
+    ok(served === H4 && e?.statusCode === 400, `Messages, ${name}: no model -> ${H4} (${served}); naming ${H5} -> 400 (${e?.statusCode})`);
+  }
   const tr = { model: H5, max_tokens: 64, messages: [...m, { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "f", input: {} }] }, { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] }], tools: [{ name: "f", input_schema: { type: "object" } }] };
   ok(refused(tr) === null, "Messages: a tool round trip ending in a tool_result is not a prefill");
   const v4 = validateMessagesRequest({ model: H4, max_tokens: 4096, messages: [...m, { role: "assistant", content: "Sure," }], temperature: 0.2, thinking: { type: "enabled", budget_tokens: 1024 } }, "v1-chat");
