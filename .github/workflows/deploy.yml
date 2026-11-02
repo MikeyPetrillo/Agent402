@@ -6900,3 +6900,38 @@ jobs:
           done
           echo "::error::decide deployment did not reach SUCCESS in 15 minutes (last status: $LAST). The main app is live."
           exit 1
+
+      # The new build's 402s against Coinbase's Bazaar validator, read-only and
+      # keyless (the heartbeat repeats it on a schedule). A route the validator
+      # reads INVALID on every one of three runs fails this job, so a release
+      # that breaks a listing is red on its own run. A validator that cannot be
+      # read (exit 2, CDP-side) warns instead: it gives no verdict on our build.
+      - name: Bazaar listing validation on the new build
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          BEST=9
+          for i in 1 2 3; do
+            set +e
+            OUT=$(TARGET_URL=https://agent402.tools node scripts/bazaar-validate.js 2>&1); CODE=$?
+            set -e
+            echo "--- run $i: exit $CODE"
+            echo "$OUT" | tail -20
+            if [ "$CODE" -lt "$BEST" ]; then BEST=$CODE; fi
+            if [ "$CODE" = "0" ]; then break; fi
+            if [ "$i" -lt 3 ]; then sleep 60; fi
+          done
+          case "$BEST" in
+            0) echo "Every flagship route validates on the new build." ;;
+            2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
+            *) echo "::error::A flagship route reads INVALID on all three Bazaar validator runs against the new build."; exit 1 ;;
+          esac
