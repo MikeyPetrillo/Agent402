@@ -4785,6 +4785,8 @@ jobs:
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js
+          # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
+          t node scripts/test-svm-funding-refusal.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
           # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream)

@@ -1961,6 +1961,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     registerArcContractWalletRouteGate(server, contractOkRoutes);
     console.log(`Arc: contract-wallet signatures accepted (ARC_CONTRACT_WALLETS=on) on ${contractOkRoutes.size} pure-CPU routes (no model, paid upstream, spend-first, lasting effect or identity binding)`);
   }
+  // A Solana wallet refused for funding several times in a row is answered
+  // from the funding hold, without the facilitator, until its Retry-After
+  // passes (src/svm-funding-refusal.js).
+  if (svmCaip2.length) {
+    const { registerSvmFundingHold } = await import("./svm-funding-refusal.js");
+    const { rememberHint } = await import("./verify-hint.js");
+    registerSvmFundingHold(server, {
+      remember: (payload, h) => rememberHint(payload, h),
+      count: (network, reason, held) => toolFailureMonitor().noteFundingRefusal({ network, reason, held }),
+    });
+  }
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -2673,14 +2684,21 @@ export function railStatus() {
 // (src/verify-hint.js): read their USDC balance on Base (bounded, <= 1.5 s,
 // burst reads coalesced into multicall batches) and remember a plain-language hint under the failed
 // CREDENTIAL's key, which the 402 middleware merges in for that header only.
-async function recordVerifyFailure(ctx, reason) {
+async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
   let bucket = "unknown";
   try {
     const amount = Number(ctx?.requirements?.amount);
     const priceUsd = Number.isFinite(amount) ? amount / 1e6 : null;
     const { noteVerifyFailure } = await import("./verify-hint.js");
-    const noted = await noteVerifyFailure({ paymentPayload: ctx?.paymentPayload, network: ctx?.requirements?.network, reason, priceUsd });
+    const noted = await noteVerifyFailure({ paymentPayload: ctx?.paymentPayload, network: ctx?.requirements?.network, reason, priceUsd, detail, feePayer: ctx?.requirements?.extra?.feePayer });
     if (noted) bucket = noted.bucket;
+    // A Solana wallet with no USDC account or too little USDC: counted toward
+    // the funding hold (src/svm-funding-refusal.js), never a recovered verify.
+    if (noted?.svmFunding && !/\(recovered via /.test(String(reason))) {
+      const { fundingKeyOf, noteFundingRefusal } = await import("./svm-funding-refusal.js");
+      toolFailureMonitor().noteFundingRefusal({ network: ctx?.requirements?.network, reason: noted.svmFunding });
+      await noteFundingRefusal({ key: fundingKeyOf(ctx?.paymentPayload, ctx?.requirements?.network), kind: noted.svmFunding });
+    }
   } catch { /* a hint is best-effort */ }
   // Telemetry (reason, chain, route, balance BUCKET - never the payer): see posthog.js.
   // Who failed, as a one-way id. Prefer the signed EIP-3009 `from`; fall back to
@@ -2825,6 +2843,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // facilitator can read a GatewayWalletBatched authorization, so it is
     // never offered to one, and its failure stands as Gateway's.
     if (isBatchedCtx(ctx)) { await recordVerifyFailure(ctx, reason); return; }
+    const detail = typeof ctx?.error?.invalidMessage === "string" ? ctx.error.invalidMessage : "";
     // Before writing this off as a failed payment: was the facilitator merely
     // UNREACHABLE? @x402/core resolves one client per network and does not fall
     // back when that client throws, so a connect timeout at CDP - which is
@@ -2865,14 +2884,15 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         console.warn(`[payments] verify failover errored, original failure stands: ${String(e?.message || e).slice(0, 120)}`);
       }
     }
-    await recordVerifyFailure(ctx, reason);
+    await recordVerifyFailure(ctx, reason, { detail });
   });
   if (typeof server.onAfterVerify === "function") {
     server.onAfterVerify(async (ctx) => {
       if (ctx?.result && ctx.result.isValid === false) {
         const reason = String(ctx.result.invalidReason || "verify rejected");
         console.warn(`[payments] facilitator VERIFY rejected on ${ctx?.requirements?.network} ${ctx?.requirements?.scheme}: ${reason}`);
-        await recordVerifyFailure(ctx, reason);
+        // The graceful shape carries the simulation's words in invalidMessage.
+        await recordVerifyFailure(ctx, reason, { detail: typeof ctx.result.invalidMessage === "string" ? ctx.result.invalidMessage : "" });
       }
     });
   }

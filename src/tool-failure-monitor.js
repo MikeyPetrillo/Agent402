@@ -37,6 +37,11 @@
 //              payment, same nonce) or keyed (an Idempotency-Key or
 //              payment-identifier). Detail only, never a word; by slug,
 //              never by payer.
+//   funding refusals  a Solana verify refused because the paying wallet has
+//              no USDC token account or too little USDC
+//              (src/svm-funding-refusal.js), by network and reason, split
+//              into refused (the facilitator said so) and held (answered from
+//              the funding hold without a verify). Detail only, never a word.
 //   buyer refusals  a settle-breaker refusal (src/gateway-settle-breaker.js)
 //              of a key that had settled at least one call inside the
 //              breaker's window: a paying buyer was turned away. A count per
@@ -219,6 +224,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const refusals = [];          // { at, network, facilitator, reason }
   const replays = new Map();    // slug -> Map(bucket -> [implicit, keyed])
   const buyerRefusals = new Map(); // bucket -> count (no slug, no key)
+  const fundingRefusals = new Map(); // "network|reason" -> Map(bucket -> [refused, held])
   const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [], f: [] })
   const rails = new Map();      // payment rail -> Map(bucket -> { o: [], s: [], f: [] })
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
@@ -380,6 +386,19 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return buyerRefusals.get(b);
   }
 
+  /** A Solana funding refusal (src/svm-funding-refusal.js): refused by the
+   *  facilitator, or held (answered without a verify). No payer, no key. */
+  function noteFundingRefusal({ network, reason, held = false, at = now() } = {}) {
+    const k = `${String(network || "unknown").slice(0, 64)}|${String(reason || "unknown").slice(0, 40)}`;
+    let m = fundingRefusals.get(k);
+    if (!m) { if (fundingRefusals.size >= MAX_SLUGS) return null; m = new Map(); fundingRefusals.set(k, m); }
+    const b = bucketOf(at);
+    let row = m.get(b);
+    if (!row) { row = [0, 0]; m.set(b, row); prune(m, at); }
+    row[held ? 1 : 0]++;
+    return held ? "held" : "refused";
+  }
+
   // ---- snapshots and the merge ----------------------------------------------
   function snapshot(t = now()) {
     const floor = bucketOf(t - DAY_MS);
@@ -406,6 +425,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       paths: pack(paths),
       rails: pack(rails),
       buyerRefusals: Object.fromEntries([...buyerRefusals].filter(([b]) => b > floor)),
+      fundingRefusals: pack(fundingRefusals),
     };
   }
 
@@ -436,7 +456,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     const gasM = {}; // newest reading per (network, facilitator, signer)
-    const repM = {}, brM = {}, pathM = {}, railM = {};
+    const repM = {}, brM = {}, pathM = {}, railM = {}, fundM = {};
     // A row from a replica that predates the free lane has no f; add reads it as zeros.
     const addLanes = (into, key, rows) => {
       const dst = (into[key] ||= {});
@@ -453,6 +473,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyReplay()), row);
       }
       for (const [b, n] of Object.entries(s.buyerRefusals || {})) brM[b] = (brM[b] || 0) + (Number(n) || 0);
+      for (const [k, rows] of Object.entries(s.fundingRefusals || {})) {
+        const dst = (fundM[k] ||= {});
+        for (const [b, row] of Object.entries(rows)) add((dst[b] ||= [0, 0]), row);
+      }
       for (const [slug, rows] of Object.entries(s.tools || {})) addLanes(toolsM, slug, rows);
       for (const [name, rows] of Object.entries(s.upstreams || {})) {
         const dst = (upM[name] ||= {});
@@ -478,7 +502,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM, rails: railM };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM, rails: railM, fundingRefusals: fundM };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -599,6 +623,16 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       for (const k of REPLAY_KINDS) { replayTotals.hour[k] += named(REPLAY_KINDS, h)[k]; replayTotals.day[k] += named(REPLAY_KINDS, d)[k]; }
     }
     replayRows.sort((a, b) => (b.day.implicit + b.day.keyed) - (a.day.implicit + a.day.keyed) || a.slug.localeCompare(b.slug));
+    // Solana funding refusals by network and reason (detail only, never a word).
+    const fundingRows = [];
+    for (const [k, rows] of Object.entries(m.fundingRefusals || {})) {
+      const h = [0, 0], d = [0, 0];
+      for (const [b, row] of Object.entries(rows)) { if (Number(b) > hourFloor) add(h, row); if (Number(b) > dayFloor) add(d, row); }
+      if (!d[0] && !d[1]) continue;
+      const bar = k.lastIndexOf("|");
+      fundingRows.push({ network: k.slice(0, bar), reason: k.slice(bar + 1), hour: { refused: h[0], held: h[1] }, day: { refused: d[0], held: d[1] } });
+    }
+    fundingRows.sort((a, b) => (b.day.refused + b.day.held) - (a.day.refused + a.day.held) || a.network.localeCompare(b.network) || a.reason.localeCompare(b.reason));
     // Catalog outcomes by arrival path (detail only, never a word).
     const laneRows = (src) => {
       const out = {};
@@ -623,7 +657,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return {
       toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
-      replays: replayRows, replayTotals, byPath, byRail,
+      replays: replayRows, replayTotals, byPath, byRail, fundingRefusals: fundingRows,
       thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
       answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
@@ -710,9 +744,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, noteFundingRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); fundingRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 

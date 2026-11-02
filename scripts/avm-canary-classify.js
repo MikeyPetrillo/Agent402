@@ -74,8 +74,10 @@ export const isUpstreamOutage = (status, body) =>
 // `reason` nested in an extension's example.
 // facilitator-quota is left out: it comes from a SETTLE refusal, which was
 // never a gate refusal. insufficient-funds is left out: it is the SWEEP'S OWN
-// wallet (isBuyerUnfunded below), never a verdict on the rail.
-const GATE_REASONS = new Set(REJECTION_REASONS.map((r) => r.reason).filter((r) => r !== "facilitator-quota" && r !== "insufficient-funds"));
+// wallet (isBuyerUnfunded below), never a verdict on the rail; so is
+// no-token-account (a Solana wallet with no USDC account).
+const FUNDING_REASONS = new Set(["insufficient-funds", "no-token-account"]);
+const GATE_REASONS = new Set(REJECTION_REASONS.map((r) => r.reason).filter((r) => r !== "facilitator-quota" && !FUNDING_REASONS.has(r)));
 const refusalReasonOf = (status, body) => {
   if (status !== 402) return null;
   let d;
@@ -91,7 +93,7 @@ export const isGateRefusal = (status, body) => GATE_REASONS.has(refusalReasonOf(
 // fails the same way, so the sweep stops and reports FUNDING. Before this class
 // existed, a wallet that ran dry mid-sweep read as a string of rail failures
 // on whichever tools happened to come next.
-export const isBuyerUnfunded = (status, body) => refusalReasonOf(status, body) === "insufficient-funds";
+export const isBuyerUnfunded = (status, body) => FUNDING_REASONS.has(refusalReasonOf(status, body));
 
 // Terminal shape of one paid attempt:
 // "ok" | "empty" | "breaker" | "unfunded" | "fast-402" | "throttle" | "slow-402" | "other".

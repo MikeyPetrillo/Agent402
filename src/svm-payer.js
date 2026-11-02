@@ -81,6 +81,67 @@ export function svmRequiredSigners(txBase64) {
   } catch { return null; }
 }
 
+// The SPL token programs (classic and Token-2022) and TransferChecked's tag.
+const TOKEN_PROGRAMS = new Set([
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+]);
+const IX_TRANSFER_CHECKED = 12;
+
+/**
+ * The accounts of the token transfer in an exact-scheme Solana payment: the
+ * instruction at `index` (2 in the scheme's fixed layout: compute limit,
+ * compute price, TransferChecked), read from the static account keys. Null
+ * unless that instruction is a TransferChecked of a token program whose four
+ * accounts all sit in the static keys (an address-table account cannot be
+ * read without an RPC, and a guess is worse than nothing).
+ * @param {string} txBase64
+ * @returns {{source:string, mint:string, destination:string, authority:string}|null}
+ */
+export function svmTransferAccounts(txBase64, { index = 2 } = {}) {
+  try {
+    if (typeof txBase64 !== "string" || !txBase64 || txBase64.length > 4096) return null;
+    const bytes = Buffer.from(txBase64, "base64");
+    const sigs = readCompactU16(bytes, 0);
+    if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
+    let at = sigs.next + 64 * sigs.value;
+    if (at >= bytes.length) return null;
+    if ((bytes[at] & 0x80) !== 0) {
+      if ((bytes[at] & 0x7f) !== 0) return null;
+      at += 1;
+    }
+    if (at + 3 > bytes.length) return null;
+    at += 3;
+    const keys = readCompactU16(bytes, at);
+    if (!keys || keys.value < 1 || keys.value > 64) return null;
+    at = keys.next;
+    if (at + 32 * keys.value > bytes.length) return null;
+    const keyAt = (i) => base58Encode(bytes.subarray(at + 32 * i, at + 32 * (i + 1)));
+    let p = at + 32 * keys.value + 32; // past the keys and the recent blockhash
+    const count = readCompactU16(bytes, p);
+    if (!count || count.value <= index || count.value > 16) return null;
+    p = count.next;
+    for (let i = 0; i < count.value; i++) {
+      if (p >= bytes.length) return null;
+      const program = bytes[p++];
+      const accts = readCompactU16(bytes, p);
+      if (!accts || accts.next + accts.value > bytes.length) return null;
+      const accountIdx = [...bytes.subarray(accts.next, accts.next + accts.value)];
+      p = accts.next + accts.value;
+      const data = readCompactU16(bytes, p);
+      if (!data || data.next + data.value > bytes.length) return null;
+      const tag = data.value > 0 ? bytes[data.next] : -1;
+      p = data.next + data.value;
+      if (i !== index) continue;
+      if (program >= keys.value || !TOKEN_PROGRAMS.has(keyAt(program))) return null;
+      if (tag !== IX_TRANSFER_CHECKED || accountIdx.length < 4 || accountIdx.slice(0, 4).some((k) => k >= keys.value)) return null;
+      const [source, mint, destination, authority] = accountIdx.slice(0, 4).map(keyAt);
+      return { source, mint, destination, authority };
+    }
+    return null;
+  } catch { return null; }
+}
+
 /**
  * The buyer's address for an SVM x402 payment: the first required signer that
  * is not the fee payer named by the accept (`requirements.extra.feePayer`).
