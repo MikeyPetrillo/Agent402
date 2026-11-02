@@ -351,6 +351,10 @@ export const TIERS = {
     maxInputChars: 32_000,
     maxTokens: 2048,
     maxPrice: { prompt: 2.5, completion: 8 }, // catastrophe bound above the priciest family prefix
+    // Server-chosen failover after the requested model's own successor, as on
+    // nano: a base call whose model has no available host is answered by one
+    // of these (both priced under every base model) instead of an error.
+    fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-chat"],
     prefixes: [
       // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
       // harmless), the way gpt-4.1-nano was until its 2026-10-23 retirement.
