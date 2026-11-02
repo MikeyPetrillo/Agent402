@@ -561,7 +561,7 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> Pay-per-call web tools for AI agents, payable over **${mppMethodsSummary().enabled ? "x402 or MPP" : "x402"}** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppMethodsSummary().enabled ? `, or MPP on Base/Celo (USDC)${mppMethodsSummary().tempo ? " or Tempo (USDC.e or PathUSD, native)" : ""}` : ""}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> Pay-per-call web tools for AI agents, payable over **${mppMethodsSummary().enabled ? "x402 or MPP" : "x402"}** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
@@ -684,6 +684,16 @@ ${toolSections}
 /** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
  *  summary line and sections are taken from the full text, so they never drift;
  *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
+// The MPP rails the llms.txt summary names, from the live MPP config: the EVM
+// rails by chain, then Tempo, and nothing while no MPP method is offered.
+function mppRailsProse() {
+  const m = mppMethodsSummary();
+  const parts = [];
+  if (m.evm?.rails?.length) parts.push(`${m.evm.rails.map((r) => r.chain).join("/")} (USDC)`);
+  if (m.tempo) parts.push("Tempo (USDC.e or PathUSD, native)");
+  return parts.length ? `, or MPP on ${parts.join(" or ")}` : "";
+}
+
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];

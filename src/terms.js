@@ -6,7 +6,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL } from "./repo-link.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { creditsSalesEnabled, creditsDailyMaxCents } from "./credits-sales.js";
-import { answerShareEnabled } from "./answer-share.js";
+import { sharePagesMayBeLive } from "./answer-share.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -19,7 +19,7 @@ export function termsPage(baseUrl) {
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
   // Shared answer pages exist only while their switch is on (src/answer-share.js).
-  const sharesOn = answerShareEnabled();
+  const sharesOn = sharePagesMayBeLive();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}

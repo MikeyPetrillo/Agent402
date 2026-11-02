@@ -119,17 +119,18 @@ function createFileStore(dir) {
     async put(rec) { write(rec); return true; },
     async sweep(now = Date.now()) {
       let files = [];
-      try { files = readdirSync(dir); } catch { return { expired: 0, dropped: 0 }; }
-      let expired = 0, dropped = 0;
+      try { files = readdirSync(dir); } catch { return { expired: 0, dropped: 0, live: 0 }; }
+      let expired = 0, dropped = 0, live = 0;
       for (const f of files) {
         const id = f.endsWith(".json") ? f.slice(0, -5) : "";
         if (!SHARE_ID_RE.test(id)) continue;
         const rec = read(id);
         if (!rec) continue;
         if (rec.expiresAt + TOMBSTONE_MS <= now) { try { unlinkSync(path(id)); dropped++; } catch { /* gone */ } continue; }
-        if (!rec.gone && rec.expiresAt <= now) { write({ v: 1, id, expiresAt: rec.expiresAt, gone: true }); expired++; }
+        if (!rec.gone && rec.expiresAt <= now) { write({ v: 1, id, expiresAt: rec.expiresAt, gone: true }); expired++; continue; }
+        if (!rec.gone) live++;
       }
-      return { expired, dropped };
+      return { expired, dropped, live };
     },
   };
 }
@@ -150,10 +151,22 @@ function createPgStore() {
         `DELETE FROM ${RT()} WHERE collection = $1 AND (body ->> 'expiresAt')::bigint <= $2`,
         [COLLECTION, now - TOMBSTONE_MS],
       );
-      return { expired: exp.rowCount, dropped: drop.rowCount };
+      const lv = await stateQuery(
+        `SELECT count(*)::int AS n FROM ${RT()} WHERE collection = $1 AND NOT (body ? 'gone') AND (body ->> 'expiresAt')::bigint > $2`,
+        [COLLECTION, now],
+      );
+      return { expired: exp.rowCount, dropped: drop.rowCount, live: lv.rows[0]?.n ?? 0 };
     },
   };
 }
+
+// Whether published pages may still be served: the last sweep's live count,
+// or a page written by this process since. Privacy and terms describe shared
+// pages while the switch is on or any may still be served (a page made while
+// it was on serves until it expires after the switch is turned off).
+let livePages = 0;
+export function noteLiveShares(n) { livePages = Math.max(0, Number(n) || 0); }
+export function sharePagesMayBeLive() { return answerShareEnabled() || livePages > 0; }
 
 let store = null;
 export function shareStore() { return (store ??= stateDbEnabled() ? createPgStore() : createFileStore(fileDir())); }
@@ -226,7 +239,7 @@ export function reserveShare(req, { log = console.warn } = {}) {
   const watched = onResponseEnd(req, res, (info) => {
     const settled = !info?.forgiven && !info?.allowance && res.statusCode === 200;
     if (!settled || !slot.rec) { createLimit.refund(key); return; }
-    shareStore().put(slot.rec).catch((e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
+    shareStore().put(slot.rec).then(() => { livePages++; }, (e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
   });
   if (!watched) { createLimit.refund(key); return null; }
   Object.defineProperty(req, RESERVATION, { value: slot, enumerable: false });
@@ -526,10 +539,14 @@ export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasteriz
   const sweep = leased("answer-shares-sweep", {}, async () => {
     try {
       const r = await shareStore().sweep(now());
+      noteLiveShares(r.live);
       if (r.expired || r.dropped) console.log(`[answer-share] sweep: ${r.expired} expired, ${r.dropped} dropped`);
       return r;
     } catch (e) { console.warn(`[answer-share] sweep failed: ${String(e?.message || e).slice(0, 160)}`); return null; }
   });
-  if (sweepEveryMs > 0) setInterval(() => { sweep().catch(() => {}); }, sweepEveryMs).unref();
+  if (sweepEveryMs > 0) {
+    sweep().catch(() => {});
+    setInterval(() => { sweep().catch(() => {}); }, sweepEveryMs).unref();
+  }
   return { sweep };
 }

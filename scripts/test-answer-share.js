@@ -204,7 +204,11 @@ const DATA = { query: "q", answer: "a", citations: [] };
   ok(new RegExp(`expired\\s+for ${AS.TOMBSTONE_DAYS} days, and after that as an unknown address`).test(p) && /answers that it was removed/.test(p), "the privacy page says how long an address answers expired (the tombstone) and that a page can be removed");
   ok(/caller-supplied question and a model-generated answer, and we may remove it/.test(termsPage("https://agent402.example")), "switch on: the terms say a shared page shows a caller-supplied question and a model-generated answer, and may be removed");
   process.env.ANSWER_SHARE = "";
-  ok(!/share=true|\/answers\//.test(privacyPage("https://agent402.example")) && !/share=true|caller-supplied/.test(termsPage("https://agent402.example")), "switch off: neither /privacy nor /terms describes shared answers");
+  AS.noteLiveShares(0);
+  ok(!/share=true|\/answers\//.test(privacyPage("https://agent402.example")) && !/share=true|caller-supplied/.test(termsPage("https://agent402.example")), "switch off, no live pages: neither /privacy nor /terms describes shared answers");
+  AS.noteLiveShares(2);
+  ok(/share=true<\/code>, and only/.test(privacyPage("https://agent402.example")) && /caller-supplied/.test(termsPage("https://agent402.example")), "switch off but pages still served: /privacy and /terms keep describing them until they expire");
+  AS.noteLiveShares(0);
   process.env.ANSWER_SHARE = "on";
   // The first-call allowance line follows its own switch.
   process.env.FIRST_CALL_ALLOWANCE = "";
@@ -409,7 +413,7 @@ try {
     await sleep(300);
     ok(files().length === before, "switch off: ...and writes nothing");
     { const d = await answerDesc(); ok(/max_tokens/.test(d) && !/share=true|"share"/.test(d), "switch off: the catalog (openapi) does not offer share"); }
-    ok(!/share=true/.test(await (await fetch(`${B}/privacy`)).text()) && !/caller-supplied/.test(await (await fetch(`${B}/terms`)).text()), "switch off: /privacy and /terms do not describe shared answers");
+    ok(/share=true/.test(await (await fetch(`${B}/privacy`)).text()) && /caller-supplied/.test(await (await fetch(`${B}/terms`)).text()), "switch off with a page made while on still served: /privacy and /terms keep describing shared answers");
     const k = await fetch(`${B}/answers/${kept.id}`);
     ok(k.status === 200 && (await k.text()).includes("made while on"), "switch off: a page made while it was on still serves until it expires");
     ok((await fetch(`${B}/answers/AAAAAAAAAAAAAAAAAAAAAAAA`)).status === 404, "switch off: an unknown id is 404");

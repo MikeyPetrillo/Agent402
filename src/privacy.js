@@ -12,7 +12,7 @@ import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followu
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
-import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled } from "./answer-share.js";
+import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -25,7 +25,7 @@ export function privacyPage(baseUrl) {
   const gatewayBatched = !!gatewayOfferPublic();
   // Shared answers and the first-call allowance each ship behind a switch:
   // their lines appear only while the switch is on.
-  const sharesOn = answerShareEnabled();
+  const sharesOn = sharePagesMayBeLive();
   const allowanceOn = firstCallAllowanceEnabled();
 
   const extraCss = `

@@ -10,8 +10,8 @@ import { createHash } from "node:crypto";
 // paragraph shown only while a switch is on (the Circle Gateway batched
 // option) moves the sha, not the date, until that switch ships on.
 const PINS = {
-  "src/terms.js": { date: "2026-10-29", sha: "fa9d0655e313e596" },
-  "src/privacy.js": { date: "2026-11-02", sha: "1d000f3c859db3c7" },
+  "src/terms.js": { date: "2026-10-29", sha: "6f28f5924de47087" },
+  "src/privacy.js": { date: "2026-11-02", sha: "67882bfe996d0279" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

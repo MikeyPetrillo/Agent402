@@ -134,18 +134,23 @@ function assertAccess(label, text, powCount, wires) {
   ok(others.every((r) => offAccess.includes(`${r.asset} on ${r.name}`)), "unit: every non-USDC rail's coin is named on its chain");
   const offAgents = agentsMd(B, c);
   ok(offAgents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !offAgents.includes("both offers"), "unit: MPP off, /agents.md Connect names the x402 offer only");
+  const { llmsTxt } = await import("../src/seo.js");
+  const llmsSummary = () => llmsTxt(B, c).split("\n").find((l) => l.startsWith("> ")) || "";
+  { const s = llmsSummary(); ok(s.includes("payable over **x402** ") && !/MPP/.test(s), "unit: MPP off, the llms.txt summary names x402 only"); }
   process.env.MPP_SECRET_KEY = "unit";
   ok(paidWiresPhrase() === `${coins} over x402 or MPP`, `unit: MPP on, the access line adds MPP (${paidWiresPhrase()})`);
   ok(frontDoorJson(c, B).access.includes(`in ${coins} over x402 or MPP,`), "unit: MPP on, the memoized JSON follows the switch");
   const onAgents = agentsMd(B, c);
   ok(onAgents.includes("both offers (x402 `PAYMENT-REQUIRED` and MPP `WWW-Authenticate: Payment`)"), "unit: MPP on, /agents.md Connect names both offers (the memo follows the switch)");
   ok(!/Tempo push payment/.test(onAgents), "unit: MPP on without Tempo, no Tempo push sentence");
+  { const s = llmsSummary(); ok(s.includes("**x402 or MPP**") && /both offers/.test(s) && /MPP on Base[^)]*\(USDC\)/.test(s) && !/Tempo/.test(s), "unit: MPP on (EVM), the llms.txt summary names MPP and its EVM rails, not Tempo"); }
   process.env.TEMPO_API_KEY = "unit"; process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
   const tempoAgents = agentsMd(B, c);
   ok(paidWiresPhrase().includes("Tempo"), "unit: a relay key and a recipient turn Tempo on");
   {
     ok(paidWiresPhrase() === `${coins} over x402 or MPP (Tempo settles in its own stablecoins)`, "unit: Tempo on, the access line scopes Tempo's own coins");
     ok(/Tempo push payment/.test(tempoAgents), "unit: Tempo on, the recovery line names the Tempo push exception");
+    ok(/or Tempo \(USDC\.e or PathUSD, native\)/.test(llmsSummary()), "unit: Tempo on, the llms.txt summary names Tempo");
   }
   ok(offAgents.includes(`When a call fails: [${AGENTS_MD_PATH}](${RECOVERY_ANCHOR})`) && RECOVERY_ANCHOR === "#when-a-call-fails", `unit: /agents.md links its own recovery heading by fragment (${RECOVERY_ANCHOR})`);
   ok(offAgents.includes(`## ${RECOVERY_HEADING}\n`), "unit: the fragment's heading is on the page");

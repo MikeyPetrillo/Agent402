@@ -41,6 +41,17 @@ const { createClient } = await import("redis");
 let pass = 0, failed = 0;
 const ok = (c, msg) => { if (c) { pass++; console.log(`ok - ${msg}`); } else { failed++; console.error(`FAIL - ${msg}`); } };
 
+// A first-call grant is never booked as a hang-up debt: recordHangupDebt in
+// src/server.js returns before it reads any settle receipt. (The receipt header
+// is already dropped for a grant, so no booted call can reach this branch; the
+// source is the instrument.)
+{
+  const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("function recordHangupDebt("), src.indexOf("function recordHangupDebt(") + 1600);
+  const guard = fn.indexOf("if (allowanceServed(req)) return null;");
+  ok(guard > 0 && guard < fn.indexOf("PAYMENT-RESPONSE"), "recordHangupDebt returns for a grant before it reads a settle receipt");
+}
+
 // A share request blocks a grant only while sharing is on.
 {
   const { shareBlocksGrant } = await import("../src/first-call-allowance.js");
