@@ -17,14 +17,25 @@
 //     settle normally;
 //   - the per-address cap and the daily USD cap refuse further grants, which
 //     then settle normally, and the public word reads "spent";
+//   - a call asking for a share link (body or query) takes no grant and
+//     settles normally;
+//   - a granted call whose client leaves before its handler starts is given
+//     back (not settled, nothing owed);
 //   - nothing is booked for a grant: one usdc sale per settle, no refund row.
+// Boot C (switch on, the web answer route eligible, its upstream stubbed and
+// slow, no forgiveness ticket):
+//   - a granted call whose client leaves while its handler runs is served
+//     unsettled and booked as owed nowhere (no refund row, no
+//     charged-but-not-served line);
+//   - a call asking for a share link takes no grant, settles, and its link
+//     is written.
 // With STATE_DATABASE_URL set, boot B runs on the state database in a schema
 // of its own (dropped afterwards), and a served grant is also a record there.
 // Requires REDIS_URL (under CI a missing one fails).
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +62,8 @@ const PG_SCHEMA = `fca_${process.pid}_${Date.now().toString(36)}`;
 // Wallets are fresh per run, so a shared database never holds a prior sale or grant for one.
 const RUN = randomBytes(8).toString("hex");
 const POOR = "0x" + RUN + "b0".padStart(24, "0");
+// Its balance read answers late (inside the read's bound), so a client can leave mid-call.
+const SLOW = "0x" + RUN + "b1".padStart(24, "0");
 
 // ---- stub facilitator: verify accepts a well-formed authorization, settle
 // succeeds once per nonce; /rpc answers balanceOf (zero for POOR).
@@ -65,6 +78,7 @@ const facilitator = createServer((req, res) => {
     if (req.url === "/rpc") {
       const data = String(p?.params?.[0]?.data || "");
       const who = "0x" + data.slice(-40).toLowerCase();
+      if (who === SLOW) return void setTimeout(() => reply({ jsonrpc: "2.0", id: p.id ?? 1, result: "0x" + (1_000_000_000).toString(16).padStart(64, "0") }), 600);
       return reply({ jsonrpc: "2.0", id: p.id ?? 1, result: "0x" + (who === POOR ? 0 : 1_000_000_000).toString(16).padStart(64, "0") });
     }
     const auth = p?.paymentPayload?.payload?.authorization || null;
@@ -82,12 +96,12 @@ const facilitator = createServer((req, res) => {
   });
 });
 
-async function boot(extraEnv) {
+async function boot(extraEnv, { preload = null } = {}) {
   const [port, facPort] = await getFreePorts(2);
   if (!facilitator.listening) await new Promise((r) => facilitator.listen(facPort, "127.0.0.1", r));
   const fac = `http://127.0.0.1:${facilitator.address().port}`;
   const log = [];
-  const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
+  const proc = spawn(process.execPath, [...(preload ? ["--import", preload] : []), join(ROOT, "src", "server.js")], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -129,6 +143,8 @@ const credential = (accept, from, nonce = "0x" + randomBytes(32).toString("hex")
 
 const ROUTES = {
   hash: { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "hello world" }) },
+  hashShare: { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "hello world", share: true }) },
+  hashShareQ: { path: "/api/hash?share=1", method: "POST", body: JSON.stringify({ text: "hello world" }) },
   hashBad: { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "hello world", algo: "nope" }) },
   radar: { path: "/api/demand-radar?limit=1", method: "GET" },
   audit: { path: "/api/x402-audit?url=http%3A%2F%2F127.0.0.1%2Fpaid", method: "GET" },
@@ -148,7 +164,7 @@ const opJson = async (B, path) => (await fetch(`${B}${path}`, { headers: { Autho
 
 const redis = createClient({ url: REDIS });
 await redis.connect();
-let A = null, Bt = null;
+let A = null, Bt = null, C = null;
 try {
   // ---------------- Boot A: switch off ----------------
   A = await boot({ FIRST_CALL_ALLOWANCE: "", FIRST_CALL_ALLOWANCE_SLUGS: "hash" });
@@ -169,6 +185,8 @@ try {
     FIRST_CALL_ALLOWANCE_MAX_USD: "0.005", // x402-audit ($0.01) is over it
     FIRST_CALL_ALLOWANCE_DAILY_USD: "0.01", // five grants of hash ($0.001) and one of demand-radar ($0.005)
     FIRST_CALL_ALLOWANCE_IP_PER_DAY: "1",
+    // No forgiveness ticket: a granted call's hang-up reaches the debt recorder.
+    HANGUP_FORGIVE: "off",
     ...(PG_URL ? { STATE_DATABASE_URL: PG_URL, STATE_DB_SCHEMA: PG_SCHEMA } : {}),
   });
   const B = Bt.B;
@@ -255,6 +273,34 @@ try {
   const r5e = await payCall(B, "hash", POOR, { ip: "10.5.0.5" });
   ok(r5e.status === 200 && !granted(r5e) && settles === s5 + expect5 + 4 && (await denied())["balance"] === 1, `a wallet whose balance is below the price gets no grant (status ${r5e.status})`);
 
+  // 5b. A call asking for a share link takes no grant: the link would be
+  // written only on a settled 200. It settles normally.
+  for (const [route, ip, n] of [["hashShare", "10.5.1.1", 1], ["hashShareQ", "10.5.1.2", 2]]) {
+    const sS = settles;
+    const r = await payCall(B, route, wallet(0xe5 + n), { ip });
+    ok(r.status === 200 && !granted(r) && settles === sS + 1 && !!r.headers.get("payment-response") && (await denied())["share"] === n, `share asked (${route}) takes no grant and settles normally (status ${r.status}, settles +${settles - sS})`);
+  }
+
+  // 5c. A granted call whose client leaves before its handler starts: given
+  // back, not settled, nothing owed.
+  {
+    const before5 = (await opJson(B, "/__operator/refunds.json")).firstCallAllowance?.processToday || {};
+    const sH = settles;
+    const rt = ROUTES.hash;
+    const accept = await acceptFor(B, rt.path, rt.method, rt.body);
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 200);
+    await fetch(`${B}${rt.path}`, { method: rt.method, headers: { "content-type": "application/json", "payment-signature": credential(accept, SLOW), "x-forwarded-for": "10.5.2.1" }, body: rt.body, signal: ac.signal }).then((x) => x.text()).catch(() => null);
+    clearTimeout(t);
+    let served = false;
+    for (let i = 0; i < 40 && !served; i++) { served = Bt.log.some((l) => /\[hangup\] (NOT CHARGED|CHARGED-BUT-NOT-SERVED)/.test(l)); if (!served) await sleep(100); }
+    const st5 = await opJson(B, "/__operator/refunds.json");
+    ok(served && settles === sH, `a granted call whose client left before its handler was not settled (hang-up recorded ${served}, settles +${settles - sH})`);
+    ok(!Bt.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")) && (st5.refunds || []).length === 0 && st5.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st5.totals?.owed?.n})`);
+    const p5 = st5.firstCallAllowance?.processToday || {};
+    ok(p5.released === (before5.released || 0) + 1 && p5.served === (before5.served || 0), `its grant was given back, not kept (${JSON.stringify(p5)})`);
+  }
+
   // 6. Per-address cap: a second new wallet from a granted address settles.
   const s6 = settles;
   const r6a = await payCall(B, "hash", wallet(0xf1), { ip: "10.6.0.1" });
@@ -301,12 +347,61 @@ try {
       ok(rows.length === grants && rows.includes(wA) && !rows.includes(wallet(0xf4)), `with the state database, each served grant is a record (${rows.length} of ${grants})`);
     } finally { await c.end().catch(() => {}); }
   } else console.log("skip - state database records (no STATE_DATABASE_URL)");
+  Bt.proc.kill("SIGKILL"); Bt = null;
+
+  // ---------------- Boot C: a slow handler, no forgiveness ticket ----------------
+  // A preload wraps the web answer stub with a delay, so a client can leave
+  // while the handler runs (after the claim, before the answer).
+  const pre = join(mkdtempSync(join(tmpdir(), "fca-preload-")), "slow-answer.mjs");
+  writeFileSync(pre, `import ${JSON.stringify(join(ROOT, "scripts", "lib", "brave-answer-stub-preload.js"))};
+const stubbed = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : input?.url || String(input);
+  if (url.startsWith("https://api.search.brave.com/res/v1/chat/completions")) await new Promise((r) => setTimeout(r, 800));
+  return stubbed(input, init);
+};
+`);
+  C = await boot({
+    FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_SLUGS: "answer", FIRST_CALL_ALLOWANCE_MAX_USD: "0.1",
+    FIRST_CALL_ALLOWANCE_DAILY_USD: "1", FIRST_CALL_ALLOWANCE_IP_PER_DAY: "100",
+    HANGUP_FORGIVE: "off", BRAVE_API_KEY: "stub-never-sent", BRAVE_ANSWERS_API_KEY: "",
+    ANSWER_SHARE_DIR: mkdtempSync(join(tmpdir(), "fca-share-")),
+  }, { preload: pre });
+  {
+    const path = "/api/answer?q=what%20is%20x402";
+    const accept = await acceptFor(C.B, path, "GET");
+    const sC = settles;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 300);
+    await fetch(`${C.B}${path}`, { headers: { "payment-signature": credential(accept, wallet(0x71)), "x-forwarded-for": "10.9.1.1" }, signal: ac.signal }).then((x) => x.text()).catch(() => null);
+    clearTimeout(t);
+    let st = null;
+    for (let i = 0; i < 40; i++) { st = await opJson(C.B, "/__operator/refunds.json"); if (st.firstCallAllowance?.processToday?.served >= 1 || st.firstCallAllowance?.processToday?.released >= 1) break; await sleep(100); }
+    await sleep(200);
+    st = await opJson(C.B, "/__operator/refunds.json");
+    const pc = st.firstCallAllowance?.processToday || {};
+    ok(pc.served === 1 && pc.released === 0 && settles === sC, `a granted call whose client left during the handler is served unsettled (${JSON.stringify(pc)}, settles +${settles - sC})`);
+    ok(C.log.some((l) => /\[hangup\] NOT CHARGED/.test(l)) && !C.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")), "the hang-up is recorded as not charged");
+    ok((st.refunds || []).length === 0 && st.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st.totals?.owed?.n})`);
+
+    // share=true: no grant, a normal settle, and the link it hands out is written.
+    const sharePath = "/api/answer?q=what%20is%20x402&share=true";
+    const sS = settles;
+    const r = await fetch(`${C.B}${sharePath}`, { headers: { "payment-signature": credential(await acceptFor(C.B, sharePath, "GET"), wallet(0x72)), "x-forwarded-for": "10.9.1.2" } });
+    const j = await r.json().catch(() => null);
+    ok(r.status === 200 && r.headers.get("x-agent402-allowance") !== "first-call" && settles === sS + 1 && !j?.firstCallAllowance, `a share=true call takes no grant and settles (status ${r.status}, settles +${settles - sS})`);
+    let page = null;
+    const link = j?.share?.url ? j.share.url.replace(/^https?:\/\/[^/]+/, C.B) : null;
+    for (let i = 0; i < 20 && link; i++) { page = await fetch(link); if (page.status === 200) break; await sleep(100); }
+    ok(Boolean(link) && page?.status === 200, `and the share link it hands out is written (${page?.status})`);
+  }
 } catch (e) {
   failed++;
   console.error("FAIL -", e?.stack || e);
 } finally {
-  if (failed) for (const l of (Bt || A)?.log?.slice(-40) || []) console.error("  server:", l);
+  if (failed) for (const l of (C || Bt || A)?.log?.slice(-40) || []) console.error("  server:", l);
   A?.proc.kill("SIGKILL");
+  C?.proc.kill("SIGKILL");
   Bt?.proc.kill("SIGKILL");
   facilitator.close();
   try { const keys = await redis.keys(`*${PREFIX}*`); if (keys.length) await redis.del(keys); } catch { /* best effort */ }
