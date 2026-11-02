@@ -7008,6 +7008,7 @@ export async function persistOriginToStateDb(origin) {
       [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
     );
     pgOriginHashes.set(origin, h);
+    pgRowHashes.set(origin, h);
     return true;
   } catch (e) {
     console.warn(`[x402-index] state database write for one origin failed: ${String(e?.message || e).slice(0, 120)}`);
@@ -7110,6 +7111,11 @@ const PG_SINGLE_ROW_BYTES = 1_048_576;
 // lets an unchanged origin skip its write; the key set is what a persist
 // deletes against.
 const pgOriginHashes = new Map();
+// origin -> the ROW_HASH_KEY of the copy held, as it was last stored or
+// folded (null: a row without one). Not pgOriginHashes: a copy read back from
+// jsonb hashes differently (jsonb reorders keys), so a container that read
+// a row compares the hash its writer stored, never one it recomputes.
+const pgRowHashes = new Map();
 const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
 // An entry's fetchedAt as a number in SQL, 0 when absent or not numeric.
@@ -7117,8 +7123,8 @@ const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\
 const UPDATED_AT_SQL = (col) => `(CASE WHEN (${col}->>'updatedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'updatedAt')::numeric ELSE 0 END)`;
 // The revision in SQL (entryRev): newer wins on the later of the two stamps.
 const REV_SQL = (col) => `GREATEST(${FETCHED_AT_SQL(col)}, ${UPDATED_AT_SQL(col)})`;
-// Each row written carries ROW_HASH_KEY: the lineHash of `[origin, entry]`,
-// the same value pgOriginHashes holds for it. Two copies are ordered by
+// Each row written carries ROW_HASH_KEY: the lineHash of `[origin, entry]`
+// its writer computed (pgRowHashes keeps it per origin). Two copies are ordered by
 // (revision, hash), in the upsert and in the pull alike, so two containers
 // holding different content at one revision (one stamp, or clocks skewed onto
 // one) converge on the same copy whichever writes last. A row with no hash
@@ -7181,16 +7187,18 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
     // would give entryRev (jsonb renders a field alone as it does in place).
     const rowRev = (row) => entryRev({ fetchedAt: row.f, updatedAt: row.u });
     // Whether a copy at (rev, hash) orders after the one held for this
-    // origin. Only a tie on revision needs the held copy's hash: the one this
-    // container last stored or folded answers when it equals the row's (every
-    // row it wrote itself), otherwise it is computed from the copy held now.
+    // origin. Only a tie on revision reads the hashes: the held copy's is the
+    // one stored with it (every row this container wrote, folded or warm
+    // started is held at the row's own hash, so it is never read back), and
+    // is computed only for a copy that was never stored.
     const newerThanHeld = async (id, rev, hash) => {
       const held = cache.get(id);
       if (!held) return true;
       const heldRev = entryRev(held);
       if (rev !== heldRev) return rev > heldRev;
-      if (typeof hash !== "string" || !hash || pgOriginHashes.get(id) === hash) return false;
-      return compareCopies(rev, hash, heldRev, await persistedHashSliced(id, held, tick)) > 0;
+      if (typeof hash !== "string" || !hash) return false;
+      const heldHash = pgRowHashes.has(id) ? pgRowHashes.get(id) : await persistedHashSliced(id, held, tick);
+      return compareCopies(rev, hash, heldRev, heldHash) > 0;
     };
     // A row is read whole only when it orders after the copy held, which no
     // row this container wrote itself does.
@@ -7231,6 +7239,7 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         cache.set(id, next);
         // Held as stored, so this container's next save does not write it back.
         pgOriginHashes.set(id, await persistedHashSliced(id, next, tick));
+        pgRowHashes.set(id, typeof bodyHash === "string" ? bodyHash : null);
         if (!held) discoveredSeeds.add(id);
         folded++;
       }
@@ -7401,7 +7410,7 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
           [INDEX_RECORDS, ids, bodies],
         );
       }
-      for (const id of ids) pgOriginHashes.set(id, changed.get(id));
+      for (const id of ids) { pgOriginHashes.set(id, changed.get(id)); pgRowHashes.set(id, changed.get(id)); }
       written += ids.length;
       await new Promise((r) => setImmediate(r));
     }
@@ -7409,7 +7418,7 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
     for (let i = 0; i < gone.length; i += 500) {
       const ids = gone.slice(i, i + 500);
       await stateQuery(`DELETE FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [INDEX_RECORDS, ids]);
-      for (const id of ids) pgOriginHashes.delete(id);
+      for (const id of ids) { pgOriginHashes.delete(id); pgRowHashes.delete(id); }
       deleted += ids.length;
     }
     console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms`);
@@ -7496,10 +7505,11 @@ async function warmStartIndexOnce() {
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
-        if (body && typeof body === "object") delete body[ROW_HASH_KEY];
+        const rowHash = body && typeof body === "object" ? body[ROW_HASH_KEY] : undefined;
+        if (rowHash !== undefined) delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
         // what this container changed, never every row over a peer's newer one.
-        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); }
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
         else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
@@ -10589,4 +10599,5 @@ registerMemoryStore("x402-index.robotsCache", () => robotsCache, { note: "robots
 registerMemoryStore("x402-index.crawlValidators", () => crawlValidators, { note: "ETag/Last-Modified per document" });
 registerMemoryStore("x402-index.crawlBackoff", () => crawlBackoff, { note: "crawl backoff per origin path" });
 registerMemoryStore("x402-index.pgOriginHashes", () => pgOriginHashes, { note: "persisted row hashes per origin" });
+registerMemoryStore("x402-index.pgRowHashes", () => pgRowHashes, { note: "stored content hash of the copy held per origin" });
 registerMemoryStore("x402-index.marketMemo", () => marketMemo, { note: "market pulse build" });

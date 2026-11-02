@@ -37,14 +37,19 @@ try {
   // ---- equal revision, different content, either write order ---------------
   // Two copies of one revision, written A-then-B on one origin and B-then-A
   // on the other. Each pair is chosen so the FIRST writer's copy has the
-  // higher hash: "last write wins" would keep the other copy on both.
+  // higher hash: "last write wins" would keep the other copy on both. And
+  // so a language collation orders the two hashes the other way (as an
+  // en_US database compares text by default): the SQL must compare bytes,
+  // as JavaScript does, or the table and the pull disagree.
   const R = 1_700_000_000_000;
   const P = "https://seller-p.example", Q = "https://seller-q.example";
   const { persistedHashOf } = A.__testSlices();
+  const lang = new Intl.Collator("en-US");
   const firstWins = (o) => {
-    for (let i = 1; i < 100; i++) {
-      const first = `$0.0${100 + i}`, second = "$0.0100";
-      if (persistedHashOf(o, entry(first, R)) > persistedHashOf(o, entry(second, R))) return [first, second];
+    for (let i = 1; i < 10_000; i++) {
+      const first = `$0.${10_000 + i}`, second = "$0.0100";
+      const h1 = persistedHashOf(o, entry(first, R)), h2 = persistedHashOf(o, entry(second, R));
+      if (h1 > h2 && lang.compare(h1, h2) < 0) return [first, second];
     }
     throw new Error("no pair found");
   };
@@ -121,7 +126,10 @@ try {
   const rL = A.__testPullBodyReads() + B.__testPullBodyReads();
   await A.persistIndexCacheAsync(); await B.persistIndexCacheAsync();
   await settle(A, B);
-  ok(priceIn(A, L) === "$0.010" && priceIn(B, L) === "$0.010" && await rowPrice(L) === "$0.010" && A.__testPullBodyReads() + B.__testPullBodyReads() - rL <= 2, `the unhashed row is rewritten with its hash and the copies stay one (reads ${A.__testPullBodyReads() + B.__testPullBodyReads() - rL})`);
+  ok(priceIn(A, L) === "$0.010" && priceIn(B, L) === "$0.010" && await rowPrice(L) === "$0.010" && A.__testPullBodyReads() + B.__testPullBodyReads() === rL, `saving both containers leaves the unhashed row one copy, read by neither again (reads ${A.__testPullBodyReads() + B.__testPullBodyReads() - rL})`);
+  A.__testSeedCache([[L, entry("$0.013", R + 30)]]);
+  await A.persistIndexCacheAsync(); await settle(A, B);
+  ok(await rowPrice(L) === "$0.013" && priceIn(B, L) === "$0.013", `a hashed copy at the same revision replaces the unhashed row on the table and the other container (row ${await rowPrice(L)}, B ${priceIn(B, L)})`);
   // A key the newer row leaves out is not kept from the held copy, so the
   // folded copy is the row's content and hashes as the row does.
   const D = "https://seller-d.example";
@@ -134,7 +142,13 @@ try {
   const rD = B.__testPullBodyReads();
   await B.persistIndexCacheAsync(); await settle(A, B);
   ok(!("redirectedTo" in B._cacheForTests().get(D)) && !("redirectedTo" in (await sdb.records.get(COLLECTION, D))) && B.__testPullBodyReads() === rD, "a key the newer row leaves out is dropped from the held copy, and the copies stay one");
-  ok(!("contentHash" in A._cacheForTests().get(P)) && !("contentHash" in B._cacheForTests().get(L)), "the row's hash is not carried into the held entry");
+  ok(!("contentHash" in A._cacheForTests().get(Q)) && !("contentHash" in B._cacheForTests().get(P)) && !("contentHash" in B._cacheForTests().get(W)), "the row's hash is not carried into an entry the pull folds");
+  const C = await import("../src/x402-index.js?container=c");
+  await C.warmStartIndexFromStateDb();
+  ok(C._cacheForTests().has(W) && [...C._cacheForTests().values()].every((e) => !("contentHash" in e)), "nor into an entry a warm start folds");
+  const rC = C.__testPullBodyReads();
+  await C.persistIndexCacheAsync(); await C.pullIndexChanges();
+  ok(C.__testPullBodyReads() === rC && priceIn(C, P) === pFirst, `a warm-started container holds every row at its stored hash: its save and pull read nothing (read ${C.__testPullBodyReads() - rC}; P ${priceIn(C, P)}, expected ${pFirst})`);
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();
