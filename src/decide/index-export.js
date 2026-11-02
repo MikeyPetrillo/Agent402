@@ -4,15 +4,17 @@
 // embeddings and ranking. This is the one seam between them: an internal,
 // token-gated GET that walks both sources and writes one row per line.
 //
-// It must never slow a paid call. So it yields to the event loop every
-// YIELD_EVERY rows, writes through the socket's backpressure, and refuses a
-// second export while one is running (the service pulls on a timer; two at
-// once is a retry storm, not a need). Unset DECIDE_INTERNAL_TOKEN = not
-// mounted (404), the same "key present = feature on" rule as every rollout.
+// It must never slow a paid call. So it yields to the event loop once a slice
+// of EXPORT_SLICE_MS has been spent (a row's cost varies: an outside row reads
+// the router's verdict, so a count of rows bounded nothing), writes through
+// the socket's backpressure, and refuses a second export while one is running
+// (the service pulls on a timer; two at once is a retry storm, not a need).
+// Unset DECIDE_INTERNAL_TOKEN = not mounted (404), the same "key present =
+// feature on" rule as every rollout.
 
 import { timingSafeEqual } from "node:crypto";
 import { localToolRow, remoteToolRow } from "./tool-rows.js";
-import { routableRemoteEntries, looksLikeListingInjection, liveProofAt, mppDualStackOrigins, indexReadiness } from "../x402-index.js";
+import { routableRemoteEntriesSliced, looksLikeListingInjection, liveProofAt, mppDualStackOrigins, indexReadiness } from "../x402-index.js";
 import { unpackRequestContract } from "../request-contract.js";
 import { dispatchable } from "../tools/route-execute.js";
 import { routeExcludedCategory } from "../route-category.js";
@@ -23,8 +25,17 @@ import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
  *  are planned, but called directly). */
 export const executableStep = (def) => dispatchable(def).ok && typeof def?.tierQuote !== "function" && !EXPENSIVE_COMPOSITE_SLUGS.has(def?.slug);
 
-const YIELD_EVERY = 500;
+export const EXPORT_SLICE_MS = 8;
 const yieldLoop = () => new Promise((r) => setImmediate(r));
+/** A clock that yields a turn once `ms` of work has run since the last yield. */
+function sliceClock(ms = EXPORT_SLICE_MS) {
+  let start = performance.now();
+  return async () => {
+    if (performance.now() - start < ms) return;
+    await yieldLoop();
+    start = performance.now();
+  };
+}
 
 export function decideTokenOk(req, token = process.env.DECIDE_INTERNAL_TOKEN) {
   const want = String(token || "");
@@ -46,8 +57,8 @@ export function fromPrivateNetwork(req) {
 }
 
 /** Rows for every priced local tool, then every routable outside tool. */
-export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date.now(), remoteExecutable = null } = {}) {
-  let n = 0;
+export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date.now(), remoteExecutable = null, sliceMs = EXPORT_SLICE_MS } = {}) {
+  const tick = sliceClock(sliceMs);
   // One row per id: the same route can reach the crawl twice (a seller listed
   // under two origins that resolve to one row id), and the service stores rows
   // by id.
@@ -57,10 +68,10 @@ export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date
     if (/^decide(?:-|$)/.test(String(def?.slug || ""))) continue;
     const row = localToolRow(def, { baseUrl, networks, now, executable: executableStep(def) });
     if (row && !emitted.has(row.id)) { emitted.add(row.id); yield row; }
-    if (++n % YIELD_EVERY === 0) await yieldLoop();
+    await tick();
   }
   const mppOrigins = new Set(mppDualStackOrigins().map((o) => String(o).replace(/\/+$/, "")));
-  for (const [, tools] of routableRemoteEntries({ baseUrl })) {
+  for await (const [, tools] of routableRemoteEntriesSliced({ baseUrl, sliceMs })) {
     for (const t of tools) {
       const row = remoteToolRow(t, {
         requestContract: unpackRequestContract(t),
@@ -73,7 +84,7 @@ export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date
         executable: routeExcludedCategory(t) !== null ? false : typeof remoteExecutable === "function" ? (() => { try { return remoteExecutable(t) === true; } catch { return false; } })() : true,
       });
       if (row && !emitted.has(row.id)) { emitted.add(row.id); yield row; }
-      if (++n % YIELD_EVERY === 0) await yieldLoop();
+      await tick();
     }
   }
 }
@@ -81,7 +92,10 @@ export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date
 let exporting = false;
 
 /** Express handler for GET /__internal/decide/tools.ndjson */
-export function decideIndexExportHandler({ getCatalog, baseUrl, getNetworks, remoteExecutable = null, getReadiness = indexReadiness }) {
+/** `prepare`, when given, runs before the first row: the caller warms there,
+ *  in slices, the whole-index views a row's verdict reads, so the first
+ *  outside row does not rebuild them in one turn. */
+export function decideIndexExportHandler({ getCatalog, baseUrl, getNetworks, remoteExecutable = null, getReadiness = indexReadiness, prepare = null }) {
   return async (req, res) => {
     if (!fromPrivateNetwork(req) || !decideTokenOk(req)) return res.status(404).json({ error: "Not found" });
     if (exporting) return res.status(429).set("Retry-After", "60").json({ error: "export already running" });
@@ -94,6 +108,9 @@ export function decideIndexExportHandler({ getCatalog, baseUrl, getNetworks, rem
     exporting = true;
     let rows = 0;
     try {
+      // A warm that fails costs only its head start: the rows rebuild in line.
+      if (typeof prepare === "function") { try { await prepare(); } catch { /* the rows read the same views either way */ } }
+      if (res.destroyed) return;
       res.status(200).set({ "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
       for await (const row of unifiedRows({ catalog: getCatalog(), baseUrl, networks: getNetworks(), remoteExecutable })) {
         if (res.destroyed) break;

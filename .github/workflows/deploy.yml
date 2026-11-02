@@ -2770,6 +2770,8 @@ jobs:
           # AVM validity guard (short-window Algorand payment rejected pre-handler, no upstream burn — offline)
           t node scripts/test-avm-validity.js
           t node scripts/test-decide-index.js
+          # The decide export and concurrent crawls of large OpenAPI documents hold the event loop in bounded slices, with the same rows as one turn (offline)
+          t node scripts/test-loop-slices.js
           # Decide BM25 index in typed arrays: same scores, tie order, filtered searches and suite plans as the Map-and-Set index it replaced, over a mutation sequence (offline)
           t node scripts/test-decide-lexical.js
           t node scripts/test-decide-planner.js

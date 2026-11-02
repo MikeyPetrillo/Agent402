@@ -73,6 +73,45 @@ try {
   const ndOrigins = existsSync(ndFile) ? readFileSync(ndFile, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).map((r) => (Array.isArray(r) ? r[0] : r?.origin)) : [];
   ok(has(ndOrigins, C), "the NDJSON twin is written through while its directory exists (a rollback warm-starts from it)");
 
+  // ---- a seller row of many megabytes ------------------------------------------
+  // Sent inside a jsonb[] literal, the driver escapes every quote of the body in
+  // one synchronous pass (over a second for an 82 MB row); a large row travels
+  // alone as a scalar parameter, and the stored row is the same.
+  {
+    const BIG = "https://seller-big.example";
+    const tools = Array.from({ length: 120_000 }, (_, i) => ({ route: `/api/r${i}`, slug: `r${i}`, name: `Route "${i}"`, description: "Quotes \"inside\" and a back\\slash.", price: "$0.001", networks: ["eip155:8453"] }));
+    m1.__testSeedCache([[BIG, entry("/big", { tools, fetchedAt: 1700000000001 })]]);
+    // The bound is relative to this machine: twice the time one JSON.stringify
+    // of the row takes here (the old array path was over ten times that).
+    const t0 = performance.now();
+    const mb = JSON.stringify(m1._cacheForTests().get(BIG)).length / 1_048_576;
+    const bound = Math.max(Number(process.env.LOOP_SLICE_BOUND_MS || 120), 2 * (performance.now() - t0));
+    let last = performance.now(), worst = 0;
+    const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
+    const storedBig = await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    worst = Math.max(worst, performance.now() - last - 2); // the gap still open when persist settles
+    clearInterval(iv);
+    const row = await sdb.records.get(COLLECTION, BIG);
+    ok(storedBig === true && row?.tools?.length === 120_000 && row.tools[17].name === 'Route "17"' && row.tools[0].description === "Quotes \"inside\" and a back\\slash.", "a multi-megabyte row is stored whole, quotes and backslashes intact");
+    ok(worst < bound, `persisting a ${mb.toFixed(0)} MB row never holds the loop past ${Math.round(bound)} ms (longest ${Math.round(worst)} ms)`);
+    // Newer wins on the single-row path as on the batch path: an older copy in
+    // memory never overwrites the stored row, a newer one replaces it.
+    // Both copies are past the single-row size, so each takes that path. The
+    // older one goes straight to the upsert (no pull first), as a second
+    // container's write does when it lands between this one's pull and write.
+    const older = tools.map((t) => ({ ...t, price: "$0.009" }));
+    await m1.__testPersistToStateDb([[BIG, entry("/big", { tools: older, fetchedAt: 1700000000000 })]]);
+    ok((await sdb.records.get(COLLECTION, BIG))?.tools?.[5]?.price === "$0.001", "an older copy of a large row does not overwrite the stored row (the SQL newer-wins rule)");
+    const newer = tools.map((t) => ({ ...t, price: "$0.002" }));
+    m1.__testSeedCache([[BIG, entry("/big", { tools: newer, fetchedAt: 1700000000002 })]]);
+    await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    ok((await sdb.records.get(COLLECTION, BIG))?.tools?.[5]?.price === "$0.002", "a newer copy of a large row replaces the stored row");
+    // Out of the table and the cache again, so the boots below see A and C only.
+    await sdb.records.del(COLLECTION, BIG);
+    m1._cacheForTests().delete(BIG);
+    ok((await ids()).join() === [A, C].join(), "the large row is removed again before the next boot");
+  }
+
   // ---- boot 3: a fresh instance warm-starts from the rows, in pages ------------
   process.env.INDEX_WARM_START_BATCH = "1"; // one row per page, so the in-progress flag is observable across turns
   const m3 = await import("../src/x402-index.js?boot=3");

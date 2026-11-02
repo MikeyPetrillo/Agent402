@@ -5829,6 +5829,10 @@ app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
   getCatalog: () => CATALOG,
   baseUrl: BASE_URL,
   getNetworks: () => publicNetworks().map((n) => PAY_NETWORKS[n]).filter(Boolean),
+  // The first outside row's verdict reads the seller summaries (and the alias
+  // walk under them); after a crawl both are stale, so they are rebuilt here
+  // in slices instead of in that row's turn.
+  prepare: () => warmRoutableSellerSummaries(),
   // Execute pays outside steps on Base through route-execute-pro, so a row is
   // executable only when the router's Base verdict for it is eligible now.
   remoteExecutable: (t) => {

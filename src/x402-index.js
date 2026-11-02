@@ -1253,6 +1253,11 @@ export function __testResetSubmitted() { submittedSeeds.clear(); successions.cle
 /** Test hook: put entries in the crawl cache so cache-dependent paths can be driven. */
 export function __testSeedCache(entries = []) { for (const [o, e] of entries) cache.set(o, e); }
 
+/** Test hook: the state-database upsert alone, for `[origin, entry]` pairs,
+ *  with no pull first (the SQL newer-wins rule is what a race between two
+ *  containers meets, after one's pull and before its write). */
+export function __testPersistToStateDb(entries) { return persistIndexCacheToStateDb(entries, entries.map((e) => JSON.stringify(e))); }
+
 /** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
 export function __testSetBazaarTools(origin, rows) { if (Array.isArray(rows)) bazaarToolsByOrigin.set(origin, rows); else bazaarToolsByOrigin.delete(origin); }
 
@@ -2527,9 +2532,48 @@ function isDevServerHost(h) {
 }
 
 export function normaliseOpenapiTools(openapi, originUrl) {
-  return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
+  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
 }
-function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
+// The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
+// multi-megabyte document resolves its local refs twice per operation, and
+// one such document held the loop for most of a second in one turn.
+const CRAWL_SLICE_MS = 10;
+async function normaliseOpenapiToolsSliced(openapi, originUrl) {
+  return scopeRowsToSeller(await runCrawlLaneAsync(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+}
+// ONE LANE for the crawl's sliced work. Twenty-five crawls run at once, and a
+// slice that yields with setImmediate comes back in the next loop iteration
+// beside every other crawl's slice, so each iteration ran one slice per crawl
+// (measured: 25 crawls at 20 ms each held one iteration for half a second).
+// Through the lane an iteration runs at most one crawl slice, whichever crawl
+// is next in line; the work is the same, only its spread over turns changes.
+const crawlLaneQueue = [];
+let crawlLanePumping = false;
+function crawlLaneTurn() {
+  return new Promise((resolve) => {
+    crawlLaneQueue.push(resolve);
+    if (!crawlLanePumping) { crawlLanePumping = true; setImmediate(crawlLanePump); }
+  });
+}
+function crawlLanePump() {
+  const next = crawlLaneQueue.shift();
+  if (next) next();
+  if (crawlLaneQueue.length) setImmediate(crawlLanePump);
+  else crawlLanePumping = false;
+}
+async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS) {
+  await crawlLaneTurn();
+  let until = performance.now() + sliceMs;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await crawlLaneTurn(); until = performance.now() + sliceMs; }
+    r = gen.next();
+  }
+  return r.value;
+}
+// One step per operation; the document is read only, so a yield between two
+// operations cannot change a row.
+function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
@@ -2624,6 +2668,7 @@ function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
           } catch { return {}; }
         })(),
       });
+      yield;
     }
   }
   return out;
@@ -5588,7 +5633,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
              JSON.parse((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
           : JSON.parse(res.html);
         openapi = body;
-        openapiTools = normaliseOpenapiTools(openapi, originUrl);
+        openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
         openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
@@ -5696,7 +5741,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       const parsed = JSON.parse(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
-        openapiTools = normaliseOpenapiTools(parsed, originUrl);
+        openapiTools = await normaliseOpenapiToolsSliced(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
         else noteFallback("/openapi.json", "no paid operation could be read from it");
       } else noteFallback("/openapi.json", "no payment annotation on any operation");
@@ -5719,7 +5764,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
         const parsed = JSON.parse(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
         if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
-          const fromAgents = normaliseOpenapiTools(parsed, originUrl);
+          const fromAgents = await normaliseOpenapiToolsSliced(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
       } catch (e) {
@@ -6857,7 +6902,12 @@ const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
 // Rows per statement and bytes per statement: an origin's entry can run to
 // hundreds of KB (tool arrays), so batches are cut by size as well as count.
 const PG_ROWS_PER_BATCH = 40;
-const PG_BYTES_PER_BATCH = 4 * 1_048_576;
+const PG_BYTES_PER_BATCH = 1_048_576;
+// A body this large travels alone, as a plain jsonb parameter. Inside a jsonb[]
+// the driver escapes every quote of every element into an array literal in one
+// synchronous pass: measured 0.85-1.2 s for one 82 MB entry, against 80 ms for
+// the same text as a scalar, and the stored row is the same either way.
+const PG_SINGLE_ROW_BYTES = 1_048_576;
 // origin -> hash of the line last written (null: held, hash unknown). The hash
 // lets an unchanged origin skip its write; the key set is what a persist
 // deletes against.
@@ -6964,6 +7014,11 @@ function* recordBatches(entries, bodyOf) {
   for (let i = 0; i < entries.length; i++) {
     const body = bodyOf(i);
     if (body === null) continue;
+    if (body.length >= PG_SINGLE_ROW_BYTES) {
+      if (ids.length) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
+      yield [[entries[i][0]], [body]];
+      continue;
+    }
     ids.push(entries[i][0]); bodies.push(body); bytes += body.length;
     if (ids.length >= PG_ROWS_PER_BATCH || bytes >= PG_BYTES_PER_BATCH) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
   }
@@ -6993,13 +7048,23 @@ async function persistIndexCacheToStateDb(entries, lines) {
       // copy of an origin than the row (the other crawled it since), and an
       // unconditional upsert wrote that copy back. A row is replaced only by
       // an entry fetched at least as recently as the one it holds.
-      await stateQuery(
-        `INSERT INTO ${recordsTable()} AS r (collection, id, body)
-         SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
-         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-         WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
-        [INDEX_RECORDS, ids, bodies],
-      );
+      if (ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES) {
+        // The same upsert and the same newer-wins rule, one row as a scalar.
+        await stateQuery(
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+          [INDEX_RECORDS, ids[0], bodies[0]],
+        );
+      } else {
+        await stateQuery(
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body)
+           SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
+           ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+          [INDEX_RECORDS, ids, bodies],
+        );
+      }
       for (const id of ids) pgOriginHashes.set(id, changed.get(id));
       written += ids.length;
       await new Promise((r) => setImmediate(r));
@@ -7058,11 +7123,12 @@ async function importIndexCacheFile() {
   let rows = 0, bytes = 0;
   const bodyOf = (i) => { const b = JSON.stringify(entries[i][1]); bytes += b.length; return b; };
   for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
-    await stateQuery(
-      `INSERT INTO ${recordsTable()} (collection, id, body)
+    await stateQuery(ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES
+      ? `INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`
+      : `INSERT INTO ${recordsTable()} (collection, id, body)
        SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
-      [INDEX_RECORDS, ids, bodies],
+    ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? [INDEX_RECORDS, ids[0], bodies[0]] : [INDEX_RECORDS, ids, bodies],
     );
     rows += ids.length;
     await new Promise((r) => setImmediate(r));
@@ -7693,7 +7759,8 @@ export async function warmRoutableSellerSummaries() {
 }
 function* routableSummarySteps() {
   const out = [];
-  const aliasOrigins = computeAliasOrigins(cache);
+  // The alias walk in steps too, so the sliced warm does not take it in one turn.
+  const aliasOrigins = yield* computeAliasOriginsSteps(cache);
   yield;
   let walked = 0;
   for (const [origin, v] of [...cache.entries()]) {
@@ -9574,6 +9641,23 @@ export function* routableRemoteEntries({ baseUrl = "" } = {}) {
     yield [origin, decoratedRemoteTools(v)];
   }
 }
+/** routableRemoteEntries across turns: the same filter, order and pools, with
+ *  the alias walk and each entry's decoration cut into slices of `sliceMs`. A
+ *  re-crawl moves the alias memo, and one seller can carry tens of thousands of
+ *  tools, so either one done in line held the loop for the export's first row. */
+export async function* routableRemoteEntriesSliced({ baseUrl = "", sliceMs = DIRECTORY_SLICE_MS } = {}) {
+  if (!removalsKnown()) return;
+  const aliases = await runSlicedAsync(computeAliasOriginsSteps(cache), sliceMs);
+  for (const [origin, v] of cache) {
+    if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
+    let pool = remotePoolMemo.get(v);
+    while (!pool) {
+      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs);
+      if (!pool) await yieldTurn();
+    }
+    yield [origin, pool];
+  }
+}
 
 export function sellerEntry(originOrHost) {
   const origin = findSellerKey(originOrHost);
@@ -9778,11 +9862,11 @@ const yieldTurn = () => new Promise((r) => setImmediate(r));
 // DIRECTORY_SLICE_MS each. One generator per computation, so the two runs
 // cannot drift apart.
 function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
-async function runSlicedAsync(gen) {
-  let until = performance.now() + DIRECTORY_SLICE_MS;
+async function runSlicedAsync(gen, sliceMs = DIRECTORY_SLICE_MS) {
+  let until = performance.now() + sliceMs;
   let r = gen.next();
   while (!r.done) {
-    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + DIRECTORY_SLICE_MS; }
+    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + sliceMs; }
     r = gen.next();
   }
   return r.value;
