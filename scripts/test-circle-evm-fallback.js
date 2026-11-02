@@ -523,11 +523,30 @@ async function payBase(url) {
   return r;
 }
 const settleOrder = () => st.hits.filter((h) => h.url === "/settle").map((h) => h.who);
+// The unpaid 402 on a few routes, with this boot's own origin replaced, so two
+// boots on different ports compare byte for byte.
+const CHALLENGE_PATHS = [PATH, "/api/uuid", "/api/demand-radar?limit=3"];
+async function challenges(url) {
+  const out = {};
+  for (const p of CHALLENGE_PATHS) {
+    const r = await fetch(`${url}${p}`);
+    const body = (await r.text()).split(url).join("ORIGIN");
+    const header = String(r.headers.get("payment-required") || "");
+    // The header's own bytes (key order and all), origin replaced; its size
+    // is what a buyer must echo back.
+    const raw = Buffer.from(header, "base64").toString("utf8").split(url).join("ORIGIN");
+    const originCount = Buffer.from(header, "base64").toString("utf8").split(url).length - 1;
+    out[p] = { status: r.status, raw, headerBytes: header.length, originCount, decoded: JSON.parse(raw), body };
+  }
+  return out;
+}
+const seen = {};
 
 await check("switch off (key set): Base settles through CDP then PayAI only; the issuer's facilitator never sees a Base settle", async () => {
   st.hits = []; st.cdpSettle = "402";
   const { url, log, proc } = await boot(P_SERVER1, {});
   try {
+    seen.off = { url, c: await challenges(url) };
     const r = await payBase(url);
     assert.equal(r.status, 402, `both refuse: the buyer is not served (got ${r.status})`);
     assert.deepEqual(settleOrder(), ["cdp", "payai"]);
@@ -542,6 +561,7 @@ await check("switch on: CDP verifies and is tried first; after CDP and PayAI ref
   try {
     for (let i = 0; i < 40 && !log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback`); i++) await new Promise((r) => setTimeout(r, 250));
     assert.match(log.text, new RegExp(`${CIRCLE_EVM_LABEL.replace(/[()]/g, "\\$&")}: last settle fallback on eip155:8453, eip155:137`));
+    seen.on = { url, c: await challenges(url) };
     const r = await payBase(url);
     assert.equal(r.status, 200, `served after the last fallback settled (got ${r.status})`);
     assert.deepEqual(settleOrder(), ["cdp", "payai", "circle"]);
@@ -553,6 +573,27 @@ await check("switch on: CDP verifies and is tried first; after CDP and PayAI ref
     assert.equal(decode(r.headers.get("payment-response")).transaction, TX);
     assert.ok(!leaks(log.text), "the key never reaches a log line");
   } finally { proc.kill("SIGKILL"); }
+});
+
+await check("the 402 challenge is identical with the switch on and off (key set both times): accepts, networks, amounts, header size", () => {
+  assert.ok(seen.off && seen.on, "both boots captured a challenge");
+  const sameLen = seen.off.url.length === seen.on.url.length;
+  for (const p of CHALLENGE_PATHS) {
+    const a = seen.off.c[p], b = seen.on.c[p];
+    assert.equal(a.status, 402, `${p} off`);
+    assert.equal(b.status, 402, `${p} on`);
+    const nets = (x) => x.decoded.accepts.map((k) => `${k.scheme}:${k.network}:${k.asset}:${k.amount}:${k.payTo}`);
+    assert.deepEqual(nets(b), nets(a), `${p}: accepts`);
+    assert.ok(nets(a).some((s) => s.startsWith(`exact:${BASE}:`)) && nets(a).some((s) => s.startsWith(`exact:${POLYGON}:`)), `${p}: Base and Polygon offered`);
+    assert.deepEqual(b.decoded, a.decoded, `${p}: decoded challenge`);
+    assert.equal(b.raw, a.raw, `${p}: header bytes`);
+    assert.equal(b.body, a.body, `${p}: 402 body`);
+    // Same bytes once the origin is replaced; the encoded size differs only
+    // by the origin's own length, which is equal when the ports have the
+    // same number of digits.
+    assert.equal(b.originCount, a.originCount);
+    if (sameLen) assert.equal(b.headerBytes, a.headerBytes, `${p}: header size`);
+  }
 });
 
 await check("switch on, CDP answers 5xx (ambiguous): the chain stops, nobody else is asked", async () => {
