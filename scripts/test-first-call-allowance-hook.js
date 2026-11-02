@@ -40,6 +40,17 @@ const { createClient } = await import("redis");
 
 let pass = 0, failed = 0;
 const ok = (c, msg) => { if (c) { pass++; console.log(`ok - ${msg}`); } else { failed++; console.error(`FAIL - ${msg}`); } };
+
+// A share request blocks a grant only while sharing is on.
+{
+  const { shareBlocksGrant } = await import("../src/first-call-allowance.js");
+  const was = process.env.ANSWER_SHARE;
+  process.env.ANSWER_SHARE = "";
+  ok(shareBlocksGrant({ share: true }) === false && shareBlocksGrant({ share: "true" }) === false, "sharing off: asking for a share link does not block a grant");
+  process.env.ANSWER_SHARE = "on";
+  ok(shareBlocksGrant({ share: true }) === true && shareBlocksGrant({ share: "true" }) === true && shareBlocksGrant({}) === false, "sharing on: asking for a share link blocks a grant");
+  if (was === undefined) delete process.env.ANSWER_SHARE; else process.env.ANSWER_SHARE = was;
+}
 const NET = "eip155:8453";
 const DEF = { route: "POST /api/hash", slug: "hash", price: "$0.001" };
 const RUN = randomBytes(8).toString("hex");
@@ -141,9 +152,19 @@ try {
     ok(m.allowanceSettleDecision({ paymentPayload: { x402Version: 2, payload: {} }, requirements: pay.accepted, transportContext: { request: { adapter: { req } } } }) === undefined,
       "an inherited claimed state never skips a settle");
   }
-  // 8. A call that asks for a share link is not granted (the link is written
-  // only on a settled 200), whether share rides the query or the body.
+  // 8. While sharing is on, a call that asks for a share link is not granted
+  // (the link is written only on a settled 200), whether share rides the
+  // query or the body. With sharing off the same call is granted.
   {
+    const shareWas = process.env.ANSWER_SHARE;
+    process.env.ANSWER_SHARE = "";
+    {
+      const { req, res } = fakeCall(payment(wallet())); req.query = { share: "true" };
+      const a = await claim(req, res);
+      ok(a.granted === true, `sharing off: share=true is granted as usual (${a.reason || "granted"})`);
+      await m.finishFirstCallAllowance(req);
+    }
+    process.env.ANSWER_SHARE = "on";
     for (const [where, set] of [["query", (req) => { req.query = { share: "true" }; }], ["body", (req) => { req.body = { text: "x", share: true }; }], ["envelope", (req) => { req.body = { input: { share: "1" } }; }]]) {
       const w = wallet(); const pay = payment(w); const { req, res } = fakeCall(pay); set(req);
       const a = await claim(req, res);
@@ -154,6 +175,7 @@ try {
     const a = await claim(req, res);
     ok(a.granted === true, `share=false is granted as usual (${a.reason || "granted"})`);
     await m.finishFirstCallAllowance(req);
+    if (shareWas === undefined) delete process.env.ANSWER_SHARE; else process.env.ANSWER_SHARE = shareWas;
   }
   // 9. The wallet key expires: a claim holds it for the claim TTL (a crash
   // leaves nothing forever); a served grant keeps it for the long TTL.

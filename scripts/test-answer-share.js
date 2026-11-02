@@ -346,7 +346,7 @@ try {
     ok(r.headers.get("x-robots-tag") === "noindex, nofollow" && /<meta name="robots" content="noindex, nofollow">/.test(html), "the page is noindex in the header and the meta");
     const cc = r.headers.get("cache-control") || "";
     const maxAge = Number(/max-age=(\d+)/.exec(cc)?.[1]);
-    ok(/^public,/.test(cc) && /immutable/.test(cc) && maxAge > 0 && maxAge <= 86_400, `public, immutable, and cached no longer than a day (${cc})`);
+    ok(/^public,/.test(cc) && !/immutable/.test(cc) && maxAge > 0 && maxAge <= 300, `public, not immutable, and cached at most five minutes so a removal takes effect (${cc})`);
     ok(/default-src 'self'/.test(r.headers.get("content-security-policy") || ""), "the page carries the site CSP");
     ok(html.includes("what is x402") && html.includes('<li id="source-2">'), "the page shows the question and its sources");
     checkHostile(html, "served page");
@@ -357,7 +357,7 @@ try {
     await viaAccept.text();
     const j = await fetch(`${link.url}.json`);
     const jb = await j.json().catch(() => ({}));
-    ok(j.status === 200 && jb.question === "what is x402" && jb.modelBacked === true && jb.citations.length === STUB_CITATIONS.length && /immutable/.test(j.headers.get("cache-control") || "") && j.headers.get("x-robots-tag") === "noindex, nofollow", "the JSON record lives at <url>.json (question, answer, citations, modelBacked), noindex");
+    ok(j.status === 200 && jb.question === "what is x402" && jb.modelBacked === true && jb.citations.length === STUB_CITATIONS.length && /max-age=([1-9]\d?|[12]\d\d|300)\b/.test(j.headers.get("cache-control") || "") && !/immutable/.test(j.headers.get("cache-control") || "") && j.headers.get("x-robots-tag") === "noindex, nofollow", "the JSON record lives at <url>.json (question, answer, citations, modelBacked), noindex");
     const svg = await fetch(`${link.url}/card.svg`);
     ok(svg.status === 200 && /image\/svg\+xml/.test(svg.headers.get("content-type") || "") && /<svg[^>]+width="1200" height="630"/.test(await svg.text()), "the SVG card answers 1200x630");
     const png = await fetch(link.cardUrl, { redirect: "manual" });

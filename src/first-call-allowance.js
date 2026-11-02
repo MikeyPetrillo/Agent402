@@ -72,7 +72,7 @@ import { getSharedRedisClient } from "./shared-limit.js";
 import { keyOf, OP_MS } from "./shared-limits.js";
 import { stateDbEnabled, records } from "./state-db.js";
 import { handlerInputOf } from "./handler-input.js";
-import { wantsShare } from "./answer-share.js";
+import { wantsShare, answerShareEnabled } from "./answer-share.js";
 
 export const ALLOWANCE_HEADER = "X-Agent402-Allowance";
 export const ALLOWANCE_HEADER_VALUE = "first-call";
@@ -130,6 +130,11 @@ export function allowanceRouteRefusal(def, cfg = firstCallAllowanceConfig()) {
 }
 
 export { allowanceOf, allowanceServed };
+
+/** A call that asks for a share link takes no grant while sharing is on: the
+ *  link is written only on a settled 200. With sharing off the handler ignores
+ *  `share`, so asking for it costs nothing. */
+export function shareBlocksGrant(input) { return answerShareEnabled() && wantsShare(input?.share); }
 
 const isOurs = (payer) => {
   const p = String(payer || "").toLowerCase();
@@ -287,7 +292,7 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
   let input = null;
   try { input = handlerInputOf(req, def); } catch { input = null; }
   if (!input) return deny("input");
-  if (wantsShare(input.share)) return deny("share");
+  if (shareBlocksGrant(input)) return deny("share");
   let paid = true;
   try { paid = Boolean(await hasPaidSale(payer)); } catch { paid = true; }
   if (paid) return deny("paid before");

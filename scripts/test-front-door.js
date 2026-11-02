@@ -108,10 +108,12 @@ function assertAccess(label, text, powCount, wires) {
   ok(firstCallAllowanceEnabled() && FIRST_CALL_FREE_COPY.test(on), "unit: switch on, the access line offers the free first call");
   ok(on.includes(`to ${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG]} or ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.90)`), "unit: the clause names the eligible tools and the cap from the allowance config");
   ok([agentsMd(B, catOn), JSON.stringify(frontDoorJson(catOn, B)), JSON.stringify(frontDoor402Json(catOn, B))].every((s) => FIRST_CALL_FREE_COPY.test(s)), "unit: switch on, agents.md, the JSON block and the 402 part carry the clause (the JSON memo follows the switch)");
+  ok(agentsMd(B, catOn).includes("nor for a free first call (a re-send of its payment is refused and not charged)"), "unit: switch on, the replay line excludes a free first call");
   process.env.FIRST_CALL_ALLOWANCE_MAX_USD = "0.6";
   const capped = frontDoorMarkdown(catOn, B);
   ok(capped.includes(`to ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.60)`) && !new RegExp(`call to [^(]*${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG].replace(".", "\\.")}`).test(capped), "unit: a tool over the cap is left out of the clause");
   process.env.FIRST_CALL_ALLOWANCE = "off";
+  ok(!agentsMd(B, catOn).includes("free first call (a re-send"), "unit: switch off, the replay line does not mention a free first call");
   ok(!FIRST_CALL_FREE_COPY.test(frontDoorMarkdown(catOn, B)) && !FIRST_CALL_FREE_COPY.test(JSON.stringify(frontDoorJson(catOn, B))), "unit: switch back off, the clause is gone from markdown and the memoized JSON");
   for (const [k, v] of [["FIRST_CALL_ALLOWANCE", saved.on], ["FIRST_CALL_ALLOWANCE_MAX_USD", saved.max], ["FIRST_CALL_ALLOWANCE_SLUGS", saved.slugs]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 }

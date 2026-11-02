@@ -140,7 +140,7 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
     allowance,
     recovery: [
       `On x402 a call the tool fails is not charged: settlement runs after the tool and only for a response under 400, and no ${code("PAYMENT-RESPONSE")} header means nothing settled. ${LATE_SETTLE_EXCEPTION}${tempoOn ? " On MPP a Tempo push payment is sent before the call, so a failure there is booked as a refund owed." : ""}`,
-      `On an EVM x402 payment, re-send the same request with the same signed payment inside the replay window for the first answer (${code("X-Replayed-Answer: 1")}) with no second settlement; not on identity-bound routes, routes with a lasting effect or streamed calls.`,
+      `On an EVM x402 payment, re-send the same request with the same signed payment inside the replay window for the first answer (${code("X-Replayed-Answer: 1")}) with no second settlement; not on identity-bound routes, routes with a lasting effect or streamed calls${allowance ? ", nor for a free first call (a re-send of its payment is refused and not charged)" : ""}.`,
       `Send an ${code("Idempotency-Key")}: the same key with the same credential (an x402 payment, a proof-of-work token or a credits key), route and body returns the first 200 answer (up to ${IDEM_MAX_BODY_LABEL}) without a second charge.`,
       `On a slow route, send the paid call with ${code("Prefer: respond-async")} for a 202 and a job link, then poll ${code("GET /api/jobs/{id}")} (free); payment settles only on the delivered answer.`,
     ],

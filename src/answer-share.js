@@ -432,8 +432,10 @@ function cachedPage(rec, render) {
 /** Tests: the rendered-page cache. */
 export const __htmlCache = htmlCache;
 const secondsLeft = (rec, now) => Math.max(1, Math.floor((rec.expiresAt - now) / 1000));
-// Public, immutable content; the cache lifetime never outlasts the share.
-const cacheFor = (rec, now) => `public, max-age=${Math.min(86_400, secondsLeft(rec, now))}, immutable`;
+// Public content kept briefly in caches, so an operator removal takes effect
+// within minutes; the lifetime never outlasts the share.
+const SHARE_CACHE_SECONDS = 300;
+const cacheFor = (rec, now) => `public, max-age=${Math.min(SHARE_CACHE_SECONDS, secondsLeft(rec, now))}`;
 const NOINDEX = "noindex, nofollow";
 
 /**

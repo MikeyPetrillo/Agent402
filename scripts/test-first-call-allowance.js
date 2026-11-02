@@ -187,6 +187,7 @@ try {
     FIRST_CALL_ALLOWANCE_IP_PER_DAY: "1",
     // No forgiveness ticket: a granted call's hang-up reaches the debt recorder.
     HANGUP_FORGIVE: "off",
+    ANSWER_SHARE: "on",
     ...(PG_URL ? { STATE_DATABASE_URL: PG_URL, STATE_DB_SCHEMA: PG_SCHEMA } : {}),
   });
   const B = Bt.B;
@@ -365,7 +366,7 @@ globalThis.fetch = async (input, init) => {
     FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_SLUGS: "answer", FIRST_CALL_ALLOWANCE_MAX_USD: "0.1",
     FIRST_CALL_ALLOWANCE_DAILY_USD: "1", FIRST_CALL_ALLOWANCE_IP_PER_DAY: "100",
     HANGUP_FORGIVE: "off", BRAVE_API_KEY: "stub-never-sent", BRAVE_ANSWERS_API_KEY: "",
-    ANSWER_SHARE_DIR: mkdtempSync(join(tmpdir(), "fca-share-")),
+    ANSWER_SHARE: "on", ANSWER_SHARE_DIR: mkdtempSync(join(tmpdir(), "fca-share-")),
   }, { preload: pre });
   {
     const path = "/api/answer?q=what%20is%20x402";
