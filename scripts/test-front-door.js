@@ -15,16 +15,17 @@
 //   node scripts/test-front-door.js
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";
 import { BAZAAR_DESCRIPTIONS, isExamplePointer } from "../src/payments.js";
 import {
-  FRONT_DOOR_SLUG, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, FIRST_CALL_FREE_COPY,
-  frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd,
+  FRONT_DOOR_SLUG, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, RECOVERY_ANCHOR, FIRST_CALL_FREE_COPY,
+  LATE_SETTLE_EXCEPTION, frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd, paidWiresPhrase,
 } from "../src/front-door.js";
+import { RAILS } from "../src/rails.js";
 import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 import { isComputePayable } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
@@ -55,9 +56,10 @@ function listOf(md, heading, label, labels) {
 }
 
 /** Scope words each recovery sentence must carry (the place it holds). */
-function assertRecoveryScope(label, rec) {
-  ok(/x402/.test(rec[0]) && /under 400/.test(rec[0]) && /PAYMENT-RESPONSE/.test(rec[0]) && /Tempo push payment/.test(rec[0]) && /refund owed/.test(rec[0]),
-    `${label}: the not-charged sentence is scoped to x402 and names the Tempo push exception`);
+function assertRecoveryScope(label, rec, { tempo = false } = {}) {
+  ok(/x402/.test(rec[0]) && /under 400/.test(rec[0]) && /PAYMENT-RESPONSE/.test(rec[0]) && rec[0].includes(LATE_SETTLE_EXCEPTION),
+    `${label}: the not-charged sentence is scoped to x402 and names the late-settle exception`);
+  ok(/Tempo push payment/.test(rec[0]) === tempo, `${label}: the Tempo push exception appears only while Tempo is offered (${tempo ? "on" : "off"})`);
   ok(/EVM x402/.test(rec[1]) && /same signed payment/.test(rec[1]) && /replay window/.test(rec[1]) && /X-Replayed-Answer: 1/.test(rec[1]) && /identity-bound/.test(rec[1]) && /lasting effect/.test(rec[1]) && /streamed/.test(rec[1]),
     `${label}: the implicit replay is scoped to an EVM x402 payment, with its three exclusions`);
   ok(/Idempotency-Key/.test(rec[2]) && /same credential/.test(rec[2]) && /route and body/.test(rec[2]) && /first 200 answer/.test(rec[2]) && /\d+ MB/.test(rec[2]),
@@ -68,13 +70,13 @@ function assertRecoveryScope(label, rec) {
 
 /** The access line: no account or key, the free tier first with its count and
  *  where it is listed, then the paid wires (scoped to Tempo's own coins). */
-function assertAccess(label, text, powCount) {
+function assertAccess(label, text, powCount, wires) {
   const t = strip(text);
   ok(/^No account, no API key\./.test(t), `${label}: access opens with no account and no API key`);
   ok(t.includes(`${powCount} pure-CPU tools run free with proof-of-work and no wallet`), `${label}: access leads with the free tier at its derived count (${powCount})`);
   ok(t.includes(`GET ${POW_LIST_PATH}`), `${label}: access says where the free tools are listed (${POW_LIST_PATH})`);
-  ok(t.indexOf("proof-of-work") < t.indexOf("x402") && /USDC over x402 or MPP \(Tempo settles in its own stablecoins\)/.test(t) && /quoted in the 402 before you pay/.test(t),
-    `${label}: then pay per call in USDC over x402 or MPP, Tempo scoped, quoted before payment`);
+  ok(t.indexOf("proof-of-work") < t.indexOf("x402") && t.includes(`paid per call in ${wires}, quoted in the 402 before you pay`),
+    `${label}: then pay per call in ${wires}, quoted before payment`);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +114,64 @@ function assertAccess(label, text, powCount) {
   process.env.FIRST_CALL_ALLOWANCE = "off";
   ok(!FIRST_CALL_FREE_COPY.test(frontDoorMarkdown(catOn, B)) && !FIRST_CALL_FREE_COPY.test(JSON.stringify(frontDoorJson(catOn, B))), "unit: switch back off, the clause is gone from markdown and the memoized JSON");
   for (const [k, v] of [["FIRST_CALL_ALLOWANCE", saved.on], ["FIRST_CALL_ALLOWANCE_MAX_USD", saved.max], ["FIRST_CALL_ALLOWANCE_SLUGS", saved.slugs]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+}
+
+// ---------------------------------------------------------------------------
+// Part 1b: the access line names coins and wires from the live config.
+{
+  const keys = ["MPP_SECRET_KEY", "TEMPO_API_KEY", "TEMPO_RECIPIENT_ADDRESS", "WALLET_ADDRESS", "TEMPO_RELAY", "STRIPE_SECRET_KEY", "NETWORK", "PAYMENT_NETWORKS"];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of keys) delete process.env[k];
+  const B = "http://unit.test";
+  const c = { [`GET /api/${FRONT_DOOR_SLUG}`]: { slug: FRONT_DOOR_SLUG, price: "$0.01" } };
+  const others = RAILS.filter((r) => r.asset !== "USDC");
+  const coins = others.length ? `stablecoins (USDC, and ${others.map((r) => `${r.asset} on ${r.name}`).join(" and ")})` : "USDC";
+  ok(paidWiresPhrase() === `${coins} over x402`, `unit: MPP off, the access line says ${coins} over x402 (${paidWiresPhrase()})`);
+  const offAccess = frontDoorJson(c, B).access;
+  ok(!/MPP|Tempo/.test(offAccess) && offAccess.includes(`in ${coins} over x402,`), "unit: MPP off, the access line names neither MPP nor Tempo");
+  ok(others.every((r) => offAccess.includes(`${r.asset} on ${r.name}`)), "unit: every non-USDC rail's coin is named on its chain");
+  const offAgents = agentsMd(B, c);
+  ok(offAgents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !offAgents.includes("both offers"), "unit: MPP off, /agents.md Connect names the x402 offer only");
+  process.env.MPP_SECRET_KEY = "unit";
+  ok(paidWiresPhrase() === `${coins} over x402 or MPP`, `unit: MPP on, the access line adds MPP (${paidWiresPhrase()})`);
+  ok(frontDoorJson(c, B).access.includes(`in ${coins} over x402 or MPP,`), "unit: MPP on, the memoized JSON follows the switch");
+  const onAgents = agentsMd(B, c);
+  ok(onAgents.includes("both offers (x402 `PAYMENT-REQUIRED` and MPP `WWW-Authenticate: Payment`)"), "unit: MPP on, /agents.md Connect names both offers (the memo follows the switch)");
+  ok(!/Tempo push payment/.test(onAgents), "unit: MPP on without Tempo, no Tempo push sentence");
+  process.env.TEMPO_API_KEY = "unit"; process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+  const tempoAgents = agentsMd(B, c);
+  ok(paidWiresPhrase().includes("Tempo"), "unit: a relay key and a recipient turn Tempo on");
+  {
+    ok(paidWiresPhrase() === `${coins} over x402 or MPP (Tempo settles in its own stablecoins)`, "unit: Tempo on, the access line scopes Tempo's own coins");
+    ok(/Tempo push payment/.test(tempoAgents), "unit: Tempo on, the recovery line names the Tempo push exception");
+  }
+  ok(offAgents.includes(`When a call fails: [${AGENTS_MD_PATH}](${RECOVERY_ANCHOR})`) && RECOVERY_ANCHOR === "#when-a-call-fails", `unit: /agents.md links its own recovery heading by fragment (${RECOVERY_ANCHOR})`);
+  ok(offAgents.includes(`## ${RECOVERY_HEADING}\n`), "unit: the fragment's heading is on the page");
+  for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+}
+
+// ---------------------------------------------------------------------------
+// Part 1c: the class. Any copy that says no PAYMENT-RESPONSE means nothing
+// settled (or not charged) carries the late-settle exception right after it.
+{
+  const CLAIM = /\bno\s*\*{0,2}\s*(?:\$\{\w+\(["'])?\\?`?PAYMENT-RESPONSE\\?`?(?:["']\)\})?\s*(?:header)?\s*\*{0,2}\s*(?:=|means|-)\s*(?:nothing settled|you were not charged)/gi;
+  const EXC = /timed-out settle, or a disconnect during settle, is booked\s+as a refund owed and repaid after on-chain proof|a transfer that lands after a timed-out settle[^.]*booked as a refund owed and repaid after on-chain proof|\$\{LATE_SETTLE_EXCEPTION\}/;
+  const files = [];
+  const walk = (dir) => { if (!existsSync(dir)) return; for (const n of readdirSync(dir)) { const f = join(dir, n); const st = statSync(f); if (st.isDirectory()) { if (n !== "node_modules" && n !== "generated") walk(f); } else if (/\.(js|mjs|md|txt)$/.test(n)) files.push(f); } };
+  for (const d of ["src", "wiki", "docs"]) walk(join(ROOT, d));
+  for (const f of ["README.md", "mcp/README.md", "mcp/index.js", "client/README.md", "tollbooth/README.md", "openclaw/README.md"]) if (existsSync(join(ROOT, f))) files.push(join(ROOT, f));
+  let claims = 0;
+  const bare = [];
+  for (const f of files) {
+    const text = readFileSync(f, "utf8");
+    for (const m of text.matchAll(CLAIM)) {
+      claims++;
+      const after = text.slice(m.index, m.index + m[0].length + 700).replace(/\\?\n\s*/g, " ");
+      if (!EXC.test(after)) bare.push(`${f.slice(ROOT.length + 1)}:${text.slice(0, m.index).split("\n").length}`);
+    }
+  }
+  ok(claims >= 5, `class: the no-receipt claim is found where it is made (${claims} places)`);
+  ok(bare.length === 0, `class: every no-receipt claim carries the late-settle exception${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +228,8 @@ async function describeOf(B) {
 }
 
 /** Every surface of one boot; returns the texts the switch checks read. */
-async function readSurfaces(B, tag) {
+async function readSurfaces(B, tag, { mpp = false } = {}) {
+  const wires = `${RAILS.some((r) => r.asset !== "USDC") ? `stablecoins (USDC, and ${RAILS.filter((r) => r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`).join(" and ")})` : "USDC"} over x402${mpp ? " or MPP" : ""}`;
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const row = (pricing.endpoints || []).find((e) => e.slug === FRONT_DOOR_SLUG);
   ok(!!row && typeof row.price === "string" && /^\$\d/.test(row.price), `${tag}: the catalog prices the first call (${FRONT_DOOR_SLUG}: ${row?.price})`);
@@ -197,16 +258,17 @@ async function readSurfaces(B, tag) {
   const llmsRes = await fetch(`${B}/llms.txt`);
   const llms = await llmsRes.text();
   ok(llmsRes.status === 200, `${tag} /llms.txt answers 200`);
-  ok(/^# Agent402\.Tools\n\n> [^\n]+\n\n## Start here\n\n- \*\*First call:\*\*/.test(llms), `${tag} /llms.txt: title, then the summary blockquote, then the three lines`);
+  ok(/^# Agent402\.Tools\n\n> [^\n]+\n\nBase URL: [^\n]+\n\nThe full text[^\n]+\n\n## Start here\n\n- \*\*First call:\*\*/.test(llms), `${tag} /llms.txt: title, summary blockquote, the pre-H2 paragraphs (base URL, full text), then the three lines under the first H2`);
+  ok(llms.indexOf("\n## ") === llms.indexOf("\n## Start here"), `${tag} /llms.txt: "## Start here" is the first H2`);
   const L = listOf(llms, "Start here", `${tag} /llms.txt`, LABELS);
-  for (const wire of ["Base URL:", "## Settlement chains", "## Connect via MCP"]) {
-    ok(llms.indexOf(wire, llms.indexOf("\n", llms.indexOf("\n> ") + 1)) > L.at + L.block.length, `${tag} /llms.txt: "${wire}" comes after the block`);
+  for (const wire of ["## Settlement chains", "## Connect via MCP"]) {
+    ok(llms.indexOf(wire) > L.at + L.block.length, `${tag} /llms.txt: "${wire}" comes after the block`);
   }
   assertFirstCall(`${tag} /llms.txt`, L.lines["First call"]);
-  assertAccess(`${tag} /llms.txt`, L.lines.Access, powCount);
+  assertAccess(`${tag} /llms.txt`, L.lines.Access, powCount, wires);
   assertUse(`${tag} /llms.txt`, L.lines["Use when"]);
-  ok(L.lines["Use when"].includes(`[${AGENTS_MD_PATH}](${BASE_URL}${AGENTS_MD_PATH})`), `${tag} /llms.txt: the use line links ${AGENTS_MD_PATH}`);
-  ok(!RECOVERY_WORDS.test(llms.slice(0, llms.indexOf("Base URL:"))) && !llms.includes(`## ${RECOVERY_HEADING}`), `${tag} /llms.txt: no recovery line at the top (they live on ${AGENTS_MD_PATH})`);
+  ok(L.lines["Use when"].includes(`[${AGENTS_MD_PATH}](${BASE_URL}${AGENTS_MD_PATH}${RECOVERY_ANCHOR})`), `${tag} /llms.txt: the use line links ${AGENTS_MD_PATH}${RECOVERY_ANCHOR}`);
+  ok(!RECOVERY_WORDS.test(llms.slice(0, L.at + L.block.length)) && !llms.includes(`## ${RECOVERY_HEADING}`), `${tag} /llms.txt: no recovery line at the top (they live on ${AGENTS_MD_PATH})`);
   ok(!EM_DASH.test(L.block), `${tag} /llms.txt: no em or en dash in the block`);
   ok(Buffer.byteLength(llms) < 16_384, `${tag} /llms.txt stays a short index (${Buffer.byteLength(llms)} bytes)`);
 
@@ -216,16 +278,19 @@ async function readSurfaces(B, tag) {
   ok(agentsRes.status === 200 && /^text\/markdown/.test(agentsRes.headers.get("content-type") || ""), `${tag} ${AGENTS_MD_PATH} answers 200 as text/markdown`);
   const A = listOf(agents, "Start here", `${tag} ${AGENTS_MD_PATH}`, LABELS);
   ok(agents.indexOf("\n## ") === A.at - 1, `${tag} ${AGENTS_MD_PATH}: the block is the first section`);
-  ok(A.block === L.block, `${tag} ${AGENTS_MD_PATH}: the block is the same text /llms.txt carries`);
+  ok(A.block === L.block.replace(`(${BASE_URL}${AGENTS_MD_PATH}${RECOVERY_ANCHOR})`, `(${RECOVERY_ANCHOR})`), `${tag} ${AGENTS_MD_PATH}: the block is the same text /llms.txt carries, its failure link a fragment on the page itself`);
+  ok(!agents.includes(`](${BASE_URL}${AGENTS_MD_PATH})`), `${tag} ${AGENTS_MD_PATH}: never links to itself by URL`);
   const R = listOf(agents, RECOVERY_HEADING, `${tag} ${AGENTS_MD_PATH}`, RECOVERY_LABELS);
   ok(R.at > A.at && R.at < agents.indexOf("## Connect") && agents.indexOf("## Connect") < agents.indexOf("## Pay"), `${tag} ${AGENTS_MD_PATH}: "${RECOVERY_HEADING}" follows the block, ahead of Connect and Pay`);
   assertRecoveryScope(`${tag} ${AGENTS_MD_PATH}`, RECOVERY_LABELS.map((k) => R.lines[k]));
+  ok(mpp ? agents.includes("both offers (x402") : agents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !agents.includes("both offers"), `${tag} ${AGENTS_MD_PATH}: Connect names ${mpp ? "both offers" : "the x402 offer only"}`);
   ok(!EM_DASH.test(agents), `${tag} ${AGENTS_MD_PATH}: no em or en dash anywhere`);
 
   // MCP server.describe: frontDoor first, the same three sentences and the guide.
   const about = await describeOf(B);
   ok(Object.keys(about)[0] === "frontDoor", `${tag} server.describe: frontDoor is the first key`);
   ok(typeof about.service === "string" && typeof about.startHere === "object" && typeof about.install === "object", `${tag} server.describe: the rest of the contract is intact`);
+  ok(typeof about.startHere?.firstJob === "string" && about.startHere.firstJob.startsWith(about.frontDoor?.firstCall || "\u0000"), `${tag} server.describe: startHere.firstJob opens with the frontDoor first call (one first-call answer)`);
   const fd = about.frontDoor || {};
   ok(JSON.stringify(Object.keys(fd)) === JSON.stringify(["firstCall", "access", "use", "guide"]), `${tag} server.describe: frontDoor is the three lines and the guide (${Object.keys(fd).join(",")})`);
   ok(fd.firstCall === strip(L.lines["First call"]) && fd.access === strip(L.lines.Access) && fd.use === strip(L.lines["Use when"]), `${tag} server.describe: the three sentences are the /llms.txt sentences`);
@@ -296,8 +361,8 @@ async function readSurfaces(B, tag) {
 // --- boot 2: FIRST_CALL_ALLOWANCE on, a non-default cap -------------------------
 {
   const MAX_USD = "0.02";
-  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD });
-  const s = await readSurfaces(B, "on");
+  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD, MPP_SECRET_KEY: "front-door-test-mpp-secret-0123456789abcdef" });
+  const s = await readSurfaces(B, "on", { mpp: true });
   const texts = { "/llms.txt": s.llms, [AGENTS_MD_PATH]: s.agents, "server.describe": JSON.stringify(s.fd), "402 body": JSON.stringify(s.body402) };
   for (const [where, text] of Object.entries(texts)) ok(FIRST_CALL_FREE_COPY.test(text), `on: ${where} offers the free first call`);
   const access = strip(s.L.lines.Access);

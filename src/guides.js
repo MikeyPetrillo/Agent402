@@ -1051,7 +1051,9 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
 A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
-(no \`PAYMENT-RESPONSE\` = nothing settled). Prefer MPP? The same 402 also
+(no \`PAYMENT-RESPONSE\` = nothing settled). One exception: a transfer that
+lands after a timed-out settle, or a disconnect during settle, is booked as a
+refund owed and repaid after on-chain proof. Prefer MPP? The same 402 also
 carries a \`WWW-Authenticate: Payment\` challenge - see
 [x402 and MPP on the same paywall](/guides/x402-and-mpp).
 `,

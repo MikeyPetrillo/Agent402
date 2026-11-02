@@ -6,17 +6,19 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-03 (agent front door)
+### 2026-11-02 (agent front door)
 Surfaces:
-- /llms.txt (under its title and summary), /agents.md and the MCP
-  server.describe answer open with the same three-line front door: the
-  first call (web.search, with web.answer beside it) at its catalog price;
-  access with no account or API key, led by the proof-of-work tools that
-  run free with no wallet (counted from the catalog, listed at /api/pow),
-  then pay per call in USDC over x402 or MPP; and when to use the service
-  and when not to, linked to /agents.md. The unpaid 402 body carries the
-  access line and the /agents.md link. Rails and wire detail follow
-  unchanged.
+- /llms.txt (after its title, summary, base URL and full-text link),
+  /agents.md and the MCP server.describe answer open with the same
+  three-line front door: the first call (web.search, with web.answer beside
+  it) at its catalog price; access with no account or API key, led by the
+  proof-of-work tools that run free with no wallet (counted from the
+  catalog, listed at /api/pow), then pay per call in the stablecoins and
+  over the wires this server offers (named from its live configuration);
+  and when to use the service and when not to, linked to /agents.md.
+  server.describe's startHere.firstJob opens with the same first call. The
+  unpaid 402 body carries the access line and the /agents.md link. Rails and
+  wire detail follow unchanged.
 - New /agents.md (text/markdown, free): the front door, then "When a call
   fails" (four recovery lines, each scoped to where it holds), then how to
   connect, pay and find more tools. Linked from /llms.txt, listed in the
@@ -26,7 +28,8 @@ Surfaces:
 - The Bazaar listings of web search, web answer, news search and browser
   render say what one call returns; the search and news sample outputs
   show two results with a matching count.
-- web.answer takes `share=true` (off by default, same price): the answer
+- When shareable answers are enabled (`ANSWER_SHARE=on`, off by default),
+  web.answer takes `share=true` (same price): the answer
   also carries `share: { url, cardUrl, expiresAt }`, a public page of the
   question, the answer and its cited sources with a 1200x630 preview card,
   written only once the call settles and kept 30 days (then 410). The page
