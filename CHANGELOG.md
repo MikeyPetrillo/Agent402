@@ -22,6 +22,9 @@ Payments:
 - The CDP facilitator's auth headers are built by the server itself, so a
   self-hosted server no longer installs @coinbase/x402; the same CDP key
   variables apply.
+Surfaces:
+- /revenue's MPP table shows each rail's last settlement by date, marked
+  "ours" when it was our own, as the x402 table does.
 
 ### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search, Stellar RPC)
 Gateway:

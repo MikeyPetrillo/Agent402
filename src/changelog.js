@@ -9,6 +9,7 @@ const ENTRIES = [
       "Router: a Tempo seller's error after payment is reported as \"it may have been charged\", unless the chain shows the payment was never taken, which is read only when the caller's answer window outlasts the payment's expiry.",
       "Router: an MPP seller whose own llms.txt example takes a list (for example urls: [...]) receives a single url, query or id in that shape; the receipt's paramsAdapted names the rename. An ambiguous case is sent as written, and a seller with a published input schema is unchanged.",
       "Payments: the CDP facilitator's auth headers are built by the server itself, so a self-hosted server no longer installs @coinbase/x402; the same CDP key variables apply.",
+      "Surfaces: /revenue's MPP table shows each rail's last settlement by date, marked \"ours\" when it was our own, as the x402 table does.",
     ],
   },
   {

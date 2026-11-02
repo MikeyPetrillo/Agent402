@@ -1844,12 +1844,20 @@ function mppRailsSection(mpp, { wallets = {} } = {}) {
       : meta.explorer && addr
         ? `<a href="${esc(meta.explorer + addr)}" rel="noopener" title="${esc(addr)}">${esc(addr.slice(0, 6))}…${esc(addr.slice(-4))}</a>`
         : n === "stripe" ? `<span style="color:var(--muted);">card, no public ledger</span>` : `<span style="color:var(--muted);">-</span>`;
+    // The newest settlement's date, marked "ours" as in the x402 table: it is
+    // ours when it is newer than the rail's newest outside settlement. A tie,
+    // or a rail with no split on record, is never labelled ours.
+    const lastMs = Date.parse(r.lastAt || "");
+    const ours = Number.isFinite(lastMs) && r.external != null && (!r.lastExternalAt || lastMs > Date.parse(r.lastExternalAt));
+    const last = Number.isFinite(lastMs)
+      ? `${esc(String(r.lastAt).slice(0, 10))}${ours ? ` <span style="color:var(--muted);">· ours</span>` : ""}`
+      : '<span style="color:var(--muted);">offered, no settlement yet</span>';
     return `<tr>
       <td><strong>${esc(meta.label)}</strong> <span style="color:var(--muted);">${esc(meta.asset)}</span></td>
       <td class="num">${Number(r.count).toLocaleString()}</td>
       <td class="num">${r.external != null ? Number(r.external).toLocaleString() : "-"}</td>
       <td class="num">${mppExternalUsdCell(n, r)}</td>
-      <td>${r.lastAt ? esc(String(r.lastAt).slice(0, 16)) + "Z" : '<span style="color:var(--muted);">offered, no settlement yet</span>'}</td>
+      <td>${last}</td>
       <td>${proof}</td>
     </tr>`;
   }).join("\n");
