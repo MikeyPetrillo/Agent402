@@ -12,6 +12,7 @@ import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followu
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { SHARE_TTL_DAYS } from "./answer-share.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -45,7 +46,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-29.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-03.</p>
 </section>
 
 <section>
@@ -67,7 +68,7 @@ cookie is off until you choose "Allow" in the strip at the bottom of the page, a
 cookieless pings before that; your choice is kept in your browser. Wherever you are, you can make or
 change that choice at any time with "analytics choices" at the foot of the page. If your browser sends the Global Privacy Control signal,
 the cookie stays off, you are not asked, and the page counter does not load. Pages whose address is itself a private
-link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
+link (a paid report, a receipt, a shared answer, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below, including the backups of it. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
@@ -99,7 +100,14 @@ so every claim below is verifiable in code.</p>
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name
     and version, the first word of the User-Agent it sends), or as any other HTTP request;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
-    you write, is kept with that call's transaction id and is never published.</li>
+    you write, is kept with that call's transaction id and is never published;</li>
+    <li>a call to <code>/api/answer</code> (web.answer) made with <code>share=true</code>, and only
+    such a call, publishes its question, its answer and the cited sources (URL and snippet) as a page at an
+    unguessable address under <code>/answers/</code>, with a preview image. Sharing is off unless the
+    caller asks for it, and the page is written only after the call is paid. We keep those fields and
+    the dates it was made and expires, never the paying wallet, IP address or any other detail of the
+    request. Anyone with the link can read the page; it asks search engines not to index it. It is
+    deleted ${SHARE_TTL_DAYS} days after it was made, and its address then answers that it has expired.</li>
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
   code) for abuse prevention and debugging. Most rate-limit counters are kept in process memory for up

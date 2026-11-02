@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (agent front door)
+- web.answer takes `share=true` (off by default, same price): the answer
+  also carries `share: { url, cardUrl, expiresAt }`, a public page of the
+  question, the answer and its cited sources with a 1200x630 preview card,
+  written only once the call settles and kept 30 days (then 410). The page
+  is not indexed; /privacy describes what it keeps.
+
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:
 - route-execute moves on to the next Tempo seller when a seller fails

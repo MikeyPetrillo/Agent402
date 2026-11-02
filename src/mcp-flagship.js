@@ -357,6 +357,11 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
         },
       },
       citationCount: { type: "integer" },
+      // Present only when the call passed share=true.
+      share: {
+        type: ["object", "null"],
+        properties: { url: { type: "string" }, cardUrl: { type: "string" }, expiresAt: { type: "string" } },
+      },
     },
     required: ["query", "answer"],
   },

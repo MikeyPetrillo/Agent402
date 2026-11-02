@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-03",
+    title: "Agent front door",
+    items: [
+      "Tools: web.answer takes share=true (off by default, same price): the answer also carries share: { url, cardUrl, expiresAt }, a public page of the question, the answer and its cited sources with a 1200x630 preview card, written only once the call settles and kept 30 days (then 410). The page is not indexed; /privacy describes what it keeps.",
+    ],
+  },
+  {
     date: "2026-11-02",
     title: "Router on Tempo and MPP, CDP headers built in-house",
     items: [

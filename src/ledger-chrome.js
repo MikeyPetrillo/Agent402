@@ -1068,7 +1068,7 @@ function posthogSnippet(baseUrl) {
 // (a paid report, a receipt, a signed alert or manage link) and off the
 // operator pages, so those URLs never reach Google. Consent and
 // internal-traffic tagging live in the loader.
-const GA_BEARER_PATH = /^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/;
+const GA_BEARER_PATH = /^\/(r|m|reports\/public|answers|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/;
 export function gaSnippet(canonical) {
   const id = String(process.env.GA_MEASUREMENT_ID || "").trim();
   if (!/^G-[A-Z0-9]{4,16}$/.test(id)) return "";

@@ -4781,6 +4781,8 @@ jobs:
           t node scripts/test-verify-hint-live.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
+          # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream)
+          t node scripts/test-answer-share.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
           # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)
