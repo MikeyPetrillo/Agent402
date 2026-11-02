@@ -16,6 +16,10 @@ process.env.GATEWAY_SETTLE_BREAKER_MAX = "3";
 process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS = "900";
 process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX = "6";
 process.env.POSTHOG_TEST_CAPTURE = "1";
+// With a REDIS_URL the breaker writes through to the shared store, whose
+// windows and pause flag outlive this process: a run keys them under its own
+// prefix so no other run (or a concurrent one on the same Redis) reads them.
+if (!process.env.SHARED_LIMITS_PREFIX) process.env.SHARED_LIMITS_PREFIX = `gwb-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 const b = await import("../src/gateway-settle-breaker.js");
 const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
@@ -57,7 +61,7 @@ ok(b.gatewaySettleBreakerKey(undefined) === null && b.gatewaySettleBreakerKey({}
 
 // --- per-key counting ----------------------------------------------------------
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const K = "0xkey1";
   b.recordGatewaySettleFailure(K); b.recordGatewaySettleFailure(K);
   ok(!b.gatewaySettleBreakerBlocked(K).blocked, "two settle failures inside the window do not block");
@@ -78,7 +82,7 @@ ok(b.gatewaySettleBreakerKey(undefined) === null && b.gatewaySettleBreakerKey({}
   // copy's authorization is already used, so it reverts fast, while the
   // originals settle slowly. Five such reverts in a row, with the window
   // holding two hundred settled calls, never refuse the buyer (2026-10-23).
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const K = "0xbusybuyer";
   // Stamps sit inside the test's short window; order is what varies.
   const t0 = Date.now() - 200;
@@ -87,29 +91,29 @@ ok(b.gatewaySettleBreakerKey(undefined) === null && b.gatewaySettleBreakerKey({}
   const s = b.gatewaySettleBreakerBlocked(K);
   ok(!s.blocked && s.fails === 5 && s.oks === 200, `five straight fast failures against two hundred settled calls do not block (got ${JSON.stringify(s)})`);
   // The same five, arriving BEFORE the successes of the same window, still do not.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(K, t0 + i * 0.5);
   for (let i = 0; i < 200; i++) b.recordGatewaySettleSuccess(K, t0 + 10 + i * 0.5);
   ok(!b.gatewaySettleBreakerBlocked(K).blocked, "order inside the window does not matter: fast failures before slow settlements still do not block");
   // A key whose payments mostly fail is still stopped: one settled, then five failures.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   b.recordGatewaySettleSuccess(K, t0);
   for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(K, t0 + 10 + i * 2);
   const s2 = b.gatewaySettleBreakerBlocked(K);
   ok(s2.blocked && s2.fails === 5 && s2.oks === 1, `one settled call then five failures blocks (got ${JSON.stringify(s2)})`);
   // Alternating one settled, MAX_FAILS failed, repeated: a settled call no
   // longer erases the failures, so the pattern is refused.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let r = 0; r < 3; r++) { b.recordGatewaySettleSuccess(K, t0 + r * 20); for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(K, t0 + r * 20 + 5 + i * 2); }
   ok(b.gatewaySettleBreakerBlocked(K).blocked, "one settled call between every three failures does not keep a key served (9 of 12 outcomes failed)");
   // Exactly at the share is not over it: three failures, three settled.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 3; i++) { b.recordGatewaySettleFailure(K, t0 + i * 10); b.recordGatewaySettleSuccess(K, t0 + 5 + i * 10); }
   ok(!b.gatewaySettleBreakerBlocked(K).blocked, "failures must be MORE than the share: three against three is served");
   ok(b.gatewaySettleBreakerStatus().minFailShare === 0.5 && b.gatewaySettleBreakerStatus().hardMaxFails === 40, "the share and the hard ceiling are reported in the status (defaults 0.5 and 40)");
   // The ceiling: a key that settles plenty still cannot run up failures without
   // bound. 39 failures against 1000 settled calls pass the share; the 40th refuses.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 1000; i++) b.recordGatewaySettleSuccess(K, t0 + i * 0.1);
   for (let i = 0; i < 39; i++) b.recordGatewaySettleFailure(K, t0 + 100 + i * 0.5);
   ok(!b.gatewaySettleBreakerBlocked(K).blocked, "39 failures against a thousand settled calls: served (under the ceiling, under the share)");
@@ -141,7 +145,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
   // CONTROL FIRST: with the breaker open the same stub IS reached. This is what
   // turns the refusal cases below into a mutation check - if the consult line
   // were removed from the handler, the tripped case would call fetch and fail.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   fetchCalls = 0;
   const req = fakeReq({ from: ADDR });
   const out = await nano.handler(chatBody, req);
@@ -150,7 +154,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 }
 {
   // Below the threshold: two failures, still served.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   b.recordGatewaySettleFailure(key); b.recordGatewaySettleFailure(key);
   fetchCalls = 0;
@@ -159,7 +163,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 }
 {
   // At the threshold: refused 429 before fetch. The stub here FAILS THE TEST if reached.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(key);
   globalThis.fetch = async () => { ok(false, "upstream was called for a blocked wallet - the breaker did not fire before spend"); throw new Error("must not be called"); };
@@ -197,7 +201,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 }
 {
   // Window expiry re-admits.
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(key);
   ok(b.gatewaySettleBreakerBlocked(key).blocked, "blocked right after the third failure");
@@ -210,7 +214,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 
 // --- the global breaker --------------------------------------------------------
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(`0xrotating${i}`);
   ok(!b.gatewaySettleBreakerGlobalPaused().paused, "five failures across five keys: below the global threshold of six");
   b.recordGatewaySettleFailure(null);
@@ -236,7 +240,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 
 // --- the finish listener reads the FINAL outcome -------------------------------
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   // Three served requests whose FINAL status is 402 (the settlement-failure
   // rewrite): each one counts, the third blocks.
@@ -247,7 +251,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     req.res.emit("finish");
   }
   ok(b.gatewaySettleBreakerBlocked(key).blocked, "three served-then-402 responses (settle failed after the handler) block the wallet");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   // A settle receipt saying success:false counts whatever the status says.
   {
     const req = fakeReq({ from: ADDR });
@@ -309,14 +313,14 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
 
     // No gate on the resource server: nothing withdraws the offer, so it counts.
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: false });
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     pause();
     await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 1 && globalFails() === 1, `with no offer gate installed a subcent_quota_exceeded refusal counts like any failed settle (wallet ${walletFails()}, global ${globalFails()})`);
 
     // Gate installed and the payTo paused: off the WALLET, still global.
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: true });
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     pause();
     for (let i = 0; i < 5; i++) await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 0 && !b.gatewaySettleBreakerBlocked(avmKey).blocked, "five withdrawn subcent_quota_exceeded refusals leave the wallet uncounted and unblocked");
@@ -333,7 +337,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     // with no key, so each one still counts on its own - also in the real
     // arming order (the catalog consult first, then the /v1 handler's own,
     // which upgrades the listener) and from ONE buyer's requests.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     pause();
     const finishUpgraded = async () => {
       const req = avmReq();
@@ -345,25 +349,25 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     };
     for (let i = 0; i < 3; i++) await finishUpgraded();
     ok(walletFails() === 0 && globalFails() === 3, `one buyer's three withdrawn refusals, catalog consult first: off the wallet, and each still counts toward the /v1 global pause (wallet ${walletFails()}, global ${globalFails()})`);
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     b.recordGatewaySettleFailure(avmKey);
     await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 1, "a withdrawn refusal does not CLEAR a real earlier failure either");
 
     // Paused, but the refusal is NOT one this gate withdraws: each counts.
     // (a) a payment verdict whose message merely names the allowance;
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     await finishWith("transaction_failed", { errorMessage: "simulate failed: subcent_quota_exceeded" });
     await finishWith("insufficient_funds", { errorMessage: "subcent_quota_exceeded" });
     ok(walletFails() === 2, `a payment verdict (transaction_failed, insufficient_funds) naming subcent_quota_exceeded in its message counts against the wallet (got ${walletFails()})`);
     // (b) a requirement the gate never withdraws: one cent, or a payTo not paused;
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     await finishWith("subcent_quota_exceeded", {}, { paid: CENT });
     await finishWith("subcent_quota_exceeded", {}, { paid: { ...SUB, payTo: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" } });
     ok(walletFails() === 2, `a one-cent requirement, and a sub-cent one paid to a payTo that is not paused, each count (got ${walletFails()})`);
     // (c) a route whose ONLY accept is the paused one: the never-empty rule
     // keeps it in the next 402, so nothing closes the loop - bounded per buyer.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     for (let i = 0; i < 3; i++) await finishWith("subcent_quota_exceeded", {}, { offered: [SUB] });
     let err = await nextCall();
     ok(walletFails() === 3 && err?.statusCode === 429, `an Algorand-only route: its refusals are not exempt (nothing was withdrawn), so three count and the fourth call is refused 429 (got ${err?.statusCode})`);
@@ -372,12 +376,12 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     // Installed, but no payTo paused right now (the refusal hook never flipped
     // it, or the evidence went stale): the offer is still out, so it counts.
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: true });
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 1, "installed but nothing paused: the refusal counts against the wallet");
 
     // AVM_SUBCENT_GATE=off: the escape hatch withdraws nothing, so nothing is exempt.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     s.noteSponsorshipStatus(PAYTO, { chain: "algorand", usedMonth: 1013, quota: 1000, suBalance: 0 });
     process.env.AVM_SUBCENT_GATE = "off";
     for (let i = 0; i < 3; i++) await finishWith("subcent_quota_exceeded");
@@ -387,13 +391,13 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     delete process.env.AVM_SUBCENT_GATE;
 
     // Paused, but a subcent refusal on ANOTHER network is not withdrawn by this gate.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     pause();
     await finishWith("subcent_quota_exceeded", { network: "eip155:43114" });
     ok(walletFails() === 1, "the same reason on a non-Algorand network counts");
 
     // Every other billing shape counts per wallet AND globally, as before.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     await finishWith("free_tier_exhausted", { network: "eip155:43114" });
     await finishWith("unexpected_settle_error", { network: "eip155:1329", errorMessage: "Facilitator settle failed (403): payment required: buy more credits" });
     ok(walletFails() === 2 && globalFails() === 1, `free_tier_exhausted and a credits wall named only in errorMessage count per wallet and globally (wallet ${walletFails()}; global ${globalFails()}: one buyer, counted once)`);
@@ -402,11 +406,11 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     ok(err?.statusCode === 429 && /2 of them were a facilitator billing refusal/.test(err?.message || "") && /USDC balance/.test(err?.message || ""), `a mixed window names the billing share and still points at the wallet for the rest - transaction_failed is a payment verdict, whatever its message says (got: ${String(err?.message).slice(0, 160)})`);
 
     // Control: a buyer-side reason on the same 402 shape counts, and three trip the 429 as before.
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     for (let i = 0; i < 3; i++) await finishWith("insufficient_funds");
     err = await nextCall();
     ok(err?.statusCode === 429 && /failed to settle/.test(err?.message || "") && /USDC balance/.test(err?.message || "") && !/billing/.test(err?.message || ""), `three genuine failures (insufficient_funds) trip the 429 exactly as before (got ${err?.statusCode})`);
-    b._gatewaySettleBreakerReset();
+    await b._gatewaySettleBreakerReset();
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: false });
   }
   // A handler-side 502 (never settled, not the wallet's doing) neither counts nor clears.
@@ -463,7 +467,7 @@ delete process.env.OPENAI_API_KEY;
 // for every wallet-only slug, and every /v1 slug is one, so the /v1 handler's
 // own global:true consult arrives SECOND on the same request.
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const failOnce = (consults) => {
     const req = fakeReq({ from: ADDR });
     for (const g of consults) b.armGatewaySettleBreaker(req, "0xscope", { global: g });
@@ -475,14 +479,14 @@ delete process.env.OPENAI_API_KEY;
   failOnce([false, true]);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "catalog consult first, /v1 consult second: the failure reaches the global count");
   ok(b.gatewaySettleBreakerBlocked("0xscope").fails === 2, "one listener per request: two requests, two wallet failures, none double-counted");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const req = fakeReq({ from: ADDR });
   b.armGatewaySettleBreaker(req, "0xscope2", { global: true });
   b.armGatewaySettleBreaker(req, "0xscope2", { global: false });
   req.res.statusCode = 402;
   req.res.emit("finish");
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "a later global:false consult never downgrades an armed global listener");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
 }
 
 // --- the global pause counts BUYERS, not failures --------------------------------
@@ -491,7 +495,7 @@ delete process.env.OPENAI_API_KEY;
 // and pause every /v1 buyer. (The HTTP twin, a real concurrent burst through a
 // booted paid server, is in scripts/test-paid-settle-breaker.js.)
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 20; i++) b.recordGatewaySettleFailure("0xoneburstwallet");
   const st = b.gatewaySettleBreakerStatus();
   ok(!st.globalPaused && st.globalFailsInWindow === 1, `twenty failures from ONE buyer count once toward the global pause and never trip it (distinct ${st.globalFailsInWindow}, GLOBAL_MAX 6)`);
@@ -500,10 +504,10 @@ delete process.env.OPENAI_API_KEY;
   ok(!b.gatewaySettleBreakerGlobalPaused().paused && b.gatewaySettleBreakerStatus().globalFailsInWindow === 5, "five different buyers: still below the threshold of six");
   b.recordGatewaySettleFailure("0xotherbuyer5");
   ok(b.gatewaySettleBreakerGlobalPaused().paused, "the sixth DIFFERENT buyer trips the pause (wallet rotation is what the pause is for)");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   b.recordGatewaySettleFailure(null); b.recordGatewaySettleFailure(null);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 2, "a failure with no key to count it under counts as its own buyer (never merged into one)");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
 }
 
 // A Circle Gateway batched payment Gateway is still settling: the buyer was
@@ -513,7 +517,7 @@ delete process.env.OPENAI_API_KEY;
 // control: Gateway refusing the same wallet's payment (insufficient_balance)
 // counts exactly as before.
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   const pendingReceipt = Buffer.from(JSON.stringify({ success: false, errorReason: "settlement_pending", transaction: "", network: "eip155:8453" })).toString("base64");
   // The paywall reads the batched kind from the payment header's accepted.extra.name.
@@ -537,14 +541,14 @@ delete process.env.OPENAI_API_KEY;
   plainReq.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
   plainReq.res.emit("finish");
   ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: settlement_pending on a plain payment still counts against the wallet");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const req = batchedReq();
   b.armGatewaySettleBreaker(req, key);
   req.res.statusCode = 402;
   req.res.setHeader("PAYMENT-RESPONSE", Buffer.from(JSON.stringify({ success: false, errorReason: "insufficient_balance", transaction: "", network: "eip155:8453" })).toString("base64"));
   req.res.emit("finish");
   ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: Gateway refusing the same wallet (insufficient_balance) still counts against it");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   // From a wallet-only consult (global:false) a pending answer feeds nothing:
   // not the wallet, and not the /v1 global pause it takes no part in.
   const wo = batchedReq();
@@ -553,19 +557,35 @@ delete process.env.OPENAI_API_KEY;
   wo.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
   wo.res.emit("finish");
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 0 && b.gatewaySettleBreakerBlocked(key).fails === 0, "a wallet-only consult's pending answer counts toward neither the wallet nor the global pause");
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
 }
 
 // The lift time with more failures than the threshold: when the
 // (len - MAX + 1)th newest failure ages out, not the oldest.
 {
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
   const key = "ip:198.51.100.77";
   const t0 = Date.now();
   for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(key, t0 + i * 10, { global: false });
   const st = b.gatewaySettleBreakerBlocked(key, t0 + 50);
   ok(st.blocked && st.until === t0 + 20 + 900, `five failures, threshold three: lifts when the third newest ages out (until ${st.until - t0} ms after the first)`);
-  b._gatewaySettleBreakerReset();
+  await b._gatewaySettleBreakerReset();
+}
+
+// The shared half (only with a REDIS_URL): a trip's pause is written by a
+// window add's reply, after the call that tripped it returned. The test reset
+// waits for every write already sent before it clears the flag, so a pause
+// still in flight cannot land after it and refuse the next case's call.
+if (process.env.REDIS_URL) {
+  ok(b._gatewaySettleBreakerShared === true, "with a REDIS_URL the breaker writes through to the shared store");
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 6; i++) b.recordGatewaySettleFailure(`0xtrip${i}`);
+  ok(b.gatewaySettleBreakerGlobalPaused().paused, "six distinct buyers trip the global pause (GLOBAL_MAX 6)");
+  await b._gatewaySettleBreakerReset();
+  let err = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: "0x" + "9".repeat(40) })); } catch (e) { err = e; }
+  ok(err === null, `after the reset no pause written by the trip survives in the shared store (${err ? err.message.slice(0, 80) : "no refusal"})`);
+  await b._gatewaySettleBreakerReset();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
