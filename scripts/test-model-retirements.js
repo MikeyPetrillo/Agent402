@@ -41,5 +41,36 @@ for (const r of RETIRING) {
   if (days <= 0) { fail++; console.log(`FAIL ${r.vendor} retired ${r.retires}, still in code:\n  ${hits.join("\n  ")}`); }
   else console.log(`warn ${r.vendor} retires ${r.retires} (${days} days): still referenced in ${hits.length} place(s)`);
 }
-console.log(`${pass} retirement groups clean, ${fail} failing`);
+// OpenAI's 2026-06-11 notice ("GPT-5 and o3 model deprecations") removes these
+// ids from the API on 2026-12-11, each with the replacement it names (pro mode
+// for the -pro ids is the -pro listing). The scan group above and the
+// gateway's RETIRING_MODELS must both carry that date and successor, so moving
+// one date (or one successor) fails here instead of drifting.
+const NOTICE_2026_12_11 = {
+  "openai/gpt-5": "openai/gpt-5.6-sol",
+  "openai/gpt-5-mini": "openai/gpt-5.6-terra",
+  "openai/gpt-5-nano": "openai/gpt-5.6-luna",
+  "openai/gpt-5-pro": "openai/gpt-5.6-sol-pro",
+  "openai/o3": "openai/gpt-5.6-sol",
+  "openai/o3-pro": "openai/gpt-5.6-sol-pro",
+};
+{
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  for (const [id, use] of Object.entries(NOTICE_2026_12_11)) {
+    const group = RETIRING.find((r) => r.ids.includes(id));
+    const e = RETIRING_MODELS[id];
+    const okDate = group?.retires === "2026-12-11" && group.ids.includes(id.replace(/^openai\//, ""));
+    const okTable = e?.until === "2026-12-11" && e.use === use && e.asItselfUntil === true;
+    if (okDate && okTable) pass++;
+    else { fail++; console.log(`FAIL ${id}: scan group ${group?.retires ?? "missing"}, RETIRING_MODELS ${e ? `${e.until} -> ${e.use}` : "missing"} (notice: 2026-12-11 -> ${use})`); }
+  }
+  // Every scan id that is also a RETIRING_MODELS key carries the same date.
+  for (const r of RETIRING) for (const id of r.ids) {
+    const e = RETIRING_MODELS[id];
+    if (!e) continue;
+    if (e.until === r.retires) pass++;
+    else { fail++; console.log(`FAIL ${id}: scan date ${r.retires}, RETIRING_MODELS ${e.until}`); }
+  }
+}
+console.log(`${pass} retirement checks clean, ${fail} failing`);
 process.exit(fail ? 1 : 0);

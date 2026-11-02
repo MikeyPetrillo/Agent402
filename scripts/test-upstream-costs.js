@@ -63,6 +63,13 @@ U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "models[acme/big-pro]", "a zero-rate model row (not stealth) is a gap, not a silent fallback to acme/big");
+// The pinned rows by name: dropping one from REQUIRED_MODEL_ROWS would stop
+// a table without it reading partial, so the list itself is pinned here.
+for (const id of ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro"]) {
+  ok(U.REQUIRED_MODEL_ROWS.includes(id), `${id} is a required model row`);
+  U.setUpstreamCostsForTest({ ...FULL, models: FULL.models.filter(([p]) => p !== id) });
+  ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().includes(`models[${id}]`), `a table without ${id} reads partial and names it`);
+}
 U.setUpstreamCostsForTest({ ...FULL, models: FULL.models.filter(([p]) => p !== U.REQUIRED_MODEL_ROWS[0]) });
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === `models[${U.REQUIRED_MODEL_ROWS[0]}]`, "a required model row that is absent is a named gap");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["stealth/x", { prompt: 0, completion: 0 }]] });
