@@ -378,6 +378,38 @@ try {
   await sleep(200);
   ok(!lateHas(p.tx), "a 5xx with no tx books nothing");
 
+  // --- the hook in this process: a tx another request holds is not served --
+  {
+    process.env.EVM_RPC_8453 = `http://127.0.0.1:${RPC_PORT}/rpc`;
+    process.env.PENDING_SETTLE_RECEIPT_WAIT_MS = "2000";
+    process.env.SALES_LEDGER_DB = join(DIR, "unit-sales.db");
+    const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+    const { claimSettlementKey, txClaimKey } = await import("../src/settlement-claims.js");
+    const hooks = [];
+    registerFacilitatorFailureHooks({ onVerifyFailure() { return this; }, onAfterVerify() { return this; }, onAfterSettle() { return this; }, onSettleFailure(fn) { hooks.push(fn); return this; } }, null, null);
+    rpcMode = "mined";
+    const runHooks = async (q) => {
+      const a = accepted.hash;
+      const ctx = {
+        requirements: { scheme: "exact", network: "eip155:8453", asset: a.asset, amount: a.amount, payTo: a.payTo },
+        paymentPayload: { x402Version: 2, payload: { authorization: { from: q.payer, to: a.payTo, value: a.amount, validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce: q.nonce } } },
+        error: Object.assign(new Error("settlement_pending"), { statusCode: 500, errorReason: "settlement_pending", errorMessage: PENDING_MSG, transaction: q.tx }),
+        transportContext: { request: { adapter: { req: {} } } },
+      };
+      for (const h of hooks) { const out = await h(ctx); if (out?.recovered) return out; }
+      return null;
+    };
+    let q = await newPayment("hash");
+    minedAt.set(q.tx, 0);
+    let out = await runHooks(q);
+    ok(out?.result?.transaction === q.tx.toLowerCase(), "hook: a proven pending tx is recovered");
+    q = await newPayment("hash");
+    minedAt.set(q.tx, 0);
+    await claimSettlementKey(txClaimKey("eip155:8453", q.tx), "another-request");
+    out = await runHooks(q);
+    ok(out === null, "hook: a proven tx another request already holds is not served");
+  }
+
   console.log(`\nOK: ${pass} passed, 0 failed`);
 } catch (e) {
   fail(`unexpected: ${e.stack || e}`);
