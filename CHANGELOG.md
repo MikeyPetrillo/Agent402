@@ -38,6 +38,13 @@ Payments:
   wallet to be funded or another listed network, instead of asking for a
   fresh signature. A wallet refused this way three times in ten minutes
   gets the same answer without a new check until its Retry-After passes.
+### 2026-11-02 (paid answers on a pending settle)
+Payments:
+- An EVM payment whose transfer confirms moments after the facilitator stops
+  waiting for it now receives its answer, instead of a refusal and a later
+  refund: when a settle comes back pending with a transaction, the server
+  reads that transaction on chain for a few seconds and serves the call once
+  the transfer to us is proven.
 
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:
