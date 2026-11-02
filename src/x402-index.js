@@ -7693,7 +7693,8 @@ export async function warmRoutableSellerSummaries() {
 }
 function* routableSummarySteps() {
   const out = [];
-  const aliasOrigins = computeAliasOrigins(cache);
+  // The alias walk in steps too, so the sliced warm does not take it in one turn.
+  const aliasOrigins = yield* computeAliasOriginsSteps(cache);
   yield;
   let walked = 0;
   for (const [origin, v] of [...cache.entries()]) {
@@ -9574,6 +9575,23 @@ export function* routableRemoteEntries({ baseUrl = "" } = {}) {
     yield [origin, decoratedRemoteTools(v)];
   }
 }
+/** routableRemoteEntries across turns: the same filter, order and pools, with
+ *  the alias walk and each entry's decoration cut into slices of `sliceMs`. A
+ *  re-crawl moves the alias memo, and one seller can carry tens of thousands of
+ *  tools, so either one done in line held the loop for the export's first row. */
+export async function* routableRemoteEntriesSliced({ baseUrl = "", sliceMs = DIRECTORY_SLICE_MS } = {}) {
+  if (!removalsKnown()) return;
+  const aliases = await runSlicedAsync(computeAliasOriginsSteps(cache), sliceMs);
+  for (const [origin, v] of cache) {
+    if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
+    let pool = remotePoolMemo.get(v);
+    while (!pool) {
+      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs);
+      if (!pool) await yieldTurn();
+    }
+    yield [origin, pool];
+  }
+}
 
 export function sellerEntry(originOrHost) {
   const origin = findSellerKey(originOrHost);
@@ -9778,11 +9796,11 @@ const yieldTurn = () => new Promise((r) => setImmediate(r));
 // DIRECTORY_SLICE_MS each. One generator per computation, so the two runs
 // cannot drift apart.
 function runSteps(gen) { let r = gen.next(); while (!r.done) r = gen.next(); return r.value; }
-async function runSlicedAsync(gen) {
-  let until = performance.now() + DIRECTORY_SLICE_MS;
+async function runSlicedAsync(gen, sliceMs = DIRECTORY_SLICE_MS) {
+  let until = performance.now() + sliceMs;
   let r = gen.next();
   while (!r.done) {
-    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + DIRECTORY_SLICE_MS; }
+    if (performance.now() >= until) { await yieldTurn(); until = performance.now() + sliceMs; }
     r = gen.next();
   }
   return r.value;
