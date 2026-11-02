@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-02",
+    title: "Paid answers on a pending settle",
+    items: [
+      "Payments: an EVM payment whose transfer confirms moments after the facilitator stops waiting for it now receives its answer, instead of a refusal and a later refund: when a settle comes back pending with a transaction, the server reads that transaction on chain for a few seconds and serves the call once the transfer to us is proven.",
+    ],
+  },
+  {
+    date: "2026-11-02",
     title: "Router on Tempo and MPP, CDP headers built in-house",
     items: [
       "Router: route-execute moves on to the next Tempo seller when a seller fails before any payment left, as it does on every other chain; each seller is paid with its own freshly signed credential.",
