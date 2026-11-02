@@ -1046,7 +1046,9 @@ jobs:
       # The agent402-mcp version the site and server.describe tell people to
       # install must exist on npm. A deploy ships the pin while the [publish]
       # job publishes beside it, so a missing version is "pending" while a main
-      # deploy run is still in progress, and an alarm after (2026-11-01).
+      # deploy run is still in progress, and an alarm after (2026-11-01). The
+      # script re-checks a version npm answers 404 for once (NPM_RECHECK_MS,
+      # default 15 s) before it reads missing, so one registry miss opens nothing.
       - name: MCP install pin check (alarm when the served agent402-mcp version is not on npm)
         if: always()
         continue-on-error: true

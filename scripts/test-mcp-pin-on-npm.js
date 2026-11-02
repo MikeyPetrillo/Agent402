@@ -18,6 +18,10 @@ const listen = (handler) => new Promise((r) => { const s = createServer(handler)
 let served = { llms: `npx -y ${PKG}@${B}`, describe: `${PKG}@${B}`, siteUp: true };
 const published = new Set([A, B]);
 let registryUp = true;
+// Versions whose first registry read is a 404 and every later read the real
+// answer (a publish landing between the two reads); hits counts reads per version.
+const missFirst = new Set();
+const hits = new Map();
 
 const site = await listen((req, res) => {
   if (!served.siteUp) { res.statusCode = 503; return res.end(); }
@@ -28,23 +32,41 @@ const site = await listen((req, res) => {
 const registry = await listen((req, res) => {
   if (!registryUp) { res.statusCode = 500; return res.end(); }
   const m = req.url.match(/^\/agent402-mcp\/(\d+\.\d+\.\d+)$/);
+  if (m) hits.set(m[1], (hits.get(m[1]) || 0) + 1);
+  if (m && missFirst.has(m[1]) && hits.get(m[1]) === 1) { res.statusCode = 404; return res.end(JSON.stringify({ error: "not found" })); }
   if (m && published.has(m[1])) { res.setHeader("content-type", "application/json"); return res.end(JSON.stringify({ name: "agent402-mcp", version: m[1] })); }
   res.statusCode = 404; res.end(JSON.stringify({ error: "not found" }));
 });
 
 const check = async () => {
   const { stdout } = await run(process.execPath, ["scripts/mcp-pin-on-npm.js"], {
-    env: { ...process.env, TARGET_URL: `http://127.0.0.1:${site.address().port}`, NPM_REGISTRY: `http://127.0.0.1:${registry.address().port}` },
+    env: { ...process.env, TARGET_URL: `http://127.0.0.1:${site.address().port}`, NPM_REGISTRY: `http://127.0.0.1:${registry.address().port}`, NPM_RECHECK_MS: "0" },
   });
+  hits.clear();
   return childJson(stdout);
 };
 
 let r = await check();
 ok(r.word === "ok" && r.versions.join() === B, `a pin npm has reads ok (${JSON.stringify(r)})`);
 
-served = { ...served, llms: `npx -y ${PKG}@${C}`, describe: `${PKG}@${C}` };
+// re-probe once: a 404 then a 200 is not an alarm
+missFirst.add(B);
 r = await check();
+ok(r.word === "ok" && r.missing.length === 0, `a 404 then a 200 on the re-check reads ok (${JSON.stringify(r)})`);
+missFirst.clear();
+
+served = { ...served, llms: `npx -y ${PKG}@${C}`, describe: `${PKG}@${C}` };
+let reads = 0;
+{
+  const { stdout } = await run(process.execPath, ["scripts/mcp-pin-on-npm.js"], {
+    env: { ...process.env, TARGET_URL: `http://127.0.0.1:${site.address().port}`, NPM_REGISTRY: `http://127.0.0.1:${registry.address().port}`, NPM_RECHECK_MS: "0" },
+  });
+  reads = hits.get(C) || 0;
+  hits.clear();
+  r = childJson(stdout);
+}
 ok(r.word === "missing" && r.missing.join() === C, `a pin npm lacks reads missing (${JSON.stringify(r)})`);
+ok(reads === 2, `a missing version is read twice (a 404, then one re-check) before it reads missing (reads=${reads})`);
 
 served = { ...served, llms: `npx -y ${PKG}@${B}`, describe: `${PKG}@${C}` };
 r = await check();

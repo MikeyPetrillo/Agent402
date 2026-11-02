@@ -13,9 +13,17 @@
 // resolves), missing (at least one does not) or unknown (the site or the
 // registry could not be read; never an alarm). Always exits 0; the heartbeat
 // step reads the word. NPM_REGISTRY overrides the registry (tests).
+// A version npm answers 404 for is asked once more after NPM_RECHECK_MS
+// (default 15000; 0 in tests) before it reads missing: the status observers'
+// re-probe-once rule, so one registry miss is not recorded as an outage.
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const REGISTRY = (process.env.NPM_REGISTRY || "https://registry.npmjs.org").replace(/\/+$/, "");
 const PIN = /agent402-mcp@(\d+\.\d+\.\d+)/g;
+const RECHECK_MS = (() => {
+  const raw = process.env.NPM_RECHECK_MS;
+  const n = raw == null || raw === "" ? 15000 : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 120000) : 15000;
+})();
 
 const timed = (ms) => AbortSignal.timeout(ms);
 async function servedVersions() {
@@ -52,7 +60,11 @@ const missing = [];
 if (!read || !versions.length) word = "unknown";
 else {
   for (const v of versions) {
-    const there = await onNpm(v);
+    let there = await onNpm(v);
+    if (there === false) {
+      await new Promise((r) => setTimeout(r, RECHECK_MS));
+      there = await onNpm(v);
+    }
     if (there === null) { word = "unknown"; continue; }
     if (!there) missing.push(v);
   }
