@@ -565,7 +565,7 @@ await check("switch on: CDP verifies and is tried first; after CDP and PayAI ref
   const { url, log, proc } = await boot(P_SERVER2, { CIRCLE_FACILITATOR_EVM_FALLBACK: "on" });
   try {
     for (let i = 0; i < 40 && !log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback`); i++) await new Promise((r) => setTimeout(r, 250));
-    assert.match(log.text, new RegExp(`${CIRCLE_EVM_LABEL.replace(/[()]/g, "\\$&")}: last settle fallback on eip155:8453, eip155:137`));
+    assert.ok(log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback on eip155:8453, eip155:137`), "the boot log names the last settle fallback and its networks");
     seen.on = { url, c: await challenges(url) };
     const r = await payBase(url);
     assert.equal(r.status, 200, `served after the last fallback settled (got ${r.status})`);

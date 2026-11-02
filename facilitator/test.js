@@ -283,7 +283,7 @@ const sorobanRpc = getRpcClient(NETWORK);
   // Protocol 30 (mainnet vote 2026-11-23): the first pubnet fallback is the node read at RPC 30.0.0
   // on 2026-11-01; the 29.0.1 node stays a later hop.
   ok(DEFAULT_FALLBACKS["stellar:pubnet"][0] === "https://rpc.ankr.com/stellar_soroban", "DEFAULT_FALLBACKS: the first pubnet fallback is the v30 RPC");
-  ok(DEFAULT_FALLBACKS["stellar:pubnet"].includes("https://mainnet.sorobanrpc.com") && DEFAULT_FALLBACKS["stellar:pubnet"].indexOf("https://mainnet.sorobanrpc.com") > 0, "DEFAULT_FALLBACKS: the v29 RPC is kept as a later fallback");
+  ok(DEFAULT_FALLBACKS["stellar:pubnet"].slice(1).some((u) => u === "https://mainnet.sorobanrpc.com"), "DEFAULT_FALLBACKS: the v29 RPC is kept as a later fallback");
 
   // RPC version check: a verdict per node, a warning only for one behind.
   ok(EXPECTED_RPC_MAJOR === 30 && resolveMinRpcMajor(undefined) === 30 && resolveMinRpcMajor("31") === 31 && resolveMinRpcMajor("off") === null && resolveMinRpcMajor("junk") === 30, "resolveMinRpcMajor: default 30, an integer overrides, off skips, junk reads the default");
