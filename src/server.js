@@ -383,6 +383,7 @@ import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
+import { agentsMd, frontDoor402Json, AGENTS_MD_PATH } from "./front-door.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
 import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -3354,6 +3355,7 @@ app.post("/api/decide/execute", async (req, res, next) => {
 const DISCOVERY_SURFACES = new Map([
   ["/llms.txt", "llms.txt"],
   ["/llms-full.txt", "llms-full.txt"],
+  ["/agents.md", "agents.md"],
   ["/SKILL.md", "skill.md"],
   ["/skill.md", "skill.md"],
   ["/openapi.json", "openapi.json"],
@@ -8589,6 +8591,10 @@ app.get("/llms-full.txt", (_req, res) => res.type("text/plain").set("Cache-Contr
 // /SKILL.md - agent-onboarding sheet ("Read <url>/SKILL.md and set up X" is
 // the prompt agent runtimes use for paid services). Lowercase alias too.
 const serveSkillMd = (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(skillMd(BASE_URL, CATALOG));
+// /agents.md - the front door for an agent (src/front-door.js): the first
+// call and its price, access, when to use it, the recovery contract, then
+// how to connect and pay. Free, like every discovery surface.
+app.get(AGENTS_MD_PATH, (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(agentsMd(BASE_URL, CATALOG)));
 app.get("/SKILL.md", serveSkillMd);
 app.get("/skill.md", serveSkillMd);
 // The runnable buyer demo, served from the site itself, so a visitor can run
@@ -10107,6 +10113,21 @@ if (FREE_MODE) {
               url: `${BASE_URL}${twinPath}`,
               note: `Same models, priced per request from this body. ${meteredQuoteSentence()} This route stays one flat price per call.`,
             };
+          }
+          return origJson(body);
+        };
+      }
+      // A first-contact unpaid 402 leads its body with the front door
+      // (src/front-door.js): access and the recovery contract, the same
+      // sentences /llms.txt and /agents.md lead with, and a link to the rest.
+      // Body only (the PAYMENT-REQUIRED header is untouched), behind the
+      // proof-of-work altPayment where that is offered, and never on a
+      // refused payment or proof, which keeps its own explanation.
+      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 !== "off") {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.frontDoor) {
+            body = { frontDoor: frontDoor402Json(CATALOG, BASE_URL), ...body };
           }
           return origJson(body);
         };

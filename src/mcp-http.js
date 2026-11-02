@@ -1,3 +1,4 @@
+import { frontDoorJson } from "./front-door.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
@@ -1143,6 +1144,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           capturePostHogDiscovery({ surface: "mcp:about" });
           const install = mcpInstallHints(baseUrl);
           return mcpJsonResult({
+            // The front door leads (src/front-door.js): the same block
+            // /llms.txt, /agents.md and the unpaid 402 body open with.
+            frontDoor: frontDoorJson(catalog, baseUrl),
             service: baseUrl,
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",

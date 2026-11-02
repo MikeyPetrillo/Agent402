@@ -250,6 +250,18 @@ export const META_OUTPUT_SCHEMAS = {
   "server.describe": {
     type: "object",
     properties: {
+      frontDoor: {
+        type: "object",
+        properties: {
+          firstCall: { type: "string" },
+          access: { type: "string" },
+          useWhen: { type: "string" },
+          doNotUseWhen: { type: "string" },
+          recovery: { type: "array", items: { type: "string" } },
+          guide: { type: "string" },
+        },
+        additionalProperties: true,
+      },
       service: { type: "string" },
       connector: { type: "string" },
       maintainer: { type: "string" },
