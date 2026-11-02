@@ -129,6 +129,9 @@
     },
     "@modelcontextprotocol/sdk": {
       "zod": "4.6.7"
+    },
+    "jimp": {
+      "zod": "4.6.7"
     }
   }
 }

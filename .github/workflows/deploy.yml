@@ -2511,6 +2511,8 @@ jobs:
           t node scripts/test-idempotency-pow-binding.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
+          # jimp on the root zod 4 (no nested zod 3; outputs and option checks match the zod 3 baseline)
+          t node scripts/test-jimp-zod.js
           # MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
           t node scripts/test-mcp-search-ranking.js
           # Report -> monitor upgrade loop (kind mapping, table-driven price, escaping, prefill-only deep link)
