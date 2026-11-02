@@ -342,7 +342,6 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     this._onPending = typeof onPending === "function" ? onPending : null;
     // Set only with ARC_CONTRACT_WALLETS=on (circleClientFromEnv): verifies a
     // contract-wallet signature on chain; null refuses every one, as before.
-    this._contractVerifier = typeof contractVerifier === "function" ? contractVerifier : null;
     // The networks this instance verifies and settles (Arc by default; the
     // Base and Polygon settle fallback names its own). Nothing else passes
     // the preflight, /supported reports only these, and a status or settle
@@ -350,6 +349,11 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const list = Array.isArray(profiles) && profiles.length ? profiles : [ARC_PROFILE];
     this._profiles = Object.freeze([...list]);
     this._networks = new Set(this._profiles.map((p) => p.caip2));
+    // The verifier checks against Arc's domain and Arc's RPC, so it is kept
+    // only by an instance that settles Arc, and handed to the preflight only
+    // for an Arc requirement (_preflight). Any other network refuses every
+    // signature that is not a local EOA one, whatever was passed here.
+    this._contractVerifier = typeof contractVerifier === "function" && this._networks.has(ARC_CAIP2) ? contractVerifier : null;
     this._label = String(label || CIRCLE_LABEL);
   }
 
@@ -357,7 +361,8 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   get networks() { return [...this._networks]; }
 
   _preflight(paymentPayload, paymentRequirements) {
-    return preflightUsdcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier: this._contractVerifier, profiles: this._profiles });
+    const contractVerifier = paymentRequirements?.network === ARC_CAIP2 ? this._contractVerifier : null;
+    return preflightUsdcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier, profiles: this._profiles });
   }
 
   /** Circle's final word on one payment: { status, transaction } with status

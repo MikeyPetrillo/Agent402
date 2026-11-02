@@ -33,7 +33,7 @@ import { hashDomain } from "viem";
 import { getFreePorts } from "./lib/free-port.js";
 import { registerFacilitatorFailureHooks, lastResortFallbackOverrides, fallbackCandidatesFor } from "../src/payments.js";
 import {
-  CircleFacilitatorClient, CIRCLE_FACILITATOR_BASE, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_PROFILES,
+  CircleFacilitatorClient, preflightUsdcPayment, ARC_PROFILE, CIRCLE_FACILITATOR_BASE, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_PROFILES,
   CIRCLE_EVM_FALLBACK_NETWORKS, circleEvmFallbackFromEnv, circleEvmFallbackEnabled, ARC_CAIP2, ARC_USDC,
 } from "../src/circle-facilitator.js";
 import { EVM_TOKEN_DOMAINS } from "../src/evm-usdc-domain.js";
@@ -55,9 +55,9 @@ const profileOf = (n) => CIRCLE_EVM_FALLBACK_PROFILES.find((p) => p.caip2 === n)
 const acct = privateKeyToAccount(generatePrivateKey());
 const nowSec = () => Math.floor(Date.now() / 1000);
 const req = (network = BASE, over = {}) => ({ scheme: "exact", network, asset: profileOf(network).asset, amount: "1000", payTo: TREASURY, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" }, ...over });
-async function signed({ network = BASE, chainId = Number(network.split(":")[1]), verifyingContract = profileOf(network).asset, name = profileOf(network).name, value = "1000", requirement = req(network) } = {}) {
+async function signed({ signer = acct, network = BASE, chainId = Number(network.split(":")[1]), verifyingContract = profileOf(network).asset, name = profileOf(network).name, value = "1000", requirement = req(network) } = {}) {
   const authorization = { from: acct.address, to: TREASURY, value, validAfter: "0", validBefore: String(nowSec() + 600), nonce: `0x${randomBytes(32).toString("hex")}` };
-  const signature = await acct.signTypedData({
+  const signature = await signer.signTypedData({
     domain: { name, version: "2", chainId, verifyingContract },
     types: { TransferWithAuthorization: [
       { name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" },
@@ -294,6 +294,54 @@ await check("the Arc client is unchanged: Base payments never pass its preflight
   assert.equal(out.errorReason, "invalid_network");
   assert.equal(f.calls.length, 0);
   assert.deepEqual(arc.networks, [ARC_CAIP2]);
+});
+
+// A contract-wallet form: the payload names acct as `from`, but the signature
+// is someone else's, so no local EOA check passes and only a verifier could.
+const other = privateKeyToAccount(generatePrivateKey());
+const ARC_REQ = { scheme: "exact", network: ARC_CAIP2, asset: ARC_USDC.asset, amount: "1000", payTo: TREASURY, maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } };
+const arcSigned = (signer) => signed({ signer, network: ARC_CAIP2, chainId: 5042, verifyingContract: ARC_USDC.asset, name: "USDC", requirement: ARC_REQ });
+const yesVerifier = () => { const v = async () => { v.calls++; return true; }; v.calls = 0; return v; };
+
+await check("a contract-wallet verifier never applies off Arc: an always-yes verifier cannot pass a non-EOA Base or Polygon signature", async () => {
+  for (const network of [BASE, POLYGON]) {
+    // The preflight itself, handed the verifier with Base/Polygon profiles.
+    const v = yesVerifier();
+    const direct = await preflightUsdcPayment(await signed({ signer: other, network }), req(network), nowSec(), { contractVerifier: v, profiles: CIRCLE_EVM_FALLBACK_PROFILES });
+    assert.equal(direct?.reason, "invalid_exact_evm_payload_signature", `${network} direct`);
+    assert.equal(v.calls, 0, `${network}: the verifier is never asked`);
+    // A client built with Base/Polygon profiles AND a verifier, and one that
+    // also settles Arc (the shape the reconcile status client has).
+    for (const profiles of [CIRCLE_EVM_FALLBACK_PROFILES, [ARC_PROFILE, ...CIRCLE_EVM_FALLBACK_PROFILES]]) {
+      const cv = yesVerifier();
+      const f = stubFetch({ "/settle": settleOk, "/verify": () => json(200, { isValid: true }) });
+      const c = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: f, contractVerifier: cv, profiles });
+      const s = await c.settle(await signed({ signer: other, network }), req(network));
+      assert.equal(s.success, false, `${network} settle`);
+      assert.equal(s.errorReason, "invalid_exact_evm_payload_signature");
+      assert.equal((await c.verify(await signed({ signer: other, network }), req(network))).invalidReason, "invalid_exact_evm_payload_signature");
+      assert.equal(cv.calls, 0, `${network}: the client never hands the verifier a ${network} payment`);
+      assert.equal(f.calls.length, 0, "nothing sent");
+      // The same client still settles an ordinary EOA payment there.
+      assert.equal((await c.settle(await signed({ network }), req(network))).success, true, `${network} EOA`);
+    }
+  }
+});
+
+await check("Arc with the verifier is unchanged: a contract-wallet signature is verified and goes to Circle; without it, refused", async () => {
+  for (const profiles of [[ARC_PROFILE], [ARC_PROFILE, ...CIRCLE_EVM_FALLBACK_PROFILES]]) {
+    const v = yesVerifier();
+    const f = stubFetch({ "/settle": settleOk });
+    const c = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: f, contractVerifier: v, profiles });
+    const s = await c.settle(await arcSigned(other), ARC_REQ);
+    assert.equal(s.success, true, JSON.stringify(s));
+    assert.equal(s.network, ARC_CAIP2);
+    assert.equal(v.calls, 1);
+    assert.equal(f.calls.filter((x) => x.url.endsWith("/settle")).length, 1);
+  }
+  const bare = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: stubFetch({ "/settle": settleOk }) });
+  assert.equal((await bare.settle(await arcSigned(other), ARC_REQ)).errorReason, "invalid_exact_evm_payload_signature");
+  assert.equal((await bare.settle(await arcSigned(acct), ARC_REQ)).success, true, "an Arc EOA payment settles");
 });
 
 console.log("part 2: a paid server against stub facilitators");
