@@ -170,11 +170,19 @@ export const tempoRpc = (method, params, opts) => rpc(method, params, opts);
 // read takes every Transfer from the signer to anyone, so another payment from
 // the same wallet in the window reads as used (the safe direction), never the
 // reverse.
-const SIGNED_LOOKBACK_S = 60;
-// Assumed at least this many seconds per block when estimating how far back
-// the window starts; the start block's own timestamp is then checked, so a
-// faster chain can only make the read refuse to answer, never miss a block.
-const MIN_BLOCK_S = 0.1;
+// The window starts at a chain head the buyer read before sending the
+// credential (less this margin), never at a wall-clock time: a host clock
+// running ahead cannot move the start past the block that carried the
+// transfer.
+const START_MARGIN_BLOCKS = 10;
+
+/** The chain's head block number, read before a credential is sent (the
+ *  log window's start). Throws on an unreadable answer. */
+export async function tempoHeadNumber({ rpcFn = rpc } = {}) {
+  const n = parseInt(await rpcFn("eth_blockNumber", [], { timeoutMs: 3000 }), 16);
+  if (!Number.isInteger(n) || n < 0) throw new Error("unreadable block number");
+  return n;
+}
 
 async function credentialExpiry(credential) {
   try {
@@ -190,30 +198,44 @@ async function credentialExpiry(credential) {
     // with the spending wallet configured, it must be that wallet.
     const acct = await account();
     if (acct && acct.address.toLowerCase() !== from) return null;
-    return { validBefore, from };
+    // The transaction's own hash, when the credential fixes it: a complete,
+    // canonical, sender-signed 0x76 envelope (mppx's transactionHash rule). A
+    // sponsored one (a 0x78 envelope, or a 0x76 awaiting a fee payer) gets its
+    // final hash from the fee payer's co-signature, so it has none here.
+    let hash = null;
+    if (payload.signature.startsWith(TxEnvelopeTempo.serializedType) && tx.signature && tx.feePayerSignature === undefined
+      && TxEnvelopeTempo.serialize(tx) === payload.signature) hash = TxEnvelopeTempo.hash(tx);
+    return { validBefore, from, hash };
   } catch { return null; }
 }
 
 /**
  * Whether a pull credential this wallet handed a seller moved money:
  * { used: false, expired: true } only when the chain's head has reached the
- * credential's validBefore and no USDC.e left its signer from before it was
- * signed through that head; { used: true } when any did; null when that
- * cannot be read inside `maxWaitMs` (an undecodable credential, an RPC
- * failure, a head still short of the expiry, a window that does not reach
- * back to the signing time). Exported for tests; `rpcFn` is injectable.
+ * credential's validBefore, no USDC.e left its signer from `fromBlock` (a
+ * head read before the credential was sent) through that head, the
+ * credential's own transaction has no receipt, and the head block reads back
+ * with the same hash after the log read; { used: true } when a transfer or the receipt
+ * shows; null when that cannot be read inside `maxWaitMs` (an undecodable or
+ * sponsored credential, no start block, an expiry past the wait, an RPC
+ * failure, a head still short of the expiry, a head that changed under the
+ * read). Exported for tests; `rpcFn` is injectable.
  */
-export async function tempoCredentialVerdict(credential, { signedAtMs, maxWaitMs = 0, rpcFn = rpc, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+export async function tempoCredentialVerdict(credential, { fromBlock, maxWaitMs = 0, rpcFn = rpc, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   const deadline = Date.now() + Math.max(0, Number(maxWaitMs) || 0);
-  if (!(Number(maxWaitMs) > 0) || !Number.isFinite(Number(signedAtMs))) return null;
+  if (!(Number(maxWaitMs) > 0) || !Number.isInteger(fromBlock) || fromBlock < 0) return null;
   const exp = await credentialExpiry(credential);
-  if (!exp) return null;
+  if (!exp || !exp.hash) return null;
+  // A head can reach validBefore no sooner than validBefore itself: an expiry
+  // past the wait's end is no verdict now, without polling the chain for it.
+  if (exp.validBefore * 1000 > deadline) return null;
   try {
     const block = async (tag) => {
       const b = await rpcFn("eth_getBlockByNumber", [tag, false], { timeoutMs: 8000 });
       const number = parseInt(b?.number, 16), timestamp = parseInt(b?.timestamp, 16);
-      if (!Number.isFinite(number) || !Number.isFinite(timestamp)) throw new Error("unreadable block");
-      return { number, timestamp };
+      const hash = typeof b?.hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(b.hash) ? b.hash.toLowerCase() : null;
+      if (!Number.isFinite(number) || !Number.isFinite(timestamp) || !hash) throw new Error("unreadable block");
+      return { number, timestamp, hash };
     };
     let head = await block("latest");
     while (head.timestamp < exp.validBefore) {
@@ -222,16 +244,21 @@ export async function tempoCredentialVerdict(credential, { signedAtMs, maxWaitMs
       await sleep(Math.min(1000, left));
       head = await block("latest");
     }
-    const startTs = Math.floor(Number(signedAtMs) / 1000) - SIGNED_LOOKBACK_S;
-    const back = Math.ceil(Math.max(0, head.timestamp - startTs) / MIN_BLOCK_S);
-    if (back > PROOF_BLOCKS) return null;
-    const fromN = Math.max(0, head.number - back);
-    const start = await block("0x" + fromN.toString(16));
-    if (fromN > 0 && start.timestamp > startTs) return null;
+    const fromN = Math.max(0, fromBlock - START_MARGIN_BLOCKS);
+    if (fromN > head.number || head.number - fromN > PROOF_BLOCKS) return null;
     const topic = "0x" + exp.from.slice(2).padStart(64, "0");
     const logs = await rpcFn("eth_getLogs", [{ fromBlock: "0x" + fromN.toString(16), toBlock: "0x" + head.number.toString(16), address: TEMPO_USDC, topics: [TRANSFER_TOPIC, topic, null] }], { timeoutMs: 15000 });
     if (!Array.isArray(logs)) return null;
-    return logs.length ? { used: true } : { used: false, expired: true };
+    if (logs.length) return { used: true };
+    // Empty logs are only as good as the node that answered them. The
+    // credential's own transaction must have no receipt, and the head block
+    // must read back unchanged after the log read; anything else is no
+    // verdict, and the failure stays committed.
+    const receipt = await rpcFn("eth_getTransactionReceipt", [exp.hash], { timeoutMs: 8000 });
+    if (receipt !== null) return receipt === undefined ? null : { used: true };
+    const again = await block("0x" + head.number.toString(16));
+    if (again.number !== head.number || again.hash !== head.hash) return null;
+    return { used: false, expired: true };
   } catch { return null; }
 }
 
@@ -277,10 +304,17 @@ export async function payTempo(url, {
   memoizeDelivery = false, slug = null,
   // After an error answer to the paid request, how long the chain may be
   // waited on to prove the credential expired unused (0: not read, and the
-  // failure stays committed). route-execute passes its refusal budget.
-  refusalMaxWaitMs = 0, refusalProof = tempoCredentialVerdict,
+  // failure stays committed). route-execute passes its refusal budget, which
+  // runs from this call's start: the time the purchase itself takes comes
+  // out of it. `refusalHead` reads the chain head the log window starts at.
+  refusalMaxWaitMs = 0, refusalProof = tempoCredentialVerdict, refusalHead = tempoHeadNumber,
+  // The moment past which the caller's own buyer can no longer settle (an
+  // EVM buyer routed here; route-execute hands it in). Checked right before
+  // signing, so a refusal there has signed nothing.
+  signBy = null,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
+  const refusalWaitEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
   if (maxAtomic == null) throw bad("payTempo requires maxAtomic (the margin-guard ceiling)", 500);
   if (!tempoBuyerConfigured() && !createCredential) throw bad("Tempo spending wallet not configured (TEMPO_UPSTREAM_BUYER_KEY)", 409);
   // ONE deadline for the whole purchase: each step gets what is left of
@@ -368,8 +402,15 @@ export async function payTempo(url, {
   //    Not minted when too little time is left for the seller to answer: an
   //    unsent pull credential moves nothing, a sent one may.
   if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to pay the seller; nothing was signed", 504);
+  if (Number.isFinite(signBy) && Date.now() > signBy) throw bad("Too little of the buyer's payment authorization is left to pay this seller and still settle. Nothing was signed.", 504);
+  // The chain head, read before the credential is sent, starts the window a
+  // refusal is later read over: the credential cannot be in any block up to
+  // it. It runs beside the signing and is awaited before the send;
+  // unreadable leaves no start, and a refusal then stays committed.
+  const headRead = Number(refusalMaxWaitMs) > 0
+    ? withinDeadline(Promise.resolve().then(() => refusalHead()), "the chain head read").then((n) => (Number.isInteger(n) && n >= 0 ? n : null), () => null)
+    : Promise.resolve(null);
   const mint = createCredential || (await defaultCredentialFactory(recipient));
-  const signedAtMs = Date.now();
   let credential;
   try { credential = await withinDeadline(Promise.resolve().then(() => mint(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(ch) } }))), "credential signing"); }
   catch (e) {
@@ -378,6 +419,7 @@ export async function payTempo(url, {
     throw bad(`Could not create an MPP credential (${why.slice(0, 120)}); nothing was sent`, 502);
   }
   if (typeof credential !== "string" || !/^Payment\s/i.test(credential)) throw bad("Could not create an MPP credential", 502);
+  const startBlock = await headRead;
   // A pull credential moves nothing until the seller submits it, so when
   // signing used up the budget the request is not sent at all.
   if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504);
@@ -402,11 +444,13 @@ export async function payTempo(url, {
     // with nothing taken. Only the chain tells them apart: once its head has
     // reached the credential's validBefore, no USDC.e Transfer from our
     // signer since signing means the credential can never move money. Read
-    // only when the caller gave a wait budget; no verdict keeps the failure
-    // committed, exactly as before.
-    if (paid.status >= 400 && !receiptHdr && Number(refusalMaxWaitMs) > 0) {
+    // only when the caller gave a wait budget, and only for what is left of
+    // it after the purchase so far; no verdict keeps the failure committed,
+    // exactly as before.
+    const refusalWaitMs = refusalWaitEndAt - Date.now();
+    if (paid.status >= 400 && !receiptHdr && refusalWaitMs > 0 && startBlock != null) {
       let verdict = null;
-      try { verdict = await refusalProof(credential, { signedAtMs, maxWaitMs: refusalMaxWaitMs }); } catch { verdict = null; }
+      try { verdict = await refusalProof(credential, { fromBlock: startBlock, maxWaitMs: refusalWaitMs }); } catch { verdict = null; }
       if (verdict && verdict.used === false && verdict.expired === true) {
         committed = false;
         const where = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
