@@ -4977,7 +4977,10 @@ jobs:
         env:
           TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}
           GH_TOKEN: ${{ github.token }}
-          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before || 'main') }}
+          # PR: its base. Push to main: the previous head. Push to any other
+          # branch: main (the whole batch). Anything else (workflow_dispatch,
+          # a main push with no before): empty, so the gate runs (fail-open).
+          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && (github.ref == 'refs/heads/main' && github.event.before || github.ref != 'refs/heads/main' && 'main')) || '' }}
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
