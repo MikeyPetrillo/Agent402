@@ -8,7 +8,7 @@
 // a single threadpool read issued before the loop is held, which completes
 // during the hold exactly like a socket answer would:
 //   - an answer that arrived while the loop was held is taken (the shared
-//     store's command deadline, and the connect wait);
+//     store's command deadline, the connect wait, the CoinGecko budget's);
 //   - a store that never answers still times out, promptly when the loop is
 //     free and boundedly when it is held;
 //   - a rejection still propagates.
@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loopDeadline, withLoopTimeout, withLoopDeadline } from "../src/loop-deadline.js";
 import { createRedisLimits } from "../src/shared-limits.js";
+import { cgWithin } from "../src/tools/coingecko-rate.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -83,6 +84,13 @@ const answerSoon = (value) => fh.read(Buffer.alloc(8), 0, 8, 0).then(() => value
   threw = null;
   try { await withLoopTimeout(new Promise(() => {}), 50, () => new Error("late")); } catch (e) { threw = e; }
   ok(threw?.message === "late", "withLoopTimeout rejects with the given error");
+}
+// 2b. The CoinGecko budget's own deadline (src/tools/coingecko-rate.js), same rule.
+{
+  await checkPhase();
+  const p = cgWithin(answerSoon("ok"), 100).catch((e) => e.message);
+  spin(400);
+  ok((await p) === "ok", "the CoinGecko shared budget takes an answer that landed while the loop was held");
 }
 // 3. Each correction on its own. The expiry waits one poll phase: a hold that
 //    ends just past the deadline (not late enough to re-arm) still reads the
