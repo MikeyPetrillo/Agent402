@@ -177,6 +177,16 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     e = await sqlRun().catch((x) => x);
     ok(e?.statusCode === 502 && e?.hint === "narrow-query" && /Narrow the query/.test(e.message) && calls.length === 1,
       `a slow 502 on a SQL query is one 502 with how to narrow it, not resent (attempts ${calls.length}, ${e?.statusCode})`);
+    // The 5xx is logged with CDP's request id, its body, and the query's
+    // shape, never the query's literals.
+    {
+      const warned = []; const realWarn = console.warn; console.warn = (m) => warned.push(String(m));
+      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("<html>502 Bad Gateway</html>", { status: 502, headers: { "x-request-id": "rid-123" } })), 60));
+      await tool("onchain-sql").handler({ sql: "SELECT to_address FROM base.transactions WHERE from_address = '0xSECRETLITERAL' LIMIT 5" }).catch(() => {});
+      console.warn = realWarn;
+      const line = warned.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
+      ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape, no literals (${line.slice(0, 220)})`);
+    }
     calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(504, {})), 60));
     e = await sqlRun().catch((x) => x);
     ok(e?.statusCode === 502 && /Narrow the query/.test(e.message) && calls.length === 1, `a slow 504 on a SQL query is answered once too (attempts ${calls.length})`);
