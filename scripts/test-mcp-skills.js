@@ -34,7 +34,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const { mountMcp } = await import("../src/mcp-http.js");
 const { SKILL_PACKS } = await import("../src/skills.js");
-const { SKILLS_EXTENSION, skillUriOf, mcpSkillsEnabled, clientDeclaresSkills } = await import("../src/mcp-skills.js");
+const { SKILLS_EXTENSION, skillUriOf, mcpSkillsEnabled, clientDeclaresSkills, buildSkillSet } = await import("../src/mcp-skills.js");
+const { hiddenCharacters } = await import("../src/hidden-chars.js");
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; } else { fail++; console.error(`  FAIL ${msg}`); } };
@@ -46,8 +47,13 @@ const def = (slug, price, extra = {}) => ({
 });
 const PACK = SKILL_PACKS.find((p) => (p.promptArgs || []).some((a) => a.substitute)) || SKILL_PACKS[0];
 const FREE_TOOL = PACK.toolSlugs[0];
+// A second pack whose bundled route is free on the connector (proof-of-work).
+// SKILL_PACKS[0] stays unserved when it is not PACK (the "not offered" case).
+const OTHER = SKILL_PACKS.find((p) => p.slug !== PACK.slug);
+const FREE_PACK = SKILL_PACKS.find((p) => p.slug !== PACK.slug && p.slug !== OTHER.slug);
 const CATALOG = {
   [`POST /api/skill/${PACK.slug}`]: def(`skill-${PACK.slug}`, "$0.042"),
+  [`POST /api/skill/${FREE_PACK.slug}`]: def(`skill-${FREE_PACK.slug}`, "$0.037", { free: true }),
   [`POST /api/${FREE_TOOL}`]: def(FREE_TOOL, "$0.001", { free: true }),
   "POST /api/whois": def("whois", "$0.001"),
 };
@@ -75,6 +81,15 @@ async function rpc(path, method, params) {
     body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, ...(params === undefined ? {} : { params }) }),
   });
   return res.json();
+}
+// A raw JSON-RPC message, for notifications (no id) and literal params values.
+async function rawPost(path, message) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25" },
+    body: JSON.stringify(message),
+  });
+  return { status: res.status, text: await res.text() };
 }
 const init = (path, capabilities = {}, extra = {}) => rpc(path, "initialize", { protocolVersion: "2025-11-25", capabilities, clientInfo: { name: "test-mcp-skills", version: "1" }, ...extra });
 const DECLARE = { extensions: { [SKILLS_EXTENSION]: {} } };
@@ -139,6 +154,16 @@ try {
   ok((await rpc("/mcp", "skills/get", {})).error?.code === -32602, "missing uri is -32602");
   ok((await rpc("/mcp", "skills/get", { uri: 7 })).error?.code === -32602, "non-string uri is -32602");
   ok((await rpc("/mcp", "skills/get", [1])).error?.code === -32602, "array params is -32602");
+  for (const method of ["skills/list", "skills/get"]) {
+    const nul = await rawPost("/mcp", { jsonrpc: "2.0", id: 901, method, params: null });
+    let parsed = null;
+    try { parsed = JSON.parse(nul.text); } catch { parsed = null; }
+    ok(parsed?.error?.code === -32602 && parsed.error.message === "params must be an object" && parsed.id === 901, `${method} params:null is "params must be an object" (got ${nul.text.slice(0, 160)})`);
+    const note = await rawPost("/mcp", { jsonrpc: "2.0", method, params: method === "skills/get" ? { uri: skillUriOf(PACK.slug) } : {} });
+    ok(note.status === 202 && note.text === "", `${method} notification (no id) gets no reply (status ${note.status}, body ${JSON.stringify(note.text.slice(0, 120))})`);
+  }
+  const absent = await rawPost("/mcp", { jsonrpc: "2.0", id: 902, method: "skills/list" });
+  ok(JSON.parse(absent.text)?.result?.skills?.length === SKILL_PACKS.length, "skills/list with params absent reads as {}");
 
   // ---- resources/read verifies against the manifest, for every skill
   let verified = 0;
@@ -163,7 +188,30 @@ try {
   ok(PACK.toolSlugs.every((t) => body.includes(`\`${t}\``)), "body names every tool the pack uses");
   ok(body.includes(`Free on this connector (proof-of-work, rate-limited): \`${FREE_TOOL}\``), "free tools are split out");
   ok(!body.includes("—"), "no em dash in skill text");
-  const other = SKILL_PACKS.find((p) => p.slug !== PACK.slug);
+  ok(body.includes("One payment of $0.042 runs all") && !body.includes("Free on this connector with proof-of-work"), "a paid bundled route leads with its one payment");
+  const freeBody = (await rpc("/mcp", "resources/read", { uri: skillUriOf(FREE_PACK.slug) })).result?.contents?.[0]?.text || "";
+  ok(freeBody.includes(`catalog.call {"slug":"skill-${FREE_PACK.slug}"`), "free bundled pack: body names the one bundled call");
+  ok(freeBody.includes("Free on this connector with proof-of-work (no wallet, no payment, rate-limited)"), "free bundled pack: body leads with proof-of-work, no payment");
+  ok(!freeBody.includes("One payment of"), "free bundled pack: body does not ask for a payment");
+  ok(freeBody.includes("With a wallet, the same call is $0.037 in USDC"), "free bundled pack: the catalog price is kept as the wallet alternative");
+
+  // ---- every built skill body and description is free of hidden characters and em dashes
+  // (skill bodies are instructions an agent reads; test-hidden-chars does not read them)
+  const built = buildSkillSet({ freeSlugs: new Set([`skill-${FREE_PACK.slug}`, FREE_TOOL]), priceOf: (slug) => (slug.startsWith("skill-") ? "$0.042" : null) });
+  const dirty = [];
+  for (const f of built.fileByUri.values()) {
+    for (const [field, text] of [["text", f.text], ["description", f.description], ["title", f.title]]) {
+      const hidden = hiddenCharacters(String(text));
+      if (hidden.length) dirty.push(`${f.uri} ${field}: hidden ${JSON.stringify(hidden.slice(0, 3))}`);
+      if (String(text).includes("\u2014")) dirty.push(`${f.uri} ${field}: em dash`);
+    }
+  }
+  for (const e of built.entries) {
+    if (hiddenCharacters(String(e.frontmatter.description)).length || String(e.frontmatter.description).includes("\u2014")) dirty.push(`${e.uri} frontmatter.description`);
+  }
+  ok(built.fileByUri.size === SKILL_PACKS.length && dirty.length === 0, `every skill body and description has no hidden character or em dash (${dirty.slice(0, 5).join("; ") || "clean"})`);
+
+  const other = OTHER;
   const otherBody = (await rpc("/mcp", "resources/read", { uri: skillUriOf(other.slug) })).result?.contents?.[0]?.text || "";
   ok(!otherBody.includes("Run it in one call") && otherBody.includes("## Steps"), "a bundled route the catalog does not serve is not offered");
   ok((await rpc("/mcp", "resources/read", { uri: "skill://agent402/nope/SKILL.md" })).error?.code === -32602, "unknown resource is -32602");

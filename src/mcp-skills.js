@@ -74,6 +74,10 @@ function skillBody(pack, { freeSlugs, priceOf }) {
     lines.push("");
   }
   if (bundledPrice) {
+    // The bundled route is free on this connector when it is in the connector's
+    // own free set (isComputePayable, the gate's allowlist); the /skills page
+    // words the same case as free with proof-of-work, or the price with a wallet.
+    const runs = `runs all ${pack.toolSlugs.length} steps server-side and returns every step's result in one answer`;
     lines.push(
       "## Run it in one call",
       "",
@@ -81,7 +85,9 @@ function skillBody(pack, { freeSlugs, priceOf }) {
       `${call} ${JSON.stringify({ slug: bundled, params: exampleParams })}`,
       "```",
       "",
-      `One payment of ${bundledPrice} runs all ${pack.toolSlugs.length} steps server-side and returns every step's result in one answer. A step that fails is reported in that answer without losing the others.`,
+      freeSlugs.has(bundled)
+        ? `Free on this connector with proof-of-work (no wallet, no payment, rate-limited): one call ${runs}. With a wallet, the same call is ${bundledPrice} in USDC. A step that fails is reported in that answer without losing the others.`
+        : `One payment of ${bundledPrice} ${runs}. A step that fails is reported in that answer without losing the others.`,
       "",
     );
   }
@@ -133,12 +139,19 @@ export function buildSkillSet({ packs = SKILL_PACKS, freeSlugs = new Set(), pric
   return { entries, entryByUri, fileByUri };
 }
 
-/** skills/list and skills/get. Returns a complete JSON-RPC response (never throws). */
+/** A JSON-RPC notification: a message with no `id` member. It gets no reply
+ *  (the SDK transport answers a notification-only POST with an empty 202). */
+export const isNotification = (body) => Boolean(body && typeof body === "object" && !Array.isArray(body) && !Object.hasOwn(body, "id"));
+
+/** skills/list and skills/get. Returns a complete JSON-RPC response, or null
+ *  for a notification, which JSON-RPC forbids answering (never throws). */
 export function handleSkillsRpc(body, skillSet) {
+  if (isNotification(body)) return null;
   const id = body?.id ?? null;
   const err = (code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
   const ok = (result) => ({ jsonrpc: "2.0", id, result: { resultType: "complete", ...result, ttlMs: SKILLS_TTL_MS, cacheScope: SKILLS_CACHE_SCOPE } });
-  const params = body?.params ?? {};
+  // Absent params read as {}; params present but null (or any non-object) is refused.
+  const params = body && Object.hasOwn(body, "params") ? body.params : {};
   if (params === null || typeof params !== "object" || Array.isArray(params)) return err(INVALID_PARAMS, "params must be an object");
   if (body.method === "skills/list") {
     // One page holds every skill, so this server never issues a cursor and

@@ -1593,7 +1593,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // the installed SDK has no such methods. Behind the per-IP limiter above.
     // With skills off they fall through to the SDK's method-not-found.
     if (skillSet && isSkillMethod(req.body?.method)) {
-      return res.status(200).json(handleSkillsRpc(req.body, skillSet));
+      const answer = handleSkillsRpc(req.body, skillSet);
+      // A notification gets no JSON-RPC reply: an empty 202, as the SDK transport answers one.
+      return answer ? res.status(200).json(answer) : res.status(202).end();
     }
     const isInitialize = req.body?.method === "initialize";
     const skillsCaps = Boolean(skillSet) && (!isInitialize || clientDeclaresSkills(req.body?.params));
