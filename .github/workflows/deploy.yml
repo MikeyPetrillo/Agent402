@@ -1370,6 +1370,12 @@ jobs:
           t node scripts/test-avm-subcent-shared-redis.js
           # Seller registration limits (x402 and MPP, per IP and global) are one count across two servers on one Redis, with each process's own count as the floor.
           t node scripts/test-registration-limits-redis.js
+          # Hang-up settlement with the booted server's forgiveness budget on the shared store (Part 2 keeps REDIS_URL under a per-run prefix).
+          t node scripts/test-hangup-settlement.js
+          # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
+          t node scripts/test-gateway-settle-breaker.js
+          # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
+          t node scripts/test-replay-store-outage.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
@@ -1415,6 +1421,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # Two copies of one revision written in either order converge on one copy in both containers and the row.
+          t node scripts/test-index-equal-rev-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
           # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
@@ -2330,7 +2338,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (8 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2342,6 +2350,7 @@ jobs:
           t node scripts/test-shared-limit.js
           # Store deadlines count loop time: an answer that landed while the loop was held is read, not a timeout
           t node scripts/test-loop-deadline.js
+          t node scripts/test-loop-deadline-sites.js
           # Tool pages backlink to the skill packs they belong to
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
