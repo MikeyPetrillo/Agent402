@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (paid answers on a pending settle)
+Payments:
+- A payment whose transfer confirms moments after the facilitator stops
+  waiting for it now receives its answer, instead of a refusal and a later
+  refund: when a settle comes back pending with a transaction, the server
+  reads that transaction on chain for a few seconds and serves the call once
+  the transfer to us is proven.
+
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:
 - route-execute moves on to the next Tempo seller when a seller fails

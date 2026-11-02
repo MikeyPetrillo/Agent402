@@ -1867,6 +1867,8 @@ jobs:
           t node scripts/test-rh-fallback-confirm.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
           t node scripts/test-late-settlements.js
+          # A pending settle answer naming a tx is read on chain first: proven mined to us -> 200, one sale, nothing booked, breaker and upstream count read it as settled; unproven, RPC errors, buyer gone or a plain 5xx -> 402 and booked as before (paid-mode boot vs stub facilitator and RPC - offline)
+          t node scripts/test-pending-settle.js
           # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check, paid-mode boot with and without the key (stub chain, throwaway keys - offline)
           t node scripts/test-own-relayer.js
           # Robinhood settle order follows the listed facilitator's relayer gas: dry -> our relayer first, funded -> facilitator first, unread never moves it (offline)

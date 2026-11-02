@@ -326,6 +326,25 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     return name;
   }
 
+  /**
+   * Move one `kind` outcome counted for `host` at `at` back to ok: a call the
+   * fetch observer counted as failed whose outcome later proved good (a
+   * facilitator's pending 5xx whose transfer was then read mined,
+   * src/pending-settle.js). Takes from the outside lane first, then synthetic,
+   * then background. Answers whether a count was moved.
+   */
+  function forgiveUpstream(host, kind, { at = now() } = {}) {
+    const name = upstreamNameOf(host);
+    const i = UPSTREAM_KINDS.indexOf(kind);
+    if (!name || i < 0 || kind === "ok") return false;
+    const row = upstreams.get(name)?.get(bucketOf(at));
+    if (!row) return false;
+    for (const lane of ["o", "s", "b"]) {
+      if (row[lane]?.[i] > 0) { row[lane][i]--; row[lane][0]++; return true; }
+    }
+    return false;
+  }
+
   /** Observe one outbound fetch (the egress meter's observer). */
   function observeFetch(host, promise, init, origin) {
     if (!upstreamNameOf(host)) return;
@@ -710,7 +729,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, forgiveUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
     _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };

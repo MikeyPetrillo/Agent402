@@ -35,6 +35,7 @@ import { x402EvmOnly, RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
+import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers } from "./pending-settle.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -1035,6 +1036,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
     labelFacilitatorErrors(label, client);
+    // A pending 5xx settle answer is noted on its payload, so a transfer the
+    // chain then proves is not left counted as a facilitator failure
+    // (src/pending-settle.js).
+    notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url);
     // Arc is Circle's alone. @x402 routes a network to the FIRST client whose
     // /supported lists it, and CDP/PayAI are registered before Circle, so a
     // general facilitator that starts listing Arc would take its payments past
@@ -2956,6 +2961,15 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       console.warn(`[payments] recovered ${r.result.network} settlement from chain proof: tx ${r.result.transaction}`);
       return { recovered: true, result: r.result };
     }
+    // "Pending" with a transaction hash: the facilitator broadcast and stopped
+    // waiting for the receipt. The receipt is read for a bounded time; a
+    // transfer it proves is this payment's is served like any recovered
+    // settlement (claimed first). Otherwise the failure goes on exactly as
+    // before: the late-settlement book reads the tx (src/pending-settle.js).
+    if (pendingSettleApplies(ctx)) {
+      const o = await settleAfterPending(ctx);
+      if (o) return o;
+    }
     if (!fallbackEnabled) return;
     // Our own relayer settled first because the listed facilitator read dry
     // (src/robinhood-order.js): it is not asked again below, and its own
@@ -3043,6 +3057,33 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       }
     }
   });
+}
+
+/**
+ * After a pending settle answer that names a transaction: the receipt is read
+ * (src/pending-settle.js), and a transfer proven to be this payment's is
+ * claimed and served. The facilitator's pending 5xx answers for this payment
+ * are then counted as ok upstream outcomes. Answers the hook result, or
+ * undefined when the failure stands.
+ */
+async function settleAfterPending(ctx) {
+  const network = ctx?.requirements?.network;
+  let r;
+  try { r = await confirmPendingSettle(ctx); } catch (e) { r = { recovered: false, reason: `receipt read errored: ${String(e?.message || e).slice(0, 120)}` }; }
+  if (!r.recovered) {
+    console.warn(`[payments] ${network} pending settle not recovered: ${r.reason}; the transaction is booked until it is read on chain`);
+    return undefined;
+  }
+  if (await recoveredTxHeldElsewhere(ctx, r.result)) {
+    console.warn(`[payments] ${network} pending settle: tx ${r.result.transaction} already held by another request or booked owed; not served`);
+    return undefined;
+  }
+  for (const a of takePendingAnswers(ctx?.paymentPayload)) {
+    try { toolFailureMonitor().forgiveUpstream(a.host, "s5xx", { at: a.at }); } catch { /* bookkeeping only */ }
+  }
+  releaseCoverOnSettled(ctx, r.result);
+  console.warn(`[payments] recovered ${network} settlement after a pending answer: tx ${r.result.transaction} (read on chain)`);
+  return { recovered: true, result: r.result };
 }
 
 /** True for a hook context whose payment or requirement is the Circle

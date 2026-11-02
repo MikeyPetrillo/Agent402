@@ -323,6 +323,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
   window is shorter than its lock wait plus receipt wait. A read failure (an unreadable receipt
   included) is a 402 with the authorization booked in the late-settlement book, which never
   closes a used authorization as not landed (`scripts/test-rh-outage.js`).
+  An EVM exact settle failure (not 4663, Arc or Tempo) that names a tx and reads as pending is
+  read on chain first (`src/pending-settle.js`): a receipt within `PENDING_SETTLE_RECEIPT_WAIT_MS`
+  (default 12000, also inside the CDN window and validBefore) that is status 1, uses this
+  authorization and moves the price from the payer to our payTo, not a recorded sale, is claimed
+  and served (its pending 5xx answers leave the upstream count); anything else, or a buyer gone,
+  keeps the 402 and the late-settlement booking (`scripts/test-pending-settle.js`).
 - **Heap attribution:** `HEAP_SAMPLING=on` (exactly "on"; off by default) starts V8's sampling heap
   profiler at the first import (`src/boot-profile.js`); `/__operator/heap-sampling.json` reports
   live sampled bytes by function and file. A read holds the loop about a second on a large heap
