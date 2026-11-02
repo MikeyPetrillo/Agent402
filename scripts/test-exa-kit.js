@@ -173,6 +173,18 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   eq(liteSearchBody(unsafe), { query: "q", type: "lite", numResults: 3, userLocation: "US", moderation: true, contents: { text: { maxCharacters: 500 } } }, "a lite body keeps only lite parameters (null unset, compliance hipaa only)");
   ok(liteSearchBody({ query: "q", type: "lite", contents: { summary: true } }).contents === undefined, "a contents block left with nothing lite takes is dropped whole");
   eq(liteSearchBody({ query: "q", type: "lite", compliance: "hipaa" }).compliance, "hipaa", "compliance hipaa is kept");
+  // The lite rate is read under its own key, not instant's: a table whose two
+  // rows differ tells them apart (no rate typed: lite is derived from instant).
+  {
+    const { readFileSync } = await import("node:fs");
+    const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
+    const raw = process.env.UPSTREAM_COSTS_JSON ? JSON.parse(process.env.UPSTREAM_COSTS_JSON) : JSON.parse(readFileSync(process.env.UPSTREAM_COSTS_FILE, "utf8"));
+    raw.vendor.exa.lite = raw.vendor.exa.instant / 2;
+    setUpstreamCostsForTest(raw);
+    const lite = estimateExaUsd("/search", { type: "lite", numResults: 10 }), instant = estimateExaUsd("/search", { type: "instant", numResults: 10 });
+    setUpstreamCostsForTest(null);
+    ok(lite !== instant && near(lite * 2, instant), "a lite search is estimated at vendor.exa.lite, not the instant rate");
+  }
   // Control: other types are sent as built.
   reset(); stub(200, { results: [] });
   await tool("exa-search").handler({ ...input, type: "auto" });
