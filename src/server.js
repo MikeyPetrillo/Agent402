@@ -2413,7 +2413,7 @@ installEgressMeter();
     try { workerHost = new URL(workerUrlAtBoot).host; } catch { /* registerUpstreamHost already parsed it */ }
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
-  setEgressOutcomeObserver((host, p, init) => { monitor.observeFetch(host, p, init, originNow()); });
+  setEgressOutcomeObserver((host, p, init, path) => { monitor.observeFetch(host, p, init, originNow(), path); });
   // Identical answers (operator detail): live-data slugs only. A pure-CPU
   // tool answers the same bytes to the same input by design, and the memory
   // and identity-bound reads answer each payer from its own store.

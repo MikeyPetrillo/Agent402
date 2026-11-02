@@ -2846,9 +2846,10 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   return tick;
 }
 
-/** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
-function registerFacilitatorUpstream(url) {
-  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
+/** A facilitator's host, counted by the failure monitor as "facilitator:<host>"
+ *  (only calls under its URL's path, so a data API on the same host is not). */
+export function registerFacilitatorUpstream(url) {
+  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`, { byPath: true }); } catch { /* not a URL */ }
 }
 
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {
