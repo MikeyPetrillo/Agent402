@@ -3,6 +3,18 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-02",
+    title: "Agent front door",
+    items: [
+      "Surfaces: /llms.txt (after its title, summary, base URL and full-text link), /agents.md and the MCP server.describe answer open with the same three-line front door: the first call (web.search, with web.answer beside it) at its catalog price; access with no account or API key, led by the proof-of-work tools that run free with no wallet (counted from the catalog, listed at /api/pow), then pay per call in the stablecoins and over the wires this server offers (named from its live configuration); and when to use the service and when not to, linked to /agents.md. server.describe's startHere.firstJob opens with the same first call. The unpaid 402 body carries the access line and the /agents.md link. Rails and wire detail follow unchanged.",
+      "Surfaces: new /agents.md (text/markdown, free): the front door, then \"When a call fails\" (four recovery lines, each scoped to where it holds), then how to connect, pay and find more tools. Linked from /llms.txt, listed in the sitemap and robots.txt.",
+      "Surfaces: the OpenAPI info description and the /.well-known/x402 summary lead with what the first call returns for its price.",
+      "Discovery: the Bazaar listings of web search, web answer, news search and browser render say what one call returns; the search and news sample outputs show two results with a matching count.",
+      "Tools: when shareable answers are enabled (ANSWER_SHARE=on, off by default), web.answer takes share=true (same price): the answer also carries share: { url, cardUrl, expiresAt }, a public page of the question, the answer and its cited sources with a 1200x630 preview card, written only once the call settles and kept 30 days (then 410 expired for 90 days; the operator can remove a page, 410 removed). The question is labeled as the caller's; the record is at /answers/<id>.json. The page is not indexed; /privacy describes what it keeps.",
+      "Payments: a Solana payment refused because the paying wallet has no USDC account or less USDC than the price now says so (reason no-token-account or insufficient-funds, retry fund-wallet, Retry-After 300) and asks for the wallet to be funded or another listed network, instead of asking for a fresh signature. A wallet refused this way three times in ten minutes gets the same answer without a new check until its Retry-After passes.",
+    ],
+  },
+  {
+    date: "2026-11-02",
     title: "Paid answers on a pending settle",
     items: [
       "Payments: an EVM payment whose transfer confirms moments after the facilitator stops waiting for it now receives its answer, instead of a refusal and a later refund: when a settle comes back pending with a transaction, the server reads that transaction on chain for a few seconds and serves the call once the transfer to us is proven.",

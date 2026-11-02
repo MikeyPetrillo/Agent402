@@ -16,6 +16,7 @@ for (const f of ["services/decide/server.js", "Dockerfile", "docker-entrypoint.s
   ok(paths.includes(f), `${f} is watched`);
 }
 ok(!paths.includes("src/server.js"), "the main app's server is not in decide's closure");
+for (const f of ["src/sales-ledger.js", "src/revenue-live.js", "src/first-call-allowance.js"]) ok(!paths.includes(f), `${f} is not in decide's closure (a grant is read through src/allowance-state.js)`);
 ok(touchesDecide(["README.md", "services/decide/rank.js"]), "a change to decide's own code selects it");
 ok(touchesDecide(["services/decide/new-helper.js"]), "a new file under services/decide/ selects it");
 ok(touchesDecide(["src/decide/index-export.js"]), "a change to the export's row format selects it");

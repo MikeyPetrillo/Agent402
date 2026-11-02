@@ -6,6 +6,7 @@ import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
 import { onResponseEnd } from "./hangup-settlement.js";
+import { allowanceServed } from "./allowance-state.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -197,6 +198,9 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       // not a reusable receipt. (FREE_MODE has no paywall to bind to and is
       // dev/test only, so it keeps caching.)
       if (res.getHeader("X-Trial-Accepted") === "true") return;
+      // Nor does a first-call allowance grant: its payment never settled
+      // (src/first-call-allowance.js), so it is no receipt to replay against.
+      if (allowanceServed(req)) return;
       const powVerified = res.getHeader("X-Pow-Accepted") === "true";
       // A PoW-served answer is stored only under the PoW token it was served
       // on. The key is computed before the PoW gate, so a payment header riding

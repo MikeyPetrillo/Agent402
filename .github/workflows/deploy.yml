@@ -1458,6 +1458,10 @@ jobs:
           t node scripts/test-hangup-forgiveness-pg.js
           # The forgiveness budget holds across replicas: one reservation script over every window on REAL redis (needs this lane's Redis).
           t node scripts/test-hangup-forgiveness-redis.js
+          # First-call allowance: a new wallet's first eligible call is served and its settle skipped, inside the per-wallet, per-address and daily caps claimed on REAL redis; nothing booked as a sale, debt or breaker outcome (stub facilitator, offline; records on this lane's Postgres).
+          t node scripts/test-first-call-allowance.js
+          # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
+          t node scripts/test-first-call-allowance-hook.js
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
@@ -1513,6 +1517,8 @@ jobs:
           t node scripts/test-state-db-overlap.js
           # The file/memory half runs without the database; the Postgres half with it.
           t node scripts/test-json-document.js
+          # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream); the live-page count and sweep on the records table (Postgres half)
+          t node scripts/test-answer-share.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -4738,6 +4744,8 @@ jobs:
           t node scripts/test-x402-v1-accepts.js
           # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header (header keys win, our fields kept, settle-failure 402s untouched; stock x402 and mppx buys unchanged) - boots a paid server, offline
           t node scripts/test-payment-required-body.js
+          # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body: the first call at the catalog price, the derived free-tier count, scoped recovery lines on /agents.md, the first-call allowance clause only while its switch is on, the header unchanged - boots two paid servers, offline
+          t node scripts/test-front-door.js
           # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
           t node scripts/test-head-paywall.js
           # Anthropic SDK base-URL alias (/v1/<tier>/v1/messages) + 1 MB body limit on the metered routes (boots a paid server, offline)
@@ -4781,6 +4789,8 @@ jobs:
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js
+          # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
+          t node scripts/test-svm-funding-refusal.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)

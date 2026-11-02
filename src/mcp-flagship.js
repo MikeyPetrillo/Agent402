@@ -250,6 +250,16 @@ export const META_OUTPUT_SCHEMAS = {
   "server.describe": {
     type: "object",
     properties: {
+      frontDoor: {
+        type: "object",
+        properties: {
+          firstCall: { type: "string" },
+          access: { type: "string" },
+          use: { type: "string" },
+          guide: { type: "string" },
+        },
+        additionalProperties: true,
+      },
       service: { type: "string" },
       connector: { type: "string" },
       maintainer: { type: "string" },
@@ -357,6 +367,11 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
         },
       },
       citationCount: { type: "integer" },
+      // Present only when the call passed share=true.
+      share: {
+        type: ["object", "null"],
+        properties: { url: { type: "string" }, cardUrl: { type: "string" }, expiresAt: { type: "string" } },
+      },
     },
     required: ["query", "answer"],
   },

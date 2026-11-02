@@ -52,6 +52,7 @@
 // stream that was cut part way through was (partly) delivered.
 
 import { hangupForgiven } from "./hangup-forgiveness.js";
+import { allowanceServed } from "./allowance-state.js";
 
 export const CLIENT_GONE_TEXT = "The connection closed before the response was ready, so the payment was not settled and nothing was charged.";
 
@@ -143,6 +144,8 @@ export function createHangupSettlementHook({ onUndelivered }) {
 // src/hangup-forgiveness.js) is not a settlement outcome: onSettleOutcome
 // skips it, so the forgiveness rule and its own budget stay the only bound on
 // it. onResponseEnd runs for it too, for bookkeeping that must always close.
+// The same holds for a first-call allowance grant whose settle was skipped
+// (src/first-call-allowance.js): its bound is that module's caps.
 const OUTCOME = Symbol("a402.responseOutcome");
 
 function outcomeState(req, res) {
@@ -161,9 +164,12 @@ function runOutcome(res, via) {
   if (state.done) return;
   state.done = true;
   const forgiven = via === "undelivered" && chargeCancelledForClientGone(state.req);
-  const info = { via, forgiven };
+  // A first-call allowance grant whose settle was skipped is not a
+  // settlement outcome either: no sale, no breaker or composite outcome.
+  const allowance = allowanceServed(state.req);
+  const info = { via, forgiven, allowance };
   for (const fn of state.always) { try { fn(info); } catch { /* an outcome listener never breaks serving */ } }
-  if (forgiven) return;
+  if (forgiven || allowance) return;
   for (const fn of state.settle) { try { fn(info); } catch { /* an outcome listener never breaks serving */ } }
 }
 

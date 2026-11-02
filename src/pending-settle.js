@@ -295,7 +295,7 @@ export async function confirmPendingSettle(ctx, {
 // Keyed by the payload's authorization object when it has one: a scheme that
 // enriches the settle payload copies the payload but keeps that object, so the
 // note and the failure hook find the same key.
-const pendingAnswers = new WeakMap(); // authorization (or payload) -> [{ host, at, tx, s5xx, lane }]
+const pendingAnswers = new WeakMap(); // authorization (or payload) -> [{ host, at, tx, s5xx, lane, client, via }]
 const keyOf = (payload) => {
   if (!payload || typeof payload !== "object") return null;
   const a = payload.payload?.authorization;
@@ -303,24 +303,33 @@ const keyOf = (payload) => {
 };
 const laneNow = () => { try { const s = currentRequestScope(); return !s ? "background" : s.synthetic ? "synthetic" : "outside"; } catch { return "background"; } };
 
+let clientSeq = 0;
 /**
- * Wrap a facilitator client's settle so its pending answers are noted.
- * `onSettledAfterPending(notes)` runs when a settle on this client succeeds
- * for a payment that already holds pending notes (the library's own retry
- * settled it): the notes are taken and handed over, so their 5xx counts can
- * be forgiven.
+ * Wrap a facilitator client's settle so its pending answers are noted. Each
+ * note names the client that answered it (`client`, an id per wrapped client)
+ * and its label (`via`, the facilitator's name), so a transaction is booked
+ * under the facilitator that named it.
+ *
+ * When a settle on this client succeeds for a payment that already holds
+ * pending notes, the notes are taken. `onSettledAfterPending(notes)` gets the
+ * ones THIS client answered (the library's own retry settled it on the same
+ * facilitator), so their 5xx counts can be forgiven. `onSettledByOther(notes)`
+ * gets the ones another client answered (a settle fallback succeeded after
+ * them): their transactions were never proven, so their 5xx counts stay.
  */
-export function notePendingSettleAnswers(client, url, { now = () => Date.now(), lane = laneNow, onSettledAfterPending = null } = {}) {
+export function notePendingSettleAnswers(client, url, { now = () => Date.now(), lane = laneNow, via = null, onSettledAfterPending = null, onSettledByOther = null } = {}) {
   if (!client || typeof client.settle !== "function" || client.settle.__a402PendingNoted) return client;
   let host = null;
   try { host = new URL(String(url)).host; } catch { return client; }
+  const id = ++clientSeq;
+  const label = via == null ? null : String(via).slice(0, 60);
   const note = (payload, answer, s5xx) => {
     try {
       const k = keyOf(payload);
       const tx = pendingSettleTxOf(answer);
       if (!k || !tx || isGatewayBatchedPayment(payload)) return;
       const list = pendingAnswers.get(k) || [];
-      if (list.length < MAX_NOTES) list.push({ host, at: now(), tx, s5xx: !!s5xx, lane: lane() });
+      if (list.length < MAX_NOTES) list.push({ host, at: now(), tx, s5xx: !!s5xx, lane: lane(), client: id, via: label });
       pendingAnswers.set(k, list);
     } catch { /* bookkeeping only */ }
   };
@@ -335,9 +344,12 @@ export function notePendingSettleAnswers(client, url, { now = () => Date.now(), 
     }
     try {
       if (result && result.success === false) note(payload, result, false);
-      else if (result && result.success === true && typeof onSettledAfterPending === "function") {
+      else if (result && result.success === true && (typeof onSettledAfterPending === "function" || typeof onSettledByOther === "function")) {
         const notes = takePendingAnswers(payload);
-        if (notes.length) onSettledAfterPending(notes, payload);
+        const mine = notes.filter((n) => n.client === id);
+        const others = notes.filter((n) => n.client !== id);
+        if (mine.length && typeof onSettledAfterPending === "function") onSettledAfterPending(mine, payload);
+        if (others.length && typeof onSettledByOther === "function") onSettledByOther(others, payload);
       }
     } catch { /* bookkeeping only */ }
     return result;

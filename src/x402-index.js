@@ -2567,6 +2567,15 @@ function crawlLanePump() {
   if (crawlLaneQueue.length) setImmediate(crawlLanePump);
   else crawlLanePumping = false;
 }
+// A fetched document is parsed in its own lane turn. Concurrent crawls'
+// network reads complete together (one poll or timers phase hands every
+// waiting crawl its body), and each continuation parsed its document before
+// the loop moved on: twelve multi-megabyte documents parsed back to back held
+// one iteration for about 100 ms. Through the lane an iteration parses one.
+async function parseInCrawlLane(text) {
+  await crawlLaneTurn();
+  return JSON.parse(text);
+}
 async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS) {
   await crawlLaneTurn();
   let until = performance.now() + sliceMs;
@@ -5474,13 +5483,13 @@ async function fallbackBody(originUrl, path, res, opts) {
 
 async function probeDoc(originUrl, path, opts, prevParsed) {
   const res = await probePath(originUrl, path, opts);
-  if (!res.notModified) return { parsed: JSON.parse(res.html), body: res.html, reused: false, finalUrl: res.finalUrl || null };
+  if (!res.notModified) return { parsed: await parseInCrawlLane(res.html), body: res.html, reused: false, finalUrl: res.finalUrl || null };
   // The previous document may be held packed; it is read only on a 304.
   const prevDoc = typeof prevParsed === "function" ? await prevParsed() : prevParsed;
   if (prevDoc != null) return { parsed: prevDoc, reused: true, finalUrl: res.finalUrl || null };
   rememberValidator(originUrl, path, null);
   const fresh = await probePath(originUrl, path, opts);
-  return { parsed: JSON.parse(fresh.html), body: fresh.html, reused: false, finalUrl: fresh.finalUrl || null };
+  return { parsed: await parseInCrawlLane(fresh.html), body: fresh.html, reused: false, finalUrl: fresh.finalUrl || null };
 }
 
 // WHAT A CRAWLED ENTRY KEEPS OF ITS MANIFEST. The parsed document is needed
@@ -5636,8 +5645,8 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       } else {
         const body = res.notModified
           ? (rememberValidator(originUrl, "/openapi.json", null),
-             JSON.parse((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
-          : JSON.parse(res.html);
+             await parseInCrawlLane((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
+          : await parseInCrawlLane(res.html);
         openapi = body;
         openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
@@ -5744,7 +5753,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
     try {
       const openapiRes = await fetchOpenapi({ conditional: false });
-      const parsed = JSON.parse(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
+      const parsed = await parseInCrawlLane(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
         openapiTools = await normaliseOpenapiToolsSliced(parsed, originUrl);
@@ -5768,7 +5777,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
     if (!openapiTools.length) {
       try {
         const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
-        const parsed = JSON.parse(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
+        const parsed = await parseInCrawlLane(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
         if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
           const fromAgents = await normaliseOpenapiToolsSliced(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }

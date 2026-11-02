@@ -9,3 +9,9 @@ fcfa810cd67558b75b568269046c8c6ea203d731:scripts/test-mpp-tempo-shim.js:generic-
 40ebb95544ce541554a5c482e803dec70db55abd:scripts/test-mpp-tempo-shim.js:generic-api-key:708
 8c08a3d320e820211f4ca8761bfc9878363daadc:scripts/test-mpp-tempo-shim.js:generic-api-key:708
 e0f43933cf2d31fe65b738f643bd919448a22a1d:scripts/test-mpp-tempo-shim.js:generic-api-key:708
+# A test's placeholder MPP key (scripts/test-front-door.js), replaced in a
+# later commit by a lower-entropy literal; not a credential.
+cb9f390a4363caf0e61597da1b20fff01b9af900:scripts/test-front-door.js:generic-api-key:364
+872cd2d87d661a7306cc72fb982ea63a932af96c:scripts/test-front-door.js:generic-api-key:364
+bdcc579e940c7573c228c0561a65883c8e1712a8:scripts/test-front-door.js:generic-api-key:375
+911ebe6be55495d60f7b088ce628732f73545079:scripts/test-front-door.js:generic-api-key:364

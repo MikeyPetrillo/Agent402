@@ -15,6 +15,7 @@
 //
 // Both are pure functions of already-computed state - no network, no secrets.
 
+import { frontDoorOneLine } from "./front-door.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -100,7 +101,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     about: `${REPO}#agent402-in-the-x402-ecosystem`,
     name: "Agent402.Tools",
     summary:
-      `Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (${gatewayPrices ? `${gatewayPrices} - ` : ""}no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (native Tempo, Base/Celo USDC, cards on routes of $0.50 or more).`,
+      `${frontDoorOneLine(catalog)} Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (${gatewayPrices ? `${gatewayPrices} - ` : ""}no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (native Tempo, Base/Celo USDC, cards on routes of $0.50 or more).`,
     // The MPP methods the 402 offers, in its order (src/mpp-offers.js - the
     // same source /openapi.json x-payment-info and /llms.txt read).
     mpp: mppMethodsSummary(),

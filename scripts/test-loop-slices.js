@@ -5,7 +5,9 @@
 //       verdict is not a fixed cost, so 500 rows bounded nothing;
 //   (b) a crawl normalised a large OpenAPI document in one turn, and the
 //       crawl runs 25 sellers at once, so a setImmediate yield only handed the
-//       loop to the next seller's slice in the same iteration;
+//       loop to the next seller's slice in the same iteration; and the
+//       crawls' document reads complete together, so every crawl parsed its
+//       document in the same iteration before any slice ran;
 //   (c) the persist of a large seller row is pinned in test-x402-index-pg.js
 //       (it needs a real database).
 // Each case asserts the longest loop gap and that the work still completes
@@ -33,17 +35,48 @@ idx.loadRemovedOrigins?.();
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-// Longest gap between 2 ms ticks while `fn` runs: the longest the loop was held.
+// Longest gap between 2 ms ticks while `fn` runs: the longest the loop was
+// held by our code. A collector pause inside a gap is subtracted from that gap
+// (and reported apart), as the production stall line and test-stall-routes.js
+// count it: a full mark-compact of this file's 150k-tool heap measured 75-96 ms
+// on a loaded host, landing in whichever slice was running, and no slicing of
+// ours shortens it.
+const { PerformanceObserver } = await import("node:perf_hooks");
+const gcPauses = [];
+new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push([e.startTime, e.startTime + e.duration]); }).observe({ entryTypes: ["gc"] });
 async function longestGap(fn) {
-  let last = performance.now(), worst = 0;
-  const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
+  const gaps = [];
+  let last = performance.now();
+  gcPauses.length = 0;
+  // The process's CPU time in each gap rides along: a gap the process spent
+  // descheduled shows far less CPU than wall time, and the message says so.
+  let lastCpu = process.cpuUsage();
+  const cpuSince = () => { const c = process.cpuUsage(); const ms = (c.user + c.system - lastCpu.user - lastCpu.system) / 1000; lastCpu = c; return ms; };
+  const iv = setInterval(() => { const now = performance.now(); gaps.push([last, now, cpuSince()]); last = now; }, 2);
+  let out;
   // The gap still open when `fn` settles counts too: an `fn` that never
   // yields lets no tick fire at all.
-  try { const out = await fn(); worst = Math.max(worst, performance.now() - last - 2); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
+  try { out = await fn(); gaps.push([last, performance.now(), cpuSince()]); } finally { clearInterval(iv); }
+  // The observer delivers a pause on a later task: wait for one that ended the window.
+  await new Promise((r) => setTimeout(r, 50));
+  let worst = 0, raw = 0, gc = 0, cpu = 0;
+  for (const [a, b, c] of gaps) {
+    let inGc = 0;
+    for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
+    if (b - a - inGc - 2 > worst) { worst = b - a - inGc - 2; raw = b - a - 2; gc = inGc; cpu = c; }
+  }
+  return { out, worst: Math.round(worst), raw: Math.round(raw), gc: Math.round(gc), cpu: Math.round(cpu) };
 }
 const spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* a costly verdict */ } };
 const BOUND_MS = Number(process.env.LOOP_SLICE_BOUND_MS || 120);
 const PAY = "0x000000000000000000000000000000000000dEaD";
+
+// A deliberate regression: a one-turn hold of twice the bound fails the same
+// measurement, whatever the collector did around it.
+{
+  const r = await longestGap(async () => { await new Promise((ok) => setImmediate(ok)); spin(2 * BOUND_MS); });
+  ok(r.worst >= BOUND_MS, `a deliberate ${2 * BOUND_MS} ms hold measures past the ${BOUND_MS} ms bound (measured ${r.worst} ms, ${r.gc} ms of its gap the collector)`);
+}
 
 // ---------------------------------------------------------------- (a) the export
 {
@@ -101,24 +134,39 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
     served.set(`${o}/.well-known/x402`, JSON.stringify({ x402Version: 2, name: "Big seller", resources: [{ resource: `${o}/api/op0`, method: "POST", description: "Operation 0", price: "$0.002", accepts }] }));
     served.set(`${o}/openapi.json`, JSON.stringify(openapiFor(o, OPS)));
   }
+  // Which loop iteration read each OpenAPI body: a counter the check phase
+  // advances once per iteration, read when the body is turned into text to
+  // parse (a String object whose toString notes the read).
+  let iteration = 0, counting = true;
+  const advance = () => { iteration++; if (counting) setImmediate(advance); };
+  const docReads = [];
+  class NotedBody extends String { toString() { docReads.push(iteration); return super.toString(); } }
   idx.__setCrawlFetchForTest(async (url) => {
     await new Promise((r) => setTimeout(r, 1)); // a network read ends a turn
     const hit = served.get(url);
     if (hit === undefined) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422 });
-    return { html: hit, finalUrl: url, validators: null };
+    return { html: url.endsWith("/openapi.json") ? new NotedBody(hit) : hit, finalUrl: url, validators: null };
   });
   idx.__setProbeFetchForTest(async () => { throw new Error("no quote probes offline"); });
   const doc = openapiFor(origins[0], OPS);
   const t0 = performance.now();
   const direct = idx.normaliseOpenapiTools(doc, origins[0]);
   const oneTurnMs = Math.round(performance.now() - t0);
+  setImmediate(advance);
   const { worst } = await longestGap(() => Promise.all(origins.map((o) => idx.__crawlSellerForTest(o))));
+  counting = false;
+  // The reads all complete in one timers phase here, as concurrent network
+  // reads do; each document is parsed in a lane turn of its own.
+  ok(docReads.length === origins.length && new Set(docReads).size === docReads.length, `the ${origins.length} concurrent crawls parse their documents in ${new Set(docReads).size} different loop iterations, one each (${docReads.length} parses)`);
   const cache = idx._cacheForTests();
   const crawled = origins.map((o) => cache.get(o));
   ok(crawled.every((e) => e && !e.error && e.tools.length >= OPS), `every concurrent crawl lands with its ${OPS} operations (${crawled.map((e) => e?.tools?.length).join(",")})`);
-  // Relative to this machine: three one-turn normalises. In one turn each, the
-  // twelve crawls held the loop for seven to eleven of them.
-  const crawlBound = Math.max(60, 3 * oneTurnMs);
+  // Relative to this machine: one and a half one-turn normalises. In one turn
+  // each, the twelve crawls held the loop for seven to eleven of them; with the
+  // documents parsed back to back in the iteration their reads completed in,
+  // for about two (all twelve parses). Through the lane an iteration holds at
+  // most one parse or one slice.
+  const crawlBound = Math.max(60, Math.round(1.5 * oneTurnMs));
   ok(worst < crawlBound, `${origins.length} concurrent crawls of ${OPS}-operation documents (one normalise is ${oneTurnMs} ms in one turn) never hold the loop past ${crawlBound} ms (longest ${worst} ms)`);
   // The rows the crawl derived are the rows the one-turn normaliser derives.
   const rowsOf = (tools) => JSON.stringify(tools.filter((t) => t.route !== "/api/op0").map(({ seller, method, route, slug, name, description, price, requestContract, responseContract }) => ({ seller, method, route, slug, name, description, price, requestContract, responseContract })));
@@ -151,11 +199,11 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   const e1 = S.persistedEntryOf(v);
   const line1 = JSON.stringify([origin, e1]);
   const oneProjectAndLine = performance.now() - t0;
-  const { out: e2, worst: wProject } = await longestGap(() => S.persistedEntryOfSliced(v, tick));
+  const { out: e2, worst: wProject, cpu: cProject } = await longestGap(() => S.persistedEntryOfSliced(v, tick));
   ok(JSON.stringify([origin, e2]) === line1, "the sliced projection of a large entry equals the one-call projection");
-  const { out: pieces, worst: wPieces } = await longestGap(() => S.linePieces(origin, e1, tick));
+  const { out: pieces, worst: wPieces, cpu: cPieces } = await longestGap(() => S.linePieces(origin, e1, tick));
   ok(pieces.join("") === line1, `the line built in ${pieces.length} pieces is byte-identical to JSON.stringify([origin, entry]) (${(line1.length / 1048576).toFixed(0)} MB)`);
-  const { out: h2, worst: wHash } = await longestGap(() => S.hashPieces(pieces, tick));
+  const { out: h2, worst: wHash, cpu: cHash } = await longestGap(() => S.hashPieces(pieces, tick));
   ok(h2 === S.lineHash(line1), "hashing the pieces in order gives the hash of the joined line (no piece splits a character)");
   ok((await S.persistedHashSliced(origin, v, tick)) === S.persistedHashOf(origin, v), "the sliced persisted hash equals the one-call persisted hash");
 
@@ -164,7 +212,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   const t1 = performance.now();
   const direct = JSON.parse(rendered);
   const oneParse = performance.now() - t1;
-  const { out: parsed, worst: wParse } = await longestGap(() => S.parseJsonSliced(rendered, tick));
+  const { out: parsed, worst: wParse, cpu: cParse } = await longestGap(() => S.parseJsonSliced(rendered, tick));
   ok(JSON.stringify(parsed) === JSON.stringify(direct) && Object.keys(parsed).join() === Object.keys(direct).join(), "the sliced parse of a large rendered row equals JSON.parse (values and key order)");
   ok(Object.prototype.hasOwnProperty.call(parsed.tools[0].nested[1], "__proto__") && Object.getPrototypeOf(parsed.tools[0].nested[1]) === Object.prototype, "a \"__proto__\" key stays an own data property, as JSON.parse leaves it");
   const proto = JSON.stringify({ a: 1, ["__proto__"]: Array.from({ length: 70_000 }, (_, i) => ({ i, s: "x".repeat(10) })), z: [] });
@@ -184,7 +232,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   // Bounded: each sliced step holds the loop for a slice, not for the whole entry.
   const sliceBound = Math.max(60, Math.min(BOUND_MS, oneProjectAndLine / 2, oneParse / 2));
   const worstAll = Math.max(wProject, wPieces, wHash, wParse);
-  ok(worstAll < sliceBound, `projection, line, hash and parse of the large entry never hold the loop past ${Math.round(sliceBound)} ms (one-call projection+line ${Math.round(oneProjectAndLine)} ms, parse ${Math.round(oneParse)} ms; longest ${worstAll} ms: ${wProject}/${wPieces}/${wHash}/${wParse})`);
+  ok(worstAll < sliceBound, `projection, line, hash and parse of the large entry never hold the loop past ${Math.round(sliceBound)} ms (one-call projection+line ${Math.round(oneProjectAndLine)} ms, parse ${Math.round(oneParse)} ms; longest ${worstAll} ms: ${wProject}/${wPieces}/${wHash}/${wParse}; process CPU in each longest gap ${cProject}/${cPieces}/${cHash}/${cParse} ms)`);
 }
 
 console.log(`\ntest-loop-slices: ${pass} passed, ${fail} failed`);

@@ -28,8 +28,9 @@ import { vendorHits, loadVendorData } from "./lib/vendor-names.js";
 import { stripScripts, stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3089;
-const BASE = `http://127.0.0.1:${PORT}`;
+// Port 0: the kernel assigns a free port, read back from the server's
+// "listening on :<port>" line (scripts/test-port-hygiene.js).
+let BASE = null;
 
 let pass = 0;
 const fail = (m) => { console.error("FAIL:", m); try { proc.kill("SIGKILL"); } catch {} process.exit(1); };
@@ -76,11 +77,15 @@ const PAGES = [
 
 const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false" },
-  stdio: "ignore",
+  env: { ...process.env, FREE_MODE: "true", PORT: "0", X402_SYNC_ON_START: "false" },
+  stdio: ["ignore", "pipe", "ignore"],
 });
+let bootLog = "";
+proc.stdout.on("data", (d) => { if (!BASE) bootLog = (bootLog + d).slice(-20_000); });
 
 try {
+  for (let i = 0; i < 180 && !BASE; i++) { const m = bootLog.match(/listening on :(\d+)/); if (m) BASE = `http://127.0.0.1:${m[1]}`; else await sleep(500); }
+  if (!BASE) fail(`server never printed its port:\n${bootLog.slice(-600)}`);
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch {} await sleep(500); }
 
   for (const { path, titleSubstr } of PAGES) {
@@ -247,6 +252,34 @@ try {
     ok(sells.length === 0, `credits are off and no page or card offers to sell them${sells.length ? ` - ${sells.join(" | ")}` : ""}`);
   } else {
     console.log("skip - this boot sells credits (CREDITS_SALES on); the off-state copy check needs it off");
+  }
+}
+
+// --- the first-call allowance is offered only while its switch is on --------
+// Same rule as credits: copy that offers something reads the switch that
+// sells it. firstCallAllowanceEnabled() is the allowance module's own read of
+// FIRST_CALL_ALLOWANCE; the boot above inherits this process's environment.
+{
+  const { firstCallAllowanceEnabled } = await import("../src/first-call-allowance.js");
+  const { FIRST_CALL_FREE_COPY } = await import("../src/front-door.js");
+  ok(FIRST_CALL_FREE_COPY.test("a wallet's first EVM x402 call to web.search (at or under the cap) is free") &&!FIRST_CALL_FREE_COPY.test("Your first call in 60 seconds - free, no wallet"), "control: the first-call-free pattern matches the allowance clause and not the proof-of-work copy");
+  const paths = new Set([...PAGES.map((p) => p.path), "/llms.txt", "/llms-full.txt", "/agents.md", "/openapi.json", "/.well-known/x402"]);
+  for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml", "/sitemap-learn.xml"]) {
+    const xml = await (await fetch(`${BASE}${sm}`)).text().catch(() => "");
+    for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) paths.add(m[1]);
+  }
+  const offers = [];
+  for (const path of paths) {
+    const text = await (await fetch(`${BASE}${path}`)).text().catch(() => "");
+    const m = String(text).match(FIRST_CALL_FREE_COPY);
+    if (m) offers.push(path);
+  }
+  // The unpaid 402 body is read in both switch states by test-front-door.js
+  // (this boot is FREE_MODE, so a paid route would run instead of answering 402).
+  if (firstCallAllowanceEnabled()) {
+    ok(offers.includes("/llms.txt") && offers.includes("/agents.md"), `the allowance is on and /llms.txt and /agents.md state it (${offers.join(", ")})`);
+  } else {
+    ok(offers.length === 0, `the allowance is off and no page, index or 402 body offers a free first call (${paths.size} paths read)${offers.length ? ` - ${offers.join(" | ")}` : ""}`);
   }
 }
 

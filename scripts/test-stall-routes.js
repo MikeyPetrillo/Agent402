@@ -4,7 +4,9 @@
 //   1. Offline: the sliced builders return exactly what the one-turn reads
 //      return (sales summaries, the revenue ledger's summary, daily series
 //      and buyer events, the index snapshot, the tool directory) and never
-//      hold the loop past GAP_MS on production-sized data; a seller summary
+//      hold the loop past GAP_MS on production-sized data (the sales
+//      summaries also with every page of work inflated, so they must yield
+//      on elapsed time, not after a count of pages); a seller summary
 //      rebuild projects only the sellers that changed. The all-chains
 //      /marketplace page (both views) renders the same bytes in slices as in
 //      one turn, and while a warm start folds entries in, the readers of one
@@ -119,8 +121,8 @@ const heldUnder = (ms, limit) => ms < limit;
 // --- 0. a deliberate regression: a build that holds the loop for five times
 // a derived bound must fail the same pin and the same measurement the
 // figures below pass, whatever the machine's baseline made the bound.
+const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms) { /* hold the loop */ } };
 {
-  const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms) { /* hold the loop */ } };
   for (const [name, limit, note] of [["GAP", GAP_MS, GAP.note], ["ROUTE", ROUTE_BOUND_MS, ROUTE.note]]) {
     const r = await blockOf(async () => spin(5 * limit));
     ok(!heldUnder(r.ms, limit), `a deliberate ${5 * limit} ms hold fails the ${name} pin (measured ${r.ms} ms; ${note})`);
@@ -138,8 +140,52 @@ const heldUnder = (ms, limit) => ms < limit;
     const nSliced = await blockOf(() => sales.externalByNetworkAsync({ days }));
     ok(isDeepStrictEqual(nSliced.value, nSync), `externalByNetworkAsync({ days: ${days} }) equals externalByNetwork (worst ${nSliced.ms} ms)`);
   }
+  // The page walk against the one-query read of the same window, straight
+  // from the file: counts and per-rail totals add across the 30 pages, and a
+  // buyer or tool seen on several pages is counted once. The window is read
+  // just before and just after the summary; when both agree, the summary
+  // must equal them.
+  {
+    const { PAYING_RAILS_SQL } = await import("../src/paid-rails.js");
+    const ro = new Database(process.env.SALES_LEDGER_DB, { readonly: true });
+    const ext = `FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`;
+    const direct = (since) => ({
+      buyers: ro.prepare(`SELECT COUNT(DISTINCT payer) AS n ${ext} AND payer IS NOT NULL`).get(since).n,
+      tools: ro.prepare(`SELECT COUNT(DISTINCT slug) AS n ${ext}`).get(since).n,
+      byRail: Object.fromEntries(ro.prepare("SELECT internal, rail, COUNT(*) AS n FROM sales WHERE ts >= ? GROUP BY internal, rail").all(since).map((r) => [`${r.internal ? "internal" : "external"}:${r.rail}`, r.n])),
+      settlements: ro.prepare(`SELECT COUNT(*) AS n ${ext}`).get(since).n,
+      netBuyers: ro.prepare(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT network, payer ${ext} AND payer IS NOT NULL)`).get(since).n,
+    });
+    for (const days of [30, 36_500]) {
+      const a = direct(Date.now() - days * 86_400_000);
+      const sum = await sales.salesSummaryAsync({ days });
+      const net = await sales.externalByNetworkAsync({ days });
+      const b = direct(Date.now() - days * 86_400_000);
+      if (!isDeepStrictEqual(a, b)) { console.log(`skip - the ${days}-day window moved a row while it was read`); continue; }
+      const netSettlements = Object.values(net).reduce((t, r) => t + r.settlements, 0);
+      ok(sum.distinctExternalBuyers === a.buyers && sum.distinctToolsSoldExternal === a.tools && isDeepStrictEqual(sum.totals.byRail, a.byRail) && netSettlements === a.settlements,
+        `the ${days}-day page walk equals the one-query read (${a.buyers} buyers, ${a.tools} tools, ${a.settlements} external settlements)`);
+      // No buyer here pays on two spellings of one rail, so the per-rail sets add up to the distinct (network, payer) pairs.
+      ok(Object.values(net).reduce((t, r) => t + r.buyers, 0) === a.netBuyers, `...and its per-rail buyers count each (network, payer) once (${a.netBuyers})`);
+    }
+    ro.close();
+  }
   const detailed = await sales.salesSummaryAsync({ days: 30, detailed: true });
   ok(isDeepStrictEqual(detailed, sales.salesSummary({ days: 30, detailed: true })), "the detailed summary is the same sliced or whole");
+  // A slow host, simulated: every page of the window walk costs a quarter of
+  // the bound more. The walk yields on elapsed time, so a turn still holds
+  // one slice plus one page; a walk that yielded after a fixed count of
+  // pages (four or more) would hold the loop past the bound here.
+  const pageCost = Math.ceil(GAP_MS / 4);
+  let pages = 0;
+  sales._setSummaryPageCostForTests(() => { pages++; spin(pageCost); });
+  try {
+    for (const [name, fn] of [["salesSummaryAsync", () => sales.salesSummaryAsync({ days: 36_500 })], ["externalByNetworkAsync", () => sales.externalByNetworkAsync({ days: 36_500 })]]) {
+      pages = 0;
+      const slow = await blockOf(fn);
+      ok(pages >= 20 && heldUnder(slow.ms, GAP_MS), `${name} with ${pageCost} ms more work per page (${pages} pages, ${pages * pageCost} ms in all) yields on elapsed time: never held the loop past ${GAP_MS} ms (worst ${slow.ms} ms; longest gap ${slow.raw} ms, ${slow.gc} ms of it the collector)`);
+    }
+  } finally { sales._setSummaryPageCostForTests(null); }
 }
 
 // --- 1b. the revenue ledger: summary, daily series, buyer events.
@@ -383,6 +429,32 @@ try {
     const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
     const ms = worstMs - worstGcMs;
     ok(resp.status === 200 && heldUnder(ms, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (${ROUTE.note}; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
+  }
+  {
+    // The operator's sales page reads the detailed summary across turns too,
+    // and it is the ledger's own detailed summary.
+    await fetch(`${base}/__operator/perf.json?reset=1`, op);
+    const resp = await fetch(`${base}/__operator/sales.json`, op);
+    const body = await resp.json();
+    await sleep(300);
+    const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
+    ok(resp.status === 200 && heldUnder(worstMs - worstGcMs, ROUTE_BOUND_MS), `GET /__operator/sales.json: 200, the loop held at most ${worstMs - worstGcMs} ms (${ROUTE.note})`);
+    const { mppAgentsThisWeek, feedback, ...summary } = body;
+    const direct = JSON.parse(JSON.stringify(sales.salesSummary({ days: 30, detailed: true })));
+    ok(isDeepStrictEqual(summary.totals, direct.totals) && summary.distinctExternalBuyers === direct.distinctExternalBuyers && isDeepStrictEqual(summary.repeatBuyers, direct.repeatBuyers) && feedback && "mppAgentsThisWeek" in body,
+      "/__operator/sales.json carries the ledger's detailed summary, feedback and the weekly MPP count");
+  }
+  {
+    // Neither ledger read behind a request runs the one-turn walk: the
+    // operator's sales page awaits the sliced summary, and a cold shared
+    // reading starts the sliced build instead of reading in line.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const route = src.slice(src.indexOf('app.get("/__operator/sales.json"'), src.indexOf('app.get("/__operator/sales.json"') + 1400);
+    ok(/await salesSummaryAsync\(\{ detailed: true \}\)/.test(route) && !/[^a-zA-Z]salesSummary\(/.test(route), "/__operator/sales.json awaits salesSummaryAsync, never the one-turn salesSummary");
+    const cold = src.slice(src.indexOf("function currentLedgerFigures()"), src.indexOf("const ledgerFiguresBoot"));
+    ok(cold.length > 0 && !/salesSummary\(|externalByNetwork\(/.test(cold) && /refreshLedgerFigures\(\)/.test(cold), "a cold shared ledger reading starts the sliced build, never a one-turn read");
+    ok(/await Promise\.race\(\[ledgerFiguresBoot,/.test(src) && src.indexOf("await Promise.race([ledgerFiguresBoot,") < src.indexOf("const httpServer = app.listen("), "the first shared ledger reading is awaited (bounded) before the server listens");
   }
   {
     // The shared labelled snapshot reaches the page: every external row of the

@@ -273,12 +273,27 @@ heartbeat page on it under one issue that closes when nothing is owed.
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
   amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
   reads the premium and the floor and a refund repays what was paid.
+- **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
+  account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
+  and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in
+  `SVM_FUNDING_WINDOW_MS` (10 min), answers from a beforeVerify hold lasting the Retry-After, shared
+  through shared-limits; a valid verify clears it; `SVM_FUNDING_THROTTLE=off` disables the hold.
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
   sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is
   not evidence; a pause a settle refusal set holds against headroom reads for
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
+- **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`. The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
+- **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`,
+  `server.describe` and the unpaid 402 body; the access line names coins and wires from the rails
+  list and the MPP config. `FRONT_DOOR_402=off` leaves the 402 body as the offer alone.
+- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
+  `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
+  off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)
+  keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,
+  claimed before the call, and `ANSWER_SHARE_DIR` is the file store without the state database. Takedown:
+  `POST /__operator/answer-shares/delete {id, note}` (410 removed).
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
 - **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer

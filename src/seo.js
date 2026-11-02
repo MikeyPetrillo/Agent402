@@ -16,7 +16,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
-import { mppMethodsProse } from "./mpp-offers.js";
+import { mppMethodsProse, mppMethodsSummary } from "./mpp-offers.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
@@ -30,6 +30,7 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION } from "./front-door.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -214,7 +215,7 @@ User-agent: *
 Allow: /
 ${searchRules}
 
-# Machine-readable catalogs for agents: ${baseUrl}/SKILL.md , ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/.well-known/agent-card.json , ${baseUrl}/.well-known/agent-registration.json , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
+# Machine-readable catalogs for agents: ${baseUrl}/agents.md , ${baseUrl}/SKILL.md , ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/.well-known/agent-card.json , ${baseUrl}/.well-known/agent-registration.json , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 # Crawling this catalog: every route and price is in ${baseUrl}/.well-known/x402 , ${baseUrl}/openapi.json and ${baseUrl}/api/pricing ; read those rather than each priced route. Crawl policy, including the hourly budget on unpaid price checks: ${baseUrl}/crawler
 Sitemap: ${baseUrl}/sitemap.xml
 Sitemap: ${baseUrl}/sitemapindex.xml
@@ -236,6 +237,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/docs`, priority: "0.8" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
+    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
     { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
@@ -559,7 +561,7 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> Pay-per-call web tools for AI agents, payable over **x402 or MPP** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet - USDC via x402, or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> Pay-per-call web tools for AI agents, payable over **${mppMethodsSummary().enabled ? "x402 or MPP" : "x402"}** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
@@ -587,7 +589,7 @@ ${reportsParagraph(baseUrl, tools)}
 
 Determine it from the response you already hold, without asking us:
 
-- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry.
+- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry. ${LATE_SETTLE_EXCEPTION}
 - **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged on x402. Safe to retry with a fresh authorization.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
@@ -610,6 +612,7 @@ ${meteredCurl(baseUrl)}
 ${flatTiersLine()}
 
 ## Key machine surfaces
+- [/agents.md](${baseUrl}${AGENTS_MD_PATH}): the front door for an agent in markdown - the first call and its price, access with no account or API key, when to use the service and when not to, the recovery contract, then how to connect and pay
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): **front door** - cited answer grounded in live web search results
@@ -678,7 +681,23 @@ ${toolSections}
 `;
 }
 
-/** /llms.txt: the short index an agent reads first (under 15 KB). Its title,
+// The MPP rails the llms.txt summary names, from the live MPP config: the EVM
+// rails by chain with each rail's coin (chains sharing a coin grouped, e.g.
+// "Base/Celo (USDC)"), then Tempo with its configured currencies, and nothing
+// while no MPP method is offered. Takes the summary (tests pass their own).
+export function mppRailsProse(m = mppMethodsSummary()) {
+  const orList = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}`);
+  const parts = [];
+  if (m.evm?.rails?.length) {
+    const byAsset = new Map();
+    for (const r of m.evm.rails) byAsset.set(r.asset, [...(byAsset.get(r.asset) || []), r.chain]);
+    for (const [asset, chains] of byAsset) parts.push(`${chains.join("/")} (${asset})`);
+  }
+  if (m.tempo?.currencies?.length) parts.push(`Tempo (${orList(m.tempo.currencies.map((c) => c.label))}, native)`);
+  return parts.length ? `, or MPP on ${parts.join(" or ")}` : "";
+}
+
+/** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
  *  summary line and sections are taken from the full text, so they never drift;
  *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
 export function llmsTxt(baseUrl, catalog) {
@@ -699,6 +718,11 @@ export function llmsTxt(baseUrl, catalog) {
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
 - Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
+  // The llms.txt order (the llms.txt spec: title, summary blockquote, then
+  // plain paragraphs before the first H2): the base URL and the full-text
+  // pointer, then the front door's three lines under the first H2
+  // (src/front-door.js: the first call and its price, access, when to use
+  // it); rails and wire detail follow unchanged.
   return `${title}
 
 ${summary}
@@ -706,6 +730,8 @@ ${summary}
 Base URL: ${baseUrl}
 
 The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. Terms are defined once at ${baseUrl}/glossary, and the category is explained at ${baseUrl}/agentic-finance. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+
+${frontDoorMarkdown(catalog, baseUrl)}
 
 ${mppMethodsProse()}
 

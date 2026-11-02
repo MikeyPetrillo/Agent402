@@ -25,6 +25,7 @@
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
+import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -182,8 +183,13 @@ export function balanceBucket(balanceUsd, priceUsd) {
 }
 
 /** The plain-language hint. Pure; exported for tests. */
-export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false }) {
+export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false, detail = "", svmPayer = null }) {
   const r = String(reason || "");
+  // A Solana payment whose transfer failed in the facilitator's simulation
+  // because the paying wallet has no USDC account or too little USDC
+  // (src/svm-funding-refusal.js): a new signature cannot fix that, funding can.
+  const svmFunding = classifySvmFundingRefusal({ network, reason: `${r} ${detail || ""}` });
+  if (svmFunding) return { ...fundingHint({ kind: svmFunding, payer: svmPayer, priceUsd }), svmFunding };
   // A Circle Gateway batched payment resent while Gateway is still settling
   // it (src/gateway-nanopayments.js): the same payment, later; never a new
   // signature. Read before every other word.
@@ -254,7 +260,7 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
  *  `isValid:false`). Reads the balance (bounded) and remembers the hint under
  *  the failed CREDENTIAL's key; `paymentPayload` is the decoded payload the
  *  paywall verified (`payer` alone is accepted for tests). */
-export async function noteVerifyFailure({ paymentPayload, payer, network, reason, priceUsd, now = Date.now, balanceReader = usdcBalanceOnBase }) {
+export async function noteVerifyFailure({ paymentPayload, payer, network, reason, priceUsd, detail = "", feePayer, now = Date.now, balanceReader = usdcBalanceOnBase }) {
   const rawFrom = String(payer || paymentPayload?.payload?.authorization?.from || "").toLowerCase();
   // An EVM credential names its payer (authorization.from); an AVM, SVM or
   // Stellar one does not, and until 2026-10-12 that ended the hint here, so a
@@ -269,12 +275,23 @@ export async function noteVerifyFailure({ paymentPayload, payer, network, reason
   const gateway = isGatewayBatchedPayment(paymentPayload);
   const isBase = !gateway && /^eip155:8453$/.test(String(network || "")) && !/^settlement_(pending|failed)$/.test(String(reason || ""));
   const balanceUsd = isBase && from ? await balanceReader(from) : null;
-  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway });
+  const svmPayer = /^solana:/.test(String(network || "")) ? fundingPayerOf(paymentPayload, { feePayer }) : null;
+  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway, detail, svmPayer });
   // `reason` on the entry is the facilitator's text (telemetry reads it);
   // the refusal class the hint names rides as `reasonClass`.
   const entry = { ...h, balanceUsd, priceUsd, network, reasonClass: h.reason || null, reason: String(reason || "").slice(0, 200), at: now() };
   if (key) { hints.set(key, entry); bounded(hints); }
   return { ...entry, bucket: balanceBucket(balanceUsd, priceUsd), key };
+}
+
+/** Remember an already-worded hint for one payment's credential (the Solana
+ *  funding hold answers without a verify, so nothing else would). */
+export function rememberHint(paymentPayload, h, { now = Date.now } = {}) {
+  const key = paymentPayload ? credentialKeyOf(paymentPayload) : null;
+  if (!key || !h) return null;
+  const entry = { ...h, balanceUsd: null, reasonClass: h.reason || null, reason: String(h.reason || "").slice(0, 200), at: now() };
+  hints.set(key, entry); bounded(hints);
+  return entry;
 }
 
 /** The remembered hint for one credential key (null when none / expired). */
@@ -327,11 +344,13 @@ export function verifyHintMiddleware() {
         }
         const h = hintForCredential(credentialKeyFromHeader(header));
         if (h) {
-          if (!res.headersSent) res.setHeader("Retry-After", h.retry === "fund-wallet" || h.retry === "fund-gateway-deposit" ? "60" : h.retryAfterSeconds ? String(h.retryAfterSeconds) : "5");
+          if (!res.headersSent) res.setHeader("Retry-After", h.retryAfterSeconds ? String(h.retryAfterSeconds) : h.retry === "fund-wallet" || h.retry === "fund-gateway-deposit" ? "60" : "5");
           // A hint that names its class carries it as `reason`, the field
           // every refusal class is read from (and the paywall rollup).
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;
-          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint: h.hint, retry: h.retry, ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
+          // A route that also takes proof-of-work says so in the funding hint.
+          const hint = h.svmFunding && body.altPayment ? `${h.hint} ${POW_SENTENCE}` : h.hint;
+          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
         }
         // No facilitator hint means the payment never REACHED the facilitator:
         // @x402/express refused it first and threw the reason away. Read the

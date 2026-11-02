@@ -12,6 +12,8 @@ import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followu
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
+import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -21,6 +23,13 @@ export function privacyPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
+  // Shared answers and the first-call allowance each ship behind a switch:
+  // their lines appear only while the switch is on. The shared-answer line
+  // also stays, in the past tense, while pages made under the switch may
+  // still be served after it is turned off.
+  const sharesOn = sharePagesMayBeLive();
+  const sharesOffered = answerShareEnabled();
+  const allowanceOn = firstCallAllowanceEnabled();
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -45,7 +54,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-29.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-02.</p>
 </section>
 
 <section>
@@ -67,7 +76,7 @@ cookie is off until you choose "Allow" in the strip at the bottom of the page, a
 cookieless pings before that; your choice is kept in your browser. Wherever you are, you can make or
 change that choice at any time with "analytics choices" at the foot of the page. If your browser sends the Global Privacy Control signal,
 the cookie stays off, you are not asked, and the page counter does not load. Pages whose address is itself a private
-link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
+link (a paid report, a receipt, a shared answer, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below, including the backups of it. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
@@ -99,7 +108,24 @@ so every claim below is verifiable in code.</p>
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name
     and version, the first word of the User-Agent it sends), or as any other HTTP request;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
-    you write, is kept with that call's transaction id and is never published.</li>
+    you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
+    <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
+    charge, so each wallet gets one free first call) keeps the address of each wallet granted one,
+    without expiry, so the same wallet is never granted twice, and a daily count of grants per client
+    address, kept under a keyed hash of the address (never the address itself) and deleted after two days;</li>` : ""}${sharesOn ? `
+    <li>a call to <code>/api/answer</code> (web.answer) made with <code>share=true</code>${sharesOffered ? `, and only
+    such a call, publishes its question, its answer and the cited sources (URL and snippet) as a page at an
+    unguessable address under <code>/answers/</code>, with a preview image. Sharing is off unless the
+    caller asks for it, and the page is written only after the call is paid.` : ` while sharing was
+    offered, and only such a call, published its question, its answer and the cited sources (URL and
+    snippet) as a page at an unguessable address under <code>/answers/</code>, with a preview image,
+    written only after the call was paid. No new pages are made now; each page already made stays at
+    its address until it expires.`} We keep those fields and
+    the dates it was made and expires, never the paying wallet, IP address or any other detail of the
+    request. Anyone with the link can read the page; it asks search engines not to index it. It is
+    deleted ${SHARE_TTL_DAYS} days after it was made, and its address then answers that it has expired
+    for ${TOMBSTONE_DAYS} days, and after that as an unknown address. We may remove a page sooner; its
+    address then answers that it was removed.</li>` : ""}
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
   code) for abuse prevention and debugging. Most rate-limit counters are kept in process memory for up

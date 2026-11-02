@@ -50,6 +50,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
+import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
@@ -210,6 +211,8 @@ function x402WireOf(req) {
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
+  // A first-call allowance grant was never settled: nothing to owe.
+  if (allowanceServed(req)) return null;
   // The debt names the chain-read sender: book it once that read is done.
   // Truthy meanwhile, so recordHangupOutcome does not log it as uncharged.
   if (req.tempoSettled && tempoLedgerPayerPending(req)) {
@@ -383,6 +386,7 @@ import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
+import { agentsMd, frontDoor402Json, AGENTS_MD_PATH } from "./front-door.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
 import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -661,7 +665,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts, payerHasPaidSale } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -813,6 +817,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
@@ -2570,7 +2575,7 @@ const carriesPaidCredential = (req) => {
 // Bearer-style paths (a report or monitor id IS the credential for it) map to
 // a fixed key so the id never reaches a timing key, a stall line or the
 // operator read.
-const BEARER_PATH_KEYS = [[/^\/r\//, "/r/:session"], [/^\/api\/r\//, "/api/r/:session"], [/^\/m\//, "/m/:report"], [/^\/api\/m\//, "/api/m/:report"], [/^\/reports\/public\//, "/reports/public/:id"], [/^\/api\/reports\/public\//, "/api/reports/public/:id"]];
+const BEARER_PATH_KEYS = [[/^\/r\//, "/r/:session"], [/^\/api\/r\//, "/api/r/:session"], [/^\/m\//, "/m/:report"], [/^\/api\/m\//, "/api/m/:report"], [/^\/reports\/public\//, "/reports/public/:id"], [/^\/api\/reports\/public\//, "/api/reports/public/:id"], [/^\/answers\//, "/answers/:id"]];
 app.use(requestTimingMiddleware((req) => {
   const path = String(req.path || "/");
   const method = req.method === "HEAD" ? "GET" : req.method;
@@ -3354,6 +3359,7 @@ app.post("/api/decide/execute", async (req, res, next) => {
 const DISCOVERY_SURFACES = new Map([
   ["/llms.txt", "llms.txt"],
   ["/llms-full.txt", "llms-full.txt"],
+  ["/agents.md", "agents.md"],
   ["/SKILL.md", "skill.md"],
   ["/skill.md", "skill.md"],
   ["/openapi.json", "openapi.json"],
@@ -3697,6 +3703,11 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // The first-call allowance, only while it is switched on: on / spent
+    // (today's cap is used) / unavailable (the shared store did not answer,
+    // so nothing is granted). One word, never a figure; the figures are on
+    // /__operator/refunds.json.
+    ...(firstCallAllowanceEnabled() ? { firstCallAllowance: { status: await firstCallAllowanceStatus().then((s) => s.status).catch(() => "unknown") } } : {}),
     // Arc settlements Circle left pending (src/circle-pending.js): off / ok /
     // near_capacity / full / unresolved. One word; the heartbeat pages on
     // unresolved and full.
@@ -4856,7 +4867,7 @@ app.get("/__operator/settlement-reconciliation.json", (req, res) => {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
-app.get("/__operator/sales.json", (req, res) => {
+app.get("/__operator/sales.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
   try {
@@ -4868,7 +4879,9 @@ app.get("/__operator/sales.json", (req, res) => {
     // the series and method split live on /__operator/mpp-agents.json.
     let mppAgentsThisWeek = null;
     try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
-    res.json({ ...salesSummary({ detailed: true }), mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
+    // The detailed summary walks the whole window: read across turns, never in line.
+    const summary = await salesSummaryAsync({ detailed: true });
+    res.json({ ...summary, mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -6067,6 +6080,9 @@ app.get("/__operator/refunds.json", async (req, res) => {
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
+    // First-call allowance grants (src/first-call-allowance.js): switch,
+    // caps, today's grants and list-price USD, refusals by reason.
+    firstCallAllowance: await firstCallAllowanceStatus().catch(() => null),
     // Settle failures that named a transaction, open until the chain says
     // whether it landed (src/late-settlements.js); a landed one becomes an
     // owed row above.
@@ -7990,23 +8006,30 @@ function refreshLedgerFigures() {
   }
   return ledgerFiguresBuild;
 }
-// The shared reading, never older than the TTL plus one background build. Cold
-// (before the boot build lands) it is read once in line, as the per-page read
-// always was, and shared from then on.
+// The shared reading, never older than the TTL plus one background build. The
+// first build is awaited before the server listens (bounded, below), so a
+// request finds it. Cold (that build failed or outlasted its wait) it is never
+// read in line: the build is started across turns and the readers get no
+// figures (a host entry is left out) until it lands.
+const warnLedgerFigures = (e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
 function currentLedgerFigures() {
   const f = ledgerFigures;
   if (f) {
-    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch((e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
+    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch(warnLedgerFigures);
     return f;
   }
-  const summary = new Map(), byNetwork = new Map();
-  for (const days of LEDGER_FIGURE_WINDOWS) { summary.set(days, salesSummary({ days })); byNetwork.set(days, externalByNetwork({ days })); }
-  ledgerFigures = { at: Date.now(), summary, byNetwork };
-  return ledgerFigures;
+  refreshLedgerFigures().catch(warnLedgerFigures);
+  return null;
 }
-setImmediate(() => { salesLedgerReady().then(() => refreshLedgerFigures()).catch(() => { /* the first page read builds it */ }); });
-const sharedSummary = ({ days = 30 } = {}) => currentLedgerFigures().summary.get(days) ?? salesSummary({ days });
-const sharedByNetwork = ({ days = 30 } = {}) => currentLedgerFigures().byNetwork.get(days) ?? externalByNetwork({ days });
+const ledgerFiguresBoot = new Promise((ok) => setImmediate(ok)).then(() => salesLedgerReady()).then(() => refreshLedgerFigures()).catch(() => { /* the first page read starts it */ });
+const LEDGER_FIGURES_BOOT_WAIT_MS = 10_000;
+function ledgerFiguresOrThrow() {
+  const f = currentLedgerFigures();
+  if (!f) throw new Error("ledger figures are still building");
+  return f;
+}
+const sharedSummary = ({ days = 30 } = {}) => ledgerFiguresOrThrow().summary.get(days) ?? salesSummary({ days });
+const sharedByNetwork = ({ days = 30 } = {}) => ledgerFiguresOrThrow().byNetwork.get(days) ?? externalByNetwork({ days });
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
@@ -8589,6 +8612,10 @@ app.get("/llms-full.txt", (_req, res) => res.type("text/plain").set("Cache-Contr
 // /SKILL.md - agent-onboarding sheet ("Read <url>/SKILL.md and set up X" is
 // the prompt agent runtimes use for paid services). Lowercase alias too.
 const serveSkillMd = (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(skillMd(BASE_URL, CATALOG));
+// /agents.md - the front door for an agent (src/front-door.js): the first
+// call and its price, access, when to use it, the recovery contract, then
+// how to connect and pay. Free, like every discovery surface.
+app.get(AGENTS_MD_PATH, (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(agentsMd(BASE_URL, CATALOG)));
 app.get("/SKILL.md", serveSkillMd);
 app.get("/skill.md", serveSkillMd);
 // The runnable buyer demo, served from the site itself, so a visitor can run
@@ -8872,6 +8899,24 @@ app.get("/card.png", async (_req, res) => {
   } catch {
     res.redirect(302, "/card.svg");
   }
+});
+// Shared answers (src/answer-share.js): the page, its card and the expiry
+// sweep for web.answer calls made with share=true. The id is the bearer.
+mountAnswerShares(app, {
+  baseUrl: BASE_URL, notFoundPage, rasterizeSvg,
+  brand: { BRAND, BRAND_DEFS, BRAND_FONT_STYLE },
+  priceOf: () => CATALOG["GET /api/answer"]?.price || "",
+});
+// Operator takedown of one shared answer: its page, JSON and card answer 410
+// "removed" from then on. Body {"id": "<share id>", "note": "<why>"}.
+app.post("/__operator/answer-shares/delete", express.json({ limit: "8kb" }), async (req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const id = String(req.body?.id || "").trim().replace(/^.*\/answers\//, "").replace(/(\.json|\/card\.(png|svg))$/, "");
+  let r;
+  try { r = await removeShare(id, req.body?.note); } catch { return res.status(503).json({ error: "the share store could not be written" }); }
+  if (r.status === "unknown") return res.status(404).json({ ok: false, status: "unknown", note: "no shared answer has that id" });
+  res.json({ ok: true, status: r.status, id });
 });
 // GitHub repo social preview (Settings → Social preview) wants 1280×640.
 let cardGithubCache = null;
@@ -10111,6 +10156,22 @@ if (FREE_MODE) {
           return origJson(body);
         };
       }
+      // A first-contact unpaid 402 leads its body with the front door
+      // (src/front-door.js): the access line /llms.txt and /agents.md lead
+      // with, and the /agents.md link (the recovery lines live there only).
+      // FRONT_DOOR_402=off leaves the body as the offer alone.
+      // Body only (the PAYMENT-REQUIRED header is untouched), behind the
+      // proof-of-work altPayment where that is offered, and never on a
+      // refused payment or proof, which keeps its own explanation.
+      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 !== "off") {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.frontDoor) {
+            body = { frontDoor: frontDoor402Json(CATALOG, BASE_URL), ...body };
+          }
+          return origJson(body);
+        };
+      }
       res.on("finish", () => {
         if (res.statusCode === 402) {
           // Classify the bounce by what the caller tried. A payment header that
@@ -10824,6 +10885,25 @@ if (!FREE_MODE) {
       try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
       return;
     }
+    next();
+  });
+}
+
+// First-call allowance (src/first-call-allowance.js), off unless
+// FIRST_CALL_ALLOWANCE=on. Mounted after every payment gate and the hang-up
+// ticket, so the payment here has been verified and the handler is next: a
+// wallet that never paid us may take one grant on an eligible route, claimed
+// atomically against its caps now, kept when the settle of its 200 was
+// skipped and given back on any other end.
+if (!FREE_MODE) {
+  app.use(async (req, res, next) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (!def || !firstCallAllowanceEnabled() || !ownTrue(req, "__a402Dispatched")) return next();
+    if (res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
+    let a = null;
+    try { a = await claimFirstCallAllowance(req, res, def, { ip: req.ip, synthetic: isSyntheticRequest(req), hasPaidSale: payerHasPaidSale }); }
+    catch (err) { console.warn(`[allowance] claim failed (${String(err?.message || err).slice(0, 80)}); the call is paid as usual`); }
+    if (a?.granted) onResponseEnd(req, res, () => { void finishFirstCallAllowance(req).catch(() => {}); });
     next();
   });
 }
@@ -11606,6 +11686,10 @@ setUnloadedStoresProbe(unloadedStores);
 // The all-time ledger totals behind the home page count and /revenue are built
 // now, across turns, so the first visitor's request does not read them in line.
 revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
+// The shared ledger figures behind the host entries (chain pages, /marketplace,
+// /leaderboard, /api/index) are built across turns before the first request,
+// so no reader finds them cold; bounded, so a slow build never holds the boot.
+await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   // The bound port, so a PORT=0 boot (a test reading the port back) prints

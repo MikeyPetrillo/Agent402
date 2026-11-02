@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { childJson } from "./lib/child-json.js";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-sales-"));
 process.env.SALES_LEDGER_DB = join(dir, "test-sales.db");
@@ -317,11 +318,15 @@ rmSync(dir, { recursive: true, force: true });
   const summary = src.slice(src.indexOf("const distinctExternalBuyers ="), src.indexOf("const distinctExternalBuyers =") + 400);
   ok(!/\.all\([^)]*\)\.length/.test(summary),
     "neither published count is the .length of a query result list");
-  ok(/qExtDistinctPayers\.get\(/.test(summary) && /qExtDistinctSlugs\.get\(/.test(summary),
-    "both counts come from dedicated COUNT(DISTINCT ...) queries");
-  for (const q of ["qExtDistinctSlugs", "qExtDistinctPayers"]) {
+  // The window is read a page at a time, so each count is the size of a set
+  // gathered from a dedicated SELECT DISTINCT over every page.
+  ok(/= extPayers\.size;/.test(summary) && /= extSlugs\.size;/.test(summary),
+    "both counts are the sizes of sets, never added across pages");
+  ok(/qExtDistinctPayersPage\.all\([^)]*\)\) extPayers\.add\(/.test(src) && /qExtDistinctSlugsPage\.all\([^)]*\)\) extSlugs\.add\(/.test(src),
+    "each set is fed only by its dedicated DISTINCT page query");
+  for (const q of ["qExtDistinctSlugsPage", "qExtDistinctPayersPage"]) {
     const decl = src.slice(src.indexOf(`const ${q} = `), src.indexOf(`const ${q} = `) + 260);
-    ok(/COUNT\(DISTINCT/.test(decl), `${q} uses COUNT(DISTINCT ...)`);
+    ok(/SELECT DISTINCT/.test(decl), `${q} uses SELECT DISTINCT`);
     ok(!/LIMIT/i.test(decl), `${q} carries no LIMIT`);
   }
 }
@@ -373,6 +378,47 @@ rmSync(dir, { recursive: true, force: true });
   const d3 = decideSales({ days: 30 });
   ok(d3.allTime.decide.external - d.allTime.decide.external === 1 && d3.allTime.decide.sweeps.count === d.allTime.decide.sweeps.count, "one tool under the line (the plan itself counts as a distinct tool) is still an outside buyer");
 }
+
+// --- the paged window walk: its last page, and money added across pages ---------------
+// The summaries read the window a page of 2000 row ids at a time, from the
+// window's first id through the last id on the books. Each case runs in its own
+// process on its own ledger so the row ids are ours to place: the window spans
+// exactly two pages, so its last row is the only row of a third page that starts
+// on the last id, and a walk that stopped one page early would drop it. Each row
+// sits on its own page, so the revenue is added across pages; it must be the
+// exact sum rounded half up at the fourth decimal, the same in every page order.
+{
+  const { execFileSync } = await import("node:child_process");
+  const moduleUrl = new URL("../src/sales-ledger.js", import.meta.url).href;
+  const child = `
+    const Database = (await import("node:module")).createRequire(${JSON.stringify(moduleUrl)})("better-sqlite3");
+    const m = await import(${JSON.stringify(moduleUrl)});
+    const raw = new Database(process.env.SALES_LEDGER_DB);
+    const ins = raw.prepare("INSERT INTO sales (id, ts, slug, price_usd, rail, network, payer, tx, internal) VALUES (?,?,?,?,?,?,?,?,0)");
+    const prices = JSON.parse(process.env.PRICES);
+    prices.forEach((p, i) => ins.run(1 + i * 2000, Date.now() - 1000, "tool-" + i, p, "usdc", "net-" + i, "0x" + String(i + 1).repeat(40).slice(0, 40), "0xpage" + i));
+    raw.close();
+    const pick = (s) => ({ sales: s.totals.external.sales, usd: s.totals.external.revenueUsd, buyers: s.distinctExternalBuyers, tools: s.distinctToolsSoldExternal });
+    const net = (n) => Object.keys(n).sort().map((k) => k + "=" + n[k].settlements + "/" + n[k].buyers).join(",");
+    console.log(JSON.stringify({ sync: pick(m.salesSummary({ days: 1 })), async: pick(await m.salesSummaryAsync({ days: 1 })), net: net(m.externalByNetwork({ days: 1 })), netAsync: net(await m.externalByNetworkAsync({ days: 1 })) }));
+  `;
+  for (const prices of [[0.03, 0.00005, 0.1], [0.1, 0.00005, 0.03]]) {
+    const sub = mkdtempSync(join(tmpdir(), "a402-sales-pages-"));
+    let got = null;
+    try {
+      got = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], {
+        env: { ...process.env, SALES_LEDGER_DB: join(sub, "pages.db"), STATE_DATABASE_URL: "", REDIS_URL: "", PRICES: JSON.stringify(prices) },
+        encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
+      }));
+    } catch (e) { ok(false, `page-walk child ran (${String(e?.message || e).slice(0, 120)})`); } finally { rmSync(sub, { recursive: true, force: true }); }
+    if (!got) continue;
+    const want = { sales: 3, usd: 0.1301, buyers: 3, tools: 3 };
+    ok(isDeepStrictEqualJson(got.sync, want) && isDeepStrictEqualJson(got.async, want),
+      `ids 1, 2001, 4001 at ${prices.join(" + ")}: all three rows counted, the last on its own page, and $0.13005 rounds half up to $0.1301 (sync ${JSON.stringify(got.sync)}, async ${JSON.stringify(got.async)})`);
+    ok(got.net === "net-0=1/1,net-1=1/1,net-2=1/1" && got.netAsync === got.net, `externalByNetwork reads the last page too (${got.net}; async ${got.netAsync})`);
+  }
+}
+function isDeepStrictEqualJson(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

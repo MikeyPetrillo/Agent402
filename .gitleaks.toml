@@ -67,6 +67,10 @@ regexes = [
   # rule reads a description ending in "API key." and captures the next
   # object key, the slug x402-trending. Pinned exactly.
   '''^x402-trending$''',
+  # scripts/test-front-door.js: an earlier placeholder MPP key for a local
+  # paid boot (replaced by a plain literal), still in the merge diffs of its
+  # branch history. A fixture, not a credential. Pinned exactly.
+  '''^front-door-test-mpp-secret-0123456789abcdef$''',
   # EVM contract/wallet addresses are public identifiers, never secrets. This
   # is 40 hex chars precisely; a real EVM private key is 64 hex and is NOT
   # covered here, so it would still fire.
