@@ -1773,6 +1773,48 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
       ok(after.model === use && after.__substitutedFrom === id && retiringModel(`${id}-2025-08-07`)?.use === use, `${id}: from 2026-12-11 served as ${use} on ${home}, the swap named, a dated snapshot retiring with it`);
       K.setRetiringClockForTest(null);
     }
+    // A call naming a scheduled id stays, from its date, on every tier that
+    // admitted it the day before, served there by the successor (2026-11-01:
+    // gpt-5-nano on base and premium would have moved to nano, gpt-5.6-luna's
+    // only flat home, or answered 400 where no price was gated). On each flat
+    // home the margin clamp prices the successor from its own row and serves a
+    // short prompt (a 400 there would mean the tier price no longer covers it),
+    // and the route's own price holds (no cross-tier move).
+    const scheduled = Object.keys(RETIRING_MODELS).filter((id) => RETIRING_MODELS[id].asItselfUntil);
+    ok(["openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5-pro", "openai/o3", "openai/o3-pro"].every((id) => scheduled.includes(id)), `all six 2026-12-11 ids are looped (${scheduled.length} scheduled ids)`);
+    for (const id of scheduled) {
+      const { use, until } = RETIRING_MODELS[id];
+      const day = Date.parse(`${until}T00:00:00Z`);
+      K.setRetiringClockForTest(() => day - 1000);
+      const homes = Object.keys(TIERS).filter((s) => tierAllows(s, id));
+      K.setRetiringClockForTest(() => day);
+      const lost = homes.filter((s) => !tierAllows(s, K.canonicalModel(id), id));
+      ok(homes.length > 0 && lost.length === 0, `${id}: served by ${use} on every home tier (${homes.join(", ")})${lost.length ? `; lost on ${lost.join(", ")}` : ""}`);
+      for (const s of homes.filter((h) => K.isFlatTier(h))) {
+        let served = null, err = null;
+        try { served = validateRequest({ model: id, messages: m1, max_tokens: 64 }, s); } catch (e) { err = e; }
+        ok(served?.model === use && served.__substitutedFrom === id && cf(use) !== null && K.crossTierHome(s, id) === null && K.flatTierQuoteUsd(s, id) === TIERS[s].price,
+          `${id} on ${s}: served as ${use} under the margin clamp at ${s}'s own price, priced by its own row${err ? ` (${err.statusCode} ${err.message.slice(0, 80)})` : ""}`);
+      }
+      K.setRetiringClockForTest(null);
+    }
+    // gpt-5-nano on base and premium from 2026-12-11: gpt-5.6-luna keeps the
+    // whole tier output cap under the clamp. A caller naming gpt-5.6-luna
+    // itself keeps its nano home and price on either route.
+    K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+    for (const s of ["v1-chat", "v1-chat-premium"]) {
+      const b = validateRequest({ model: "openai/gpt-5-nano", messages: m1, max_tokens: TIERS[s].maxTokens }, s);
+      ok(b.model === "openai/gpt-5.6-luna" && b.max_tokens === TIERS[s].maxTokens, `gpt-5-nano on ${s} from 2026-12-11: gpt-5.6-luna with the full ${TIERS[s].maxTokens}-token cap`);
+      ok(!tierAllows(s, "openai/gpt-5.6-luna") && K.crossTierHome(s, "openai/gpt-5.6-luna") === "v1-chat-nano", `gpt-5.6-luna named on ${s} keeps its nano home`);
+    }
+    {
+      const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+      const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+      const mm = validateMessagesRequest({ model: "openai/gpt-5-nano", max_tokens: 64, messages: m1 }, "v1-chat");
+      const rr = validateResponsesRequest({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64 }, "v1-chat-premium");
+      ok(mm.body.model === "openai/gpt-5.6-luna" && rr.body.model === "openai/gpt-5.6-luna", `Messages (base) and Responses (premium): gpt-5-nano from 2026-12-11 served as gpt-5.6-luna on the route's tier (${mm.body.model}, ${rr.body.model})`);
+    }
+    K.setRetiringClockForTest(null);
     // gpt-4o-mini's availability successor is not itself retiring, and serves
     // where gpt-4o-mini does on the budget router.
     const succ = K.AVAILABILITY_SUCCESSORS["openai/gpt-4o-mini"] || [];

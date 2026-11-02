@@ -810,9 +810,11 @@ export const RETIRING_MODELS = Object.freeze({
   // OpenAI shuts down GPT-5, GPT-5 mini, GPT-5 nano, GPT-5 pro, o3 and o3-pro on
   // 2026-12-11 (OpenAI's deprecations page, notice of 2026-06-11). SCHEDULED
   // like the entries above; each successor is the replacement that notice
-  // names (pro mode for the -pro ids is the -pro listing) and is admitted on
-  // the tier that serves the retiring id today: gpt-5-nano on nano, the rest
-  // on premium. Before the date, the tier prefixes that admit these ids go.
+  // names (pro mode for the -pro ids is the -pro listing). A call naming one
+  // stays on every tier that admitted it (tierAllows' `requested`), served by
+  // the successor there, so gpt-5-nano on base or premium is not moved to
+  // nano; pinned in test-llm-gateway. Dropping one of those prefixes moves
+  // that tier's callers to the successor's own home tier instead.
   "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
   "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-5.6-terra", asItselfUntil: true },
   "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true },
@@ -976,7 +978,18 @@ export function streamClientWatch(res) {
   };
 }
 
-export function tierAllows(tierSlug, model) {
+function prefixesAdmit(tier, id) {
+  return tier.prefixes.some((p) => (p.endsWith("/") ? id.startsWith(p) : id === p || id.startsWith(p + "-") || id.startsWith(p + ":")));
+}
+
+/** Whether a tier serves `model`. `requested` is the id the caller sent,
+ *  when the wire has it: a retired id (RETIRING_MODELS, its date passed) stays
+ *  on every tier whose prefixes admitted it, served there by its successor
+ *  under that tier's caps, price and clamp. Without this a base call naming
+ *  gpt-5-nano would move to nano on 2026-12-11 (gpt-5.6-luna's only flat
+ *  home), with nano's smaller input and output caps. A caller naming the
+ *  successor itself keeps the successor's own home tier and price. */
+export function tierAllows(tierSlug, model, requested) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
   const id = canonicalModel(model).toLowerCase();
@@ -984,7 +997,9 @@ export function tierAllows(tierSlug, model) {
   // Belt for refuseCostVariants: a "-contributor" listing is never admitted
   // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
   if (/-contributor(?:$|:)/.test(id)) return false;
-  return tier.prefixes.some((p) => (p.endsWith("/") ? id.startsWith(p) : id === p || id.startsWith(p + "-") || id.startsWith(p + ":")));
+  if (prefixesAdmit(tier, id)) return true;
+  const from = requested == null ? null : substitutedFrom(requested);
+  return !!from && canonicalModel(requested).toLowerCase() === id && prefixesAdmit(tier, from);
 }
 
 /** Which gateway tier serves this model - for self-correcting 400s. */
@@ -1027,7 +1042,7 @@ export function crossTierHome(routeTier, model) {
   if (!isFlatTier(routeTier)) return null;
   const m = canonicalModel(model);
   if (m === AUTO_MODEL && TIERS[AUTO_TIER]?.router === true) return AUTO_TIER;
-  if (!m || tierAllows(routeTier, m)) return null;
+  if (!m || tierAllows(routeTier, m, model)) return null;
   try { refuseCostVariants(m); } catch { return null; }
   const home = tierFor(m);
   return home && home !== routeTier && isFlatTier(home) ? home : null;
@@ -1846,7 +1861,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // ":batch" is the asynchronous batch
   // API (24h window), not a chat completion this path can serve.
   refuseCostVariants(model);
-  if (!tierAllows(tierSlug, model)) {
+  if (!tierAllows(tierSlug, model, input.model)) {
     // "auto" reaches here only when the request was not gated at the auto
     // price (no request, or FREE_MODE): name the route that serves it.
     if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
