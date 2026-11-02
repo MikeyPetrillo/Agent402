@@ -63,11 +63,21 @@ const REDIS_PREFIX = "replay:";
  * null when there is nothing to guard (no payment header — a proof-of-work
  * call or an unpaid discovery crawl).
  *
- * Prefers the network-scoped EIP-3009 nonce — the exact value the on-chain
- * `transferWithAuthorization` consumes — so a re-encoded-but-equivalent
- * authorization still maps to one identity. Falls back to hashing the raw
- * credential for schemes whose nonce we can't parse (e.g. an SVM signed
+ * Prefers the EIP-3009 nonce scoped to its network and its signed payer: the
+ * chain consumes a nonce per (token, from), so two wallets that sign the same
+ * nonce are two payments, and so are two networks. A re-encoded-but-equivalent
+ * authorization still maps to one identity. The network is read where each
+ * wire carries it (v2 on `accepted`, v1 at the top level); an EVM payer is
+ * lowercased, any other spelling is kept as signed. Falls back to hashing the
+ * raw credential for schemes whose nonce we can't parse (e.g. an SVM signed
  * transaction), where the header bytes themselves are the single-use artifact.
+ *
+ * A nonce key reads "n2:<identity>:<legacy>": <legacy> is the key an earlier
+ * build used for the same credential (network as v1 spells it, nonce only).
+ * The guard honors claims and consumed marks under that legacy key that an
+ * earlier build wrote, and writes its own there tagged, so across a deploy
+ * neither build lets the other's in-flight or consumed payment run again
+ * (see legacyOf below).
  */
 export function paymentReplayKey(req) {
   const cred =
@@ -75,16 +85,36 @@ export function paymentReplayKey(req) {
   if (!cred || typeof cred !== "string") return null;
   try {
     const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));
-    const nonce = p?.payload?.authorization?.nonce;
-    const network = p?.network || p?.payload?.network || "?";
+    const auth = p?.payload?.authorization;
+    const nonce = auth?.nonce;
     if (typeof nonce === "string" && nonce) {
-      return "n:" + createHash("sha256").update(`${network}:${nonce.toLowerCase()}`).digest("hex");
+      const n = nonce.toLowerCase();
+      const network = p?.accepted?.network || p?.network || p?.payload?.network || "?";
+      const rawFrom = typeof auth?.from === "string" ? auth.from.trim() : "";
+      const from = /^0x[0-9a-fA-F]{40}$/.test(rawFrom) ? rawFrom.toLowerCase() : rawFrom;
+      const id = createHash("sha256").update(`${network}\n${from}\n${n}`).digest("hex");
+      const legacyNetwork = p?.network || p?.payload?.network || "?";
+      const legacy = createHash("sha256").update(`${legacyNetwork}:${n}`).digest("hex");
+      return `n2:${id}:${legacy}`;
     }
   } catch {
     /* not base64 JSON, or no parseable nonce — fall through to raw identity */
   }
   return "c:" + createHash("sha256").update(cred).digest("hex");
 }
+
+// A key's Redis name and, for a nonce key, the name an earlier build used for
+// the same credential. An earlier build's entries hold a bare timestamp; ours
+// at the legacy name hold LEGACY_TAG + our own name, so we skip another
+// payer's tagged entry there and honor an untagged one (it may be this very
+// payment, claimed or consumed by the earlier build).
+const LEGACY_TAG = "v2|";
+function namesOf(key) {
+  const m = /^n2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
+  if (!m) return { primary: String(key), legacy: null };
+  return { primary: `n2:${m[1]}`, legacy: `n:${m[2]}` };
+}
+const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
 // A consumed mark is kept at least this long past the authorization's own
 // validBefore (clock skew between us, the facilitator and the chain).
@@ -135,6 +165,11 @@ export function paymentValidBeforeMs(req) {
  * unsettled granted one it is not, which is one reason the paid x402 path
  * requires the shared store whenever one is configured (server.js).
  */
+// Drop a legacy-name entry only when it is this payment's own tagged one.
+async function delIfTagged(c, name, tag) {
+  if ((await c.get(REDIS_PREFIX + name)) === tag) await c.del(REDIS_PREFIX + name);
+}
+
 export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
   // Local (per-process) fallback state — used whenever Redis is unset or a
   // call to it fails (unless the caller requires the shared store), so a
@@ -145,14 +180,18 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
   // key -> interval renewing this process's Redis claim on it.
   const renewers = new Map();
-  function startRenew(key) {
+  function startRenew(key, legacyHeld = false) {
     stopRenew(key);
     const until = Date.now() + maxHoldMs;
+    const { primary, legacy } = namesOf(key);
     const t = setInterval(async () => {
       if (Date.now() >= until) { stopRenew(key); return; }
       try {
         const c = await getSharedRedisClient();
-        if (c) await c.expire(REDIS_PREFIX + "f:" + key, inflightTtlSeconds);
+        if (c) {
+          await c.expire(REDIS_PREFIX + "f:" + primary, inflightTtlSeconds);
+          if (legacyHeld && legacy) await c.expire(REDIS_PREFIX + "f:" + legacy, inflightTtlSeconds);
+        }
       } catch { /* the next tick retries */ }
     }, renewMs);
     t.unref?.();
@@ -199,14 +238,30 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
       const c = await getSharedRedisClient();
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
+        const { primary, legacy } = namesOf(key);
+        const tag = LEGACY_TAG + primary;
         try {
-          if (await c.get(REDIS_PREFIX + "c:" + key)) return "consumed";
+          if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
+          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return "consumed";
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
-          const claimed = await c.set(REDIS_PREFIX + "f:" + key, String(now), { NX: true, EX: inflightTtlSeconds });
+          const claimed = await c.set(REDIS_PREFIX + "f:" + primary, String(now), { NX: true, EX: inflightTtlSeconds });
           if (!claimed) return "inflight";
-          startRenew(key);
+          let legacyHeld = false;
+          const back = async (verdict) => { await c.del(REDIS_PREFIX + "f:" + primary); if (legacyHeld) await delIfTagged(c, "f:" + legacy, tag); return verdict; };
+          if (legacy) {
+            // An earlier build's claim on this credential is honored; another
+            // payer's tagged claim there is not ours to wait on.
+            legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, tag, { NX: true, EX: inflightTtlSeconds }));
+            if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy))) return back("inflight");
+          }
+          // Read the consumed mark again under the claim: a settle writes its
+          // mark before it drops its claim, so a settle that finished between
+          // the first read and the claim is seen here.
+          if (await c.get(REDIS_PREFIX + "c:" + primary)) return back("consumed");
+          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return back("consumed");
+          startRenew(key, legacyHeld);
           return "ok";
         } catch (e) {
           if (requireShared) {
@@ -237,8 +292,15 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
           // "consumed" or fails its SET NX ("inflight"). Dropping the claim
           // first left a gap in which a re-sent authorization was claimed
           // "ok" and reached the paywall again.
-          await c.set(REDIS_PREFIX + "c:" + key, String(now), { EX: Math.max(ttlSeconds, Math.ceil(holdMs / 1000)) });
-          await c.del(REDIS_PREFIX + "f:" + key);
+          const { primary, legacy } = namesOf(key);
+          const ex = Math.max(ttlSeconds, Math.ceil(holdMs / 1000));
+          await c.set(REDIS_PREFIX + "c:" + primary, String(now), { EX: ex });
+          // An earlier build still running reads any entry at the legacy name
+          // as consumed. Tagged, so this build reads it as another payer's;
+          // an earlier build's own mark there is never overwritten.
+          if (legacy) await c.set(REDIS_PREFIX + "c:" + legacy, LEGACY_TAG + primary, { NX: true, EX: ex });
+          await c.del(REDIS_PREFIX + "f:" + primary);
+          if (legacy) await delIfTagged(c, "f:" + legacy, LEGACY_TAG + primary);
           return;
         } catch (e) {
           console.error("[replay-guard] redis settle failed, falling back to local state:", e.message);
@@ -260,7 +322,9 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
       const c = await getSharedRedisClient();
       if (c) {
         try {
-          await c.del(REDIS_PREFIX + "f:" + key);
+          const { primary, legacy } = namesOf(key);
+          await c.del(REDIS_PREFIX + "f:" + primary);
+          if (legacy) await delIfTagged(c, "f:" + legacy, LEGACY_TAG + primary);
           return;
         } catch (e) {
           console.error("[replay-guard] redis release failed, falling back to local state:", e.message);

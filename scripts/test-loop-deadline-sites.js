@@ -36,6 +36,7 @@ process.env.WALLET_DAILY_LEDGER_FILE = join(dir, "wallet-daily.json");
 process.env.FIRST_CALL_ALLOWANCE = "on";
 
 const { __setTestClient } = await import("../src/shared-limit.js");
+const { _resetSharedLimitsState } = await import("../src/shared-limits.js");
 const { reserveHangupForgiveness } = await import("../src/hangup-forgiveness.js");
 const { reserveSpend } = await import("../src/external-spend-guard.js");
 const { createRedisJournal, __setJournalRedisForTest } = await import("../src/ledger-journal-redis.js");
@@ -79,6 +80,7 @@ async function held(call, holdMs = 500) {
 {
   const evals = [];
   __setTestClient({ eval: (script) => { evals.push(script); return answerSoon([1, 0]); } });
+  _resetSharedLimitsState();
   const req = {};
   const t = await held(() => reserveHangupForgiveness(req, { keys: ["ip:198.51.100.7"], priceUsd: 0.01, slug: "loop-deadline-probe" }));
   ok(t.granted === true && evals.length >= 1, `hang-up ticket: an answer that landed while the loop was held grants (${t.state}/${t.reason})`);
@@ -86,6 +88,7 @@ async function held(call, holdMs = 500) {
 }
 {
   warns.length = 0;
+  _resetSharedLimitsState(); // the once-a-minute log line is read per case
   __setTestClient({ eval: hung, sendCommand: hung });
   const t0 = performance.now();
   await Promise.race([reserveHangupForgiveness({}, { keys: ["ip:198.51.100.8"], priceUsd: 0.01, slug: "loop-deadline-probe" }), new Promise((r) => setTimeout(r, 3000))]);
@@ -94,6 +97,7 @@ async function held(call, holdMs = 500) {
 // 2. External spend guard: the per-payer shared reserve.
 {
   warns.length = 0;
+  _resetSharedLimitsState();
   const evals = [];
   __setTestClient({ eval: (script) => { evals.push(script); return answerSoon([1, 0]); } });
   const d = await held(() => reserveSpend("0x" + "a".repeat(40), 0.01, { chain: "base" }));
@@ -102,6 +106,7 @@ async function held(call, holdMs = 500) {
 }
 {
   warns.length = 0;
+  _resetSharedLimitsState();
   __setTestClient({ eval: hung });
   await Promise.race([reserveSpend("0x" + "b".repeat(40), 0.01, { chain: "base" }), new Promise((r) => setTimeout(r, 3000))]);
   ok(timedOutWarn("external-spend"), "spend reserve: a store that never answers still times out");

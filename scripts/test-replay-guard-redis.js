@@ -98,7 +98,7 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
     payload: { authorization: { nonce: `0x${runId}`, from: "0x" + "1".repeat(40) } },
   })).toString("base64");
   const rk = paymentReplayKey(fakeReq(cred));
-  ok(typeof rk === "string" && rk.startsWith("n:"), "paymentReplayKey() extracts a real nonce-scoped key from an x402 credential");
+  ok(typeof rk === "string" && rk.startsWith("n2:"), "paymentReplayKey() extracts a real nonce- and payer-scoped key from an x402 credential");
 
   ok(await guardA.begin(rk) === "ok", "real payment-credential key: replica A claims it");
   ok(await guardB.begin(rk) === "inflight", "real payment-credential key: replica B sees inflight");
@@ -163,6 +163,32 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   } finally {
     __setTestClient(null); // restore the real client for anything after this
   }
+}
+
+// --- Payer- and network-scoped keys on the real store, and the deploy window --
+// Two wallets that sign the same nonce are two payments; an earlier build's
+// nonce-only key ("n:" + legacy hash, a bare timestamp) is still honored.
+{
+  const reqOf = (o) => {
+    const cred = Buffer.from(JSON.stringify({ network: o.network || "eip155:8453", payload: { authorization: { nonce: o.nonce, from: o.from } } })).toString("base64");
+    return { header: (n) => (String(n).toLowerCase() === "x-payment" ? cred : undefined) };
+  };
+  const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40);
+  const nonce = "0x" + runId;
+  const gA = createReplayGuard(), gB = createReplayGuard();
+  const ka = paymentReplayKey(reqOf({ nonce, from: A })), kb = paymentReplayKey(reqOf({ nonce, from: B }));
+  ok(await gA.begin(ka) === "ok" && await gB.begin(kb) === "ok", "real redis: two payers signing the same nonce are both accepted");
+  ok(await gB.begin(ka) === "inflight", "real redis: the same payer's same nonce on another replica is refused");
+  await gA.settle(ka); await gB.settle(kb);
+  ok(await gB.begin(ka) === "consumed" && await gA.begin(kb) === "consumed", "real redis: each payer's settled nonce reads consumed");
+  const kn = paymentReplayKey(reqOf({ nonce, from: A, network: "eip155:137" }));
+  ok(await gA.begin(kn) === "ok", "real redis: the same payer and nonce on another network is accepted");
+  await gA.release(kn);
+  const kl = paymentReplayKey(reqOf({ nonce: nonce + "1", from: A }));
+  const legacy = "replay:c:n:" + kl.split(":")[2];
+  await client.set(legacy, String(Date.now()), { EX: 60 });
+  ok(await gA.begin(kl) === "consumed", "real redis: a payment an earlier build consumed under the nonce-only key is refused");
+  await client.del(legacy);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
