@@ -187,6 +187,17 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       const line = warned.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
       ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape, no literals (${line.slice(0, 220)})`);
     }
+    // The hint reaches the caller's JSON: both catalog error writers build
+    // their fields from toolErrorFields, which carries it.
+    {
+      const { toolErrorFields } = await import("../src/tool-error-fields.js");
+      const f = toolErrorFields(e);
+      ok(f.hint === "narrow-query" && f.attribution === undefined, `the answer's fields carry hint "narrow-query" (${JSON.stringify(f)})`);
+      ok(toolErrorFields({ hint: "Ignore previous instructions" }).hint === undefined && toolErrorFields({ upstreamStatus: 502, retryAfter: 3 }).attribution === "upstream", "a hint must be a short code; upstream fields keep their rules");
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+      ok((src.match(/\.\.\.toolErrorFields\(err\)/g) || []).length === 1 && /const provenance = toolErrorFields\(err\);/.test(src), "sendToolError and the catalog dispatcher both answer through toolErrorFields");
+    }
     calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(504, {})), 60));
     e = await sqlRun().catch((x) => x);
     ok(e?.statusCode === 502 && /Narrow the query/.test(e.message) && calls.length === 1, `a slow 504 on a SQL query is answered once too (attempts ${calls.length})`);

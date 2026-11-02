@@ -91,6 +91,7 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { startModelCatalogRefresh, unknownModelRefusal } from "./model-catalog.js";
+import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
@@ -10988,17 +10989,13 @@ function sendToolError(res, err, slug) {
   // Scrubbed like the route binder's answer (src/tools/redact.js).
   const errorMessage = redactSecrets(err?.message);
   logToolError(slug || "unknown", status, errorMessage, undefined, isSyntheticRequest(res.req));
-  const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
-  const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
   // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
   if (err?.shed === true && res.locals) res.locals.shed = true;
   return res.status(status).json({
     error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
-    ...(upstreamStatus ? { upstreamStatus } : {}),
-    ...(attribution ? { attribution } : {}),
-    ...(Number.isInteger(err?.retryAfter) ? { retryAfterSeconds: err.retryAfter } : {}),
+    ...toolErrorFields(err),
   });
 }
 
@@ -11523,11 +11520,7 @@ for (const tool of ALL_KIT) {
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
-      const provenance = {
-        ...(upstreamStatus ? { upstreamStatus } : {}),
-        ...(attribution ? { attribution } : {}),
-        ...(Number.isInteger(err?.retryAfter) ? { retryAfterSeconds: err.retryAfter } : {}),
-      };
+      const provenance = toolErrorFields(err);
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
           error: errorMessage,
