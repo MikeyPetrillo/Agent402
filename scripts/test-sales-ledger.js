@@ -317,11 +317,15 @@ rmSync(dir, { recursive: true, force: true });
   const summary = src.slice(src.indexOf("const distinctExternalBuyers ="), src.indexOf("const distinctExternalBuyers =") + 400);
   ok(!/\.all\([^)]*\)\.length/.test(summary),
     "neither published count is the .length of a query result list");
-  ok(/qExtDistinctPayers\.get\(/.test(summary) && /qExtDistinctSlugs\.get\(/.test(summary),
-    "both counts come from dedicated COUNT(DISTINCT ...) queries");
-  for (const q of ["qExtDistinctSlugs", "qExtDistinctPayers"]) {
+  // The window is read a page at a time, so each count is the size of a set
+  // gathered from a dedicated SELECT DISTINCT over every page.
+  ok(/= extPayers\.size;/.test(summary) && /= extSlugs\.size;/.test(summary),
+    "both counts are the sizes of sets, never added across pages");
+  ok(/qExtDistinctPayersPage\.all\([^)]*\)\) extPayers\.add\(/.test(src) && /qExtDistinctSlugsPage\.all\([^)]*\)\) extSlugs\.add\(/.test(src),
+    "each set is fed only by its dedicated DISTINCT page query");
+  for (const q of ["qExtDistinctSlugsPage", "qExtDistinctPayersPage"]) {
     const decl = src.slice(src.indexOf(`const ${q} = `), src.indexOf(`const ${q} = `) + 260);
-    ok(/COUNT\(DISTINCT/.test(decl), `${q} uses COUNT(DISTINCT ...)`);
+    ok(/SELECT DISTINCT/.test(decl), `${q} uses SELECT DISTINCT`);
     ok(!/LIMIT/i.test(decl), `${q} carries no LIMIT`);
   }
 }
