@@ -1372,19 +1372,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     console.warn(`WARNING: CIRCLE_FACILITATOR_EVM_FALLBACK=on but ${circleKeyConfigured() ? "neither Base nor Polygon is offered" : "CIRCLE_FACILITATOR_API_KEY is unset"} - the Base/Polygon settle fallback is off`);
   }
   if (circleEvm) {
-    const confirm = (attempt = 0) => {
-      Promise.resolve().then(() => circleEvm.getSupported()).then((sup) => {
-        const listed = (Array.isArray(sup?.kinds) ? sup.kinds : []).filter((k) => k?.scheme === "exact").map((k) => k.network);
-        for (const n of circleEvmWanted) if (listed.includes(n)) circleEvmConfirmed.add(n);
-        const missing = circleEvmWanted.filter((n) => !circleEvmConfirmed.has(n));
-        console.log(`${CIRCLE_EVM_LABEL}: last settle fallback on ${[...circleEvmConfirmed].join(", ") || "(none)"}${missing.length ? `; not listed for ${missing.join(", ")}, never tried there` : ""}`);
-      }).catch((e) => {
-        // Only our own reason code is printed (src/circle-facilitator.js).
-        if (attempt === 0) console.warn(`WARNING: ${CIRCLE_EVM_LABEL} /supported failed (${String(e?.reason || "error").slice(0, 40)}); not tried until it answers (re-checked in the background)`);
-        setTimeout(() => confirm(attempt + 1), ROBINHOOD_FALLBACK_RECHECK_MS).unref?.();
-      });
-    };
-    confirm();
+    circleEvmSupportedWatch({
+      client: circleEvm, wanted: circleEvmWanted, confirmed: circleEvmConfirmed,
+      refreshMs: Number(process.env.CIRCLE_EVM_SUPPORTED_REFRESH_MS) > 0 ? Number(process.env.CIRCLE_EVM_SUPPORTED_REFRESH_MS) : 10 * 60_000,
+      retryMs: ROBINHOOD_FALLBACK_RECHECK_MS,
+    }).start();
     if (!/^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim())) {
       console.warn(`WARNING: CIRCLE_FACILITATOR_EVM_FALLBACK=on has no effect while PAYMENT_SETTLE_FALLBACK is off`);
     }
@@ -2520,6 +2512,56 @@ export function fallbackCandidatesFor(network, payAiClient, solvadorClient, over
  * gate as every other fallback: each earlier settler must have refused
  * before broadcasting.
  */
+/**
+ * Keeps `confirmed` (read at each settle by lastResortFallbackOverrides) equal
+ * to the networks of `wanted` that the client's latest /supported lists exact
+ * for. Each refresh recomputes the set in place, so a chain the facilitator
+ * stops listing stops being tried and one it lists again comes back. A refresh
+ * that fails empties the set (fail closed, as Arc's own /supported guard drops
+ * Arc on a failed read) and is retried after `retryMs`; an answer is re-read
+ * after `refreshMs`. Only a change is logged.
+ */
+export function circleEvmSupportedWatch({ client, wanted, confirmed, refreshMs = 10 * 60_000, retryMs = 120_000, log = console.log, warn = console.warn, label = CIRCLE_EVM_LABEL }) {
+  let timer = null;
+  let stopped = false;
+  let last = null; // the last logged state: a set key, or "failed"
+  const schedule = (ms) => {
+    if (stopped) return;
+    timer = setTimeout(() => { refresh().catch(() => {}); }, ms);
+    timer.unref?.();
+  };
+  const refresh = async () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    let sup;
+    try {
+      sup = await client.getSupported();
+    } catch (e) {
+      confirmed.clear();
+      // Only our own reason code is printed (src/circle-facilitator.js).
+      if (last !== "failed") warn(`WARNING: ${label} /supported failed (${String(e?.reason || "error").slice(0, 40)}); not tried until it answers (re-checked in the background)`);
+      last = "failed";
+      schedule(retryMs);
+      return [...confirmed];
+    }
+    const listed = new Set((Array.isArray(sup?.kinds) ? sup.kinds : []).filter((k) => k?.scheme === "exact").map((k) => k?.network));
+    confirmed.clear();
+    for (const n of wanted) if (listed.has(n)) confirmed.add(n);
+    const key = [...confirmed].join(",");
+    if (key !== last) {
+      const missing = wanted.filter((n) => !confirmed.has(n));
+      log(`${label}: last settle fallback on ${[...confirmed].join(", ") || "(none)"}${missing.length ? `; not listed for ${missing.join(", ")}, never tried there` : ""}`);
+    }
+    last = key;
+    schedule(refreshMs);
+    return [...confirmed];
+  };
+  return {
+    refresh,
+    start() { refresh().catch(() => {}); return this; },
+    stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; },
+  };
+}
+
 /**
  * The reconcile pass's status reader (src/circle-pending.js calls it with a
  * paymentId only). One status client reads every booked network, so each

@@ -401,6 +401,38 @@ await check("reconcile: one status client for Arc, Base and Polygon binds each a
   rmSync(dir, { recursive: true, force: true });
 });
 
+await check("/supported refresh: a chain dropped stops being tried, re-added comes back; a failed read fails closed", async () => {
+  const { circleEvmSupportedWatch } = await import("../src/payments.js");
+  const kindsFor = (nets) => ({ ...SUPPORTED, kinds: [SUPPORTED.kinds[0], ...nets.map((n) => ({ x402Version: 2, scheme: "exact", network: n, asset: profileOf(n).asset }))] });
+  let answer = () => json(200, SUPPORTED);
+  const client = circleEvmFallbackFromEnv({ CIRCLE_FACILITATOR_EVM_FALLBACK: "on", CIRCLE_FACILITATOR_API_KEY: KEY }, { fetchImpl: stubFetch({ "/supported": () => answer() }) });
+  const confirmed = new Set();
+  const logs = [];
+  const w = circleEvmSupportedWatch({ client, wanted: [BASE, POLYGON], confirmed, refreshMs: 3_600_000, retryMs: 3_600_000, log: (m) => logs.push(m), warn: (m) => logs.push(m) });
+  const pa = {}, sv = {}, last = { name: CIRCLE_EVM_LABEL, client };
+  const ov = lastResortFallbackOverrides({ networks: [BASE, POLYGON], payAiClient: pa, solvadorClient: sv, last, confirmed });
+  const tried = (n) => fallbackCandidatesFor(n, pa, sv, ov).some((c) => c.name === CIRCLE_EVM_LABEL);
+  try {
+    assert.deepEqual(await w.refresh(), [BASE, POLYGON]);
+    assert.ok(tried(BASE) && tried(POLYGON));
+    answer = () => json(200, kindsFor([POLYGON]));
+    assert.deepEqual(await w.refresh(), [POLYGON], "Base dropped");
+    assert.ok(!tried(BASE) && tried(POLYGON), "Base is no longer a candidate");
+    answer = () => json(200, kindsFor([BASE, POLYGON]));
+    assert.deepEqual(await w.refresh(), [BASE, POLYGON], "Base re-added");
+    assert.ok(tried(BASE));
+    answer = () => new Response("down", { status: 503, headers: { "content-type": "text/plain" } });
+    assert.deepEqual(await w.refresh(), [], "a failed read empties the set");
+    assert.ok(!tried(BASE) && !tried(POLYGON));
+    answer = () => json(200, { ...SUPPORTED, kinds: "malformed" });
+    assert.deepEqual(await w.refresh(), [], "a malformed answer confirms nothing");
+    answer = () => json(200, SUPPORTED);
+    assert.deepEqual(await w.refresh(), [BASE, POLYGON], "and it comes back once it answers");
+    assert.ok(!logs.some(leaks), "no key or upstream body in the log");
+    assert.equal(logs.filter((m) => m.includes("last settle fallback on eip155:8453, eip155:137")).length, 3, "logged on each change only");
+  } finally { w.stop(); }
+});
+
 console.log("part 2: a paid server against stub facilitators");
 
 const [P_SERVER1, P_SERVER2, P_SERVER3, P_CDP, P_PAYAI, P_CIRCLE] = await getFreePorts(6);
