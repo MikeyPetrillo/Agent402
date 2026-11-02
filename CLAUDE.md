@@ -238,6 +238,9 @@ heartbeat page on it under one issue that closes when nothing is owed.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
   there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
+  The metered chat route refuses a model id missing from the upstream's live model list with a 400
+  before any payment gate (`src/model-catalog.js`, read hourly; fails open on no fresh list;
+  `MODEL_CATALOG_URL` points the read at a stub).
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,

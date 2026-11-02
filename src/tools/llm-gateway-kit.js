@@ -57,6 +57,7 @@ import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
+import { unknownModelRefusal } from "../model-catalog.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -1884,6 +1885,12 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
         ? `Model "${model}" is served by the ${home} tier - call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call), or ${TIERS["v1-chat-metered"] ? `${TIERS["v1-chat-metered"].route.split(" ")[1]} (the same model, quoted per request from $${tierPriceLabel(TIERS["v1-chat-metered"].price)})` : "the metered route"} instead.`
         : `Model "${model}" is not in the gateway allowlist. GET /v1/models lists every supported model and its tier.`
     );
+  }
+  // The metered route takes any id under its vendor prefixes; one the live
+  // list does not carry is refused here (and before payment, server.js).
+  if (tier.metered) {
+    const unknown = unknownModelRefusal(model);
+    if (unknown) { const e = bad(unknown); e.code = "unknown_model"; throw e; }
   }
 
   const messages = input.messages;
