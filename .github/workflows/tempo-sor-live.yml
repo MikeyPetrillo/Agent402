@@ -15,6 +15,14 @@ on:
         description: "/api/route/execute or /api/route/execute-plus"
         required: false
         default: ""
+      params:
+        description: "Seller input as JSON (default: {\"url\":\"https://example.com\"})"
+        required: false
+        default: ""
+      expect_text:
+        description: "Text the delivered result must contain (default: Example Domain)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -35,10 +43,12 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           TASK: ${{ github.event.inputs.task }}
           ROUTE: ${{ github.event.inputs.route }}
+          PARAMS: ${{ github.event.inputs.params }}
+          EXPECT_TEXT: ${{ github.event.inputs.expect_text }}
         run: |
           [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
           echo "::add-mask::$BURNER_KEY"; [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
-          [ -n "$TASK" ] || unset TASK; [ -n "$ROUTE" ] || unset ROUTE
+          [ -n "$TASK" ] || unset TASK; [ -n "$ROUTE" ] || unset ROUTE; [ -n "$PARAMS" ] || unset PARAMS; [ -n "$EXPECT_TEXT" ] || unset EXPECT_TEXT
           node scripts/tempo-sor-live.js
       - name: Keep the real response for the announcement card
         if: always()
