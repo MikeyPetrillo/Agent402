@@ -180,6 +180,28 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   ok(isPreBroadcastFailure(tagged) && isPreBroadcastFailure(viemLike) && isPreBroadcastFailure(wrapped), "a tagged build/sign failure and an insufficient-funds refusal (bare or as a cause) are pre-broadcast");
   ok(!isPreBroadcastFailure(new Error("timeout waiting for the receipt")) && !isPreBroadcastFailure(new Error("fetch failed")) && !isPreBroadcastFailure(null), "a timeout, a transport error or nothing at all is not: money may have moved");
 
+  // A Solana send refused in preflight (-32002: simulated and failed, never
+  // broadcast) is pre-broadcast and names the failing program's logs; any
+  // other RPC error on the send is not.
+  {
+    const { createServer } = await import("node:http");
+    let answer = null;
+    const srv = await new Promise((r) => { const s = createServer((req, res) => { req.resume(); req.on("end", () => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: answer })); }); }).listen(0, "127.0.0.1", () => r(s)); });
+    const prevRpc = process.env.SOLANA_RPC_URL;
+    process.env.SOLANA_RPC_URL = `http://127.0.0.1:${srv.address().port}`;
+    const caught = async (method) => { try { await rr.solanaRpc(method, []); return null; } catch (e) { return e; } };
+    answer = { code: -32002, message: "Transaction simulation failed: Error processing Instruction 0: invalid account data for instruction", data: { err: { InstructionError: [0, "InvalidAccountData"] }, logs: ["Program Tokenkeg invoke [1]", "Program log: Error: InvalidAccountData", "Program Tokenkeg failed: invalid account data for instruction"] } };
+    const pre = await caught("sendTransaction");
+    ok(isPreBroadcastFailure(pre) && /InvalidAccountData/.test(pre.message) && /Program log: Error: InvalidAccountData/.test(pre.message), `a preflight refusal is pre-broadcast and carries the program logs (${pre?.message?.slice(0, 90)})`);
+    answer = { code: -32005, message: "Node is behind" };
+    const other = await caught("sendTransaction");
+    ok(other && !isPreBroadcastFailure(other), "any other send error is not pre-broadcast");
+    answer = { code: -32002, message: "simulation failed" };
+    ok(!isPreBroadcastFailure(await caught("getBalance")), "a -32002 on a read is not a send outcome");
+    if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
+    srv.close();
+  }
+
   // The executor: a claimed EVM row whose send fails pre-broadcast goes back to owed, noted.
   const ledger = fakeLedger(ROWS());
   const releases = [];
