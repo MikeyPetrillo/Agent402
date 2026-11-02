@@ -10137,8 +10137,9 @@ if (FREE_MODE) {
         };
       }
       // A first-contact unpaid 402 leads its body with the front door
-      // (src/front-door.js): access and the recovery contract, the same
-      // sentences /llms.txt and /agents.md lead with, and a link to the rest.
+      // (src/front-door.js): the access line /llms.txt and /agents.md lead
+      // with, and the /agents.md link (the recovery lines live there only).
+      // FRONT_DOOR_402=off leaves the body as the offer alone.
       // Body only (the PAYMENT-REQUIRED header is untouched), behind the
       // proof-of-work altPayment where that is offered, and never on a
       // refused payment or proof, which keeps its own explanation.

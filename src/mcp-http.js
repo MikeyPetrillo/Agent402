@@ -1143,10 +1143,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "server.describe") {
           capturePostHogDiscovery({ surface: "mcp:about" });
           const install = mcpInstallHints(baseUrl);
+          const frontDoor = frontDoorJson(catalog, baseUrl);
           return mcpJsonResult({
             // The front door leads (src/front-door.js): the same block
             // /llms.txt, /agents.md and the unpaid 402 body open with.
-            frontDoor: frontDoorJson(catalog, baseUrl),
+            // startHere.firstJob (kept for clients that read it) opens with
+            // the same first-call sentence, so the answer has one first call.
+            frontDoor,
             service: baseUrl,
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",
@@ -1154,7 +1157,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // Flagship-first positioning: search/answer as the default job,
             // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {
-              firstJob: `One fact: call web.search or web.answer.${catalog["POST /api/decide"] ? " A job with more than one step: call decide.plan, then decide.execute (the plan fee is credited toward the run)." : ""} Otherwise catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini; /v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.`,
+              firstJob: `${frontDoor.firstCall}${catalog["POST /api/decide"] ? " A job with more than one step: call decide.plan, then decide.execute (the plan fee is credited toward the run)." : ""} Otherwise catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini; /v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.`,
               flagships: [...flagshipSet].map((slug) => ({
                 mcpName: mcpNameOf(slug),
                 slug,

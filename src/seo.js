@@ -30,7 +30,7 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
-import { frontDoorMarkdown, AGENTS_MD_PATH } from "./front-door.js";
+import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION } from "./front-door.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -589,7 +589,7 @@ ${reportsParagraph(baseUrl, tools)}
 
 Determine it from the response you already hold, without asking us:
 
-- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry.
+- **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry. ${LATE_SETTLE_EXCEPTION}
 - **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged on x402. Safe to retry with a fresh authorization.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
@@ -702,18 +702,20 @@ export function llmsTxt(baseUrl, catalog) {
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
 - Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
-  // The llms.txt order: the title, the summary blockquote, then the front
-  // door's three lines (src/front-door.js: the first call and its price,
-  // access, when to use it); rails and wire detail follow unchanged.
+  // The llms.txt order (the llms.txt spec: title, summary blockquote, then
+  // plain paragraphs before the first H2): the base URL and the full-text
+  // pointer, then the front door's three lines under the first H2
+  // (src/front-door.js: the first call and its price, access, when to use
+  // it); rails and wire detail follow unchanged.
   return `${title}
 
 ${summary}
 
-${frontDoorMarkdown(catalog, baseUrl)}
-
 Base URL: ${baseUrl}
 
 The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. Terms are defined once at ${baseUrl}/glossary, and the category is explained at ${baseUrl}/agentic-finance. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+
+${frontDoorMarkdown(catalog, baseUrl)}
 
 ${mppMethodsProse()}
 
