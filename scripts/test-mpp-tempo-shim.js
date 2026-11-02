@@ -17,6 +17,7 @@
 // Wire-format compatibility with Tempo's REAL relay (api.tempo.xyz) is
 // UNVERIFIED until a real TEMPO_API_KEY exists — see the approved plan's
 // "Verification" section. This file proves OUR logic, not their API.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import express from "express";

@@ -10,6 +10,7 @@
 // Each assertion reads the fact from its source and checks the rendered page
 // says that, so changing the code without the page (or the page without the
 // code) fails here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { pageText } from "./lib/html-text.js";
 

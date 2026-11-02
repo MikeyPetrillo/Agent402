@@ -5,6 +5,7 @@
 // on the mistakes that cost someone money or erase a debt: double-booking,
 // silent write-offs, refunding the canary to ourselves, skipping caps, and
 // case-folding an address on a case-sensitive rail.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
 import { planRefunds, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";

@@ -1,5 +1,6 @@
 // Unit test for the composite-spend guard (research/dossier upstream-drain
 // protection). Offline, fast, in CI.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.COMPOSITE_GUARD_MAX_FAILS = "3";
 process.env.COMPOSITE_GUARD_WINDOW_MS = "60000";
 process.env.COMPOSITE_GUARD_BLOCK_MS = "600";

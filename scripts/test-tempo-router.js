@@ -14,6 +14,7 @@
 //   router    buyerPaymentNetwork reads the tempo gate's marker; the chain map
 //             puts MPP/tempo buyers on the Tempo wallet, keeps Base buyers on
 //             Base unless SOR_TEMPO_FROM_BASE opts them into Tempo fallthrough
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { tempoCatalog, rankTempoResources } from "../src/tempo-sellers.js";
 import { payTempo, __testResetProofCache, tempoInboundCount, tempoInboundEvidence, tempoEvidenceFromLogs, primeTempoInboundCount, TEMPO_USDC, TEMPO_CAIP2 } from "../src/tempo-buyer.js";

@@ -19,6 +19,7 @@
 //   * ?seller= lookup finds each by its prefixed URL; route URLs are
 //     seller + route; the two apps are not folded together as aliases;
 //   * a bare origin's rows and lookups are exactly as before.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 {
   const { mkdtempSync } = await import("node:fs");

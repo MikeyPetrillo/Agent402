@@ -15,6 +15,7 @@
 //    rather than polling forever;
 //  - the 600+ fast tools and paid non-composites are untouched;
 //  - a task is never minted for a call that has not cleared the paywall.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const TASK_GATE_MS_TEST = 150;
 process.env.AGENT402_MCP_TASK_GATE_MS = String(TASK_GATE_MS_TEST); // keep the gate window short
 process.env.AGENT402_MCP_TASK_POLL_MS = "50";

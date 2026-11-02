@@ -7,6 +7,7 @@
 // Solana SOR branch inherited the gap: it asked for the top 20 with no filter
 // and kept the Solana rows, so a Base-dominated tie at score 14 left the
 // best-named Solana seller outside the window entirely.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { routeQuery, _cacheForTests } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;

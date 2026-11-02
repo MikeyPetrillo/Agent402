@@ -17,6 +17,7 @@
 //      server's [posthog-test] output.
 //
 //   node scripts/test-posthog-funnel.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { createServer } from "node:http";

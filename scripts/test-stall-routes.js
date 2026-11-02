@@ -15,6 +15,7 @@
 //      sales ledger: the first request to each route after boot holds the
 //      loop under ROUTE_BOUND_MS, and the shared ledger figures the routes
 //      serve equal a direct read of the ledger.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";

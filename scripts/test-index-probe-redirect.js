@@ -18,6 +18,7 @@
 //   * a redirect to another host is never followed: the 301 is the answer;
 //   * the register door still refuses an http origin, and a registered seller's
 //     detail shows the recorded redirect origin and the probed URL that answered.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_PAYWALL_PROBES_PER_CYCLE = "25";
 {

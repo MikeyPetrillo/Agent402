@@ -3,6 +3,7 @@
 // /api/find and the /api/index search. Reported from outside 2026-09-10: every
 // router split on [^a-z0-9]+, so a CJK query produced zero terms and zero rows
 // while its English twin ranked three sellers. Offline, synthetic catalog.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 import { queryTerms, termMatcher, splitTokens, isCjkTerm } from "../src/query-terms.js";
 const { routeQuery, _cacheForTests, allIndexedTools } = await import("../src/x402-index.js");

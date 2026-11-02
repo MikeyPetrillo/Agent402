@@ -3,6 +3,7 @@
 // and fall back to the three-venue feed (DBEQ.BASIC) only when the primary
 // answers with an error or no rows. Offline: global fetch is stubbed, and
 // every answer must name the dataset it came from.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 process.env.DATABENTO_WARM = "off";
 const db = await import("../src/tools/databento.js");

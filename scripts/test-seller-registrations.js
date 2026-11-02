@@ -20,6 +20,7 @@
 // needing a real on-chain snapshot.
 //
 //   node scripts/test-seller-registrations.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { registerOrigin, __testResetSubmitted } from "../src/x402-index.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations } from "../src/stats.js";
 

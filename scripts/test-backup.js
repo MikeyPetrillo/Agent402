@@ -94,6 +94,10 @@ const { backupPlan, runBackup, backupStatus, backupConfigured, backupAlarmStatus
 // A rejected signature names the stored credentials as the usual cause; any other failure gets no hint.
 ok(/BACKUP_S3_SECRET/.test(credentialHint("list failed: HTTP 403 <Code>SignatureDoesNotMatch</Code>")), "a SignatureDoesNotMatch names the stored credentials");
 ok(credentialHint("PUT x: HTTP 500 internal") === "", "a non-credential failure gets no credential hint");
+// With a database the stored status is read at the first call and the word
+// is "unknown" until that read lands, as on a booting server, which awaits
+// every store's first load before it listens: wait for it the same way.
+if (DB_MODE) { backupAlarmStatus(); await (await import("../src/state-db.js")).stateStoresReady(); }
 ok(backupAlarmStatus() === "stale", `configured with no successful run yet: the alarm word is stale (${backupAlarmStatus()})`);
 
 // --- plan ------------------------------------------------------------------

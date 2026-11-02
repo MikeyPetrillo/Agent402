@@ -6,6 +6,7 @@
 //      local sweeps) are never limited;
 //   3. the limiter sits AFTER the cache lookup, so a cache hit never counts;
 //   4. routableSellerSummaries is memoized and rebuilt when the cache changes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

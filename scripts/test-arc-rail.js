@@ -20,6 +20,7 @@
 // for the other rails, Arc still fails closed), malformed /supported. Every
 // leg asserts the key and the upstream body never appear in a response or a
 // log line.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

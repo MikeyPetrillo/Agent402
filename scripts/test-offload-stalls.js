@@ -8,6 +8,7 @@
 //      one read of the payment history (source pins: the ledger needs a
 //      populated database).
 //   3. The per-page chain strip is memoized on its inputs (source pin).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";

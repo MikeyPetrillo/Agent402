@@ -10,6 +10,7 @@
 //
 // Offline, no server, no network: pure helpers + the in-memory cache via the
 // _cacheForTests() escape hatch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   bazaarItemToTool,
   mergeOpenapiIntoBazaar,

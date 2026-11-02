@@ -61,6 +61,14 @@ import { getFreePorts } from "./lib/free-port.js";
 const CALLER_SHARED_LIMITS = process.env.SHARED_LIMITS;
 const RUN_PREFIX = process.env.SHARED_LIMITS_PREFIX || `hangup-${process.pid}-${randomBytes(4).toString("hex")}`;
 process.env.SHARED_LIMITS = "off";
+// Both parts are written against the file stores: Part 1 reads and writes the
+// budget's FILE (persistNow, loadHangupForgiveness on this process's clock),
+// and Part 2 edits the booted server's sales ledger file directly (the attest
+// case) and restarts it on the same budget file (case m). A STATE_DATABASE_URL
+// in the caller's environment would move those to rows this suite never
+// reads, so it is removed here; the Postgres store has its own suite
+// (scripts/test-hangup-forgiveness-pg.js).
+delete process.env.STATE_DATABASE_URL;
 const { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } = await import("../src/hangup-settlement.js");
 const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupForgivenessConfig, hangupTicketDenial, hasLastingEffect, LASTING_EFFECT_SLUG_LIST, _resetHangupForgiveness, hangupKeyDigest, persistPath, persistNow, flushHangupForgiveness, loadHangupForgiveness, _hangupForgivenessShared } = await import("../src/hangup-forgiveness.js");
 const { createCredits } = await import("../src/credits.js");

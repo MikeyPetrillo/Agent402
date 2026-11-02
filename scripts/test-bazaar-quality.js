@@ -2,6 +2,7 @@
 // distinct payers ride from the Bazaar feed into the index (per resource + per
 // origin), into /api/find external results (field + tiebreak), and into the
 // SOR gate as positive evidence (folded as MAX in server.js). Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { routeQuery, bazaarItemToTool, bazaarQualityFor, bazaarQualityEntries, _setBazaarQualityForTest, _cacheForTests, indexSnapshot, foldBazaarQuality } from "../src/x402-index.js";
 

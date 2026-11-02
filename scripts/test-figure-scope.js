@@ -22,6 +22,7 @@
 //
 // Everything below is behavioural against the real modules, not a source
 // grep: a scope that is present but wrong passes a grep and fails here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

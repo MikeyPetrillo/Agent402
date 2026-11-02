@@ -10,6 +10,7 @@
 // wallet. Part 1 pins the pure rules; part 2 boots a PAID server against stub
 // facilitators (EVM + Algorand, both local) with a stub /sponsorship/status,
 // and drives the real 402, the real matching and the real settle path.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";

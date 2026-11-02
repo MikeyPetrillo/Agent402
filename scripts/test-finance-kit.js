@@ -13,6 +13,7 @@
 // into one: extremes across venues, volume SUMMED and labelled partial, and
 // open/close taken from the venue that actually traded the most. Getting that
 // wrong produces a confident-looking quote built on one thin venue.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { FINANCE_TOOLS, stockAnalysis } from "../src/tools/finance-kit.js";
 import { consolidate, databentoEnabled } from "../src/tools/databento.js";
 

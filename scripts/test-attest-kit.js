@@ -4,6 +4,7 @@
 // spend guard, encoding, persistence) runs for real. Pins from source that the
 // dispatcher records sha256 of the exact bytes res.json sends and that the
 // finish hook hands it to the ledger.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

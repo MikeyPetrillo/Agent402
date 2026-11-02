@@ -5,6 +5,7 @@
 // VERIFIES and then fails to SETTLE leaves us out the upstream spend with the
 // buyer charged nothing. Self-dealt - one wallet listing the seller and buying
 // from it - every drained dollar returns to the attacker.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   maySpend, noteSpend, adjustSpend, resolveSpend, payerExposureUsd, exposureSnapshot, __reset,
 } from "../src/external-spend-guard.js";
