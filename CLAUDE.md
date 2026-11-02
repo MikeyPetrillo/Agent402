@@ -299,6 +299,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   facilitator only (`src/circle-facilitator.js`): `CIRCLE_FACILITATOR_API_KEY` is the switch,
   the client is Arc-only, reduces every upstream error to a status and a reason code, and Arc
   fails closed on Circle's own `/supported` (`scripts/test-arc-rail.js`).
+  `CIRCLE_FACILITATOR_EVM_FALLBACK` is off by default; with `=on`, the Arc key and
+  `PAYMENT_SETTLE_FALLBACK=true`, the issuer's facilitator is the last settle fallback on Base
+  and Polygon, only for networks its `/supported` lists (`src/circle-facilitator.js`,
+  `src/circle-supported.js`; `scripts/test-circle-evm-fallback.js`).
   `ROBINHOOD_FACILITATOR_URL` is an ordered list: the first settles, the rest are Robinhood's
   settle fallback (never routing facilitators), reached after a pre-broadcast refusal or, on
   `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
