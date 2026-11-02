@@ -4,6 +4,7 @@
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { childJson } from "./lib/child-json.js";
 
 const run = promisify(execFile);
 let pass = 0, fail = 0;
@@ -35,7 +36,7 @@ const check = async () => {
   const { stdout } = await run(process.execPath, ["scripts/mcp-pin-on-npm.js"], {
     env: { ...process.env, TARGET_URL: `http://127.0.0.1:${site.address().port}`, NPM_REGISTRY: `http://127.0.0.1:${registry.address().port}` },
   });
-  return JSON.parse(stdout.trim().split("\n").pop());
+  return childJson(stdout);
 };
 
 let r = await check();

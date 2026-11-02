@@ -42,7 +42,7 @@ ok(SUCC === "deepseek/deepseek-v4-flash", "deepseek-chat names its successor");
       ok(want ? chain[1] === want : !list.includes(chain[1]), `${req} on ${tier}: successor ${want || "none (tier admits none)"}`);
     }
   }
-  ok(failoverChain("openai/gpt-4o-mini", "v1-chat")[1] === "openai/gpt-5-nano" && failoverChain("openai/gpt-4o-mini", "v1-chat-metered")[1] === "openai/gpt-5-nano", "gpt-4o-mini: base and metered fall back to gpt-5-nano");
+  ok(failoverChain("openai/gpt-4o-mini", "v1-chat-metered")[1] === "openai/gpt-6-luna" && failoverChain("openai/gpt-4o-mini", "v1-chat").length === 1, "gpt-4o-mini: metered falls back to gpt-6-luna; base admits neither luna nor a non-retiring nano, so it serves gpt-4o-mini alone until a base successor is chosen");
   ok(!Object.values(AVAILABILITY_SUCCESSORS).flat().includes("openai/gpt-4.1-nano"), "no successor is a model OpenAI removes 2026-10-23 (gpt-4.1-nano)");
 }
 
