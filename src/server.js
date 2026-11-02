@@ -210,6 +210,8 @@ function x402WireOf(req) {
 function recordHangupDebt(req, res) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
+  // A first-call allowance grant was never settled: nothing to owe.
+  if (allowanceServed(req)) return null;
   // The debt names the chain-read sender: book it once that read is done.
   // Truthy meanwhile, so recordHangupOutcome does not log it as uncharged.
   if (req.tempoSettled && tempoLedgerPayerPending(req)) {
@@ -661,7 +663,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts, payerHasPaidSale } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -813,6 +815,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
@@ -3697,6 +3700,11 @@ app.get("/api/gateway-status", async (req, res) => {
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
+    // The first-call allowance, only while it is switched on: on / spent
+    // (today's cap is used) / unavailable (the shared store did not answer,
+    // so nothing is granted). One word, never a figure; the figures are on
+    // /__operator/refunds.json.
+    ...(firstCallAllowanceEnabled() ? { firstCallAllowance: { status: await firstCallAllowanceStatus().then((s) => s.status).catch(() => "unknown") } } : {}),
     // Arc settlements Circle left pending (src/circle-pending.js): off / ok /
     // near_capacity / full / unresolved. One word; the heartbeat pages on
     // unresolved and full.
@@ -6067,6 +6075,9 @@ app.get("/__operator/refunds.json", async (req, res) => {
     // How much of the hang-up forgiveness budget is in use: once it is spent,
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
+    // First-call allowance grants (src/first-call-allowance.js): switch,
+    // caps, today's grants and list-price USD, refusals by reason.
+    firstCallAllowance: await firstCallAllowanceStatus().catch(() => null),
     // Settle failures that named a transaction, open until the chain says
     // whether it landed (src/late-settlements.js); a landed one becomes an
     // owed row above.
@@ -10824,6 +10835,25 @@ if (!FREE_MODE) {
       try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
       return;
     }
+    next();
+  });
+}
+
+// First-call allowance (src/first-call-allowance.js), off unless
+// FIRST_CALL_ALLOWANCE=on. Mounted after every payment gate and the hang-up
+// ticket, so the payment here has been verified and the handler is next: a
+// wallet that never paid us may take one grant on an eligible route, claimed
+// atomically against its caps now, kept when the settle of its 200 was
+// skipped and given back on any other end.
+if (!FREE_MODE) {
+  app.use(async (req, res, next) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (!def || !firstCallAllowanceEnabled() || !ownTrue(req, "__a402Dispatched")) return next();
+    if (res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
+    let a = null;
+    try { a = await claimFirstCallAllowance(req, res, def, { ip: req.ip, synthetic: isSyntheticRequest(req), hasPaidSale: payerHasPaidSale }); }
+    catch (err) { console.warn(`[allowance] claim failed (${String(err?.message || err).slice(0, 80)}); the call is paid as usual`); }
+    if (a?.granted) onResponseEnd(req, res, () => { void finishFirstCallAllowance(req).catch(() => {}); });
     next();
   });
 }
