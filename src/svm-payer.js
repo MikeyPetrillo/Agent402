@@ -19,7 +19,9 @@
 // Dependency-free: a compact-u16 reader, a legacy/v0 message header walk and a
 // base58 encoder for the comparison, no RPC, no @solana/kit. Pure, bounded,
 // never throws: null whenever the bytes are not the shape described, because a
-// wrong payer id is worse than none.
+// wrong payer id is worse than none. svmSignedTransfer also checks the
+// transfer authority's ed25519 signature with node:crypto.
+import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -88,57 +90,102 @@ const TOKEN_PROGRAMS = new Set([
 ]);
 const IX_TRANSFER_CHECKED = 12;
 
+// The transfer instruction of a wire transaction, with what checking its
+// signature needs: the account-key indices, the amount (TransferChecked's u64
+// after its tag), the signatures and the serialized message they sign (every
+// byte after the signatures section, version prefix included). Null on any
+// shape mismatch.
+function readTransfer(txBase64, index) {
+  if (typeof txBase64 !== "string" || !txBase64 || txBase64.length > 4096) return null;
+  const bytes = Buffer.from(txBase64, "base64");
+  const sigs = readCompactU16(bytes, 0);
+  if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
+  const messageStart = sigs.next + 64 * sigs.value;
+  let at = messageStart;
+  if (at >= bytes.length) return null;
+  if ((bytes[at] & 0x80) !== 0) {
+    if ((bytes[at] & 0x7f) !== 0) return null;
+    at += 1;
+  }
+  if (at + 3 > bytes.length) return null;
+  const numRequiredSignatures = bytes[at];
+  at += 3;
+  const keys = readCompactU16(bytes, at);
+  if (!keys || keys.value < 1 || keys.value > 64) return null;
+  at = keys.next;
+  if (at + 32 * keys.value > bytes.length) return null;
+  const keysAt = at;
+  const keyBytes = (i) => bytes.subarray(keysAt + 32 * i, keysAt + 32 * (i + 1));
+  let p = at + 32 * keys.value + 32; // past the keys and the recent blockhash
+  const count = readCompactU16(bytes, p);
+  if (!count || count.value <= index || count.value > 16) return null;
+  p = count.next;
+  for (let i = 0; i < count.value; i++) {
+    if (p >= bytes.length) return null;
+    const program = bytes[p++];
+    const accts = readCompactU16(bytes, p);
+    if (!accts || accts.next + accts.value > bytes.length) return null;
+    const accountIdx = [...bytes.subarray(accts.next, accts.next + accts.value)];
+    p = accts.next + accts.value;
+    const data = readCompactU16(bytes, p);
+    if (!data || data.next + data.value > bytes.length) return null;
+    const tag = data.value > 0 ? bytes[data.next] : -1;
+    const dataAt = data.next, dataLen = data.value;
+    p = data.next + data.value;
+    if (i !== index) continue;
+    if (program >= keys.value || !TOKEN_PROGRAMS.has(base58Encode(keyBytes(program)))) return null;
+    if (tag !== IX_TRANSFER_CHECKED || accountIdx.length < 4 || accountIdx.slice(0, 4).some((k) => k >= keys.value)) return null;
+    const amount = dataLen >= 9 ? bytes.readBigUInt64LE(dataAt + 1) : null;
+    return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, numRequiredSignatures, keyBytes, accountIdx: accountIdx.slice(0, 4), amount };
+  }
+  return null;
+}
+
 /**
  * The accounts of the token transfer in an exact-scheme Solana payment: the
  * instruction at `index` (2 in the scheme's fixed layout: compute limit,
  * compute price, TransferChecked), read from the static account keys. Null
  * unless that instruction is a TransferChecked of a token program whose four
  * accounts all sit in the static keys (an address-table account cannot be
- * read without an RPC, and a guess is worse than nothing).
+ * read without an RPC, and a guess is worse than nothing). This reads what the
+ * transaction NAMES; svmSignedTransfer reads what its authority signed.
  * @param {string} txBase64
  * @returns {{source:string, mint:string, destination:string, authority:string}|null}
  */
 export function svmTransferAccounts(txBase64, { index = 2 } = {}) {
   try {
-    if (typeof txBase64 !== "string" || !txBase64 || txBase64.length > 4096) return null;
-    const bytes = Buffer.from(txBase64, "base64");
-    const sigs = readCompactU16(bytes, 0);
-    if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
-    let at = sigs.next + 64 * sigs.value;
-    if (at >= bytes.length) return null;
-    if ((bytes[at] & 0x80) !== 0) {
-      if ((bytes[at] & 0x7f) !== 0) return null;
-      at += 1;
-    }
-    if (at + 3 > bytes.length) return null;
-    at += 3;
-    const keys = readCompactU16(bytes, at);
-    if (!keys || keys.value < 1 || keys.value > 64) return null;
-    at = keys.next;
-    if (at + 32 * keys.value > bytes.length) return null;
-    const keyAt = (i) => base58Encode(bytes.subarray(at + 32 * i, at + 32 * (i + 1)));
-    let p = at + 32 * keys.value + 32; // past the keys and the recent blockhash
-    const count = readCompactU16(bytes, p);
-    if (!count || count.value <= index || count.value > 16) return null;
-    p = count.next;
-    for (let i = 0; i < count.value; i++) {
-      if (p >= bytes.length) return null;
-      const program = bytes[p++];
-      const accts = readCompactU16(bytes, p);
-      if (!accts || accts.next + accts.value > bytes.length) return null;
-      const accountIdx = [...bytes.subarray(accts.next, accts.next + accts.value)];
-      p = accts.next + accts.value;
-      const data = readCompactU16(bytes, p);
-      if (!data || data.next + data.value > bytes.length) return null;
-      const tag = data.value > 0 ? bytes[data.next] : -1;
-      p = data.next + data.value;
-      if (i !== index) continue;
-      if (program >= keys.value || !TOKEN_PROGRAMS.has(keyAt(program))) return null;
-      if (tag !== IX_TRANSFER_CHECKED || accountIdx.length < 4 || accountIdx.slice(0, 4).some((k) => k >= keys.value)) return null;
-      const [source, mint, destination, authority] = accountIdx.slice(0, 4).map(keyAt);
-      return { source, mint, destination, authority };
-    }
-    return null;
+    const t = readTransfer(txBase64, index);
+    if (!t) return null;
+    const [source, mint, destination, authority] = t.accountIdx.map((k) => base58Encode(t.keyBytes(k)));
+    return { source, mint, destination, authority };
+  } catch { return null; }
+}
+
+// An ed25519 public key as SPKI DER: the fixed 12-byte prefix, then the 32 bytes.
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+/**
+ * The token transfer of a Solana payment, only when its authority SIGNED it:
+ * the authority is one of the message's required signers and its ed25519
+ * signature over the serialized message verifies here, with no RPC. A
+ * transaction that only names a wallet as authority (no signer slot, a zero
+ * or wrong signature) reads as null. `amount` is the transfer's base units
+ * (a BigInt). Pure, bounded, never throws.
+ * @param {string} txBase64
+ * @returns {{source:string, mint:string, destination:string, authority:string, amount:bigint}|null}
+ */
+export function svmSignedTransfer(txBase64, { index = 2 } = {}) {
+  try {
+    const t = readTransfer(txBase64, index);
+    if (!t || t.amount == null) return null;
+    if (t.numRequiredSignatures < 1 || t.numRequiredSignatures !== t.sigCount) return null;
+    const authIdx = t.accountIdx[3];
+    if (authIdx >= t.numRequiredSignatures) return null; // not a signer of this message
+    const sig = t.bytes.subarray(t.sigsAt + 64 * authIdx, t.sigsAt + 64 * (authIdx + 1));
+    const key = createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, t.keyBytes(authIdx)]), format: "der", type: "spki" });
+    if (!cryptoVerify(null, t.bytes.subarray(t.messageStart), key, sig)) return null;
+    const [source, mint, destination, authority] = t.accountIdx.map((k) => base58Encode(t.keyBytes(k)));
+    return { source, mint, destination, authority, amount: t.amount };
   } catch { return null; }
 }
 

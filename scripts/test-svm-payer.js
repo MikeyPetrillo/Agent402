@@ -12,7 +12,7 @@
 // proven against the real wire layout for BOTH message versions.
 //   node scripts/test-svm-payer.js
 import { readFile } from "node:fs/promises";
-import { svmRequiredSigners, svmPayerFromPayload, base58Encode } from "../src/svm-payer.js";
+import { svmRequiredSigners, svmPayerFromPayload, base58Encode, svmSignedTransfer, svmTransferAccounts } from "../src/svm-payer.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -69,6 +69,59 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
   const tx = Buffer.from(await build(0), "base64");
   tx[0] = 3; // claims three signatures; the header still says two
   ok(svmRequiredSigners(tx.toString("base64")) === null, "a signature count that contradicts the header is refused");
+}
+
+// --- the transfer authority's signature, checked here --------------------------
+// svmSignedTransfer answers only when the TransferChecked authority is a
+// required signer AND its ed25519 signature over the message verifies.
+{
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111";
+  const payTo = await kit.generateKeyPairSigner();
+  const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+  const src = (await kit.generateKeyPairSigner()).address;
+  // authority: "signs" (signer slot, signed), "slot" (signer slot, never signed), "named" (no signer slot)
+  async function transfer(version, authority, amount = 4321) {
+    const role = authority === "named" ? kit.AccountRole.READONLY : kit.AccountRole.READONLY_SIGNER;
+    const ixs = [
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(1)]) },
+      { programAddress: kit.address(TOKEN), accounts: [
+        { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+        { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+        { address: payTo.address, role: kit.AccountRole.WRITABLE },
+        authority === "signs" ? { address: buyer.address, role, signer: buyer } : { address: buyer.address, role },
+      ], data: new Uint8Array([12, ...u64(amount), 6]) },
+    ];
+    const msg = kit.pipe(kit.createTransactionMessage({ version }),
+      (m) => kit.setTransactionMessageFeePayer(feePayer.address, m),
+      (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+      (m) => kit.appendTransactionMessageInstructions(ixs, m));
+    const compiled = kit.compileTransaction(msg);
+    const signed = authority === "signs" ? await kit.partiallySignTransaction([buyer.keyPair], compiled) : compiled;
+    return kit.getBase64EncodedWireTransaction(signed);
+  }
+  for (const version of [0, "legacy"]) {
+    const tx = await transfer(version, "signs");
+    const t = svmSignedTransfer(tx);
+    ok(t && t.authority === buyer.address && t.source === src && t.amount === 4321n, `${version} message: a signed transfer reads with its amount (${t && t.amount})`);
+    const slot = await transfer(version, "slot");
+    ok(svmTransferAccounts(slot)?.authority === buyer.address && svmSignedTransfer(slot) === null, `${version} message: a signer slot left unsigned reads as null`);
+    const named = await transfer(version, "named");
+    ok(svmTransferAccounts(named)?.authority === buyer.address && svmSignedTransfer(named) === null, `${version} message: an authority that is not a required signer reads as null`);
+    const sigFlip = Buffer.from(tx, "base64");
+    sigFlip[1 + 64 + 10] ^= 0x01; // the buyer's signature (slot 1; slot 0 is the fee payer's)
+    ok(svmSignedTransfer(sigFlip.toString("base64")) === null, `${version} message: a forged signature reads as null`);
+    const msgFlip = Buffer.from(tx, "base64");
+    msgFlip[msgFlip.length - 3] ^= 0x01; // a byte of the transfer amount, after signing
+    ok(svmSignedTransfer(msgFlip.toString("base64")) === null, `${version} message: a message changed after signing reads as null`);
+    const otherKey = Buffer.from(tx, "base64");
+    otherKey.fill(0, 1, 65); // the fee payer's slot (it signs later, at settle)
+    ok(svmSignedTransfer(otherKey.toString("base64"))?.authority === buyer.address, `${version} message: the fee payer's empty slot does not matter, only the authority's`);
+  }
+  for (const junk of [null, "", "AAAA", Buffer.alloc(300).toString("base64"), "A".repeat(5000)]) {
+    let out; try { out = svmSignedTransfer(junk); } catch (e) { out = `threw ${e.message}`; }
+    ok(out === null, `svmSignedTransfer junk ${String(junk).slice(0, 12)} -> null`);
+  }
 }
 
 // --- the wiring in payments.js is pinned from source ---------------------------

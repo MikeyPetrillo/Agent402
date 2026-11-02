@@ -15,8 +15,9 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePort } from "./lib/free-port.js";
-import { classifySvmFundingRefusal, fundingHint, fundingKeyOf, noteFundingRefusal, fundingHoldOf, clearFundingState, RETRY_AFTER_S, HOLD_AFTER, POW_SENTENCE, _resetFundingForTest, _setFundingStoreForTest } from "../src/svm-funding-refusal.js";
-import { createMemoryLimits } from "../src/shared-limits.js";
+import { classifySvmFundingRefusal, fundingHint, fundingKeyOf, noteFundingRefusal, fundingHoldOf, clearFundingState, registerSvmFundingHold, catalogPriceText, RETRY_AFTER_S, HOLD_AFTER, POW_SENTENCE, _resetFundingForTest, _setFundingStoreForTest } from "../src/svm-funding-refusal.js";
+import { createMemoryLimits, createRedisLimits } from "../src/shared-limits.js";
+import { displayPrice } from "../src/pages.js";
 import { svmTransferAccounts } from "../src/svm-payer.js";
 import { hintFor } from "../src/verify-hint.js";
 import { createToolFailureMonitor } from "../src/tool-failure-monitor.js";
@@ -47,9 +48,13 @@ ok(classifySvmFundingRefusal({ network: "eip155:8453", reason: SHORT }) === null
   ok(/no USDC token account on Solana/.test(a.hint) && /Nothing was charged\./.test(a.hint) && /9xQe\.\.\.VFin/.test(a.hint), `no account: says what is missing, that nothing was charged, and names the wallet (${a.hint})`);
   ok(!/fresh authorization|Sign a fresh/i.test(a.hint), "no account: never asks for a fresh signature");
   const b = fundingHint({ kind: "insufficient-funds", priceUsd: 0.05 });
-  ok(/less USDC on Solana than this call costs \(\$0\.050\)/.test(b.hint) && /another network listed in accepts/.test(b.hint), `too little: names the price and the other networks (${b.hint})`);
+  ok(/less USDC on Solana than this call costs \(\$0\.05\)/.test(b.hint) && /another network listed in accepts/.test(b.hint), `too little: names the price and the other networks (${b.hint})`);
   ok(REJECTION_REASONS.some((r) => r.reason === "no-token-account") && REJECTION_REASONS.some((r) => r.reason === "insufficient-funds"), "both classes are published refusal classes");
   ok(!/—/.test(a.hint + b.hint + POW_SENTENCE), "no em dash in the hint text");
+  ok(/costs \(\$0\.08\)/.test(fundingHint({ kind: "insufficient-funds", priceUsd: 0.08 }).hint) && /costs \(\$0\.001\)/.test(fundingHint({ kind: "insufficient-funds", priceUsd: 0.001 }).hint), "the price prints as the catalog prints it ($0.08, $0.001)");
+  const prices = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.08, 0.1, 0.25, 1, 3.3, 0.0015, 0.000123, 12];
+  const off = prices.filter((p) => catalogPriceText(p) !== displayPrice(`$${p}`));
+  ok(!off.length, `catalogPriceText matches the catalog's displayPrice (${off.map((p) => `${p}: ${catalogPriceText(p)} vs ${displayPrice(`$${p}`)}`).join("; ") || "all equal"})`);
 }
 
 // ---- EVM hints unchanged --------------------------------------------------------
@@ -72,7 +77,7 @@ const payTo = await kit.generateKeyPairSigner();
 const u32 = (n) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n, true); return b; };
 const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
 let priceSeq = 1;
-async function paymentTx(buyer, { source, amount = 1000, version = 0 } = {}) {
+async function paymentTx(buyer, { source, amount = 1000, version = 0, authority = "signs" } = {}) {
   const src = source || (await kit.generateKeyPairSigner()).address;
   const ixs = [
     { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, ...u32(20000)]) },
@@ -81,7 +86,9 @@ async function paymentTx(buyer, { source, amount = 1000, version = 0 } = {}) {
       { address: kit.address(src), role: kit.AccountRole.WRITABLE },
       { address: kit.address(MINT), role: kit.AccountRole.READONLY },
       { address: payTo.address, role: kit.AccountRole.WRITABLE },
-      { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+      // "signs": a signer that signed; "slot": a signer slot never signed; "named": not a signer at all
+      authority === "signs" ? { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer }
+        : { address: buyer.address, role: authority === "slot" ? kit.AccountRole.READONLY_SIGNER : kit.AccountRole.READONLY },
     ], data: new Uint8Array([12, ...u64(amount), 6]) },
   ];
   const msg = kit.pipe(
@@ -90,7 +97,8 @@ async function paymentTx(buyer, { source, amount = 1000, version = 0 } = {}) {
     (m) => kit.setTransactionMessageLifetimeUsingBlockhash({ blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n }, m),
     (m) => kit.appendTransactionMessageInstructions(ixs, m),
   );
-  return { tx: kit.getBase64EncodedWireTransaction(await kit.partiallySignTransactionMessageWithSigners(msg)), source: src };
+  const wire = authority === "signs" ? await kit.partiallySignTransactionMessageWithSigners(msg) : kit.compileTransaction(msg);
+  return { tx: kit.getBase64EncodedWireTransaction(wire), source: src };
 }
 {
   const buyer = await kit.generateKeyPairSigner();
@@ -105,7 +113,8 @@ async function paymentTx(buyer, { source, amount = 1000, version = 0 } = {}) {
   const k1 = fundingKeyOf({ payload: { transaction: tx } }, SOL);
   const k2 = fundingKeyOf({ payload: { transaction: (await paymentTx(buyer)).tx } }, SOL);
   const sameSrc = (await paymentTx(buyer, { source: svmTransferAccounts(tx).source })).tx;
-  ok(k1 && k1 !== k2 && fundingKeyOf({ payload: { transaction: sameSrc } }, SOL) === k1, "the key is the authority AND its source account: another source is another key, a re-signed payment from the same one is the same");
+  ok(k1?.amount === 1000, `the key carries the transfer's amount (${k1?.amount})`);
+  ok(k1 && k1.id !== k2.id && fundingKeyOf({ payload: { transaction: sameSrc } }, SOL)?.id === k1.id, "the key is the authority AND its source account: another source is another key, a re-signed payment from the same one is the same");
   ok(fundingKeyOf({ payload: { transaction: tx } }, "eip155:8453") === null, "no key off Solana");
 }
 
@@ -113,17 +122,122 @@ async function paymentTx(buyer, { source, amount = 1000, version = 0 } = {}) {
 {
   _setFundingStoreForTest(createMemoryLimits()); _resetFundingForTest();
   const t0 = 1_700_000_000_000;
-  const k = "k1";
+  const k = { id: "k1", amount: 100_000 };
   for (let i = 1; i < HOLD_AFTER(); i++) ok(!(await noteFundingRefusal({ key: k, kind: "insufficient-funds", now: t0 + i })).held, `refusal ${i}: no hold yet`);
   ok((await noteFundingRefusal({ key: k, kind: "insufficient-funds", now: t0 + 10 })).held, `refusal ${HOLD_AFTER()}: the hold is set`);
   const h = await fundingHoldOf({ key: k, now: t0 + 20 });
-  ok(h?.kind === "insufficient-funds" && h.untilMs === t0 + 10 + RETRY_AFTER_S() * 1000, "the hold lasts exactly the Retry-After the buyer was given");
+  ok(h?.kind === "insufficient-funds" && h.untilMs === t0 + 10 + RETRY_AFTER_S() * 1000 && h.minAmount === 100_000, "the hold lasts exactly the Retry-After the buyer was given, at the refused amount");
+  ok((await fundingHoldOf({ key: { id: "k1", amount: 250_000 }, now: t0 + 20 }))?.kind === "insufficient-funds", "a dearer attempt from the held wallet is held");
+  ok((await fundingHoldOf({ key: { id: "k1", amount: 1_000 }, now: t0 + 20 })) === null, "a cheaper attempt from the held wallet is not held: it goes to verify");
+  ok((await fundingHoldOf({ key: "k1", now: t0 + 20 })) === null, "an attempt of unknown amount is not held for insufficient funds");
   ok((await fundingHoldOf({ key: k, now: t0 + 10 + RETRY_AFTER_S() * 1000 })) === null, "at the Retry-After the hold is gone");
-  ok((await fundingHoldOf({ key: "k2", now: t0 + 20 })) === null, "another wallet is not held");
-  ok(!(await noteFundingRefusal({ key: "k3", kind: "no-token-account", now: t0 })).held && !(await noteFundingRefusal({ key: "k3", kind: "insufficient-funds", now: t0 + 1 })).held, "different reasons count apart");
+  ok((await fundingHoldOf({ key: { id: "k2", amount: 100_000 }, now: t0 + 20 })) === null, "another wallet is not held");
+  ok(!(await noteFundingRefusal({ key: { id: "k3", amount: 5 }, kind: "no-token-account", now: t0 })).held && !(await noteFundingRefusal({ key: { id: "k3", amount: 5 }, kind: "insufficient-funds", now: t0 + 1 })).held, "different reasons count apart");
+  ok((await noteFundingRefusal({ key: "k4", kind: "insufficient-funds", now: t0 })).count === 0, "a refusal of unknown amount is not counted");
+  // A lower refusal lowers the held amount; no-token-account holds every amount.
+  for (let i = 0; i < HOLD_AFTER(); i++) await noteFundingRefusal({ key: { id: "k5", amount: i === 0 ? 2_000 : 90_000 }, kind: "insufficient-funds", now: t0 + i });
+  ok((await fundingHoldOf({ key: { id: "k5", amount: 2_000 }, now: t0 + 20 }))?.minAmount === 2_000 && (await fundingHoldOf({ key: { id: "k5", amount: 1_999 }, now: t0 + 20 })) === null, "the hold keeps the smallest amount refused in the window");
+  for (let i = 0; i < HOLD_AFTER(); i++) await noteFundingRefusal({ key: { id: "k6", amount: 90_000 }, kind: "no-token-account", now: t0 + i });
+  ok((await fundingHoldOf({ key: { id: "k6", amount: 1 }, now: t0 + 20 }))?.kind === "no-token-account", "a no-token-account hold holds every amount");
   await clearFundingState({ key: k });
   ok((await fundingHoldOf({ key: k, now: t0 + 20 })) === null && !(await noteFundingRefusal({ key: k, kind: "insufficient-funds", now: t0 + 30 })).held, "a valid verify clears the hold and the window");
   _setFundingStoreForTest(null);
+}
+
+// ---- the hooks, on signed and unsigned transactions ------------------------------
+function hookPair() {
+  const hooks = { bv: null, av: null };
+  registerSvmFundingHold({ onBeforeVerify: (f) => { hooks.bv = f; }, onAfterVerify: (f) => { hooks.av = f; } }, { remember: () => {} });
+  return hooks;
+}
+const asPayload = (tx) => ({ payload: { transaction: tx } });
+const reqs = (amount) => ({ network: SOL, amount: String(amount), extra: { feePayer: feePayer.address } });
+{
+  _setFundingStoreForTest(createMemoryLimits()); _resetFundingForTest();
+  const { bv } = hookPair();
+  // A transaction that names the victim's wallet and token account but was never signed by it.
+  const victim = await kit.generateKeyPairSigner();
+  const victimSrc = (await kit.generateKeyPairSigner()).address;
+  for (const authority of ["named", "slot"]) {
+    const forged = (await paymentTx(victim, { source: victimSrc, amount: 5_000_000, authority })).tx;
+    ok(svmTransferAccounts(forged)?.authority === victim.address && fundingKeyOf(asPayload(forged), SOL) === null, `${authority} authority: the transfer names the victim, and there is no key`);
+    for (let i = 0; i < HOLD_AFTER() + 2; i++) await noteFundingRefusal({ key: fundingKeyOf(asPayload(forged), SOL), kind: "insufficient-funds" });
+  }
+  const own = (await paymentTx(victim, { source: victimSrc, amount: 1_000 })).tx;
+  ok((await bv({ paymentPayload: asPayload(own), requirements: reqs(1_000) })) === undefined, "refusals of unsigned victim-authority transactions never hold the victim's own signed payment");
+  ok((await bv({ paymentPayload: asPayload((await paymentTx(victim, { source: victimSrc, amount: 5_000_000 })).tx), requirements: reqs(5_000_000) })) === undefined, "not even at the price the unsigned ones were refused at");
+  // A forged signature: the victim's slot filled with someone else's signature bytes.
+  const forgedSig = Buffer.from(own, "base64");
+  for (let i = 0; i < 64; i++) forgedSig[1 + 64 + i] = (i * 7 + 3) & 0xff;
+  ok(fundingKeyOf(asPayload(forgedSig.toString("base64")), SOL) === null, "a forged signature gives no key");
+  // A signed transaction re-used with the amount changed after signing.
+  const bumped = Buffer.from(own, "base64"); bumped[bumped.length - 3] ^= 0x10;
+  ok(fundingKeyOf(asPayload(bumped.toString("base64")), SOL) === null, "a message changed after signing gives no key");
+  _setFundingStoreForTest(null);
+}
+{
+  _setFundingStoreForTest(createMemoryLimits()); _resetFundingForTest();
+  const { bv, av } = hookPair();
+  // A real, signed, underfunded wallet: refused at $0.10, held after HOLD_AFTER.
+  const buyer = await kit.generateKeyPairSigner();
+  const src = (await kit.generateKeyPairSigner()).address;
+  for (let i = 0; i < HOLD_AFTER(); i++) {
+    const p = asPayload((await paymentTx(buyer, { source: src, amount: 100_000 })).tx);
+    ok((await bv({ paymentPayload: p, requirements: reqs(100_000) })) === undefined, `signed refusal ${i + 1} reaches verify`);
+    await noteFundingRefusal({ key: fundingKeyOf(p, SOL), kind: "insufficient-funds" });
+  }
+  const again = await bv({ paymentPayload: asPayload((await paymentTx(buyer, { source: src, amount: 100_000 })).tx), requirements: reqs(100_000) });
+  ok(again?.abort === true && /less USDC on Solana than this call costs \(\$0\.10\)/.test(again.message), `the signed underfunded wallet is held at $0.10 with the funding hint (${again?.message})`);
+  const cheap = asPayload((await paymentTx(buyer, { source: src, amount: 1_000 })).tx);
+  ok((await bv({ paymentPayload: cheap, requirements: reqs(1_000) })) === undefined, "a $0.001 payment from the same wallet goes to verify");
+  await av({ paymentPayload: cheap, requirements: reqs(1_000), result: { isValid: true } });
+  ok((await bv({ paymentPayload: asPayload((await paymentTx(buyer, { source: src, amount: 100_000 })).tx), requirements: reqs(100_000) })) === undefined, "its valid verify cleared the hold");
+  _setFundingStoreForTest(null);
+}
+{
+  // The clear after a valid verify runs only when the read before it found state.
+  const mem = createMemoryLimits();
+  const calls = [];
+  _setFundingStoreForTest(new Proxy(mem, { get: (o, name) => (typeof o[name] === "function" ? (...a) => { calls.push(name); return o[name](...a); } : o[name]) }));
+  _resetFundingForTest();
+  const { bv, av } = hookPair();
+  const buyer = await kit.generateKeyPairSigner();
+  const p = asPayload((await paymentTx(buyer)).tx);
+  await bv({ paymentPayload: p, requirements: reqs(1_000) });
+  await av({ paymentPayload: p, requirements: reqs(1_000), result: { isValid: true } });
+  ok(calls.length === 1 && calls[0] === "windowReadMany", `a wallet with nothing recorded costs one read per payment (${calls.join(",")})`);
+  await noteFundingRefusal({ key: fundingKeyOf(p, SOL), kind: "insufficient-funds" });
+  calls.length = 0;
+  const p2 = asPayload((await paymentTx(buyer, { source: svmTransferAccounts(p.payload.transaction).source })).tx);
+  await bv({ paymentPayload: p2, requirements: reqs(1_000) });
+  await av({ paymentPayload: p2, requirements: reqs(1_000), result: { isValid: true } });
+  ok(calls.filter((c) => c === "windowClear").length === 3, `a wallet with a refusal on record is cleared (${calls.join(",")})`);
+  _setFundingStoreForTest(null);
+}
+{
+  // A shared store that never answers: one command timeout, then this process's memory.
+  const never = () => new Promise(() => {});
+  const hung = { eval: never, get: never, set: never, del: never, zRem: never };
+  _setFundingStoreForTest(createRedisLimits(async () => hung, { opTimeoutMs: 200 }));
+  _resetFundingForTest();
+  const keepAlive = setInterval(() => {}, 1000);
+  const { bv, av } = hookPair();
+  const times = [];
+  for (let i = 0; i < 5; i++) {
+    const p = asPayload((await paymentTx(await kit.generateKeyPairSigner())).tx);
+    const t = performance.now();
+    await bv({ paymentPayload: p, requirements: reqs(1_000) });
+    await av({ paymentPayload: p, requirements: reqs(1_000), result: { isValid: true } });
+    times.push(Math.round(performance.now() - t));
+  }
+  clearInterval(keepAlive);
+  ok(times[0] < 400 && times.slice(1).every((ms) => ms < 50), `a hung store costs one 200 ms timeout, then nothing (${times.join(", ")} ms)`);
+  // The hold still works from memory meanwhile.
+  const buyer = await kit.generateKeyPairSigner();
+  const src = (await kit.generateKeyPairSigner()).address;
+  for (let i = 0; i < HOLD_AFTER(); i++) await noteFundingRefusal({ key: fundingKeyOf(asPayload((await paymentTx(buyer, { source: src })).tx), SOL), kind: "insufficient-funds" });
+  ok((await bv({ paymentPayload: asPayload((await paymentTx(buyer, { source: src })).tx), requirements: reqs(1_000) }))?.abort === true, "while the store is skipped the hold is kept in memory");
+  _setFundingStoreForTest(null); _resetFundingForTest();
 }
 
 // ---- the failure monitor -------------------------------------------------------------
