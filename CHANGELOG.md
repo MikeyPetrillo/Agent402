@@ -32,8 +32,10 @@ Surfaces:
   web.answer takes `share=true` (same price): the answer
   also carries `share: { url, cardUrl, expiresAt }`, a public page of the
   question, the answer and its cited sources with a 1200x630 preview card,
-  written only once the call settles and kept 30 days (then 410). The page
-  is not indexed; /privacy describes what it keeps.
+  written only once the call settles and kept 30 days (then 410 expired for
+  90 days; the operator can remove a page, 410 removed). The question is
+  labeled as the caller's; the record is at /answers/<id>.json. The page is
+  not indexed; /privacy describes what it keeps.
 Payments:
 - A Solana payment refused because the paying wallet has no USDC account
   or less USDC than the price now says so (reason no-token-account or
