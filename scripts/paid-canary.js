@@ -635,6 +635,22 @@ export const TOOLS = [
 
 // Why a paid request 402'd. On a settle FAILURE the middleware attaches the
 /** The settlement tx out of a base64 PAYMENT-RESPONSE header, or null. */
+/**
+ * The amount a leg actually paid, as "$0.05": the settle receipt's `amount`
+ * (atomic units, set when it differs from the authorization) first, else the
+ * amount in the accept the client signed. Never a typed price: null when
+ * neither is readable.
+ */
+export function paidAmountText({ receiptHeader = null, signedAmount = null, decimals = 6 } = {}) {
+  let atomic = null;
+  try { const r = receiptHeader ? JSON.parse(Buffer.from(receiptHeader, "base64").toString("utf8")) : null; if (r?.success === true && /^\d+$/.test(String(r.amount ?? ""))) atomic = String(r.amount); } catch { /* fall back to the signed amount */ }
+  if (atomic == null && /^\d+$/.test(String(signedAmount ?? ""))) atomic = String(signedAmount);
+  if (atomic == null || !Number.isInteger(decimals) || decimals < 0) return null;
+  const s = atomic.padStart(decimals + 1, "0");
+  const whole = s.slice(0, s.length - decimals), frac = s.slice(s.length - decimals).replace(/0+$/, "");
+  return `$${whole}.${frac.padEnd(2, "0")}`;
+}
+
 function txFromReceiptHeader(h) {
   if (!h) return null;
   try { const r = JSON.parse(Buffer.from(h, "base64").toString("utf8")); return r?.success === true && typeof r.transaction === "string" ? r.transaction : null; }
@@ -1028,7 +1044,7 @@ async function main() {
   }
 
   // Optional Solana leg — gated on SOLANA_BURNER_KEY (base58 64-byte secret
-  // or JSON byte array; fund it with USDC on Solana). Buys the $0.05
+  // or JSON byte array; fund it with USDC on Solana). Buys the
   // skill-decode-blob pack (seven pure-CPU tools, deterministic, no upstream
   // cost) with an SVM-ONLY client, so the payment can only settle on a Solana
   // accept — a true Solana-path proof with no silent EVM fallback. $0.05
@@ -1045,7 +1061,11 @@ async function main() {
       ]);
       const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
       const signer = await kit.createKeyPairSignerFromBytes(bytes);
-      const svmPay = wrapSvm(synthFetch, registerExactSvmScheme(disableVendorSpendControls(new SvmClient()), { signer }));
+      // The accept the client signed, so the OK line prints what was paid.
+      let signedAccept = null;
+      const svmClient = registerExactSvmScheme(disableVendorSpendControls(new SvmClient()), { signer });
+      svmClient.onAfterPaymentCreation(async (c) => { signedAccept = c?.paymentPayload?.accepted || c?.selectedRequirements || null; });
+      const svmPay = wrapSvm(synthFetch, svmClient);
       const res = await svmPay(`${TARGET}/api/skill/decode-blob`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         // The pack's own documented example blob (a JWT) — deterministic steps.
@@ -1063,7 +1083,8 @@ async function main() {
         if (receiptHdr) {
           try { tx = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8"))?.transaction || null; } catch { /* best-effort */ }
         }
-        console.log(`\nOK    solana     /api/skill/decode-blob  → settled $0.05 USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
+        const paid = paidAmountText({ receiptHeader: receiptHdr, signedAmount: signedAccept?.amount }) || "an unread amount of";
+        console.log(`\nOK    solana     /api/skill/decode-blob  → settled ${paid} USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
         noteRail("solana", true);
       } else if (res.status === 402 && legRefusalVerdict(settleRejectReason(res.headers)) === "page") {
         // Same rule as the Algorand leg: WARN was only ever for OUR burner's
