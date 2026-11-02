@@ -13,6 +13,12 @@ Gateway:
 - gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro are served as
   themselves until 2026-12-11, then by their named gpt-5.6 successors on the
   same tier, the swap named in agent402_model_substituted.
+- The metered tier's default model is Claude Haiku 5.5. A call that names no
+  model but sends temperature, top_p, top_k, an assistant prefill or a fixed
+  reasoning budget is served by Claude Haiku 4.5 instead of a 400.
+- The base tier falls back to gpt-6-luna, then deepseek-chat, when the
+  requested model has no available host, as the nano tier does.
+- Judgment routes run Jev 1.14.0.
 Surfaces:
 - server.describe, llms.txt and the README offer the hosted connector at
   https://agent402.tools/mcp in place of an add-server form that has closed.
