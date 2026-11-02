@@ -365,17 +365,23 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     return preflightUsdcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier, profiles: this._profiles });
   }
 
-  /** Circle's final word on one payment: { status, transaction } with status
-   *  "pending" | "completed" | "failed", or null when it cannot be read. */
-  async paymentStatus(paymentId) {
+  /** Circle's final word on one payment: { status, transaction, network } with
+   *  status "pending" | "completed" | "failed", or null when it cannot be read.
+   *  With `network` (the one the payment was booked or settled on), an answer
+   *  naming any other network is null, never a settlement; so is an answer
+   *  naming none while this instance settles more than one network. */
+  async paymentStatus(paymentId, { network: expected } = {}) {
     if (typeof paymentId !== "string" || !UUID.test(paymentId)) return null;
+    if (expected !== undefined && !this._networks.has(expected)) return null;
     let r;
     try { r = await this._request("status", `/status/${paymentId}`, { timeoutMs: VERIFY_TIMEOUT_MS }); } catch { return null; }
     if (!r.ok || r.parseError || !isObj(r.data)) return null;
     const { status, transaction, network } = r.data;
     if (network !== undefined && !this._networks.has(network)) return null;
-    if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction } : null;
-    if (status === "failed" || status === "pending") return { status, transaction: null };
+    if (expected !== undefined && (network === undefined ? this._networks.size !== 1 : network !== expected)) return null;
+    const named = network === undefined ? expected : network;
+    if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction, network: named } : null;
+    if (status === "failed" || status === "pending") return { status, transaction: null, network: named };
     return null;
   }
 
@@ -489,7 +495,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const deadline = this._now() + this._pendingBudgetMs;
     while (this._now() < deadline) {
       await new Promise((r) => setTimeout(r, this._pendingPollMs));
-      const s = await this.paymentStatus(paymentId);
+      const s = await this.paymentStatus(paymentId, { network });
       if (s?.status === "completed") return { success: true, transaction: s.transaction, network, payer };
       if (s?.status === "failed") return { success: false, errorReason: "settlement_failed", transaction: "", network, payer };
     }

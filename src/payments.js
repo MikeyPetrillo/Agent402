@@ -1404,7 +1404,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // hold every entry.
       await b.refresh();
       if (!b.list().length) return null;
-      const r = await b.reconcile({ status: (id) => client.paymentStatus(id) });
+      const r = await b.reconcile({ status: circlePendingStatusReader(client, () => b.list()) });
       if (r.owed || r.failed || r.served || r.unresolved || r.errors) console.warn(`[circle] pending reconcile: ${r.owed} booked owed, ${r.served} served after all, ${r.failed} failed (nothing owed), ${r.unresolved} unresolved, ${r.errors} errored, ${r.pending + r.unreadable} still pending`);
       return r;
     });
@@ -2520,6 +2520,21 @@ export function fallbackCandidatesFor(network, payAiClient, solvadorClient, over
  * gate as every other fallback: each earlier settler must have refused
  * before broadcasting.
  */
+/**
+ * The reconcile pass's status reader (src/circle-pending.js calls it with a
+ * paymentId only). One status client reads every booked network, so each
+ * answer is bound to the network its entry was booked on: an answer naming
+ * another network, or an id booked on more than one network, reads as
+ * unreadable (null), never as completed.
+ */
+export function circlePendingStatusReader(client, listEntries) {
+  return async (paymentId) => {
+    const nets = new Set((listEntries() || []).filter((e) => e?.paymentId === paymentId).map((e) => e.network));
+    if (nets.size !== 1) return null;
+    return client.paymentStatus(paymentId, { network: [...nets][0] });
+  };
+}
+
 export function lastResortFallbackOverrides({ networks, payAiClient, solvadorClient, last, confirmed }) {
   const out = {};
   for (const n of networks) {

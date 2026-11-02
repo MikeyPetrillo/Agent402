@@ -344,6 +344,63 @@ await check("Arc with the verifier is unchanged: a contract-wallet signature is 
   assert.equal((await bare.settle(await arcSigned(acct), ARC_REQ)).success, true, "an Arc EOA payment settles");
 });
 
+await check("settle-time pending poll: a completion named on another network is not this payment's settlement", async () => {
+  const id = "0f0e0d0c-0b0a-4908-8706-0504030201aa";
+  const booked = [];
+  const c = circleEvmFallbackFromEnv({ CIRCLE_FACILITATOR_EVM_FALLBACK: "on", CIRCLE_FACILITATOR_API_KEY: KEY }, {
+    pendingPollMs: 5, pendingBudgetMs: 40, onPending: (e) => { booked.push(e); },
+    fetchImpl: stubFetch({
+      "/settle": () => json(200, { success: false, errorReason: "settlement_pending", extensions: { "settlement-status": { paymentId: id } } }),
+      [`/status/${id}`]: () => json(200, { status: "completed", network: POLYGON, transaction: TX }),
+    }),
+  });
+  const out = await c.settle(await signed({ network: BASE }), req(BASE));
+  assert.equal(out.success, false, "not reported as settled");
+  assert.equal(booked.length, 1, "booked for the reconcile pass instead");
+  assert.equal(booked[0].network, BASE);
+});
+
+await check("reconcile: one status client for Arc, Base and Polygon binds each answer to the booked entry's network", async () => {
+  const { createCirclePendingBook } = await import("../src/circle-pending.js");
+  const { circlePendingStatusReader } = await import("../src/payments.js");
+  const dir = mkdtempSync(join(tmpdir(), "a402-circle-evm-pending-"));
+  let clock = 1_000_000;
+  const owed = [];
+  const book = createCirclePendingBook({ file: join(dir, "book.json"), now: () => clock, log: () => {},
+    recordOwed: async (row) => { owed.push(row); return true; }, owedRecorded: async () => true });
+  const uuid = (i) => `11111111-2222-4333-8444-${i.toString(16).padStart(12, "0")}`;
+  const nonce = (i) => `0x${i.toString(16).padStart(64, "0")}`;
+  // id -> [booked network, status answer]
+  const cases = {
+    [uuid(1)]: [BASE, { status: "completed", network: POLYGON, transaction: TX }],
+    [uuid(2)]: [ARC_CAIP2, { status: "completed", network: BASE, transaction: TX }],
+    [uuid(3)]: [POLYGON, { status: "completed", transaction: TX }],
+    [uuid(4)]: [BASE, { status: "failed", network: POLYGON }],
+    [uuid(5)]: [POLYGON, { status: "completed", network: POLYGON, transaction: `0x${"d4".repeat(32)}` }],
+  };
+  let i = 0;
+  for (const [id, [network]] of Object.entries(cases)) await book.book({ paymentId: id, payer: acct.address, network, nonce: nonce(++i), amount: "1000" });
+  const routes = {};
+  for (const [id, [, body]] of Object.entries(cases)) routes[`/status/${id}`] = () => json(200, { paymentId: id, ...body });
+  const status = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: stubFetch(routes), profiles: [ARC_PROFILE, ...CIRCLE_EVM_FALLBACK_PROFILES] });
+  clock += 10 * 60_000;
+  const r = await book.reconcile({ status: circlePendingStatusReader(status, () => book.list()) });
+  assert.equal(r.checked, 5);
+  assert.equal(r.owed, 1, JSON.stringify(r));
+  assert.deepEqual(owed.map((o) => [o.network, o.tx]), [[POLYGON, `0x${"d4".repeat(32)}`]], "only the answer on the booked network counts");
+  assert.equal(r.failed, 0, "a failure named on another network does not drop the entry either");
+  assert.equal(r.unreadable, 4);
+  assert.deepEqual(book.list().map((e) => e.paymentId).sort(), [uuid(1), uuid(2), uuid(3), uuid(4)]);
+  // An id booked on two networks cannot be bound to either.
+  const reader = circlePendingStatusReader(status, () => [{ paymentId: uuid(5), network: BASE }, { paymentId: uuid(5), network: POLYGON }]);
+  assert.equal(await reader(uuid(5)), null);
+  // A single-network client still accepts an answer that names no network.
+  const arcOnly = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: stubFetch({ [`/status/${uuid(6)}`]: () => json(200, { status: "completed", transaction: TX }) }) });
+  assert.deepEqual(await arcOnly.paymentStatus(uuid(6), { network: ARC_CAIP2 }), { status: "completed", transaction: TX, network: ARC_CAIP2 });
+  assert.equal(await arcOnly.paymentStatus(uuid(6), { network: BASE }), null, "a network the client does not settle");
+  rmSync(dir, { recursive: true, force: true });
+});
+
 console.log("part 2: a paid server against stub facilitators");
 
 const [P_SERVER1, P_SERVER2, P_SERVER3, P_CDP, P_PAYAI, P_CIRCLE] = await getFreePorts(6);
