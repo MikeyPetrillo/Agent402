@@ -18,6 +18,11 @@
 // monitor counts outcomes per path on /__operator/tool-failures.json, and
 // /__operator/cohorts.json is operator-only. Nothing new reaches public
 // surfaces.
+// The ledger is checked through its SQLite file, and the booted server buys
+// with fixed nonces: with a state database the ledger is a table that ignores
+// SALES_LEDGER_DB, and Redis from an earlier run replays or refuses the same
+// credentials. Both are off for this process and its child.
+import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
