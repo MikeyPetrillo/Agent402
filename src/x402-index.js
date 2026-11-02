@@ -2527,9 +2527,48 @@ function isDevServerHost(h) {
 }
 
 export function normaliseOpenapiTools(openapi, originUrl) {
-  return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
+  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
 }
-function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
+// The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
+// multi-megabyte document resolves its local refs twice per operation, and
+// one such document held the loop for most of a second in one turn.
+const CRAWL_SLICE_MS = 10;
+async function normaliseOpenapiToolsSliced(openapi, originUrl) {
+  return scopeRowsToSeller(await runCrawlLaneAsync(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+}
+// ONE LANE for the crawl's sliced work. Twenty-five crawls run at once, and a
+// slice that yields with setImmediate comes back in the next loop iteration
+// beside every other crawl's slice, so each iteration ran one slice per crawl
+// (measured: 25 crawls at 20 ms each held one iteration for half a second).
+// Through the lane an iteration runs at most one crawl slice, whichever crawl
+// is next in line; the work is the same, only its spread over turns changes.
+const crawlLaneQueue = [];
+let crawlLanePumping = false;
+function crawlLaneTurn() {
+  return new Promise((resolve) => {
+    crawlLaneQueue.push(resolve);
+    if (!crawlLanePumping) { crawlLanePumping = true; setImmediate(crawlLanePump); }
+  });
+}
+function crawlLanePump() {
+  const next = crawlLaneQueue.shift();
+  if (next) next();
+  if (crawlLaneQueue.length) setImmediate(crawlLanePump);
+  else crawlLanePumping = false;
+}
+async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS) {
+  await crawlLaneTurn();
+  let until = performance.now() + sliceMs;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await crawlLaneTurn(); until = performance.now() + sliceMs; }
+    r = gen.next();
+  }
+  return r.value;
+}
+// One step per operation; the document is read only, so a yield between two
+// operations cannot change a row.
+function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
@@ -2624,6 +2663,7 @@ function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
           } catch { return {}; }
         })(),
       });
+      yield;
     }
   }
   return out;
@@ -5588,7 +5628,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
              JSON.parse((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
           : JSON.parse(res.html);
         openapi = body;
-        openapiTools = normaliseOpenapiTools(openapi, originUrl);
+        openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
         openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
@@ -5696,7 +5736,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       const parsed = JSON.parse(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
-        openapiTools = normaliseOpenapiTools(parsed, originUrl);
+        openapiTools = await normaliseOpenapiToolsSliced(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
         else noteFallback("/openapi.json", "no paid operation could be read from it");
       } else noteFallback("/openapi.json", "no payment annotation on any operation");
@@ -5719,7 +5759,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
         const parsed = JSON.parse(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
         if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
-          const fromAgents = normaliseOpenapiTools(parsed, originUrl);
+          const fromAgents = await normaliseOpenapiToolsSliced(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
       } catch (e) {
