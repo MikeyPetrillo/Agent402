@@ -13,6 +13,12 @@
 //      survived the loopback);
 //   4. a free tool is untouched (runs free, no challenge);
 //   5. a tampered credential is a -32043 (verification failed) with an RFC 9457 `problem`.
+// /api/stats deltas (one paid call is one served call) and the memory store are
+// read from the booted server: each server gets stores of its own, so another
+// suite's server beside this one, or an exported MEMORY_DB_FILE or state
+// database, cannot add calls to the count or hold its SQLite write lock.
+import "./lib/file-mode.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -102,7 +108,7 @@ await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
 proc = spawn("node", ["src/server.js"], {
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "",
+    ...process.env, ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     MPP_SECRET_KEY: SECRET,
@@ -256,7 +262,7 @@ try {
   const port2 = await getFreePort();
   proc = spawn("node", ["src/server.js"], {
     env: {
-      ...process.env, PORT: String(port2), FREE_MODE: "",
+      ...process.env, ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
       MPP_SECRET_KEY: SECRET,

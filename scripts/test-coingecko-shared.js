@@ -25,6 +25,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePort, getFreePorts } from "./lib/free-port.js";
+// Each server keeps its own stores (lib/own-stores.js): only Redis is shared.
+import { ownStoreEnv } from "./lib/own-stores.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -85,10 +87,18 @@ await new Promise((r) => stub.listen(0, "127.0.0.1", r));
 const STUB_URL = `http://127.0.0.1:${stub.address().port}`;
 
 // ---- servers ------------------------------------------------------------------------------
+// The word reads degraded for SHARED_LIMITS_DEGRADED_HOLD_MS after any command
+// that missed its deadline. A server booting on a host whose cores are taken
+// (a parallel suite) misses its first commands while its own boot holds the
+// loop, and the default hold kept the word degraded for a minute after Redis
+// answered every command since. The servers here hold it for the minimum, so
+// the word reads what the store does now; what is shared is asserted by the
+// behavior checks.
+const OPERATOR_TOKEN = "coingecko-shared-operator-token-0123456789";
 const BASE_ENV = (() => {
   const e = { ...process.env };
   for (const k of ["REDIS_URL", "SHARED_LIMITS", "SHARED_LIMITS_PREFIX", "RATE_LIMIT_REPLICAS", "COINGECKO_API_KEY", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX"]) delete e[k];
-  return { ...e, FREE_MODE: "true", X402_INDEX_CRAWL: "off", COINGECKO_STUB_URL: STUB_URL, SHARED_LIMITS_PROBE_FIRST_MS: "0", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" };
+  return { ...e, AGENT402_OPERATOR_TOKEN: OPERATOR_TOKEN, FREE_MODE: "true", X402_INDEX_CRAWL: "off", COINGECKO_STUB_URL: STUB_URL, SHARED_LIMITS_PROBE_FIRST_MS: "0", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" };
 })();
 let run = 0;
 async function boot(n, env) {
@@ -96,7 +106,7 @@ async function boot(n, env) {
   const ports = await getFreePorts(n);
   const servers = ports.map((port) => {
     const c = spawn(process.execPath, ["--import", "./scripts/lib/coingecko-stub-preload.js", "src/server.js"], {
-      env: { ...BASE_ENV, ...(env.redis ? { REDIS_URL, SHARED_LIMITS_PREFIX: prefix } : {}), ...env.vars, PORT: String(port) },
+      env: { ...BASE_ENV, ...ownStoreEnv("coingecko"), ...(env.redis ? { REDIS_URL, SHARED_LIMITS_PREFIX: prefix } : {}), ...env.vars, PORT: String(port) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.log = "";
@@ -110,7 +120,7 @@ async function boot(n, env) {
   if (!ups.every(Boolean)) { for (const s of servers) console.error(s.child.log.slice(-1500)); ok(false, "servers booted"); done(1); }
   if (env.redis) {
     // The store answers before the first request is counted on it.
-    const word = async (s) => { for (let i = 0; i < 80; i++) { const j = await (await fetch(`${s.url}/api/gateway-status`)).json(); if (j.sharedLimits?.status === "on") return "on"; await wait(250); } return "not on"; };
+    const word = async (s) => { for (let i = 0; i < 80; i++) { const j = await (await fetch(`${s.url}/api/gateway-status`)).json(); if (j.sharedLimits?.status === "on") return "on"; await wait(250); } const d = await (await fetch(`${s.url}/api/gateway-status`, { headers: { "x-operator-token": OPERATOR_TOKEN } })).json().catch(() => ({})); return `not on: ${JSON.stringify(d.sharedLimits)} ${s.child.log.split("\n").filter((l) => /shared-limit/.test(l)).slice(0, 4).join(" | ")}`; };
     const words = await Promise.all(servers.map(word));
     ok(words.every((w) => w === "on"), `every server reads the shared store (${words.join(", ")})`);
   }

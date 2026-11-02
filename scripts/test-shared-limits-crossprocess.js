@@ -21,6 +21,8 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { getFreePorts } from "./lib/free-port.js";
+// Each server keeps its own stores (lib/own-stores.js): only Redis is shared.
+import { ownStoreEnv } from "./lib/own-stores.js";
 
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis (CI provides a service container). It deliberately does not skip.");
@@ -32,7 +34,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // Every key this run touches is namespaced, so a second run on the same Redis
 // (or a leftover pause flag from an earlier one) cannot change an answer.
 const PREFIX = `xp${process.pid}${Date.now().toString(36)}`;
-const BASE_ENV = { ...process.env, SHARED_LIMITS_PREFIX: PREFIX, SHARED_LIMITS: "on" };
+// The word reads degraded for SHARED_LIMITS_DEGRADED_HOLD_MS after any command
+// that missed its deadline. A server booting on a host whose cores are taken
+// (a parallel suite) misses its first commands while its own boot holds the
+// loop, and the default hold kept the word degraded for a minute after Redis
+// answered every command since. The servers here hold it for the minimum, so
+// the word reads what the store does now; what is shared is asserted by the
+// behavior checks.
+const BASE_ENV = { ...process.env, SHARED_LIMITS_PREFIX: PREFIX, SHARED_LIMITS: "on", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000" };
 const children = [];
 const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } catch { /* */ } } process.exit(code); };
 
@@ -42,7 +51,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   const [pa, pb, pr] = await getFreePorts(3);
   const boot = (port, token = TOKEN) => {
     const c = spawn(process.execPath, ["src/server.js"], {
-      env: { ...BASE_ENV, FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: token, OPERATOR_AUTH_FAIL_ALERT: "10" },
+      env: { ...BASE_ENV, ...ownStoreEnv("shared-limits"), FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: token, OPERATOR_AUTH_FAIL_ALERT: "10" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     c.log = "";
@@ -58,7 +67,9 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   ok(ua && ub && ur, "three servers booted on free ports against one Redis");
   if (!(ua && ub && ur)) { console.error(A.log.slice(-800), Bs.log.slice(-800), R.log.slice(-800)); done(1); }
   const status = async (port, auth = false) => (await fetch(`http://127.0.0.1:${port}/api/gateway-status`, auth ? { headers: { "x-operator-token": TOKEN } } : {})).json();
-  const sa = await status(pa), sb = await status(pb);
+  // Polled: the word is a measurement, and a boot-time miss clears once the hold ends.
+  const settled = async (port) => { let j = null; for (let i = 0; i < 80; i++) { j = await status(port); if (j.sharedLimits?.status === "on") break; await wait(250); } return j; };
+  const [sa, sb] = await Promise.all([settled(pa), settled(pb)]);
   ok(sa.sharedLimits?.status === "on" && sb.sharedLimits?.status === "on", `both servers publish sharedLimits.status on (${sa.sharedLimits?.status}, ${sb.sharedLimits?.status})`);
   ok(Object.keys(sa.sharedLimits).join() === "status", "the public field is the word alone");
   const opA = await status(pa, true);
@@ -100,7 +111,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
 // ---- 2. two replicas of the control modules --------------------------------------------
 function replica(name) {
   const c = spawn(process.execPath, ["scripts/lib/shared-limits-driver.js"], {
-    env: { ...BASE_ENV, EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_HARD_MAX: "5", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4", TYPESAFE_API_KEY: "test-key-never-sent", OPENROUTER_API_KEY: "", DECIDE_OPENROUTER_API_KEY: "", INFLIGHT_COVER: "" },
+    env: { ...BASE_ENV, ...ownStoreEnv("shared-limits-replica"), EXTERNAL_MAX_UNSETTLED_USD: "1", HANGUP_FORGIVE_KEY_USD: "0.25", HANGUP_FORGIVE_GLOBAL_USD: "2", HANGUP_FORGIVE_SALT: `salt-${PREFIX}`, HANGUP_FORGIVE_FILE: "off", COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_HARD_MAX: "5", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "6", GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4", TYPESAFE_API_KEY: "test-key-never-sent", OPENROUTER_API_KEY: "", DECIDE_OPENROUTER_API_KEY: "", INFLIGHT_COVER: "" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   children.push(c);

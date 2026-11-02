@@ -28,6 +28,7 @@ import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePorts } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
@@ -65,7 +66,7 @@ await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
 proc = spawn("node", ["--import", "./scripts/lib/upstream-stub-preload.js", "src/server.js"], {
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
+    ...process.env, ...ownStoreEnv("settle-breaker"), PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
