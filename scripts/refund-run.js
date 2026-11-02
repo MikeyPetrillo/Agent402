@@ -582,10 +582,18 @@ async function sendTempo(row, prep) {
 // destination must already hold a USDC account (a payer of USDC on Solana
 // has one), integer base units, our own signer on the memo.
 const SOLANA_MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
-async function solanaRpc(method, params) {
+export async function solanaRpc(method, params) {
   const r = await fetch(SOLANA_RPC(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
   const j = await r.json();
-  if (j.error) throw new Error(`${method}: ${String(j.error.message || "error").slice(0, 120)}`);
+  if (j.error) {
+    // A sendTransaction refused in preflight (-32002: the node simulated it and
+    // it failed) was never broadcast. Its program logs name the instruction.
+    const logs = Array.isArray(j.error.data?.logs) ? j.error.data.logs.slice(-6).join(" | ").slice(0, 600) : "";
+    const err = j.error.data?.err ? ` err=${JSON.stringify(j.error.data.err).slice(0, 200)}` : "";
+    const e = new Error(`${method}: ${String(j.error.message || "error").slice(0, 120)}${err}${logs ? ` logs: ${logs}` : ""}`);
+    if (method === "sendTransaction" && j.error.code === -32002) markPreBroadcast(e);
+    throw e;
+  }
   return j.result;
 }
 async function solanaSigner() {

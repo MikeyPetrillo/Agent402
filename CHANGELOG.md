@@ -6,6 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
+Router:
+- route-execute moves on to the next Tempo seller when a seller fails
+  before any payment left, as it does on every other chain; each seller is
+  paid with its own freshly signed credential.
+- A Tempo seller's error after payment is reported as "it may have been
+  charged", unless the chain shows the payment was never taken, which is
+  read only when the caller's answer window outlasts the payment's expiry.
+- An MPP seller whose own llms.txt example takes a list (for example
+  `urls: [...]`) receives a single url, query or id in that shape; the
+  receipt's `paramsAdapted` names the rename. An ambiguous case is sent as
+  written, and a seller with a published input schema is unchanged.
+Payments:
+- The CDP facilitator's auth headers are built by the server itself, so a
+  self-hosted server no longer installs @coinbase/x402; the same CDP key
+  variables apply.
+Surfaces:
+- /revenue's MPP table shows each rail's last settlement by date, marked
+  "ours" when it was our own, as the x402 table does.
+
 ### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search, Stellar RPC)
 Gateway:
 - The pro tier serves openai/gpt-6.1-terra (and its -pro twin) and

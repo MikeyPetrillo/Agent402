@@ -127,5 +127,65 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   idx.__setProbeFetchForTest(null);
 }
 
+// ------------------------------------------------- (d) one very large entry
+// One seller lists over 100k tools (a 35 MB row). Its projection, line,
+// hash and parse each ran as one call of 50-370 ms on the persist and pull
+// paths; the across-turns forms must equal the one-call forms exactly.
+{
+  const S = idx.__testSlices();
+  const N = Number(process.env.LOOP_SLICE_TOOLS || 150_000);
+  const odd = ["say \"hi\"", "back\\slash\\", "\\\"", "]}{[", "日本語の説明", "emoji 😀 pair", "lone \ud800 high", "nul \u0000 byte", "tab\tnew\nline"];
+  // An own "__proto__" key, as JSON.parse makes one (an object literal would set the prototype instead).
+  const PROTO_KEYED = JSON.parse('{"__proto__": {"x": 1}}');
+  const tools = Array.from({ length: N }, (_, i) => ({
+    route: `/api/r${i}`, slug: `r${i}`, name: odd[i % odd.length] + i, price: i % 3 ? "$0.001" : 0.0015,
+    description: "日".repeat(20 + (i % 7)) + "x".repeat(i % 500 === 0 ? 900 : 10), tags: i % 1000 === 0 ? Array.from({ length: 12 }, (_, k) => `t${k}`) : ["a"],
+    inputSchema: { type: "object", properties: { q: { type: "string" } } }, nested: [[1, 2.5, -0, 1e21], PROTO_KEYED], ok: i % 2 === 0, none: null,
+  }));
+  tools[7] = undefined; // a hole-like element serialises as null
+  const v = { manifest: { name: "Huge seller", description: "d", capabilities: { tools: N } }, tools, fetchedAt: 1700000000123, error: null, source: "crawl", history: [1, 0, 1], paywall: null, updatedAt: 1700000000999 };
+  const origin = "https://huge.example";
+  const tick = S.sliceClock();
+
+  const t0 = performance.now();
+  const e1 = S.persistedEntryOf(v);
+  const line1 = JSON.stringify([origin, e1]);
+  const oneProjectAndLine = performance.now() - t0;
+  const { out: e2, worst: wProject } = await longestGap(() => S.persistedEntryOfSliced(v, tick));
+  ok(JSON.stringify([origin, e2]) === line1, "the sliced projection of a large entry equals the one-call projection");
+  const { out: pieces, worst: wPieces } = await longestGap(() => S.linePieces(origin, e1, tick));
+  ok(pieces.join("") === line1, `the line built in ${pieces.length} pieces is byte-identical to JSON.stringify([origin, entry]) (${(line1.length / 1048576).toFixed(0)} MB)`);
+  const { out: h2, worst: wHash } = await longestGap(() => S.hashPieces(pieces, tick));
+  ok(h2 === S.lineHash(line1), "hashing the pieces in order gives the hash of the joined line (no piece splits a character)");
+  ok((await S.persistedHashSliced(origin, v, tick)) === S.persistedHashOf(origin, v), "the sliced persisted hash equals the one-call persisted hash");
+
+  // The pull parses a row as the database renders it ("key": value, ", ").
+  const rendered = JSON.stringify(e1).replace(/("(?:[^"\\]|\\.)*")|([:,])/g, (m, str, punct) => (str ? str : punct + " "));
+  const t1 = performance.now();
+  const direct = JSON.parse(rendered);
+  const oneParse = performance.now() - t1;
+  const { out: parsed, worst: wParse } = await longestGap(() => S.parseJsonSliced(rendered, tick));
+  ok(JSON.stringify(parsed) === JSON.stringify(direct) && Object.keys(parsed).join() === Object.keys(direct).join(), "the sliced parse of a large rendered row equals JSON.parse (values and key order)");
+  ok(Object.prototype.hasOwnProperty.call(parsed.tools[0].nested[1], "__proto__") && Object.getPrototypeOf(parsed.tools[0].nested[1]) === Object.prototype, "a \"__proto__\" key stays an own data property, as JSON.parse leaves it");
+  const proto = JSON.stringify({ a: 1, ["__proto__"]: Array.from({ length: 70_000 }, (_, i) => ({ i, s: "x".repeat(10) })), z: [] });
+  const protoParsed = await S.parseJsonSliced(proto, tick);
+  ok(JSON.stringify(protoParsed) === proto && Array.isArray(Object.getOwnPropertyDescriptor(protoParsed, "__proto__")?.value) && Object.getPrototypeOf(protoParsed) === Object.prototype, "a large top-level \"__proto__\" array is put back as an own property");
+  let threw = null;
+  try { await S.parseJsonSliced(rendered.slice(0, -2), tick); } catch (err) { threw = err; }
+  ok(threw instanceof SyntaxError, "a truncated large text throws a SyntaxError, as JSON.parse does");
+  const dup = `{"tools": [${'{"a": 1}, '.repeat(120_000)}{"a": 2}], "tools": [3]}`;
+  ok(JSON.stringify(await S.parseJsonSliced(dup, tick)) === JSON.stringify(JSON.parse(dup)), "a text with a repeated key is parsed by JSON.parse whole (last key wins)");
+  // An array then a scalar under one key: the array put back after the
+  // skeleton parse would overwrite the scalar that JSON.parse keeps.
+  const dupScalar = `{"tools": [${"1, ".repeat(600_000)}1], "tools": 5}`;
+  const dupScalarParsed = await S.parseJsonSliced(dupScalar, tick);
+  ok(dupScalar.length >= 1_048_576 && dupScalarParsed.tools === 5 && JSON.stringify(dupScalarParsed) === JSON.stringify(JSON.parse(dupScalar)), `a large array then a scalar under one key reads the scalar, as JSON.parse does (got ${Array.isArray(dupScalarParsed.tools) ? `an array of ${dupScalarParsed.tools.length}` : JSON.stringify(dupScalarParsed.tools)})`);
+
+  // Bounded: each sliced step holds the loop for a slice, not for the whole entry.
+  const sliceBound = Math.max(60, Math.min(BOUND_MS, oneProjectAndLine / 2, oneParse / 2));
+  const worstAll = Math.max(wProject, wPieces, wHash, wParse);
+  ok(worstAll < sliceBound, `projection, line, hash and parse of the large entry never hold the loop past ${Math.round(sliceBound)} ms (one-call projection+line ${Math.round(oneProjectAndLine)} ms, parse ${Math.round(oneParse)} ms; longest ${worstAll} ms: ${wProject}/${wPieces}/${wHash}/${wParse})`);
+}
+
 console.log(`\ntest-loop-slices: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

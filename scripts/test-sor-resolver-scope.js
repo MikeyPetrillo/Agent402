@@ -30,7 +30,10 @@ ok(/resolved\.sort\(\(a, b\) => \(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 
 ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await probePublicUrl(r.url"),
   "the resolve loop skips a ROUTE whose payment layer refused our payment on this chain BEFORE probing it (the memo x402-buyer writes after a chain-verified refusal)");
 ok(!/sellerRefusedRecently\(r\.seller/.test(fn), "the resolver does not bench a whole origin for one route's refusals");
-ok(/resolved\.push\(\{[^\n]*wire: r\.wire/.test(fn), "the resolved candidate carries its wire (a Tempo seller settles over MPP; the receipt said x402 before)");
+{
+  const cand = readFileSync(new URL("../src/sor-candidates.js", import.meta.url), "utf8");
+  ok(/resolved\.push\(resolvedCandidateOf\(r, /.test(fn) && /wire: r\.wire \|\| "x402"/.test(cand), "the resolved candidate carries its wire (a Tempo seller settles over MPP; the receipt said x402 before)");
+}
 // The model-list skip (2026-09-02): a chat seller whose readable model list
 // lacks the requested model is skipped BEFORE the probe, and the model reaches
 // the resolver from route-execute's params. Pinned from source because the

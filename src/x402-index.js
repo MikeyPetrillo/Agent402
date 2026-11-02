@@ -27,9 +27,10 @@ import { resolveLocalRefs } from "./openapi-deref.js";
 import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeExampleFor, mergeProbeExamples, ProbeExampleMemo, MAX_EXAMPLES as MAX_PROBE_EXAMPLES } from "./probe-example.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
+import { StringDecoder } from "node:string_decoder";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
@@ -1256,6 +1257,11 @@ export function __testSeedCache(entries = []) { for (const [o, e] of entries) ca
 /** Test hook: the state-database upsert alone, for `[origin, entry]` pairs,
  *  with no pull first (the SQL newer-wins rule is what a race between two
  *  containers meets, after one's pull and before its write). */
+/** The across-turns forms and their one-call twins, for the equality tests. */
+export function __testSlices() { return { parseJsonSliced, jsonPieces, linePieces, hashPieces, lineHash, persistedEntryOf, persistedEntryOfSliced, persistedHashOf, persistedHashSliced, sliceClock }; }
+/** Rows the pull has read whole (bodies), since boot. */
+export function __testPullBodyReads() { return pullBodyReads; }
+export function __testPullBatchStats() { return { ...pullBatchStats }; }
 export function __testPersistToStateDb(entries) { return persistIndexCacheToStateDb(entries, entries.map((e) => JSON.stringify(e))); }
 
 /** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
@@ -6768,13 +6774,185 @@ async function persistedEntriesSliced() {
   const tick = sliceClock();
   const out = [];
   for (const [origin, v] of held) {
-    const e = persistedEntryOf(v);
+    const e = await persistedEntryOfSliced(v, tick);
     if (e) out.push([origin, e]);
     await tick();
   }
   return out;
 }
-function persistedEntryOf(v) {
+
+// ---- one large entry across turns ------------------------------------------
+// One seller lists over a hundred thousand tools (a 35 MB row): projecting,
+// serialising, hashing or parsing its entry in one call held the loop for
+// 50-370 ms each. These do the same work in pieces with a clock check between
+// them, and every result equals the one-call form exactly.
+const SLICE_ARRAY_MIN = 2000; // arrays shorter than this are handled in one call
+const SLICE_TEXT_MIN = 1_048_576; // texts shorter than this are parsed in one call
+const SLICE_STEP = 256; // elements between clock checks
+/** persistedEntryOf(v), with a long tool array projected across turns. */
+async function persistedEntryOfSliced(v, tick) {
+  const tools = v?.tools;
+  if (!Array.isArray(tools) || tools.length < SLICE_ARRAY_MIN) return persistedEntryOf(v);
+  if (v.error && !heldLastGood(v)) return null;
+  const slim = new Array(tools.length);
+  for (let i = 0; i < tools.length; i++) {
+    if (i in tools) slim[i] = slimToolForPersist(tools[i]); // a hole stays a hole, as map leaves it
+    if (i % SLICE_STEP === 0) await tick();
+  }
+  return persistedEntryOf(v, slim);
+}
+/** Pieces whose concatenation is JSON.stringify(value): a plain object's long
+ *  arrays are serialised element by element across turns, the rest in one
+ *  call. Each boundary falls between JSON tokens (never inside a string), so
+ *  hashing the pieces in order hashes the joined text. */
+async function jsonPieces(value, tick) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.toJSON === "function") return [JSON.stringify(value)];
+  const big = Object.keys(value).filter((k) => Array.isArray(value[k]) && value[k].length >= SLICE_ARRAY_MIN && typeof value[k].toJSON !== "function");
+  if (!big.length) return [JSON.stringify(value)];
+  // Each long array is stood in for by a marker string no seller text can hold
+  // (checked: it must appear exactly once), and the arrays are spliced back.
+  const marks = big.map(() => `\u0000slice:${randomUUID()}`);
+  const skeleton = { ...value };
+  big.forEach((k, i) => { skeleton[k] = marks[i]; });
+  const text = JSON.stringify(skeleton);
+  const pieces = [];
+  let from = 0;
+  for (let b = 0; b < big.length; b++) {
+    const quoted = JSON.stringify(marks[b]);
+    const at = text.indexOf(quoted, from);
+    if (at < 0 || text.indexOf(quoted, at + quoted.length) >= 0) return [JSON.stringify(value)];
+    pieces.push(text.slice(from, at), "[");
+    const arr = value[big[b]];
+    for (let i = 0; i < arr.length; i++) {
+      const el = arr[i];
+      if (el && typeof el === "object" && typeof el.toJSON === "function") return [JSON.stringify(value)];
+      if (i) pieces.push(",");
+      // undefined, a function or a symbol inside an array serialises as null.
+      pieces.push(JSON.stringify(el) ?? "null");
+      if (i % SLICE_STEP === 0) await tick();
+    }
+    pieces.push("]");
+    from = at + quoted.length;
+  }
+  pieces.push(text.slice(from));
+  return pieces;
+}
+/** The persisted line `JSON.stringify([origin, entry])` as pieces. */
+async function linePieces(origin, entry, tick) {
+  const body = await jsonPieces(entry, tick);
+  return [`[${JSON.stringify(origin)},`, ...body, "]"];
+}
+/** lineHash of the joined pieces, fed piece by piece across turns. */
+async function hashPieces(pieces, tick) {
+  const h = createHash("sha1");
+  for (let i = 0; i < pieces.length; i++) {
+    h.update(pieces[i]);
+    if (i % SLICE_STEP === 0) await tick();
+  }
+  return h.digest("base64");
+}
+/** persistedHashOf(origin, v) across turns. */
+async function persistedHashSliced(origin, v, tick) {
+  const e = await persistedEntryOfSliced(v, tick);
+  return e ? hashPieces(await linePieces(origin, e, tick), tick) : null;
+}
+
+// JSON text scanning for parseJsonSliced: each returns the index just past
+// what it read, or -1 when the text is not what it expects.
+const isJsonWs = (c) => c === 32 || c === 10 || c === 13 || c === 9;
+function skipJsonWs(s, i) { while (i < s.length && isJsonWs(s.charCodeAt(i))) i++; return i; }
+function jsonStringEnd(s, i) {
+  for (let j = i + 1; ;) {
+    const q = s.indexOf("\"", j);
+    if (q < 0) return -1;
+    let n = 0;
+    for (let b = q - 1; b > i && s.charCodeAt(b) === 92; b--) n++;
+    if (n % 2 === 0) return q + 1;
+    j = q + 1;
+  }
+}
+function jsonValueEnd(s, i) {
+  const c = s.charCodeAt(i);
+  if (c === 34) return jsonStringEnd(s, i);
+  if (c === 123 || c === 91) {
+    let depth = 0;
+    for (let j = i; j < s.length;) {
+      const d = s.charCodeAt(j);
+      if (d === 34) { j = jsonStringEnd(s, j); if (j < 0) return -1; continue; }
+      if (d === 123 || d === 91) depth++;
+      else if ((d === 125 || d === 93) && --depth === 0) return j + 1;
+      j++;
+    }
+    return -1;
+  }
+  let j = i;
+  while (j < s.length) { const d = s.charCodeAt(j); if (d === 44 || d === 125 || d === 93 || isJsonWs(d)) break; j++; }
+  return j > i ? j : -1;
+}
+/** JSON.parse(text), with the elements of a large object's top-level arrays
+ *  parsed a few at a time across turns. The object around them is parsed
+ *  with each such array emptied, and the arrays are put back under their
+ *  keys. Any text this does not read as one object with unique keys is
+ *  handed to JSON.parse whole, so a malformed text throws as it always did. */
+async function parseJsonSliced(text, tick) {
+  if (typeof text !== "string" || text.length < SLICE_TEXT_MIN) return JSON.parse(text);
+  const whole = () => JSON.parse(text);
+  let i = skipJsonWs(text, 0);
+  if (text.charCodeAt(i) !== 123) return whole();
+  const skeleton = [];
+  const arrays = [];
+  const keys = new Set();
+  let from = 0;
+  i = skipJsonWs(text, i + 1);
+  if (text.charCodeAt(i) !== 125) {
+    for (;;) {
+      if (text.charCodeAt(i) !== 34) return whole();
+      const keyEnd = jsonStringEnd(text, i);
+      if (keyEnd < 0) return whole();
+      const key = JSON.parse(text.slice(i, keyEnd));
+      if (keys.has(key)) return whole();
+      keys.add(key);
+      i = skipJsonWs(text, keyEnd);
+      if (text.charCodeAt(i) !== 58) return whole();
+      i = skipJsonWs(text, i + 1);
+      let end;
+      if (text.charCodeAt(i) === 91) {
+        const items = [];
+        let j = skipJsonWs(text, i + 1);
+        if (text.charCodeAt(j) === 93) end = j + 1;
+        else {
+          for (let n = 0; ; n++) {
+            const e = jsonValueEnd(text, j);
+            if (e < 0) return whole();
+            items.push(JSON.parse(text.slice(j, e)));
+            j = skipJsonWs(text, e);
+            if (n % SLICE_STEP === 0) await tick();
+            if (text.charCodeAt(j) === 44) { j = skipJsonWs(text, j + 1); continue; }
+            if (text.charCodeAt(j) === 93) { end = j + 1; break; }
+            return whole();
+          }
+        }
+        skeleton.push(text.slice(from, i), "[]");
+        arrays.push([key, items]);
+        from = end;
+      } else {
+        end = jsonValueEnd(text, i);
+        if (end < 0) return whole();
+      }
+      i = skipJsonWs(text, end);
+      if (text.charCodeAt(i) === 44) { i = skipJsonWs(text, i + 1); continue; }
+      if (text.charCodeAt(i) === 125) break;
+      return whole();
+    }
+  }
+  if (skipJsonWs(text, i + 1) !== text.length) return whole();
+  skeleton.push(text.slice(from));
+  const out = JSON.parse(skeleton.join(""));
+  for (const [key, items] of arrays) out[key] = items;
+  return out;
+}
+
+function persistedEntryOf(v, slimTools = null) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
     // A failure that still holds its last good catalogue is. Dropping those
@@ -6784,7 +6962,7 @@ function persistedEntryOf(v) {
     if (v?.error && !heldLastGood(v)) return null;
     return ({
       manifest: slimManifestForPersist(v.manifest),
-      tools: Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : [],
+      tools: slimTools ?? (Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : []),
       fetchedAt: v.fetchedAt ?? null,
       error: v.error ? String(v.error).slice(0, 300) : null,
       ...(v.error && Array.isArray(v.fallbackErrors) && v.fallbackErrors.length ? { fallbackErrors: v.fallbackErrors.slice(0, 5) } : {}),
@@ -6844,9 +7022,17 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     const savedAt = Date.now();
     const t0 = performance.now();
     const lines = new Array(entries.length);
+    // A large entry is serialised and hashed in pieces (its hash is kept for
+    // the database step); the rest are one call each.
+    const hashes = new Array(entries.length);
     const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
-      lines[i] = JSON.stringify(entries[i]);
+      const [origin, e] = entries[i];
+      if (Array.isArray(e?.tools) && e.tools.length >= SLICE_ARRAY_MIN) {
+        const pieces = await linePieces(origin, e, tick);
+        hashes[i] = await hashPieces(pieces, tick);
+        lines[i] = pieces.join("");
+      } else lines[i] = JSON.stringify(entries[i]);
       await tick();
     }
     const ms = Math.round(performance.now() - t0);
@@ -6877,7 +7063,7 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
       // written through while their directory exists, so a rollback to the
       // build that reads files alone warm-starts from a current one. A file
       // error is logged, never the verdict.
-      const stored = await persistIndexCacheToStateDb(entries, lines);
+      const stored = await persistIndexCacheToStateDb(entries, lines, hashes);
       if (existsSync(dirname(ndFile))) await writeFiles().catch((e) => console.warn(`[x402-index] cache write-through failed: ${String(e?.message || e).slice(0, 120)}`));
       return stored;
     }
@@ -6961,26 +7147,41 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
       pullWatermarkId = "";
     }
     const tick = sliceClock();
+    // A row's revision without its body: the same values the parsed body
+    // would give entryRev (jsonb renders a field alone as it does in place).
+    const rowRev = (row) => entryRev({ fetchedAt: row.f, updatedAt: row.u });
+    // A row is read whole only when this container does not already hold the
+    // origin at that revision or newer, which is every row it wrote itself.
+    const wanted = (row) => typeof row.id === "string" && !isRemovedOrigin(row.id) && !((h) => h && entryRev(h) >= rowRev(row))(cache.get(row.id));
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
         // The stamp travels as text: a JS Date drops the microseconds, and the
         // last row of every pull would then be read again forever.
-        `SELECT id, body, updated_at::text AS stamp FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
+        `SELECT id, updated_at::text AS stamp, body->'fetchedAt' AS f, body->'updatedAt' AS u, pg_column_size(body) AS sz FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
         [INDEX_RECORDS, pullWatermark, pullWatermarkId, pageSize],
       );
-      for (const { id, body, stamp } of r.rows) {
+      const bodies = await indexRowTexts(r.rows.filter(wanted));
+      for (const row of r.rows) {
+        const { id, stamp } = row;
         // Each folded row is projected, stringified and hashed: a page of
         // large catalogues is seconds of work, so it is spread over turns.
         // The cache is read per row below, after any yield.
         await tick();
         pullWatermark = stamp;
         pullWatermarkId = String(id);
-        if (typeof id !== "string" || !body || typeof body !== "object" || isRemovedOrigin(id)) continue;
+        if (!wanted(row)) continue;
+        let text = bodies.get(id);
+        if (text === undefined) text = (await indexRowTexts([row])).get(id);
+        // As the database holds it now: a row changed since the page was read
+        // is at least as new, and one deleted since is not folded back.
+        const body = text == null ? null : await parseJsonSliced(text, tick);
+        if (!body || typeof body !== "object" || isRemovedOrigin(id)) continue;
         const held = cache.get(id);
         if (held && entryRev(held) >= entryRev(body)) continue;
-        cache.set(id, held ? { ...held, ...body } : { ...body, warmStarted: true });
+        const next = held ? { ...held, ...body } : { ...body, warmStarted: true };
+        cache.set(id, next);
         // Held as stored, so this container's next save does not write it back.
-        pgOriginHashes.set(id, persistedHashOf(id, cache.get(id)));
+        pgOriginHashes.set(id, await persistedHashSliced(id, next, tick));
         if (!held) discoveredSeeds.add(id);
         folded++;
       }
@@ -6993,6 +7194,91 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
     .finally(() => { pullInFlight = null; });
   return pullInFlight;
 }
+/** The stored bodies of these origins as JSON text (id -> text, null when the
+ *  row is gone), read a few rows per statement. As text, a body is parsed by
+ *  parseJsonSliced across turns instead of by the driver in one call (a
+ *  35 MB row held the loop for over 300 ms that way). */
+const PULL_BODIES_PER_QUERY = 50;
+// A row stored larger than this (pg_column_size, after compression) is read
+// as UTF-8 byte ranges of PULL_PART_BYTES, each decoded on its own: the
+// driver turning one 35 MB field into a string was a single 80 ms call.
+const PULL_CHUNKED_ROW_BYTES = 262_144;
+const PULL_PART_BYTES = 1_048_576;
+// Text bytes one statement of whole rows may return. A row's stored size is
+// compressed: index rows measured 18-22x smaller stored than as text, and a
+// repetitive catalogue 77x, so 50 rows under the chunked threshold could be
+// tens of MB in one result. The stored size times PULL_TEXT_PER_STORED_BYTE
+// only plans a statement; the statement itself measures each rendered text
+// and returns it only while its running total is within the budget (the
+// first row always, when under PULL_CHUNKED_ROW_BYTES). A row it holds back
+// goes to the next statement with its measured length, or is read in byte
+// ranges when that length is past the threshold.
+const PULL_TEXT_BYTES_PER_QUERY = 1_048_576;
+const PULL_TEXT_PER_STORED_BYTE = 24;
+let pullBodyReads = 0;
+const pullBatchStats = { statements: 0, maxBytes: 0 };
+async function indexRowTexts(rows) {
+  const out = new Map();
+  const queue = [];
+  pullBodyReads += rows.length;
+  for (const row of rows) {
+    out.set(row.id, null);
+    if (Number(row.sz) >= PULL_CHUNKED_ROW_BYTES) out.set(row.id, await indexRowTextChunked(row.id));
+    else queue.push({ id: row.id, est: (Number(row.sz) || 0) * PULL_TEXT_PER_STORED_BYTE });
+  }
+  while (queue.length) {
+    const batch = [];
+    let est = 0;
+    while (queue.length && batch.length < PULL_BODIES_PER_QUERY && (!batch.length || est + queue[0].est <= PULL_TEXT_BYTES_PER_QUERY)) {
+      const q = queue.shift();
+      est += q.est;
+      batch.push(q.id);
+    }
+    // The text is rendered once (OFFSET 0 keeps the subquery from being
+    // inlined into each use), measured, and sent only when admitted.
+    const r = await stateQuery(
+      `SELECT id, len, CASE WHEN len < $3::int AND (n = 1 OR run <= $4::bigint) THEN t END AS body FROM (
+         SELECT id, t, octet_length(t) AS len, sum(octet_length(t)) OVER (ORDER BY ord) AS run, row_number() OVER (ORDER BY ord) AS n
+         FROM (SELECT r.id, r.body::text AS t, array_position($2::text[], r.id) AS ord FROM ${recordsTable()} r WHERE r.collection = $1 AND r.id = ANY($2::text[]) OFFSET 0) s
+       ) w`,
+      [INDEX_RECORDS, batch, PULL_CHUNKED_ROW_BYTES, PULL_TEXT_BYTES_PER_QUERY],
+    );
+    let bytes = 0;
+    const held = [];
+    for (const { id, len, body } of r.rows) {
+      if (body != null) { out.set(id, body); bytes += Number(len); continue; }
+      if (Number(len) >= PULL_CHUNKED_ROW_BYTES) out.set(id, await indexRowTextChunked(id));
+      else held.push({ id, est: Number(len) });
+    }
+    queue.unshift(...held);
+    pullBatchStats.statements++;
+    pullBatchStats.maxBytes = Math.max(pullBatchStats.maxBytes, bytes);
+  }
+  return out;
+}
+/** One row's body text, read in byte ranges (null when the row is gone). The
+ *  text is rendered once per statement (OFFSET 0 keeps the subquery from
+ *  being inlined into every range), and a character cut at a range boundary
+ *  is completed by the decoder from the next range. */
+async function indexRowTextChunked(id) {
+  const r = await stateQuery(
+    `SELECT c.n, substring(x.b FROM (c.n - 1) * $3::int + 1 FOR $3::int) AS part FROM ${recordsTable()} r
+     CROSS JOIN LATERAL (SELECT convert_to(r.body::text, 'UTF8') AS b OFFSET 0) x
+     CROSS JOIN LATERAL generate_series(1, GREATEST(1, ceil(octet_length(x.b)::numeric / $3::int)::int)) AS c(n)
+     WHERE r.collection = $1 AND r.id = $2 ORDER BY c.n`,
+    [INDEX_RECORDS, id, PULL_PART_BYTES],
+  );
+  if (!r.rows.length) return null;
+  const dec = new StringDecoder("utf8");
+  const parts = [];
+  for (const { part } of r.rows) {
+    parts.push(dec.write(part));
+    await new Promise((res) => setImmediate(res));
+  }
+  parts.push(dec.end());
+  return parts.join("");
+}
+
 /** Read the removal list again from the database and purge what it names. */
 async function reloadRemovedOrigins() {
   if (!stateDbEnabled()) return;
@@ -7026,7 +7312,7 @@ function* recordBatches(entries, bodyOf) {
 }
 
 /** Upsert changed origins and delete the rows of origins no longer held. */
-async function persistIndexCacheToStateDb(entries, lines) {
+async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   const t0 = performance.now();
   let written = 0, deleted = 0;
   try {
@@ -7036,7 +7322,7 @@ async function persistIndexCacheToStateDb(entries, lines) {
     for (let i = 0; i < entries.length; i++) {
       const origin = entries[i][0];
       held.add(origin);
-      const h = lineHash(lines[i]);
+      const h = hashes[i] ?? lineHash(lines[i]);
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
       await tick();
     }

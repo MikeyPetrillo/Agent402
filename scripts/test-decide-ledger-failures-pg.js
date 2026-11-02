@@ -29,7 +29,10 @@ const REAL = process.env.STATE_DATABASE_URL;
 const relay = await startPgRelay(REAL);
 process.env.STATE_DATABASE_URL = relay.url;
 process.env.STATE_DB_CONNECT_TIMEOUT_MS = "1500";
-process.env.DECIDE_PENDING_REPLAY_MS = "200";
+// The child keeps the slow replay timer its parent hands it: a child whose
+// timer claims its own journal and exits mid-pass holds the claim for the
+// journal lease, and the restarted ledger below could land nothing.
+if (!CHILD) process.env.DECIDE_PENDING_REPLAY_MS = "200";
 const DIR = CHILD ? process.env.DECIDE_FAIL_DIR : mkdtempSync(join(tmpdir(), "decide-fail-pg-"));
 
 const sdb = await import("../src/state-db.js");
@@ -47,6 +50,24 @@ const fp = (id) => ({ ...ext(id, "agent402"), firstParty: true });
 
 // ---- child: one paid run, the database cut after the seller is paid, exit before any retry ----
 if (CHILD) {
+  // Count the journal claims this process makes (Redis mode): the run's writes
+  // must be left for a fresh ledger, never drained by the child that exits.
+  let claims = null;
+  if (String(process.env.REDIS_URL || "").trim()) {
+    claims = 0;
+    const { getSharedRedisClient } = await import("../src/shared-limit.js");
+    const { __setJournalRedisForTest } = await import("../src/ledger-journal-redis.js");
+    const wrapped = new WeakMap();
+    __setJournalRedisForTest(async () => {
+      const c = await getSharedRedisClient();
+      if (!c) return c;
+      if (!wrapped.has(c)) wrapped.set(c, new Proxy(c, { get(t, k) {
+        if (k === "eval") return (script, o) => { if (/ZRANGEBYSCORE/.test(String(script))) claims++; return t.eval(script, o); };
+        const v = t[k]; return typeof v === "function" ? v.bind(t) : v;
+      } }));
+      return wrapped.get(c);
+    });
+  }
   const L = openDecideLedger(join(DIR, "ledger.db"));
   await L.ready;
   const decisionId = `dec_${randomBytes(4).toString("hex")}`;
@@ -58,7 +79,7 @@ if (CHILD) {
   const out = await exec({ decisionId, maxBudgetUsd: 0.05 }, req);
   for (const fn of req.__onSettled || []) fn(true); // the payment settled
   setTimeout(() => {
-    console.log(JSON.stringify({ decisionId, runId: out.runId, status: out.status, spentUsd: out.spentUsd, leftover: out.leftoverCredit }));
+    console.log(JSON.stringify({ decisionId, runId: out.runId, status: out.status, spentUsd: out.spentUsd, leftover: out.leftoverCredit, claims }));
     process.exit(0); // gone long before the first in-memory retry
   }, 300);
 } else {
@@ -241,6 +262,7 @@ if (CHILD) {
       const before = (await q(`SELECT status FROM ${T("runs")} WHERE id = $1`, [o.runId]))[0];
       ok(o.status === "complete" && o.leftover?.token && before?.status === "running", `the child answered ${o.status} with a leftover credit, then exited; the run reads ${before?.status} in the database`);
       ok(await journalHolds({ schema: process.env.STATE_DB_SCHEMA, prefix: "decide", needle: o.runId, file: join(childDir, "ledger.db.pending.ndjson") }), "...its journal is kept (in Redis with REDIS_URL set, else beside the ledger file)");
+      if (String(process.env.REDIS_URL || "").trim()) ok(o.claims === 0, `...the exited child never claimed its journal, so no lease of a gone holder stands in the restart's way (${o.claims} claims)`);
       const L2 = openDecideLedger(join(childDir, "ledger.db"));
       await L2.ready;
       for (let i = 0; i < 30 && L2.pendingCount(); i++) await wait(100);

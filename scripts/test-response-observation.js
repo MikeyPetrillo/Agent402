@@ -142,18 +142,20 @@ ok(o.lastMissing.join(",") === "data.attributes",
     "the same (origin, method, route) the index projects on reads it back - record and read agree on the key");
 }
 
-// The resolver's own return is the one link no behavioural test here can reach
-// (resolveExternalSeller is not exported from server.js), so it gets a source
-// assertion - the weaker instrument, used only because the stronger one is
-// unavailable. Without it, deleting the field leaves every test above green
+// The resolver's own return: resolveExternalSeller builds each live candidate
+// with resolvedCandidateOf (src/sor-candidates.js), so the fields are read off
+// the function production calls. Without them, every test above stays green
 // while the observer receives an empty promise list and records nothing.
 {
   const { readFileSync } = await import("node:fs");
-  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/guaranteedPaths: r\.responseContract\?\.guaranteedPaths \|\| \[\]/.test(server),
+  const { resolvedCandidateOf } = await import("../src/sor-candidates.js");
+  const c = resolvedCandidateOf({ seller: "https://ext.example", slug: "zk", url: "https://ext.example/api/zk", method: "POST", route: "/api/zk", responseContract: { guaranteedPaths: ["data.attributes"] } });
+  ok(c.guaranteedPaths.join(",") === "data.attributes",
     "resolveExternalSeller passes the declared paths to the paid call, or there is nothing to verify");
-  ok(/route: r\.route \|\| null/.test(server),
+  ok(c.route === "/api/zk",
     "...and the route, or the observation is keyed by something no reader uses");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/resolvedCandidateOf\(/.test(server), "...and the resolver builds its candidates with that function");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

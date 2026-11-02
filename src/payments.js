@@ -3297,9 +3297,11 @@ async function resolveCdpFacilitatorConfig() {
     return { url: process.env.CDP_FACILITATOR_URL };
   }
   if (!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET)) return null;
-  const { createFacilitatorConfig } = await import("@coinbase/x402");
+  // src/cdp-facilitator.js builds the same config @coinbase/x402 did, on the
+  // CDP kit's JWT minter (scripts/test-cdp-facilitator.js).
+  const { cdpFacilitatorConfig } = await import("./cdp-facilitator.js");
   console.log("Facilitator: Coinbase CDP (Bazaar discovery enabled)");
-  return createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
+  return cdpFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
 }
 
 async function resolveFacilitatorConfig(network) {

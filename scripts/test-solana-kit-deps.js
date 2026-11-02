@@ -93,6 +93,5 @@ for (const n of ["getSetComputeUnitLimitInstruction", "setTransactionMessageComp
 const { ExactSvmScheme } = await import("@x402/svm/exact/client");
 const { ExactSvmScheme: ServerScheme } = await import("@x402/svm/exact/server");
 ok(typeof ExactSvmScheme === "function" && typeof ServerScheme === "function", "@x402/svm exact client + server load on the overridden program packages");
-ok(existsSync(join(ROOT, "node_modules/@coinbase/cdp-sdk/node_modules/@solana/kit")) || true, "note: @coinbase/cdp-sdk carries its own nested kit 5 by design (not reachable from our code)");
 
 console.log(`\ntest-solana-kit-deps: ${pass} assertions passed`);

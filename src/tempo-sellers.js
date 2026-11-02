@@ -63,6 +63,9 @@ export function tempoCatalog(snapshot = mppIndexSnapshot()) {
         priceUsd, priceAtomic: fixed ? amount : null, dynamic: !fixed,
         networks: [TEMPO_CAIP2],
         wire: "mpp",
+        // Key shapes of the seller's documented request example, when its
+        // llms.txt has one (src/mpp-input-examples.js); route-execute reads it.
+        ...(e.inputExample && e.inputExample.keys && typeof e.inputExample.keys === "object" ? { inputExample: e.inputExample } : {}),
       });
     }
   }

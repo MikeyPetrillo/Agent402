@@ -60,18 +60,63 @@ ok((await buildCliX402Middleware({ TOLLBOOTH_PAYTO: PAYTO })) === null, "PAYTO w
   // Coinbase Business path: CDP keys and NO facilitator URL -> the CLI settles
   // through Coinbase's facilitator (createFacilitatorConfig mints the JWTs),
   // so a middleware is built where the URL-less env used to yield null.
-  // The key is GENERATED here (never committed): the CLI now proves the key
+  // @coinbase/x402 is tollbooth's own optional peer, not a root dependency, so
+  // this runs on what a tollbooth user installs: the package as `npm pack`
+  // publishes it, plus @coinbase/x402 at the range tollbooth declares and the
+  // @x402 peers at the versions the root resolves, in a temporary folder
+  // outside the repository. The install runs with no lifecycle scripts and an
+  // environment of PATH and the home and temp folders only, so no secret the
+  // CI job holds reaches it. Under CI a failed install fails this test.
+  // The key is GENERATED here (never committed): the CLI proves the key
   // parses by minting one JWT at boot, so the fixture must be a real EC key.
+  const { mkdtempSync, writeFileSync, rmSync, realpathSync, readFileSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const { createRequire } = await import("node:module");
   const { generateKeyPairSync } = await import("node:crypto");
-  const pem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({ type: "pkcs8", format: "pem" });
-  const mw = await buildCliX402Middleware({ TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_CDP_API_KEY_ID: "organizations/test/apiKeys/test", TOLLBOOTH_CDP_API_KEY_SECRET: pem });
-  ok(typeof mw === "function", "TOLLBOOTH_CDP_API_KEY_ID/SECRET without a facilitator URL -> a settling middleware via Coinbase's facilitator (the Coinbase Business path)");
-  const bad = await new Promise((resolve) => {
-    const c = spawn(process.execPath, ["-e", `import("${join(ROOT, "tollbooth/index.js").replace(/\\/g, "/")}").then(m => m.buildCliX402Middleware(process.env)).then(x => { console.log(x ? "MW" : "NULL"); })`], { env: { ...process.env, TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_CDP_API_KEY_ID: "organizations/test/apiKeys/test", TOLLBOOTH_CDP_API_KEY_SECRET: "not-a-key" } });
-    let out = ""; c.stdout.on("data", (d) => { out += d; }); c.stderr.on("data", (d) => { out += d; });
-    c.on("exit", (code) => resolve({ code, out }));
-  });
-  ok(bad.code === 1 && /cannot sign|Invalid key|key format/i.test(bad.out) && !/not-a-key/.test(bad.out), "a CDP secret that cannot sign fails the boot (exit 1) with the reason, never the key itself, instead of booting 'settling' and answering 500s");
+  const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
+  const installEnv = Object.fromEntries(["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot"]
+    .filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+  ok(Object.keys(installEnv).every((k) => !/KEY|SECRET|TOKEN|COSTS|PASSWORD/i.test(k)), "the tollbooth install environment carries no secret-named variable");
+  const npmBin = existsSync(join(dirname(process.execPath), "npm")) ? join(dirname(process.execPath), "npm") : "npm";
+  const npm = (args, cwd) => spawnSync(npmBin, args, { cwd, env: installEnv, encoding: "utf8", timeout: 240_000, shell: process.platform === "win32" });
+  const range = readJson(join(ROOT, "tollbooth/package.json")).peerDependencies?.["@coinbase/x402"];
+  ok(!!range, `tollbooth declares @coinbase/x402 (${range})`);
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "tb-cdp-")));
+  const fault = (step, r) => `${step} failed (status ${r.status}${r.error ? `, ${r.error.message}` : ""}): ${String(r.stderr || r.stdout || "").trim().split("\n").slice(-6).join(" | ")}`;
+  let installError = null;
+  const packed = npm(["pack", join(ROOT, "tollbooth"), "--pack-destination", dir, "--ignore-scripts", "--json"], dir);
+  let tarball = null;
+  if (packed.status !== 0) installError = fault("npm pack", packed);
+  else tarball = JSON.parse(packed.stdout)[0]?.filename;
+  if (!installError) {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "tollbooth-cdp-check", private: true, type: "module" }));
+    const peers = ["@x402/express", "@x402/core", "@x402/evm"].map((n) => `${n}@${readJson(join(ROOT, "node_modules", n, "package.json")).version}`);
+    const inst = npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", `./${tarball}`, `@coinbase/x402@${range}`, ...peers], dir);
+    if (inst.status !== 0) installError = fault("npm install", inst);
+  }
+  if (installError && process.env.CI) fail(`tollbooth CDP path: ${installError} (a missing dependency is a failure under CI)`);
+  if (installError) {
+    console.warn(`SKIP - tollbooth CDP path not exercised: ${installError}`);
+  } else {
+    const tbDir = join(dir, "node_modules/agent402-tollbooth");
+    const cbEntry = createRequire(join(tbDir, "package.json")).resolve("@coinbase/x402");
+    ok(cbEntry.startsWith(dir) && !cbEntry.startsWith(ROOT), `tollbooth resolves @coinbase/x402 ${readJson(join(dir, "node_modules/@coinbase/x402/package.json")).version} from its own install, not the repository`);
+    ok(!existsSync(join(tbDir, "test.js")) && existsSync(join(tbDir, "index.js")), "the CDP path runs on the packed package (published files only)");
+    const runCdp = (secret) => new Promise((resolve) => {
+      const c = spawn(process.execPath, ["--input-type=module", "-e", `const m = await import("agent402-tollbooth"); const x = await m.buildCliX402Middleware(process.env); console.log(typeof x === "function" ? "MW" : "NULL"); process.exit(0);`], {
+        cwd: dir, env: { ...installEnv, TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_CDP_API_KEY_ID: "organizations/test/apiKeys/test", TOLLBOOTH_CDP_API_KEY_SECRET: secret },
+      });
+      let out = ""; c.stdout.on("data", (d) => { out += d; }); c.stderr.on("data", (d) => { out += d; });
+      c.on("exit", (code) => resolve({ code, out }));
+    });
+    const pem = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({ type: "pkcs8", format: "pem" });
+    const good = await runCdp(pem);
+    ok(good.code === 0 && /^MW$/m.test(good.out), `TOLLBOOTH_CDP_API_KEY_ID/SECRET without a facilitator URL -> a settling middleware via Coinbase's facilitator (the Coinbase Business path) (exit ${good.code}: ${good.out.trim().slice(0, 300)})`);
+    const bad = await runCdp("not-a-key");
+    ok(bad.code === 1 && /cannot sign/i.test(bad.out) && !/not-a-key/.test(bad.out), `a CDP secret that cannot sign fails the boot (exit 1) with the reason, never the key itself, instead of booting 'settling' and answering 500s (exit ${bad.code}: ${bad.out.replace(/not-a-key/g, "<key>").trim().slice(0, 300)})`);
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 ok(CLI_NETWORKS.base === "eip155:8453" && CLI_NETWORKS.polygon === "eip155:137" && CLI_NETWORKS.celo === "eip155:42220", "CLI network names map to CAIP-2");
 {

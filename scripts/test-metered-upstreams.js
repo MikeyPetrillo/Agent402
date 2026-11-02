@@ -62,6 +62,9 @@ const ALLOWED = {
   // That claim is not taken on trust: `noRequest` files are re-checked below
   // against the request verbs, so one added later that actually fetches fails.
   "upstream-budgets.js": { why: "declares the daily call budgets; hostnames are match strings", noRequest: true },
+  // Builds the facilitator URL and auth headers only; @x402/core issues the
+  // verify and settle calls, one per paid request.
+  "cdp-facilitator.js": { why: "builds the CDP facilitator URL and auth headers; makes no request itself", noRequest: true },
 };
 
 // What "issues a request" looks like in this tree. Kept narrow on purpose: a

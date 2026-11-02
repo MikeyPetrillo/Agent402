@@ -30,6 +30,7 @@ import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
 import { recordRouterPurchase } from "../router-purchases.js";
+import { adaptParamsToExample } from "../mpp-input-examples.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -494,6 +495,16 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const extMethod = (ext.method || "POST").toUpperCase();
           let extUrl = ext.url;
           let extBody = params;
+          // An MPP seller's index row has no input schema; when its llms.txt
+          // documents a request example, a scalar url/query/id it takes as a
+          // one-element plural list (or the reverse) is reshaped to it, and
+          // nothing else (src/mpp-input-examples.js). x402 rows never carry
+          // an example, so their bodies are the buyer's params as before.
+          let paramsAdapted = [];
+          if (extWire === "mpp" && ext.inputExample && extMethod !== "GET" && extMethod !== "HEAD") {
+            const shaped = adaptParamsToExample(params, ext.inputExample);
+            if (shaped.adapted.length) { extBody = shaped.params; paramsAdapted = shaped.adapted; }
+          }
           if (extMethod === "GET" || extMethod === "HEAD") {
             const qp = new URLSearchParams();
             for (const [k, v] of Object.entries(params || {})) {
@@ -623,9 +634,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // authorization went out and we may have paid, so retrying another
             // seller would be a second, uncorrelated spend. A 4xx never falls
             // through: it cancels the buyer's settlement and means our request
-            // was wrong, which the next seller would reject the same way. Tempo
-            // buyers never fall through (their credential is single-use and
-            // time-boxed - a second seller needs a fresh one).
+            // was wrong, which the next seller would reject the same way.
             // FALL THROUGH ONLY WHEN THE AUTHORIZATION WAS NEVER SENT.
             // payX402 stamps `committed:true` on every throw AFTER it has
             // signed and sent the payment header - at which point we cannot
@@ -637,8 +646,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // settle our transfer and THEN return 5xx, so "5xx = not charged"
             // is a false assumption the seller controls. `committed` is set by
             // OUR buyer code from whether the header was sent, which the seller
-            // cannot influence. Tempo never falls through either way (single-
-            // use, time-boxed credential).
+            // cannot influence. Tempo follows the
+            // same rule (payTempo stamps `committed` the same way; see below).
             // A pre-payment failure (unreachable, over cap, SSRF refusal) signed
             // NOTHING, so it must not consume the paid-attempt budget - counting
             // it would let two cheap misses starve a legitimate retry. `committed`
@@ -666,12 +675,23 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             adjustSpend(spendHandle, spentMaybe ? (e?.signedUsd != null && Number.isFinite(signedUsd) && signedUsd >= 0 ? signedUsd : cap) : 0);
             // A Solana refusal is proven only after waiting out the credential,
             // which spends most of the buyer's own window: no second seller.
-            const waitedOnRefusal = chain === "solana" && e?.refused === true;
+            // A Tempo refusal is proven the same way (the chain's head past
+            // the credential's validBefore), so it ends the request too.
+            const waitedOnRefusal = (chain === "solana" || chain === "tempo") && e?.refused === true;
+            // TEMPO FALLS THROUGH LIKE EVERY OTHER RAIL when nothing left the
+            // wallet: a failure before the credential was handed to the seller
+            // (unreachable, a bad or over-cap challenge, the proven-seller
+            // gate, a credential not minted) carries no committed stamp, and
+            // each candidate is paid with its own freshly signed credential,
+            // so the next one cannot be a second charge for this one. A Tempo
+            // buyer's own window still bounds it: with under 4 s of that
+            // budget left, no further seller is started.
+            const tempoOutOfTime = chain === "tempo" && windowBudgetMs != null && remainingMs() < 4000;
             // No sanctions list held: every candidate would get the same
             // refusal before signing, so the first one ends the request.
             const screenUnavailable = e?.screenUnavailable === true;
             if (screenUnavailable) lastErr.screenUnavailable = true;
-            if (hasNext && !spentMaybe && !unanswered && chain !== "tempo" && !waitedOnRefusal && !screenUnavailable) {
+            if (hasNext && !spentMaybe && !unanswered && !tempoOutOfTime && !waitedOnRefusal && !screenUnavailable) {
               console.warn(e?.refused
                 ? `[sor] seller ${ext.seller} refused the payment and the chain shows no debit - trying next candidate, nothing spent`
                 : `[sor] seller ${ext.seller} failed pre-payment (${sc}) - trying next candidate, nothing spent`);
@@ -722,6 +742,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               settleNetwork: chainCaip2,
               ...(servedUnpaid ? { sellerPaid: false } : {}),
               wire: extWire,
+              ...(paramsAdapted.length ? { paramsAdapted } : {}),
               resolvedBy: "task-external",
               ...(ext.selection ? { selection: ext.selection } : {}),
               // A buyer should know when the seller that served them had no

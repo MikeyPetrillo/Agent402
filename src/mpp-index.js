@@ -33,6 +33,7 @@ import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
 
 export { validateOriginInput };
 
@@ -493,15 +494,22 @@ const HEALTH_WINDOW = 5;
 
 /** Verify one origin (registry-sourced or self-submitted). Updates `cache`
  *  in place. Never throws - a failed probe just leaves `verified: false` with
- *  the reason recorded, same posture as x402-index.js's crawlSeller(). */
-export async function verifyMppSeller(origin) {
+ *  the reason recorded, same posture as x402-index.js's crawlSeller().
+ *  `probe` and `fetchText` are injectable for tests (the guarded network
+ *  primitives refuse a local stub); production passes neither. */
+export async function verifyMppSeller(origin, { probe, fetchText } = {}) {
   const svc = registryByOrigin.get(origin) || null;
   const target = await resolveProbeTarget(origin, svc);
-  const result = await probeMppChallenge(target);
+  const result = await (probe || probeMppChallenge)(target);
   noteProbeOutcome(origin, result.ok);
   const prior = cache.get(origin);
   const history = [...(prior?.history || []), result.ok ? 1 : 0].slice(-HEALTH_WINDOW);
   const scan = svc ? null : mppScanByOrigin.get(origin) || null;
+  // Request-example key shapes from the seller's llms.txt, read only for a
+  // seller that just verified and lists endpoints (src/mpp-input-examples.js:
+  // guarded fetch, capped, cached an hour; key names and shapes only).
+  let endpoints = Array.isArray(svc?.endpoints) ? svc.endpoints : [];
+  if (result.ok && endpoints.length) endpoints = attachInputExamples(endpoints, await fetchLlmsExamples(origin, { timeoutMs: PROBE_TIMEOUT_MS, ...(fetchText ? { fetchText } : {}) }));
   const entry = {
     origin,
     name: svc?.name || scan?.name || origin.replace(/^https?:\/\//, ""),
@@ -514,7 +522,7 @@ export async function verifyMppSeller(origin) {
     icon: svc?.icon || scan?.logoUrl || null,
     realm: svc?.realm || null,
     provider: svc?.provider || null,
-    endpoints: Array.isArray(svc?.endpoints) ? svc.endpoints : [],
+    endpoints,
     probedUrl: target.url,
     // Live-observed payment offers (see parseOffers). Kept from the last
     // SUCCESSFUL probe so a transient probe failure does not blank the
@@ -737,6 +745,9 @@ export function stopMppCrawler() {
   if (discoveryTimer) { clearInterval(discoveryTimer); discoveryTimer = null; }
   if (pullTimer) { clearInterval(pullTimer); pullTimer = null; }
 }
+
+/** Test-only: hold one registry row, as discoverMppRegistry() would. */
+export function __testSetRegistryRow(origin, svc) { registryByOrigin.set(origin, svc); }
 
 /** Test-only: fully reset in-memory state between test cases. */
 export function __testReset() {

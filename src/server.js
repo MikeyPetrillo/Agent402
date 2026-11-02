@@ -655,6 +655,7 @@ import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
 import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
@@ -1671,16 +1672,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       : null;
     candidates = rankTempoResources(tempoCatalog(), task, { capUsd: cap, excludeOrigin: ourOrigin, provenByRecipient })
       .slice(0, 5)
-      .map((r) => ({
-        seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
-        // Dynamic-priced sellers carry no price here: the live-probe loop
-        // below reads it from the real tempo/charge challenge and drops the
-        // candidate when it exceeds the cap.
-        price: r.dynamic ? null : `$${r.priceUsd}`, priceUsd: r.dynamic ? null : r.priceUsd, dynamic: !!r.dynamic,
-        networks: r.networks, wire: "mpp", settled: r.settled,
-        // The route's own text, for the category filter below.
-        description: r.description, tags: r.tags,
-      }));
+      // Dynamic-priced sellers carry no price: the live-probe loop below
+      // reads it from the real tempo/charge challenge (src/sor-candidates.js).
+      .map(tempoCandidateOf);
   } else if (chain === "algorand") {
     // Algorand sellers come from the GoPlausible facilitator catalog AND from
     // our own crawl (src/algorand-sellers.js, 2026-09-18). The two halves carry
@@ -2039,7 +2033,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.unproven ? { unproven: true } : {}), ...(r.judgedSelection ? { selection: r.judgedSelection } : {}) });
+      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;

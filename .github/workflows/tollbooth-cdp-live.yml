@@ -22,6 +22,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
+      # @coinbase/x402 is tollbooth's own optional peer for the CDP path, not a
+      # root dependency: install it for this run at the range tollbooth
+      # declares, with no lifecycle scripts and no lockfile or package.json write.
+      - name: Install tollbooth's CDP peer
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund "@coinbase/x402@$(node -p "require('./tollbooth/package.json').peerDependencies['@coinbase/x402']")"
       - name: Control - the same CLI path through PayAI's keyless facilitator
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
