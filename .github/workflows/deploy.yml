@@ -1517,6 +1517,8 @@ jobs:
           t node scripts/test-state-db-overlap.js
           # The file/memory half runs without the database; the Postgres half with it.
           t node scripts/test-json-document.js
+          # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream); the live-page count and sweep on the records table (Postgres half)
+          t node scripts/test-answer-share.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -4791,8 +4793,6 @@ jobs:
           t node scripts/test-svm-funding-refusal.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
-          # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream)
-          t node scripts/test-answer-share.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
           # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)

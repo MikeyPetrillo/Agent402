@@ -45,6 +45,16 @@ const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog.sl
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const files = () => readdirSync(SHARE_DIR).filter((f) => f.endsWith(".json"));
+const PAST_PRIVACY = /share=true<\/code> while sharing was\s+offered, and only such a call, published its question[\s\S]*No new pages are made now; each page already made stays at\s+its address until it expires\./;
+const PAST_TERMS = /share=true<\/code> while sharing was offered published a shared answer page: it shows the\s+caller-supplied question and a model-generated answer, and we may remove it at any time\./;
+
+// ---- 0. before any count -----------------------------------------------------
+{
+  // A fresh process has not counted live pages yet: unknown counts as may-be-live.
+  process.env.ANSWER_SHARE = "";
+  ok(AS.sharePagesMayBeLive(), "switch off, live pages not counted yet (unknown at boot): pages may be live");
+  process.env.ANSWER_SHARE = "on";
+}
 
 // ---- 1. in process ----------------------------------------------------------
 ok(!AS.wantsShare(undefined) && !AS.wantsShare(false) && !AS.wantsShare("false") && !AS.wantsShare("") && !AS.wantsShare(0), "share is off unless asked for");
@@ -104,6 +114,7 @@ const checkHostile = (html, where) => {
   ok((await AS.readShare("AAAAAAAAAAAAAAAAAAAAAAAA", now)).status === "unknown" && (await AS.readShare("../etc/passwd", now)).status === "unknown", "an unknown or malformed id reads unknown (404)");
   const sw = await AS.shareStore().sweep(now);
   ok(sw.expired === 1 && sw.dropped === 1, `the sweep tombstones the expired share and drops the past-tombstone one (${JSON.stringify(sw)})`);
+  ok(await AS.countLiveShares(now) === 1 && await AS.shareStore().countLive(now + AS.SHARE_TTL_MS + 1) === 0, "the read-only count sees the one live share (and none once it expires)");
   const tomb = await AS.shareStore().get(old.id);
   ok(tomb.gone === true && !("answer" in tomb) && !("question" in tomb) && (await AS.readShare(old.id, now)).status === "gone", "the tombstone keeps only the expiry and still reads gone (410)");
   ok((await AS.readShare(ancient.id, now)).status === "unknown", "past the tombstone period it reads unknown");
@@ -127,8 +138,15 @@ const DATA = { query: "q", answer: "a", citations: [] };
   ok(slot && link && AS.SHARE_ID_RE.test(link.url.split("/").pop()) && link.cardUrl === `${link.url}/card.png` && !Number.isNaN(Date.parse(link.expiresAt)), "reserveShare + prepareShare answer { url, cardUrl, expiresAt }");
   await sleep(50);
   ok(files().length === 0, "a reserved share writes nothing by itself");
+  // The count says no live pages; the write in this process raises it, so the
+  // lines stay with the switch turned off.
+  AS.noteLiveShares(0);
+  process.env.ANSWER_SHARE = "";
+  ok(!AS.sharePagesMayBeLive(), "switch off, a count of zero: no pages may be live");
   req.res.emit("finish"); await sleep(50);
   ok(files().length === 1, "a settled 200 writes the share");
+  ok(AS.sharePagesMayBeLive(), "a successful write in this process raises the live count: pages may be live with the switch off");
+  process.env.ANSWER_SHARE = "on";
   await clearFiles();
 
   const bad = fakeReq();
@@ -207,7 +225,15 @@ const DATA = { query: "q", answer: "a", citations: [] };
   AS.noteLiveShares(0);
   ok(!/share=true|\/answers\//.test(privacyPage("https://agent402.example")) && !/share=true|caller-supplied/.test(termsPage("https://agent402.example")), "switch off, no live pages: neither /privacy nor /terms describes shared answers");
   AS.noteLiveShares(2);
-  ok(/share=true<\/code>, and only/.test(privacyPage("https://agent402.example")) && /caller-supplied/.test(termsPage("https://agent402.example")), "switch off but pages still served: /privacy and /terms keep describing them until they expire");
+  {
+    const pp = privacyPage("https://agent402.example"), tt = termsPage("https://agent402.example");
+    ok(PAST_PRIVACY.test(pp) && !/Sharing is off unless the/.test(pp) && !/such a call, publishes/.test(pp) && new RegExp(`deleted ${AS.SHARE_TTL_DAYS} days after it was made`).test(pp), "switch off but pages still served: /privacy describes them in the past tense, says no new pages are made, and keeps the expiry lines");
+    ok(PAST_TERMS.test(tt) && !/share=true<\/code> publishes/.test(tt), "switch off but pages still served: /terms describes the shared page in the past tense");
+  }
+  AS.noteLiveShares(null);
+  ok(PAST_PRIVACY.test(privacyPage("https://agent402.example")) && PAST_TERMS.test(termsPage("https://agent402.example")), "switch off, live pages not counted yet: /privacy and /terms keep the past-tense lines");
+  process.env.ANSWER_SHARE = "on";
+  ok(!PAST_PRIVACY.test(privacyPage("https://agent402.example")) && !PAST_TERMS.test(termsPage("https://agent402.example")), "switch on: the present-tense lines, not the past-tense ones");
   AS.noteLiveShares(0);
   process.env.ANSWER_SHARE = "on";
   // The first-call allowance line follows its own switch.
@@ -237,6 +263,24 @@ const DATA = { query: "q", answer: "a", citations: [] };
   ok(g.status === 410 && /was removed/.test(await g.text()) && !AS.__htmlCache.has(rec.id), "after a takedown the page answers 410 removed and the cached render is dropped");
   await new Promise((r) => srv.close(r));
   await clearFiles();
+}
+{
+  // The boot count: a store that cannot be read yet is retried; until a count
+  // lands the pages read as may-be-live.
+  let calls = 0;
+  AS.__setShareStore({ backend: "test", async get() { return null; }, async put() { return true; }, async sweep() { return { expired: 0, dropped: 0, live: 0 }; }, async countLive() { if (calls++ === 0) throw new Error("not ready"); return 0; } });
+  AS.noteLiveShares(null);
+  process.env.ANSWER_SHARE = "";
+  const express = (await import("express")).default;
+  const logs = [];
+  AS.mountAnswerShares(express(), { baseUrl: "http://share.test", notFoundPage: () => {}, rasterizeSvg: async () => null, brand: {}, sweepEveryMs: 0, countEveryMs: 3_600_000, countRetryMs: 30, log: (l) => logs.push(l) });
+  await sleep(5);
+  ok(calls === 1 && AS.sharePagesMayBeLive() && logs.length === 1, "a boot count that fails leaves the pages may-be-live and is logged");
+  for (let i = 0; i < 40 && calls < 2; i++) await sleep(10);
+  await sleep(5);
+  ok(calls === 2 && !AS.sharePagesMayBeLive(), `the failed boot count is retried and its zero applied (count calls ${calls})`);
+  process.env.ANSWER_SHARE = "on";
+  AS.__setShareStore(AS.__createFileStore(SHARE_DIR));
 }
 
 // ---- 2. paid server ---------------------------------------------------------
@@ -413,7 +457,7 @@ try {
     await sleep(300);
     ok(files().length === before, "switch off: ...and writes nothing");
     { const d = await answerDesc(); ok(/max_tokens/.test(d) && !/share=true|"share"/.test(d), "switch off: the catalog (openapi) does not offer share"); }
-    ok(/share=true/.test(await (await fetch(`${B}/privacy`)).text()) && /caller-supplied/.test(await (await fetch(`${B}/terms`)).text()), "switch off with a page made while on still served: /privacy and /terms keep describing shared answers");
+    ok(PAST_PRIVACY.test(await (await fetch(`${B}/privacy`)).text()) && PAST_TERMS.test(await (await fetch(`${B}/terms`)).text()), "switch off with a page made while on still served: /privacy and /terms describe shared answers in the past tense");
     const k = await fetch(`${B}/answers/${kept.id}`);
     ok(k.status === 200 && (await k.text()).includes("made while on"), "switch off: a page made while it was on still serves until it expires");
     ok((await fetch(`${B}/answers/AAAAAAAAAAAAAAAAAAAAAAAA`)).status === 404, "switch off: an unknown id is 404");
@@ -421,6 +465,48 @@ try {
 } finally {
   proc?.kill("SIGKILL");
   facilitator?.close();
+}
+
+// ---- 4. the Postgres store ----------------------------------------------------
+// The records table: one live, one expired, one removed record; the read-only
+// count and the sweep. Runs when STATE_DATABASE_URL_FOR_TEST names a database
+// (scripts/lib/file-mode.js clears STATE_DATABASE_URL for the parts above);
+// under CI a missing one fails.
+{
+  const url = String(process.env.STATE_DATABASE_URL_FOR_TEST || "").trim();
+  if (!url && process.env.CI) fail("CI needs STATE_DATABASE_URL_FOR_TEST for the Postgres store case");
+  if (url) {
+    process.env.STATE_DATABASE_URL = url;
+    const { requireTestPg } = await import("./lib/test-pg.js");
+    requireTestPg({ label: "test-answer-share" });
+    const sdb = await import("../src/state-db.js");
+    try {
+      AS.__setShareStore(null);
+      ok(AS.shareStore().backend === "pg", "with the state database, shares live in the records table");
+      const now = Date.now();
+      const live = AS.shareRecord({ id: AS.newShareId(), query: "q", answer: "a", citations: [], now });
+      const old = AS.shareRecord({ id: AS.newShareId(), query: "q", answer: "old", citations: [], now: now - AS.SHARE_TTL_MS - 1000 });
+      const gone = AS.shareRecord({ id: AS.newShareId(), query: "q", answer: "gone", citations: [], now });
+      for (const r of [live, old, gone]) await AS.shareStore().put(r);
+      await AS.removeShare(gone.id, "test", { now, log: () => {} });
+      process.env.ANSWER_SHARE = "";
+      AS.noteLiveShares(null);
+      ok(await AS.countLiveShares(now) === 1, "postgres: the read-only count sees one live page (not the expired or the removed one)");
+      const sw = await AS.shareStore().sweep(now);
+      ok(sw.live === 1 && sw.expired === 1 && sw.dropped === 0, `postgres: the sweep counts live 1 and tombstones expired 1 (${JSON.stringify(sw)})`);
+      ok((await AS.readShare(old.id, now)).status === "gone" && (await AS.readShare(gone.id, now)).status === "removed" && (await AS.readShare(live.id, now)).status === "ok", "postgres: the expired page reads gone, the removed one removed, the live one ok");
+      const { privacyPage } = await import("../src/privacy.js");
+      const { termsPage } = await import("../src/terms.js");
+      ok(AS.sharePagesMayBeLive() && PAST_PRIVACY.test(privacyPage("https://agent402.example")) && PAST_TERMS.test(termsPage("https://agent402.example")), "postgres, switch off, one live page: /privacy and /terms render the past-tense lines");
+      await AS.removeShare(live.id, "test", { now, log: () => {} });
+      ok(await AS.countLiveShares(now) === 0 && !AS.sharePagesMayBeLive() && !/share=true/.test(privacyPage("https://agent402.example")), "postgres, switch off, no live page: the lines are gone");
+    } finally {
+      try { await sdb.__dropStateSchema(); } catch { /* best effort */ }
+      await sdb.closeStateDb();
+    }
+  } else {
+    console.log("SKIP - Postgres store case: no STATE_DATABASE_URL_FOR_TEST");
+  }
 }
 console.log(`\n${pass} passed`);
 process.exit(0);

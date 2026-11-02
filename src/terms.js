@@ -6,7 +6,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL } from "./repo-link.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { creditsSalesEnabled, creditsDailyMaxCents } from "./credits-sales.js";
-import { sharePagesMayBeLive } from "./answer-share.js";
+import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -18,8 +18,11 @@ export function termsPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its paragraph and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
-  // Shared answer pages exist only while their switch is on (src/answer-share.js).
+  // Shared answer pages exist only while their switch is on, or while pages
+  // made under it may still be served (src/answer-share.js): then the
+  // paragraph reads in the past tense.
   const sharesOn = sharePagesMayBeLive();
+  const sharesOffered = answerShareEnabled();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -86,7 +89,7 @@ aside from short-lived caches that make repeated identical calls cheaper, not re
 content may be inaccurate, incomplete, or unsuitable for your purpose; it is not professional, legal,
 financial, or medical advice. Your use of generated content, including any obligation to verify it or
 mark it as AI-generated where the law requires, is your responsibility.</p>${sharesOn ? `
-<p>A web.answer call made with <code>share=true</code> publishes a shared answer page: it shows the
+<p>A web.answer call made with <code>share=true</code>${sharesOffered ? " publishes" : " while sharing was offered published"} a shared answer page: it shows the
 caller-supplied question and a model-generated answer, and we may remove it at any time.</p>` : ""}
 
 <h2>Enforcement</h2>

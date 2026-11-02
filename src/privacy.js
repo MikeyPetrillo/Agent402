@@ -12,7 +12,7 @@ import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followu
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
-import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, sharePagesMayBeLive } from "./answer-share.js";
+import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -24,8 +24,11 @@ export function privacyPage(baseUrl) {
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
   // Shared answers and the first-call allowance each ship behind a switch:
-  // their lines appear only while the switch is on.
+  // their lines appear only while the switch is on. The shared-answer line
+  // also stays, in the past tense, while pages made under the switch may
+  // still be served after it is turned off.
   const sharesOn = sharePagesMayBeLive();
+  const sharesOffered = answerShareEnabled();
   const allowanceOn = firstCallAllowanceEnabled();
 
   const extraCss = `
@@ -110,10 +113,14 @@ so every claim below is verifiable in code.</p>
     charge, so each wallet gets one free first call) keeps the address of each wallet granted one,
     without expiry, so the same wallet is never granted twice, and a daily count of grants per client
     address, kept under a keyed hash of the address (never the address itself) and deleted after two days;</li>` : ""}${sharesOn ? `
-    <li>a call to <code>/api/answer</code> (web.answer) made with <code>share=true</code>, and only
+    <li>a call to <code>/api/answer</code> (web.answer) made with <code>share=true</code>${sharesOffered ? `, and only
     such a call, publishes its question, its answer and the cited sources (URL and snippet) as a page at an
     unguessable address under <code>/answers/</code>, with a preview image. Sharing is off unless the
-    caller asks for it, and the page is written only after the call is paid. We keep those fields and
+    caller asks for it, and the page is written only after the call is paid.` : ` while sharing was
+    offered, and only such a call, published its question, its answer and the cited sources (URL and
+    snippet) as a page at an unguessable address under <code>/answers/</code>, with a preview image,
+    written only after the call was paid. No new pages are made now; each page already made stays at
+    its address until it expires.`} We keep those fields and
     the dates it was made and expires, never the paying wallet, IP address or any other detail of the
     request. Anyone with the link can read the page; it asks search engines not to index it. It is
     deleted ${SHARE_TTL_DAYS} days after it was made, and its address then answers that it has expired

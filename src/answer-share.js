@@ -35,6 +35,7 @@
 // question renders as text.
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { sanitizeReportProse } from "./report-grounding.js";
@@ -132,6 +133,21 @@ function createFileStore(dir) {
       }
       return { expired, dropped, live };
     },
+    // Read-only and asynchronous (one file at a time), so a count over many
+    // files never holds the event loop on the boot path.
+    async countLive(now = Date.now()) {
+      let files = [];
+      try { files = await readdir(dir); } catch (e) { if (e?.code === "ENOENT") return 0; throw e; }
+      let live = 0;
+      for (const f of files) {
+        const id = f.endsWith(".json") ? f.slice(0, -5) : "";
+        if (!SHARE_ID_RE.test(id)) continue;
+        let rec = null;
+        try { rec = JSON.parse(await readFile(path(id), "utf8")); } catch { continue; }
+        if (rec && !rec.gone && rec.expiresAt > now) live++;
+      }
+      return live;
+    },
   };
 }
 
@@ -151,22 +167,39 @@ function createPgStore() {
         `DELETE FROM ${RT()} WHERE collection = $1 AND (body ->> 'expiresAt')::bigint <= $2`,
         [COLLECTION, now - TOMBSTONE_MS],
       );
+      return { expired: exp.rowCount, dropped: drop.rowCount, live: await this.countLive(now) };
+    },
+    async countLive(now = Date.now()) {
       const lv = await stateQuery(
         `SELECT count(*)::int AS n FROM ${RT()} WHERE collection = $1 AND NOT (body ? 'gone') AND (body ->> 'expiresAt')::bigint > $2`,
         [COLLECTION, now],
       );
-      return { expired: exp.rowCount, dropped: drop.rowCount, live: lv.rows[0]?.n ?? 0 };
+      return lv.rows[0]?.n ?? 0;
     },
   };
 }
 
-// Whether published pages may still be served: the last sweep's live count,
-// or a page written by this process since. Privacy and terms describe shared
-// pages while the switch is on or any may still be served (a page made while
-// it was on serves until it expires after the switch is turned off).
-let livePages = 0;
-export function noteLiveShares(n) { livePages = Math.max(0, Number(n) || 0); }
-export function sharePagesMayBeLive() { return answerShareEnabled() || livePages > 0; }
+// Whether published pages may still be served: this process's last count of
+// live pages (countLiveShares, at boot and hourly, outside the sweep's lease),
+// plus each page this process wrote since that count began. Unknown (null)
+// until a count lands, and unknown counts as may-be-live. Privacy and terms
+// describe shared pages while the switch is on or any may still be served (a
+// page made while it was on serves until it expires after the switch is
+// turned off).
+let livePages = null;
+let localWrites = 0;
+export function noteLiveShares(n) { livePages = n == null ? null : Math.max(0, Number(n) || 0); }
+export function sharePagesMayBeLive() { return answerShareEnabled() || livePages === null || livePages > 0; }
+/** Read-only count of live pages, applied to sharePagesMayBeLive. Throws when the store cannot be read (the state stays as it was). */
+export async function countLiveShares(now = Date.now()) {
+  const w0 = localWrites;
+  const n = await shareStore().countLive(now);
+  // A write that landed while the count ran may be missed by it: add it back
+  // (counting it twice only keeps the lines up, the safe direction).
+  noteLiveShares(n + (localWrites - w0));
+  return n;
+}
+function noteShareWritten() { localWrites++; livePages = (livePages ?? 0) + 1; }
 
 let store = null;
 export function shareStore() { return (store ??= stateDbEnabled() ? createPgStore() : createFileStore(fileDir())); }
@@ -239,7 +272,7 @@ export function reserveShare(req, { log = console.warn } = {}) {
   const watched = onResponseEnd(req, res, (info) => {
     const settled = !info?.forgiven && !info?.allowance && res.statusCode === 200;
     if (!settled || !slot.rec) { createLimit.refund(key); return; }
-    shareStore().put(slot.rec).then(() => { livePages++; }, (e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
+    shareStore().put(slot.rec).then(noteShareWritten, (e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
   });
   if (!watched) { createLimit.refund(key); return null; }
   Object.defineProperty(req, RESERVATION, { value: slot, enumerable: false });
@@ -456,7 +489,7 @@ const NOINDEX = "noindex, nofollow";
  * /answers/:id/card.png and /answers/:id/card.svg, and the hourly sweep.
  * deps: { baseUrl, notFoundPage(res, opts), rasterizeSvg(svg, size), brand: { BRAND, BRAND_DEFS, BRAND_FONT_STYLE }, priceOf() }
  */
-export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasterizeSvg, brand, priceOf = () => "", now = () => Date.now(), sweepEveryMs = 3_600_000 } = {}) {
+export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasterizeSvg, brand, priceOf = () => "", now = () => Date.now(), sweepEveryMs = 3_600_000, countEveryMs = sweepEveryMs, countRetryMs = 20_000, countRetries = 3, log = console.warn } = {}) {
   setShareBaseUrl(origin);
   const pageLimit = createLimiter("answer-share-page", { perMin: 60, perHour: 600 });
   const cardLimit = createLimiter("answer-share-card", { perMin: 20, perHour: 200 });
@@ -536,17 +569,36 @@ export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasteriz
     }
   });
 
+  // Only the writes (tombstones and drops) run under the lease; each process
+  // counts live pages for itself below, so a replica that never holds the
+  // lease still knows whether pages are served.
   const sweep = leased("answer-shares-sweep", {}, async () => {
     try {
+      const w0 = localWrites;
       const r = await shareStore().sweep(now());
-      noteLiveShares(r.live);
+      noteLiveShares(r.live + (localWrites - w0));
       if (r.expired || r.dropped) console.log(`[answer-share] sweep: ${r.expired} expired, ${r.dropped} dropped`);
       return r;
     } catch (e) { console.warn(`[answer-share] sweep failed: ${String(e?.message || e).slice(0, 160)}`); return null; }
   });
+  // The count at boot (retried a few times when the store cannot be read yet;
+  // until one lands the lines read as may-be-live), then hourly. Never awaited
+  // by the caller, so it stays off the listen path.
+  const count = async ({ retriesLeft = 0 } = {}) => {
+    try { return await countLiveShares(now()); }
+    catch (e) {
+      log(`[answer-share] live count failed: ${String(e?.message || e).slice(0, 160)}`);
+      if (retriesLeft > 0) setTimeout(() => { count({ retriesLeft: retriesLeft - 1 }); }, countRetryMs).unref();
+      return null;
+    }
+  };
+  if (countEveryMs > 0) {
+    count({ retriesLeft: countRetries });
+    setInterval(() => { count(); }, countEveryMs).unref();
+  }
   if (sweepEveryMs > 0) {
     sweep().catch(() => {});
     setInterval(() => { sweep().catch(() => {}); }, sweepEveryMs).unref();
   }
-  return { sweep };
+  return { sweep, count };
 }
