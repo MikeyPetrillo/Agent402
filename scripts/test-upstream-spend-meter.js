@@ -57,7 +57,7 @@ const recorded = ({ m, e }, { source, usd, tier, model, priceUsd }, label) => {
 // ---- the fake table: real model ids, made-up rates ----
 const SPEECH_FRONT = SPEECH_MODELS[0].id;
 const T = {
-  models: [["acme/", { completion: 2, prompt: 1 }]],
+  models: [["acme/", { completion: 2, prompt: 1 }], ...(U.REQUIRED_MODEL_ROWS || []).map((id) => [id, { completion: 2, prompt: 1 }])],
   speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
   openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
