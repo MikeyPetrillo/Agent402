@@ -821,6 +821,13 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
   "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
   "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
+  // Shut down 2026-07-23 (OpenAI's deprecations page, notice of 2026-04-22,
+  // replacement gpt-5.6-sol) and gone from the upstream catalog; the premium
+  // tier's openai/gpt-5 family prefix still admitted them by name.
+  // gpt-5-chat is the upstream catalog's id for gpt-5-chat-latest.
+  "openai/gpt-5-codex": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
+  "openai/gpt-5-chat-latest": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
+  "openai/gpt-5-chat": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
   // Gone from the upstream catalog 2026-10-27 (the live-catalog guard). Its
   // family successor on premium, the one the /api/llm-premium proxy already
   // serves for the retired o3-mini and o4-mini ids (llm-kit.js).

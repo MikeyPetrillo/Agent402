@@ -1753,6 +1753,12 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(after.model === use && after.__substitutedFrom === id, `from 2026-11-30 the dated Anthropic id is served as ${use}, the swap named (${after.model}, from ${after.__substitutedFrom})`);
     K.setRetiringClockForTest(null);
   }
+  // gpt-5-codex and gpt-5-chat-latest (and the catalog's gpt-5-chat) shut down
+  // 2026-07-23: a call naming one on premium is served now by gpt-5.6-sol there.
+  for (const id of ["openai/gpt-5-codex", "openai/gpt-5-chat-latest", "openai/gpt-5-chat"]) {
+    const r = validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, "v1-chat-premium");
+    ok(RETIRING_MODELS[id]?.until === "2026-07-23" && r.model === "openai/gpt-5.6-sol" && r.__substitutedFrom === id, `${id}: shut down 2026-07-23, served on premium as gpt-5.6-sol with the swap named`);
+  }
   // OpenAI's 2026-12-11 shutdown of GPT-5 (mini, nano, pro), o3 and o3-pro:
   // each served as itself on its tier until the day, then by the named
   // successor on that same tier, the swap named, a dated snapshot following.
