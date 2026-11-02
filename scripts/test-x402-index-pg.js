@@ -112,6 +112,57 @@ try {
     ok((await ids()).join() === [A, C].join(), "the large row is removed again before the next boot");
   }
 
+  // ---- the pull: own rows are not read back, another container's are ----------
+  // After a persist the pull used to read every row this container had just
+  // written and parse it in the driver in one call (over 300 ms for a 35 MB
+  // seller). It now reads a row whole only when it is newer than what this
+  // container holds, as UTF-8 byte ranges parsed across turns.
+  {
+    const HUGE = "https://seller-huge.example";
+    // Mostly three-byte characters, so byte-range boundaries fall inside them.
+    const mk = (price, fetchedAt) => entry("/huge", { fetchedAt, tools: Array.from({ length: 100_000 }, (_, i) => ({ route: `/api/h${i}`, slug: `h${i}`, name: `名前 ${i} 😀`, description: `${"説明".repeat(40)} "${i}" \\`, price, networks: ["eip155:8453"] })) });
+    const gap = async (fn) => {
+      let last = performance.now(), worst = 0;
+      const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
+      try { const out = await fn(); worst = Math.max(worst, performance.now() - last - 2); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
+    };
+    const stampOf = async (id) => (await sdb.stateQuery(`SELECT updated_at::text AS t FROM ${process.env.STATE_DB_SCHEMA}.records WHERE collection = $1 AND id = $2`, [COLLECTION, id])).rows[0]?.t ?? null;
+    m1.__testSeedCache([[HUGE, mk("$0.001", 1700000000100)]]);
+    await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    ok((await sdb.records.get(COLLECTION, HUGE))?.tools?.length === 100_000, "the large seller's row is stored");
+    const reads0 = m1.__testPullBodyReads();
+    const { worst: wOwn } = await gap(() => m1.pullIndexChanges());
+    ok(m1.__testPullBodyReads() === reads0, `a pull right after this container's persist reads none of the rows it wrote (read ${m1.__testPullBodyReads() - reads0})`);
+
+    // Another container writes a newer copy: this one reads it, whole and once.
+    await sdb.records.put(COLLECTION, HUGE, mk("$0.002", 1700000000200));
+    const stored = await sdb.records.get(COLLECTION, HUGE); // the driver's one-call parse
+    const t0 = performance.now();
+    JSON.parse(JSON.stringify(stored));
+    const oneParse = performance.now() - t0;
+    const heldBefore = m1._cacheForTests().get(HUGE);
+    const reads1 = m1.__testPullBodyReads();
+    const { out: folded, worst: wForeign } = await gap(() => m1.pullIndexChanges());
+    ok(folded === 1 && m1.__testPullBodyReads() === reads1 + 1, `another container's newer row is read and folded once (folded ${folded}, read ${m1.__testPullBodyReads() - reads1})`);
+    const after = m1._cacheForTests().get(HUGE);
+    ok(JSON.stringify(after) === JSON.stringify({ ...heldBefore, ...stored }) && after.tools[5].price === "$0.002", "the folded entry is byte-identical to the held entry merged with the row as the driver parses it");
+    const bound = Math.max(60, Math.min(Number(process.env.LOOP_SLICE_BOUND_MS || 120), oneParse));
+    ok(Math.max(wOwn, wForeign) < bound, `neither pull holds the loop past ${Math.round(bound)} ms (one-call parse ${Math.round(oneParse)} ms; own ${wOwn} ms, foreign ${wForeign} ms)`);
+    // Held as stored: this container's next save leaves the row alone.
+    const stamp = await stampOf(HUGE);
+    await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    ok(stamp && (await stampOf(HUGE)) === stamp, "the pulled row is held as stored, so the next save does not write it back");
+
+    // A removal made on the other container reaches this one on its pull.
+    const rm = m2.removeOrigin(HUGE, { note: "test" });
+    ok(rm?.removed === true, "the other container removes the origin");
+    for (let i = 0; i < 40 && m1._cacheForTests().has(HUGE); i++) { await new Promise((r) => setTimeout(r, 50)); await m1.pullIndexChanges(); }
+    ok(!m1._cacheForTests().has(HUGE) && m1.isRemovedOrigin(HUGE), "the pull purges an origin the other container removed");
+    await sdb.records.del(COLLECTION, HUGE);
+    m2._cacheForTests().delete(HUGE);
+    ok((await ids()).join() === [A, C].join(), "the large seller's row is removed again before the next boot");
+  }
+
   // ---- boot 3: a fresh instance warm-starts from the rows, in pages ------------
   process.env.INDEX_WARM_START_BATCH = "1"; // one row per page, so the in-progress flag is observable across turns
   const m3 = await import("../src/x402-index.js?boot=3");
