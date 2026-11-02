@@ -50,7 +50,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
-import { mountAnswerShares } from "./answer-share.js";
+import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
@@ -8897,6 +8897,17 @@ mountAnswerShares(app, {
   baseUrl: BASE_URL, notFoundPage, rasterizeSvg,
   brand: { BRAND, BRAND_DEFS, BRAND_FONT_STYLE },
   priceOf: () => CATALOG["GET /api/answer"]?.price || "",
+});
+// Operator takedown of one shared answer: its page, JSON and card answer 410
+// "removed" from then on. Body {"id": "<share id>", "note": "<why>"}.
+app.post("/__operator/answer-shares/delete", express.json({ limit: "8kb" }), async (req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const id = String(req.body?.id || "").trim().replace(/^.*\/answers\//, "").replace(/(\.json|\/card\.(png|svg))$/, "");
+  let r;
+  try { r = await removeShare(id, req.body?.note); } catch { return res.status(503).json({ error: "the share store could not be written" }); }
+  if (r.status === "unknown") return res.status(404).json({ ok: false, status: "unknown", note: "no shared answer has that id" });
+  res.json({ ok: true, status: r.status, id });
 });
 // GitHub repo social preview (Settings → Social preview) wants 1280×640.
 let cardGithubCache = null;

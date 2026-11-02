@@ -10,20 +10,25 @@ import { createHash } from "node:crypto";
 // paragraph shown only while a switch is on (the Circle Gateway batched
 // option) moves the sha, not the date, until that switch ships on.
 const PINS = {
-  "src/terms.js": { date: "2026-10-29", sha: "d1096b9e1d0cde90" },
-  "src/privacy.js": { date: "2026-11-03", sha: "197846a9f06a162e" },
+  "src/terms.js": { date: "2026-10-29", sha: "fa9d0655e313e596" },
+  "src/privacy.js": { date: "2026-11-02", sha: "1d000f3c859db3c7" },
 };
 let pass = 0, fail = 0;
+const TODAY = new Date().toISOString().slice(0, 10);
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const DATE_LINE = /last updated (\d{4}-\d{2}-\d{2})\./;
 export function bodyHash(src) { return createHash("sha256").update(src.replace(DATE_LINE, "last updated <date>.")).digest("hex").slice(0, 16); }
 
+ok("2026-11-03" > "2026-11-02" && "2026-12-01" > "2026-11-30", "control: ISO dates compare as strings");
 ok(bodyHash("x last updated 2026-01-01. y") === bodyHash("x last updated 2026-02-02. y") && bodyHash("x last updated 2026-01-01. y") !== bodyHash("x last updated 2026-01-01. z"),
   "control: the hash ignores the date and sees a text change");
 for (const [file, pin] of Object.entries(PINS)) {
   const src = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
   const date = (src.match(DATE_LINE) || [])[1];
   ok(date === pin.date, `${file}: the page says last updated ${date}, pinned ${pin.date}`);
+  // A page dated ahead of its ship day tells readers (and the sitemap's
+  // lastmod) a version exists that does not: never later than today, UTC.
+  ok(Boolean(date) && date <= TODAY, `${file}: last updated ${date} is not after today (${TODAY} UTC)`);
   const h = bodyHash(src);
   ok(h === pin.sha, `${file}: text unchanged since ${pin.date} (hash ${h}; if you changed the text, bump the date in the page and set date + sha here)`);
 }
