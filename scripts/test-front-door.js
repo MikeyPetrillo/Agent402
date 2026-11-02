@@ -196,6 +196,7 @@ process.on("exit", () => { stopProc(); try { fac.close(); } catch {} });
 
 async function boot(extraEnv) {
   const [PORT] = await getFreePorts(1);
+  const TMP = mkdtempSync(join(tmpdir(), "front-door-"));
   proc = spawn(process.execPath, ["src/server.js"], {
     cwd: ROOT,
     env: {
@@ -205,7 +206,8 @@ async function boot(extraEnv) {
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       STATS_ALLOW_EPHEMERAL: "true", FRONT_DOOR_402: "", PAYMENT_REQUIRED_BODY: "",
       FIRST_CALL_ALLOWANCE: "", FIRST_CALL_ALLOWANCE_SLUGS: "", FIRST_CALL_ALLOWANCE_MAX_USD: "",
-      DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "front-door-")), "decide.db"),
+      DECIDE_LEDGER_DB: join(TMP, "decide.db"),
+      AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
       ...extraEnv,
     },
     stdio: ["ignore", "ignore", "pipe"],
