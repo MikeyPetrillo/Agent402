@@ -9,10 +9,16 @@
 //      N concurrent identical authorizations collapse to a single grant, and
 //      that a failed settle releases the nonce for a legitimate retry.
 //
-// Offline, no facilitator, no network.
+// Offline, no facilitator, no network. The per-process sections pin that
+// path: a REDIS_URL in the caller's environment would send every call to a
+// shared Redis whose keys outlive the run (a fixed key here is "consumed" on
+// the next run) and whose state _state() does not show. The real-Redis
+// behavior has its own suite (scripts/test-replay-guard-redis.js); the
+// Redis code path here runs against an in-memory client (section A4).
 import express from "express";
-import { paymentReplayKey, createReplayGuard } from "../src/replay-guard.js";
-import { __setTestClient } from "../src/shared-limit.js";
+delete process.env.REDIS_URL;
+const { paymentReplayKey, paymentValidBeforeMs, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS } = await import("../src/replay-guard.js");
+const { __setTestClient } = await import("../src/shared-limit.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -108,6 +114,106 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   } finally {
     __setTestClient(null);
   }
+}
+
+// ---- A4. The Redis code path against an in-memory client ---------------------
+// A minimal client with the commands the guard sends (GET, SET NX/EX, DEL,
+// EXPIRE) and a hook that runs between two commands, so an interleaving that
+// a real Redis allows can be placed exactly.
+function memoryRedis() {
+  const kv = new Map(); // key -> { v, exp (ms) }
+  const live = (k) => { const e = kv.get(k); if (e && e.exp && e.exp <= Date.now()) { kv.delete(k); return null; } return e || null; };
+  const c = {
+    kv, between: null, sets: [],
+    async get(k) { return live(k)?.v ?? null; },
+    async set(k, v, o = {}) {
+      if (o.NX && live(k)) return null;
+      kv.set(k, { v, exp: o.EX ? Date.now() + o.EX * 1000 : 0 });
+      c.sets.push({ k, ex: o.EX });
+      if (c.between) { const f = c.between; c.between = null; await f(); }
+      return "OK";
+    },
+    async del(k) {
+      const had = kv.delete(k);
+      if (c.between) { const f = c.between; c.between = null; await f(); }
+      return had ? 1 : 0;
+    },
+    async expire(k, sec) { const e = live(k); if (!e) return 0; e.exp = Date.now() + sec * 1000; return 1; },
+  };
+  return c;
+}
+{
+  // A re-send racing the first request's settle: with the consumed mark
+  // written before the claim is dropped, the racing begin() reads either the
+  // claim ("inflight") or the mark ("consumed"), never neither. The hook runs
+  // the racing begin() right after settle's first write lands, whichever
+  // command that is.
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g1 = createReplayGuard(), g2 = createReplayGuard();
+    const k = "n:race";
+    ok(await g1.begin(k) === "ok", "redis path: replica 1 claims the nonce");
+    let raced = null;
+    mem.between = async () => { raced = await g2.begin(k); };
+    await g1.settle(k);
+    ok(raced === "inflight" || raced === "consumed", `redis path: a begin() between settle's two writes is refused (got ${raced})`);
+    ok(await g2.begin(k) === "consumed", "redis path: after settle the nonce reads consumed");
+  } finally { __setTestClient(null); }
+}
+{
+  // The consumed mark of a granted payment is held until its authorization
+  // expires (plus a margin) when that is later than the guard's TTL: a
+  // forgiven hang-up is granted without being settled, so the chain would
+  // still accept the authorization.
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g = createReplayGuard({ ttlMs: 60 * 60 * 1000 });
+    const now = Date.now();
+    await g.begin("n:long");
+    await g.settle("n:long", now, { validBeforeMs: now + 3 * 3600_000 });
+    const ex = mem.sets.find((x) => x.k === "replay:c:n:long")?.ex;
+    ok(ex >= Math.floor((3 * 3600_000 + CONSUMED_VALIDITY_MARGIN_MS) / 1000) - 1, `redis path: a 3 h authorization keeps its consumed mark past its validBefore (EX ${ex} s)`);
+    await g.begin("n:short");
+    await g.settle("n:short", now, { validBeforeMs: now + 300_000 });
+    ok(mem.sets.find((x) => x.k === "replay:c:n:short")?.ex === 3600, "redis path: a 300 s authorization keeps the guard's 1 h TTL (the longer of the two)");
+  } finally { __setTestClient(null); }
+}
+{
+  // The same on the per-process path, with an injected clock.
+  const g = createReplayGuard({ ttlMs: 1000 });
+  await g.begin("n:held", 0);
+  await g.settle("n:held", 0, { validBeforeMs: 10_000 });
+  ok(await g.begin("n:held", 5_000) === "consumed", "local path: past the TTL but before validBefore the mark holds");
+  ok(await g.begin("n:held", 10_000 + CONSUMED_VALIDITY_MARGIN_MS - 1) === "consumed", "local path: and through the margin after validBefore");
+  const g2 = createReplayGuard({ ttlMs: 1000 });
+  await g2.begin("n:held", 0);
+  await g2.settle("n:held", 0, { validBeforeMs: 10_000 });
+  ok(await g2.begin("n:held", 10_000 + CONSUMED_VALIDITY_MARGIN_MS + 1) === "ok", "local path: past validBefore plus the margin the key is free (the chain refuses it now)");
+  // An entry held long at the head does not keep a shorter one behind it alive.
+  const g3 = createReplayGuard({ ttlMs: 1000 });
+  await g3.begin("n:a", 0); await g3.settle("n:a", 0, { validBeforeMs: 1e9 });
+  await g3.begin("n:b", 0); await g3.settle("n:b", 0);
+  ok(await g3.begin("n:b", 2_000) === "ok" && await g3.begin("n:a", 2_000) === "consumed", "local path: each entry expires on its own time");
+}
+{
+  const cred = (auth) => fakeReq({ "payment-signature": Buffer.from(JSON.stringify({ payload: { authorization: auth } })).toString("base64") });
+  ok(paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "1900000000" })) === 1_900_000_000_000, "paymentValidBeforeMs reads the signed validBefore (seconds) as ms");
+  ok(paymentValidBeforeMs(cred({ nonce: "0x1" })) === null && paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "-5" })) === null && paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "1e9" })) === null, "no or malformed validBefore -> null (the guard's TTL applies)");
+  ok(paymentValidBeforeMs(fakeReq({})) === null, "no payment header -> null");
+  const far = paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "99999999999999999999" }));
+  ok(Number.isFinite(far) && far > Date.now() + 50 * 365 * 24 * 3600_000, "an absurd validBefore is held for a century, never Infinity");
+}
+
+{
+  // The x402 call site passes the authorization's validBefore and requires
+  // the shared claim on every paid route (the booted two-container case is
+  // scripts/test-replay-store-outage.js).
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(server.includes("replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) })"), "server.js holds a granted x402 payment's consumed mark until its validBefore");
+  ok(server.includes("await replayGuard.begin(replayKey, undefined, { requireShared: true })"), "server.js requires the shared claim on every paid x402 route");
 }
 
 // ---- B. HTTP harness: the real guard code path in an Express app -------------

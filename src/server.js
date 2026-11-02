@@ -331,7 +331,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKey, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -10469,11 +10469,15 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      // A long-running or composite route needs the shared claim: with the
-      // shared store configured but unreachable it is refused here, before
-      // any payment is taken, rather than claimed on this replica alone.
-      const replayDef = CATALOG[`${req.method} ${req.path}`];
-      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      // Every paid route needs the shared claim: with the shared store
+      // configured but unreachable the call is refused here, before any
+      // payment is verified or settled, rather than claimed on this replica
+      // alone. A per-process claim on two containers lets one signed payment
+      // run the handler on each and reach the facilitator twice; only the
+      // chain's nonce and the later settlement checks would then stand
+      // between the second run and a second answer. With no shared store
+      // configured (one process) the per-process claim is the guarantee.
+      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: true });
       if (verdict === "unavailable") {
         res.setHeader("Retry-After", "30");
         return res.status(503).json({
@@ -10497,7 +10501,9 @@ if (FREE_MODE) {
       const finishGuard = () => {
         if (resolved) return;
         resolved = true;
-        if (res.statusCode === 200) replayGuard.settle(replayKey).catch(() => {});
+        // Held until the authorization itself expires when that is later
+        // than the guard's TTL: a forgiven hang-up is granted unsettled.
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) }).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
