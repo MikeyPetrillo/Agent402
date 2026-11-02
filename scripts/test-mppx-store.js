@@ -76,6 +76,12 @@ const { createMppxStore, MPPX_STORE_PREFIX } = await import("../src/mppx-store.j
   ok(entry && entry.at > Date.now() && entry.at <= exp + 1000, "the claim expires with the challenge, so redis keeps no spent markers");
   await a.delete("mppx:charge:0xbb");
   ok(await b.tryClaim("mppx:charge:0xbb", exp) === true, "after A releases the claim, B can make it");
+  // Store contract since mppx 0.15: a claim past its expiry is refused, on
+  // redis and on the memory fallback, and leaves nothing behind.
+  ok(await a.tryClaim("mppx:charge:0xpast", Date.now() - 1) === false, "redis: a claim whose expiry has passed is refused");
+  ok(!redis.data.has(`${MPPX_STORE_PREFIX}mppx:charge:0xpast`), "and the refused claim writes no marker");
+  ok(await mem.tryClaim("mppx:charge:0xpast", Date.now() - 1) === false, "memory: a claim whose expiry has passed is refused");
+  ok(await a.tryClaim("mppx:charge:0xnan", NaN) === false, "a claim with no finite expiry is refused");
 
   // update(): compare-and-set, bigints intact, and a race is retried.
   await a.put("k:budget", { n: 1n });

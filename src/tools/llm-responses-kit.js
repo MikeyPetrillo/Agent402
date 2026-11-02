@@ -31,7 +31,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning, fitReasoningToCap,
-  refuseCostVariants, refuseUnsupportedParams,
+  refuseCostVariants, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote,
   assertUpstreamBody,
   stripBilling,
 } from "./llm-gateway-kit.js";
@@ -112,11 +112,24 @@ export function validateResponsesRequest(input, tierSlug) {
   let model = canonicalModel(input.model);
   const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = (() => {
+    const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
+    return {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant",
+      reasoningBudget: input.reasoning?.max_tokens !== undefined,
+    };
+  })();
   if (!isRouted) {
     refuseCostVariants(model);
-    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // see llm-messages-kit: serve the tier default, never refuse a missing model
+    if (!model && tier.defaultModel) { // see llm-messages-kit: serve the tier default, never refuse a missing model
+      model = defaultModelFor(tier, paramCtx);
+      defaultedModel = model;
+    }
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
-    if (!tierAllows(tierSlug, model)) {
+    if (!tierAllows(tierSlug, model, input.model)) {
       // "auto" when not gated at the auto price: name the auto route.
       const home = model === AUTO_MODEL ? AUTO_TIER : tierFor(model);
       // RESPONSES_PATH_BY_TIER is an explicit map: a chat tier with no
@@ -182,14 +195,7 @@ export function validateResponsesRequest(input, tierSlug) {
   // Parameters the model does not take (GPT-6 Astra sampling; Claude Haiku 5
   // sampling and assistant prefill): named before any upstream call, as on the
   // chat and Messages wires.
-  if (!isRouted) {
-    const last = Array.isArray(input.input) ? input.input[input.input.length - 1] : null;
-    refuseUnsupportedParams(model, {
-      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
-      endsWithAssistant: !!last && (last.type || (last.role ? "message" : null)) === "message" && last.role === "assistant",
-      reasoningBudget: input.reasoning?.max_tokens !== undefined,
-    });
-  }
+  if (!isRouted) refuseUnsupportedParams(model, paramCtx);
   for (const k of ["temperature", "top_p", "metadata", "tool_choice", "parallel_tool_calls", "truncation", "text"]) if (input[k] !== undefined) body[k] = input[k];
   // tool_choice mirrors the tools guard (function tools only): Responses wire
   // is "none"|"auto"|"required" or {type:"function", name} - a hosted-tool
@@ -443,11 +449,12 @@ const INPUT_SCHEMA = {
 };
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
+  const compat = defaultModelCompatNote(t);
   if (tierSlug === "v1-chat-metered") {
-    return `OpenAI Responses API priced per request from the request itself. The 402 quotes the input (instructions, input items and tools), estimated from its tokens with headroom, plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.`;
+    return `OpenAI Responses API priced per request from the request itself. The 402 quotes the input (instructions, input items and tools), estimated from its tokens with headroom, plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.${compat ? ` ${compat}` : ""}`;
   }
   const base = `OpenAI Responses API over x402 - point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes (a namespace is flattened into its functions; function_call items carry a namespace field on non-streamed output), server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
-  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.${compat ? ` ${compat}` : ""}` : "";
   return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base + dflt;
 }
 

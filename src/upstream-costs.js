@@ -42,7 +42,7 @@ let dropped = [];
 // so both count as gaps.
 const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
-  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
+  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
   // The direct image model (USD per 1M tokens: prompt for text input,
@@ -52,6 +52,11 @@ const REQUIRED = [
   ["media", "black-forest-labs/flux-3-image-klein"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
+// Model rows a serving path needs by their own prefix: a model admitted on a
+// tier whose price only a broader row (or none) would answer. Without its row
+// a flat tier prices it at the tier's max_price bound and the metered tier
+// refuses it, so a missing one is a gap.
+export const REQUIRED_MODEL_ROWS = ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro"];
 
 function parse(text) {
   const raw = String(text || "").trim();
@@ -167,6 +172,7 @@ export function upstreamCostsGaps() {
   const gaps = [];
   for (const path of REQUIRED) if (path.reduce((o, k) => (o == null ? o : o[k]), t) == null) gaps.push(path.join("."));
   for (const k of NONEMPTY) if (!Object.keys(t[k]).length) gaps.push(k);
+  for (const p of REQUIRED_MODEL_ROWS) if (!t.models.some(([prefix]) => prefix === p) && !dropped.includes(p)) gaps.push(`models[${p}]`);
   for (const p of dropped) gaps.push(`models[${p}]`);
   return gaps;
 }

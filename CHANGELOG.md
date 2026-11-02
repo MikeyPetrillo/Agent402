@@ -6,6 +6,49 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-02 (new pro models, 2026-12-11 retirements, MCP install text, lite search, Stellar RPC)
+Gateway:
+- The pro tier serves openai/gpt-6.1-terra (and its -pro twin) and
+  moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.
+- gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro are served as
+  themselves until 2026-12-11, then by their named gpt-5.6 successors at the
+  tier and price of the route called, the swap named in
+  agent402_model_substituted.
+- gpt-5-codex and gpt-5-chat-latest, shut down upstream, are served on the
+  premium and metered tiers by gpt-5.6-sol, the swap named.
+- The metered tier's default model is Claude Haiku 5.5. A call that names no
+  model but sends temperature, top_p, top_k, an assistant prefill or a fixed
+  reasoning budget is served by Claude Haiku 4.5 instead of a 400; /v1/models
+  and the route descriptions name both.
+- The base tier falls back to gpt-6-luna, then deepseek-chat, when the
+  requested model has no available host, as the nano tier does.
+- Judgment routes run Jev 1.14.0.
+Surfaces:
+- server.describe, llms.txt and the README offer the hosted connector at
+  https://agent402.tools/mcp in place of an add-server form that has closed.
+- The hosted connector can serve every skill pack as an Agent Skill over the
+  MCP Skills extension (skills/list, skills/get, resources/read of
+  skill://agent402/<pack>/SKILL.md), offered only to a client that declares
+  the extension; off until MCP_SKILLS=on. Prompts are unchanged. A pack whose
+  tool runs free with proof-of-work says so, with the wallet price as the
+  alternative.
+Packages:
+- agent402-mcp 0.13.27 carries the same server.describe install text, and
+  every install pin names it.
+Tools:
+- exa-search accepts type "lite": the fastest search, served from cached
+  pages, with every filter the tool takes. Its published example runs it.
+Payments:
+- Self-hosters can add the stablecoin issuer's facilitator as the last
+  settle fallback on Base and Polygon (`CIRCLE_FACILITATOR_EVM_FALLBACK=on`,
+  off by default): exact USDC only, reached only after every earlier settler
+  refused before broadcasting. It is tried only on a chain the issuer's
+  /supported lists, read again every 10 minutes
+  (`CIRCLE_EVM_SUPPORTED_REFRESH_MS`).
+Facilitator:
+- On pubnet an RPC already on version 30 is tried first, ahead of the
+  Protocol 30 vote, and startup logs each RPC's version with a warning for one below protocol 30.
+
 ### 2026-11-01 (x402 2.29 libraries, model "default")
 Payments:
 - The server runs the x402 2.29 libraries (core, express, evm, svm,

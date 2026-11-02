@@ -65,7 +65,7 @@ await refuses(() => K.validateLongRequest({ state: "doc", questions: { q: { type
   const ref = v.body.state.pic;
   ok(/^img-[0-9a-f-]{36}$/.test(ref) && v.body.assets[ref]?.data_base64 === IMG.data_base64, "the image goes into state once, under a fresh reference, with its asset beside it");
   ok(v.body.state.context === "context text" && v.body.questions.q.instructions === "Is `pic` grey?", "the buyer's text is context and the question still names the image by the buyer's name");
-  ok(v.body.model === "jev-1.13.0" && !v.hasBox, "a vision request without a box runs on the pinned version");
+  ok(v.body.model === "jev-1.14.0" && !v.hasBox, "a vision request without a box runs on the pinned version");
   const b = K.validateVisionRequest({ images: { pic: IMG }, questions: { where: { type: "box", instructions: "the corner of `pic`" } } });
   ok(b.body.model === "jev-preview" && b.hasBox, "a box question always runs on jev-preview");
   const l = K.validateLocateRequest({ image: IMG, targets: ["the `mug`"] });
@@ -75,13 +75,13 @@ await refuses(() => K.validateLongRequest({ state: "doc", questions: { q: { type
 
 // --- the price guard and the upstream call ------------------------------------
 const calls = [];
-const stub = (answers, model = "jev-1.13.0", status = 200) => async (url, init) => {
+const stub = (answers, model = "jev-1.14.0", status = 200) => async (url, init) => {
   calls.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
   return new Response(JSON.stringify({ model, answers, usage: { input_tokens: 600, output_tokens: 20 } }), { status, headers: { "content-type": "application/json" } });
 };
 {
   const r = await K.judgeVision({ images: { pic: IMG }, questions: Q }, { fetchImpl: stub({ q: { type: "noul", noul: 0.9 } }) });
-  ok(r.preview === true && r.answers.q.noul === 0.9 && r.model === "jev-1.13.0", "vision answers in shape and says it is a preview");
+  ok(r.preview === true && r.answers.q.noul === 0.9 && r.model === "jev-1.14.0", "vision answers in shape and says it is a preview");
   ok(calls.at(-1).headers["TypeSafe-Danger-Zone-Images"] === "true", "vision sends the images header");
   const L = await K.locate({ image: IMG, targets: ["the thing"] }, { fetchImpl: stub({ t0_box: { type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.6 }, confidence: 0.8 }, t0_present: { type: "noul", noul: 0.2 } }, "jev-1.14.0") });
   ok(L.results[0].found === false && L.results[0].present === 0.2 && L.results[0].box.left === 0.2, "locate reports found:false when the noul says the target is absent, with the guessed box beside it");

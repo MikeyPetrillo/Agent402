@@ -635,6 +635,47 @@ export function createDbStore(path, { log = console.warn } = {}) {
   };
 }
 
+/** The marker a destroyed access key leaves behind (lowercase address). */
+export const KEY_GONE_PREFIX = "a402:keygone:";
+/** How long a marker is kept: far past any renewal's lease. */
+const KEY_GONE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+const isKeyRecord = (v) => !!v && typeof v === "object" && typeof v.privateKey === "string";
+const keyAddrOf = (v) => String(v?.accessKeyAddress || "").toLowerCase();
+
+/**
+ * The store view handed to mppx. mppx 0.17 reads an access key before it
+ * signs a renewal and writes it back (retainAccessKey: under the lookup key
+ * and under the address) once the transfer is sent, seconds later. A cancel
+ * or sweep that destroyed the key in between leaves a marker first
+ * (destroyAccessKey), and a private-key record for a marked address is not
+ * written: put checks before and after its write (a destroy that ran in
+ * between is undone), update after. Every other key passes untouched.
+ */
+export function guardDestroyedKeys(kv) {
+  const gone = async (v) => {
+    if (!isKeyRecord(v)) return false;
+    const a = keyAddrOf(v);
+    return /^0x[0-9a-f]{40}$/.test(a) && !!(await kv.get(`${KEY_GONE_PREFIX}${a}`));
+  };
+  const view = Object.create(kv);
+  view.put = async (key, value) => {
+    if (await gone(value)) return;
+    await kv.put(key, value);
+    if (await gone(value)) await kv.delete(key);
+  };
+  view.update = async (key, fn) => {
+    let wrote = null;
+    const result = await kv.update(key, (cur) => {
+      const change = fn(cur);
+      if (change?.op === "set") wrote = change.value;
+      return change;
+    });
+    if (wrote && (await gone(wrote))) await kv.delete(key);
+    return result;
+  };
+  return view;
+}
+
 /** The store for this process: the database when STATE_DATABASE_URL is set, the file otherwise. */
 export function createSubscriptionStore(path, { log = console.warn } = {}) {
   return stateDbEnabled() ? createDbStore(path, { log }) : createFileStore(path);
@@ -795,7 +836,10 @@ export function createMppSubscriptions({
   const currency = envCurrency();
   const decimals = envDecimals();
   const kv = createSubscriptionStore(storePath || STORE_PATH(), { log });
-  const subStore = Tempo.Subscription.fromStore(kv);
+  // Everything handed to mppx goes through this view: a private-key record for
+  // an access key we destroyed is never written back (see guardDestroyedKeys).
+  const mppxKv = guardDestroyedKeys(kv);
+  const subStore = Tempo.Subscription.fromStore(mppxKv);
   const PERIOD_MS = periodMs();
 
   // The mppx activation method. `resolve` maps a verified credential to the
@@ -878,7 +922,7 @@ export function createMppSubscriptions({
     currencies: [currency], decimals, recipient, chainId: TEMPO_MAINNET_CHAIN_ID,
     periodCount: PERIOD_COUNT, periodUnit: PERIOD_UNIT,
     subscriptionExpires: new Date(Math.floor((Date.now() + SUBSCRIPTION_TERM_MS) / 1000) * 1000),
-    store: kv,
+    store: mppxKv,
     // Makes mppx build the transaction through prepareTransactionRequest, which
     // is the ONLY path that populates gas and fee fields. See subscriptionFeePayer().
     ...(feePayer ? { feePayer, feePayerPolicy: subscriptionFeePayerPolicy() } : {}),
@@ -963,6 +1007,11 @@ export function createMppSubscriptions({
     const live = new Set(Object.entries(snap).filter(([k]) => k.startsWith("a402:sub:")).map(([, v]) => String(v.accessKeyAddress || "").toLowerCase()));
     let open = 0;
     for (const [key, marker] of Object.entries(snap)) {
+      // A destroyed key's marker only has to outlive a renewal in flight.
+      if (key.startsWith(KEY_GONE_PREFIX)) {
+        if (now() - (Date.parse(marker?.at || "") || 0) > KEY_GONE_KEEP_MS) await kv.delete(key);
+        continue;
+      }
       if (!key.startsWith("a402:offer:")) continue;
       const addr = String(marker?.accessKeyAddress || "").toLowerCase();
       if (live.has(addr)) { await kv.delete(key); continue; }   // paid: the key belongs to a subscription now
@@ -979,10 +1028,16 @@ export function createMppSubscriptions({
   }
   /** Delete OUR private half of one access key, by content match (see the
    *  note in sweepOffers). With it gone the buyer's standing authorization for
-   *  that key can never be exercised by anyone. Returns how many records went. */
-  async function destroyAccessKey(address, snap = kv._snapshot()) {
+   *  that key can never be exercised by anyone. Returns how many records went.
+   *  With `mark` (a key a subscription billed with, whose renewal may be in
+   *  flight) the address is marked first, so that renewal's late rewrite of
+   *  the key is refused (guardDestroyedKeys). An unpaid offer has no renewal
+   *  and leaves no marker. */
+  async function destroyAccessKey(address, snap = null, { mark = false } = {}) {
     const addr = String(address || "").toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(addr)) return 0;
+    if (mark) await kv.put(`${KEY_GONE_PREFIX}${addr}`, { at: new Date(now()).toISOString() });
+    snap = snap || kv._snapshot();
     let n = 0;
     for (const [k2, v2] of Object.entries(snap)) {
       if (v2 && typeof v2 === "object" && v2.privateKey && String(v2.accessKeyAddress || "").toLowerCase() === addr) { await kv.delete(k2); n++; }
@@ -1252,7 +1307,7 @@ export function createMppSubscriptions({
     assertSigningAllowed("a subscription renewal");
     const result = await tempoServer.renewSubscription({
       subscriptionId: rec.mppxSubscriptionId,
-      store: kv,
+      store: mppxKv,
       recipient,
       // The sponsor has to be passed HERE TOO. `renewSubscription` is a
       // standalone entry point: it calls createContext on its OWN parameters
@@ -1504,7 +1559,7 @@ export function createMppSubscriptions({
     cache.set(subId, next);   // listActive/get are synchronous for the scheduler
     // A closed canary record's access key is never needed again; drop our
     // private half so the burner's standing authorization is inert.
-    if (canaryRec) await destroyAccessKey(rec.accessKeyAddress);
+    if (canaryRec) await destroyAccessKey(rec.accessKeyAddress, null, { mark: true });
     if (r.won) log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAtNow).toISOString()}` : "immediately"})`);
     return publicView(next);
   }
@@ -1532,7 +1587,7 @@ export function createMppSubscriptions({
         : null));
       if (r.value) cache.set(rec.subId, r.value);
       if (!r.won) continue;
-      const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress);
+      const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress, null, { mark: true });
       swept.push({ subId: rec.subId, accessKeyAddress: rec.accessKeyAddress || null, keysDestroyed });
     }
     if (swept.length) log(`[mpp-subs] canary sweep closed ${swept.length} stale rail-canary subscription(s)`);

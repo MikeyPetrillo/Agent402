@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import { examplePngBase64 } from "../src/tools/judge-preview-kit.js";
 // The Jev version the paid judge is pinned to (src/tools/judge-kit.js JEV_PINNED).
-const JEV_PINNED_VERSION = (process.env.JEV_MODEL || "jev-1.13.0").trim();
+const JEV_PINNED_VERSION = (process.env.JEV_MODEL || "jev-1.14.0").trim();
 const EXAMPLE_PNG = examplePngBase64();
 
 // A failed leg names the network cause too: undici reports a bare "fetch

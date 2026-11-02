@@ -80,6 +80,11 @@ export const RETIRING = Object.freeze({
   "gpt-4.1": { until: "2027-01-14", use: "gpt-6.1-sol" },
   "o3-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
   "o4-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
+  // o3 and o3-pro shut down 2026-12-11 (notice of 2026-06-11). The notice
+  // names gpt-5.6-sol; this tier admits gpt-5.6-terra, its default, so a call
+  // naming either id is served by it from that day.
+  "o3": { until: "2026-12-11", use: "gpt-5.6-terra" },
+  "o3-pro": { until: "2026-12-11", use: "gpt-5.6-terra" },
 });
 /** The successor serving `model` at `now`, or null while it is still served as itself. */
 export function retiredSuccessor(model, now = Date.now()) {

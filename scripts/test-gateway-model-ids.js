@@ -550,19 +550,30 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
   // requested row is safe only when (a) the successor's own row covers it and
   // (b) endpoints inside the requested row remain, with tools wherever the
   // requested model has them, for the metered cap to route to.
+  // Priority endpoints are graded as rule 4 grades them: never routed on a
+  // tier without the priority knob, and divided by PRIORITY_PRICE_FACTOR on a
+  // tier with it, where the clamp prices the row at that factor.
   const row = costFor(requested);
   const succRow = costFor(succ);
+  const priorityShared = Object.keys(TIERS).some((t) => TIERS[t].priority === true && tierAllows(t, requested) && tierAllows(t, succ));
+  const graded = succEps.flatMap((e) => {
+    if (!PRIORITY_TAG.test(String(e?.tag || ""))) return [e];
+    if (!priorityShared) return [];
+    const scaled = Object.fromEntries(["prompt", "completion"].map((k) => [k, Number(e?.pricing?.[k]) / PRIORITY_PRICE_FACTOR]));
+    return [{ ...e, pricing: { ...e.pricing, ...scaled } }];
+  });
   const priceOf = (e, k) => Number(e?.pricing?.[k]) * 1e6;
   const within = (e, r) => ["prompt", "completion"].every((k) => !Number.isFinite(priceOf(e, k)) || priceOf(e, k) <= r[k] + 1e-9);
-  const dear = (k) => Math.max(...succEps.map((e) => priceOf(e, k)).filter(Number.isFinite));
-  const cheaper = succEps.every((e) => within(e, row));
+  const dear = (k) => Math.max(...graded.map((e) => priceOf(e, k)).filter(Number.isFinite));
+  ok(graded.length > 0, `${succ}: at least one endpoint is routable on a tier that serves ${requested} (${graded.length} of ${succEps.length})`);
+  const cheaper = graded.every((e) => within(e, row));
   if (cheaper) {
-    ok(true, `${succ}'s dearest live endpoint costs no more than ${requested}'s row`);
+    ok(true, `${succ}'s dearest routable endpoint costs no more than ${requested}'s row`);
   } else {
-    const capped = succEps.filter((e) => within(e, row));
-    const covered = !!succRow && succEps.every((e) => within(e, succRow));
-    ok(covered, `${succ}'s own row covers its dearest live endpoint, so the per-link clamp holds where it costs more than ${requested}'s row${covered ? "" : brief(" (amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${succRow ? `${succRow.prompt}/${succRow.completion}` : "none"})`)}`);
-    ok(capped.length > 0, `${succ} keeps live endpoints inside ${requested}'s row for the metered cap to route to (${capped.length} of ${succEps.length})`);
+    const capped = graded.filter((e) => within(e, row));
+    const covered = !!succRow && graded.every((e) => within(e, succRow));
+    ok(covered, `${succ}'s own row covers its dearest routable endpoint, so the per-link clamp holds where it costs more than ${requested}'s row${covered ? "" : brief(" (amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${succRow ? `${succRow.prompt}/${succRow.completion}` : "none"})`)}`);
+    ok(capped.length > 0, `${succ} keeps live endpoints inside ${requested}'s row for the metered cap to route to (${capped.length} of ${graded.length})`);
     ok(!tools(reqEps) || tools(capped), `${succ} supports tools on an endpoint inside ${requested}'s row wherever ${requested} supports tools`);
   }
 }

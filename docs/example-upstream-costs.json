@@ -2,6 +2,8 @@
   "_readme": "FORMAT EXAMPLE ONLY. Every number here is a placeholder, not a real or suggested rate. Copy it outside the repo, replace every value with your own providers' list prices, and load it with UPSTREAM_COSTS_FILE=/path/to/file or UPSTREAM_COSTS_JSON (raw JSON or base64). Units: models in USD per 1M tokens (longest prefix wins; optional tiers list the long-context prices a model bills from aboveTokens prompt tokens on, ascending, each at or above the row and the tier before it), speech in USD per character, embeddings in USD per 1M input tokens, sttPerMinute in USD per audio minute, everything else in USD per call or unit. scripts/test-upstream-costs.js keeps this file in step with the loader's required keys.",
   "models": [
     ["openai/", { "prompt": 1, "completion": 2 }],
+    ["openai/gpt-6.1-terra", { "prompt": 1, "completion": 2 }],
+    ["moonshotai/kimi-k3.1-pro", { "prompt": 1, "completion": 2 }],
     ["anthropic/", { "prompt": 1, "completion": 2, "tiers": [{ "aboveTokens": 100000, "prompt": 2, "completion": 4 }] }],
     ["google/", { "prompt": 1, "completion": 2 }]
   ],
@@ -13,7 +15,7 @@
   "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "black-forest-labs/flux-3-image-klein": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
   "meter": { "markup": 2 },
   "vendor": {
-    "exa": { "search": 1, "instant": 1, "answer": 1, "content": 1 },
+    "exa": { "search": 1, "instant": 1, "lite": 1, "answer": 1, "content": 1 },
     "x": { "postRead": 1, "userRead": 1 },
     "decisions": { "luna": 1, "decisionOne": 1,
       "jev": 1, "maxShare": 1 }

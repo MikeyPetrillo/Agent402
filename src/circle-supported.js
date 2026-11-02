@@ -36,35 +36,50 @@ export class CircleResponseError extends Error {
   }
 }
 
-/** Reduce Circle's /supported to the one kind we route here: Arc `exact` on the
- *  Arc USDC asset. Malformed input throws (the boot check then drops Arc). */
-export function arcKindsFromSupported(data) {
+/** The Arc USDC profile: the one network and token the Arc client settles. */
+export const ARC_PROFILE = Object.freeze({ caip2: ARC_CAIP2, chainId: ARC_CHAIN_ID, ...ARC_USDC });
+
+/** Reduce a /supported answer to the `exact` kinds of the given USDC profiles
+ *  ({ caip2, asset, name, version }), one kind per profile, in profile order.
+ *  Malformed input throws (the boot check then drops what it guards). */
+export function usdcKindsFromSupported(data, profiles) {
   if (!isObj(data) || !Array.isArray(data.kinds) || data.kinds.length > 500) {
     throw new CircleResponseError("supported", 200, "invalid_supported_shape");
   }
-  const kinds = [];
+  const found = new Map();
   for (const k of data.kinds) {
     if (!isObj(k) || typeof k.scheme !== "string" || typeof k.network !== "string") {
       throw new CircleResponseError("supported", 200, "invalid_supported_kind");
     }
-    if (k.scheme !== "exact" || k.network !== ARC_CAIP2) continue;
+    if (k.scheme !== "exact") continue;
+    const p = profiles.find((x) => x.caip2 === k.network);
+    if (!p || found.has(p.caip2)) continue;
     if (k.x402Version !== undefined && k.x402Version !== 2) continue;
-    // A listed asset must be the Arc USDC we price in; a kind for any other
-    // token on Arc is not one we can settle.
-    if (k.asset !== undefined && lc(k.asset) !== lc(ARC_USDC.asset)) continue;
+    // A listed asset must be the USDC we price in; a kind for any other
+    // token on that chain is not one we can settle.
+    if (k.asset !== undefined && lc(k.asset) !== lc(p.asset)) continue;
     const extra = isObj(k.extra) ? k.extra : {};
-    if (extra.name !== undefined && extra.name !== ARC_USDC.name) continue;
-    if (extra.version !== undefined && extra.version !== ARC_USDC.version) continue;
-    kinds.push({ x402Version: 2, scheme: "exact", network: ARC_CAIP2, extra: { name: ARC_USDC.name, version: ARC_USDC.version } });
-    break;
+    if (extra.name !== undefined && extra.name !== p.name) continue;
+    if (extra.version !== undefined && extra.version !== p.version) continue;
+    found.set(p.caip2, { x402Version: 2, scheme: "exact", network: p.caip2, extra: { name: p.name, version: p.version } });
+    if (found.size === profiles.length) break;
   }
+  const kinds = profiles.map((p) => found.get(p.caip2)).filter(Boolean);
   const extensions = Array.isArray(data.extensions)
     ? data.extensions.filter((e) => typeof e === "string" && REASON.test(e.replace(/-/g, "_")) && e.length <= 64)
     : [];
   const signers = {};
-  const arcSigners = isObj(data.signers) ? data.signers[ARC_CAIP2] : null;
-  if (Array.isArray(arcSigners)) signers[ARC_CAIP2] = arcSigners.filter((a) => typeof a === "string" && ADDR.test(a)).slice(0, 32);
+  for (const p of profiles) {
+    const list = isObj(data.signers) ? data.signers[p.caip2] : null;
+    if (Array.isArray(list)) signers[p.caip2] = list.filter((a) => typeof a === "string" && ADDR.test(a)).slice(0, 32);
+  }
   return { kinds, extensions, signers };
+}
+
+/** Reduce Circle's /supported to the one kind we route here: Arc `exact` on the
+ *  Arc USDC asset. Malformed input throws (the boot check then drops Arc). */
+export function arcKindsFromSupported(data) {
+  return usdcKindsFromSupported(data, [ARC_PROFILE]);
 }
 
 /** Arc mainnet and testnet: networks no client but Circle's may claim. */

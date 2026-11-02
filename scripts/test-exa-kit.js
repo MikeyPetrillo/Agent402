@@ -11,7 +11,7 @@
 //     tests could not see
 import {
   EXA_TOOLS, exaEnabled, estimateExaUsd, actualExaUsd,
-  exaSpendStatus, _exaSpendReset, _exaSpendBook,
+  exaSpendStatus, _exaSpendReset, _exaSpendBook, LITE_SEARCH_PARAMS, liteSearchBody,
 } from "../src/tools/exa-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -144,8 +144,54 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   reset(); stub(200, { results: [], costDollars: { total: R.instant * 1.3 } });
   await tool("exa-search").handler({ query: "fast answer", type: "instant" });
   ok(nearSpent(exaSpendStatus().spentUsd, R.instant * 1.3), "Exa's own costDollars still corrects the instant estimate upward");
-  await throws(() => tool("exa-search").handler({ query: "x", type: "deep" }), /auto, neural, keyword, fast or instant/, "an unlisted type is still refused, naming instant");
+  await throws(() => tool("exa-search").handler({ query: "x", type: "deep" }), /auto, neural, keyword, lite, fast or instant/, "an unlisted type is still refused, naming every accepted type");
   eq(tool("exa-search").price, "$0.012", "the tool's price is unchanged");
+}
+
+// --- type "lite" (2026-10-19): its own rate, and only the parameters it takes --
+{
+  ok(typeof R.lite === "number" && R.lite > 0, "the cost table carries vendor.exa.lite");
+  reset(); stub(200, { results: [], resolvedSearchType: "lite" });
+  const input = {
+    query: "cached pages", type: "lite", numResults: 4, category: "news",
+    includeDomains: ["example.com"], excludeDomains: ["example.org"],
+    startPublishedDate: "2026-01-01", endPublishedDate: "2026-10-01",
+  };
+  await tool("exa-search").handler(input);
+  const sent = JSON.parse(calls[0].opts.body);
+  eq(sent, { query: "cached pages", numResults: 4, type: "lite", category: "news", includeDomains: ["example.com"], excludeDomains: ["example.org"], startPublishedDate: "2026-01-01", endPublishedDate: "2026-10-01" }, "a lite search sends every filter the tool takes, each one lite supports");
+  ok(Object.keys(sent).every((k) => LITE_SEARCH_PARAMS.has(k)), "every key a lite search sends is on the lite list");
+  ok(nearSpent(exaSpendStatus().spentUsd, R.lite), "a lite search with no costDollars books the lite estimate");
+  ok(near(estimateExaUsd("/search", { type: "lite", numResults: 10 }), R.lite) && near(estimateExaUsd("/search", { type: "lite", numResults: 2, contents: { highlights: true } }), R.lite + 2 * R.content), "lite estimate = the lite rate plus per-page content");
+  ok(near(estimateExaUsd("/findSimilar", { type: "lite", numResults: 10 }), R.search), "lite pricing applies to /search only");
+  // A body with what lite refuses (a 400 upstream) never sends it.
+  const unsafe = {
+    query: "q", type: "lite", numResults: 3, livecrawl: "always", additionalQueries: ["a"], outputSchema: {}, systemPrompt: "s", stream: false,
+    includeText: ["x"], startCrawlDate: "2026-01-01", userLocation: "US", moderation: true, compliance: "other", category: null,
+    contents: { text: { maxCharacters: 500 }, summary: true, livecrawl: "never", maxAgeHours: -1, subpages: 1, extras: {}, highlights: null },
+  };
+  eq(liteSearchBody(unsafe), { query: "q", type: "lite", numResults: 3, userLocation: "US", moderation: true, contents: { text: { maxCharacters: 500 } } }, "a lite body keeps only lite parameters (null unset, compliance hipaa only)");
+  ok(liteSearchBody({ query: "q", type: "lite", contents: { summary: true } }).contents === undefined, "a contents block left with nothing lite takes is dropped whole");
+  eq(liteSearchBody({ query: "q", type: "lite", compliance: "hipaa" }).compliance, "hipaa", "compliance hipaa is kept");
+  // The lite rate is read under its own key, not instant's: a table whose two
+  // rows differ tells them apart (no rate typed: lite is derived from instant).
+  {
+    const { readFileSync } = await import("node:fs");
+    const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
+    const raw = process.env.UPSTREAM_COSTS_JSON ? JSON.parse(process.env.UPSTREAM_COSTS_JSON) : JSON.parse(readFileSync(process.env.UPSTREAM_COSTS_FILE, "utf8"));
+    raw.vendor.exa.lite = raw.vendor.exa.instant / 2;
+    setUpstreamCostsForTest(raw);
+    const lite = estimateExaUsd("/search", { type: "lite", numResults: 10 }), instant = estimateExaUsd("/search", { type: "instant", numResults: 10 });
+    setUpstreamCostsForTest(null);
+    ok(lite !== instant && near(lite * 2, instant), "a lite search is estimated at vendor.exa.lite, not the instant rate");
+  }
+  // Control: other types are sent as built.
+  reset(); stub(200, { results: [] });
+  await tool("exa-search").handler({ ...input, type: "auto" });
+  eq(JSON.parse(calls[0].opts.body).type, "auto", "control: a non-lite search body is not filtered");
+  const ex = tool("exa-search").discovery;
+  eq(ex.input.type, "lite", "the published example runs a lite search");
+  ok(/lite/.test(ex.inputSchema.properties.type.description) && /lite/.test(tool("exa-search").description), "the schema and the description name lite");
 }
 
 // --- upstream errors are mapped, never relayed ------------------------------

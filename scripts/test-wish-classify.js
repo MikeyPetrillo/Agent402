@@ -34,7 +34,7 @@ const stub = (answers, { status = 200, throws = false } = {}) => {
 // the parser returned null for every real answer while all 27 assertions here
 // passed against the fixture built from the same guess. A stub can only ever
 // prove the code agrees with the stub. Captured shape, 2026-09-21:
-//   {"model":"jev-1.13.0","answers":{"advertises":{"type":"noul","noul":0.44}},...}
+//   {"model":"jev-1.14.0","answers":{"advertises":{"type":"noul","noul":0.44}},...}
 const noul = (n) => ({ type: "noul", noul: n });
 const AD = { advertises: noul(0.97) };
 const REQ = { advertises: noul(0.04) };

@@ -50,7 +50,7 @@ const LUNA_ANSWERS = { answers: [
   { type: "predicate", name: "q1", probability: 0.02 },
   { type: "choice", name: "q2", choice: "frontend", probabilities: [{ value: "frontend", probability: 0.98 }, { value: "backend", probability: 0.02 }], confidence: 0.97 },
 ], usage: { input_tokens: 300, output_tokens: 0 } };
-const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
+const JEV_ANSWERS = { model: "jev-1.14.0", answers: {
   "sev.level": { type: "score", score: 1.4, confidence: 0.4, legend: { 0: "Cosmetic", 1: "Workaround exists", 2: "Blocking" }, probabilities: { 0: 0, 1: 0.6, 2: 0.4 } },
   "repro?": { type: "noul", noul: 0.32 },
   team: { type: "choice", choice: "frontend", confidence: 1, probabilities: { frontend: 1, backend: 0 } },
@@ -75,7 +75,7 @@ const JEV_ANSWERS = { model: "jev-1.13.0", answers: {
 {
   const s = stub({ [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
-  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "the default call goes to Jev only");
+  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.14.0" && !("fallbackFrom" in r), "the default call goes to Jev only");
 }
 {
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS) });
@@ -102,8 +102,8 @@ for (const [why, lunaReply] of [
 ]) {
   const s = stub({ [OPENAI]: lunaReply, [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(LUNA_IN, { fetchImpl: s.fetchImpl });
-  ok(s.hosts().join() === `${OPENAI},${TYPESAFE}` && r.model === "jev-1.13.0" && r.fallbackFrom === LUNA, `${why} falls back to Jev, named in fallbackFrom`);
-  ok(s.calls[1].body.model === "jev-1.13.0", "...and Jev is asked for the pinned version, never with Luna's name");
+  ok(s.hosts().join() === `${OPENAI},${TYPESAFE}` && r.model === "jev-1.14.0" && r.fallbackFrom === LUNA, `${why} falls back to Jev, named in fallbackFrom`);
+  ok(s.calls[1].body.model === "jev-1.14.0", "...and Jev is asked for the pinned version, never with Luna's name");
 }
 // After Luna answered 200 (billed) or timed out (maybe billed), the call ends
 // as an uncharged 502/504 and Jev is never asked: one sale, one upstream.
@@ -126,7 +126,7 @@ for (const [why, lunaReply, code] of [
   ok(e?.statusCode === 503 && e?.attribution === "upstream" && /did not answer the judgment read within \d+ s \(upstream deadline\)/.test(e?.message || "") && s.hosts().join() === OPENAI, `a Luna deadline is an uncharged 503 naming the step and Jev is not called (the timed-out call may be billed) (got ${e?.statusCode} "${e?.message}")`);
 }
 {
-  const s = stub({ [TYPESAFE]: json(200, { model: "jev-1.13.0", answers: {} }) });
+  const s = stub({ [TYPESAFE]: json(200, { model: "jev-1.14.0", answers: {} }) });
   let e = null; try { await judge({ ...JUDGE_IN, model: "jev-latest" }, { fetchImpl: (u, i) => new URL(u).host === OPENAI ? Promise.reject(new Error("no")) : s.fetchImpl(u, i) }); } catch (x) { e = x; }
   ok(e?.statusCode === 502, "an empty Jev answer is an uncharged 502, never a charged 200");
 }
@@ -144,7 +144,7 @@ for (const [why, lunaReply, code] of [
   const big = { ...LUNA_IN, state: "x".repeat(7500) };
   const s = stub({ [OPENAI]: json(200, LUNA_ANSWERS), [TYPESAFE]: json(200, JEV_ANSWERS) });
   const r = await judge(big, { fetchImpl: s.fetchImpl });
-  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.13.0" && !("fallbackFrom" in r), "a request too large for Luna's bound goes to Jev only, and is not a fallback");
+  ok(s.hosts().join() === TYPESAFE && r.model === "jev-1.14.0" && !("fallbackFrom" in r), "a request too large for Luna's bound goes to Jev only, and is not a fallback");
 }
 {
   const s = stub({ [OPENAI]: json(400, { error: { message: "bad" } }) });
@@ -169,11 +169,11 @@ const DEC_IN = {
   ok(JSON.stringify(r.answers) === JSON.stringify(reply.answers) && r.model === LUNA, "Luna's answers come back unchanged");
 }
 {
-  const jev = { model: "jev-1.13.0", answers: { department: { type: "choice", choice: "billing", confidence: 0.9, probabilities: { billing: 0.95, technical: 0.05 } }, angry: { type: "noul", noul: 0.4 }, urgency: { type: "score", score: 0.7, confidence: 0.4, legend: {}, probabilities: { 0: 0.3, 1: 0.7 } } }, usage: { input_tokens: 140 } };
+  const jev = { model: "jev-1.14.0", answers: { department: { type: "choice", choice: "billing", confidence: 0.9, probabilities: { billing: 0.95, technical: 0.05 } }, angry: { type: "noul", noul: 0.4 }, urgency: { type: "score", score: 0.7, confidence: 0.4, legend: {}, probabilities: { 0: 0.3, 1: 0.7 } } }, usage: { input_tokens: 140 } };
   const s = stub({ [OPENAI]: json(500, {}), [TYPESAFE]: json(200, jev) });
   const r = await decisions(DEC_IN, { fetchImpl: s.fetchImpl });
   const [d, a, u] = r.answers;
-  ok(r.fallback_from === LUNA && r.model === "jev-1.13.0", "a Luna outage falls back to Jev, named in fallback_from");
+  ok(r.fallback_from === LUNA && r.model === "jev-1.14.0", "a Luna outage falls back to Jev, named in fallback_from");
   ok(d.type === "choice" && d.name === "department" && d.probabilities.map((p) => p.value).join() === "billing,technical" && d.confidence === 0.9, "Jev's choice comes back in the Decisions shape, probabilities in the buyer's choice order");
   ok(a.type === "predicate" && a.probability === 0.4, "Jev's noul comes back as a predicate probability");
   ok(u.type === "score" && u.probabilities[1].label === "High" && u.probabilities[1].probability === 0.7, "Jev's score comes back with the buyer's level labels");
@@ -226,14 +226,14 @@ for (const [why, answers] of [
 // The pin (2026-10-15): "jev-latest" moves when TypeSafe promotes a release.
 {
   const { upstreamJevModel, JEV_PINNED } = await import("../src/tools/judge-kit.js");
-  ok(JEV_PINNED === "jev-1.13.0", "the default Jev backend is pinned to the tested version");
+  ok(JEV_PINNED === "jev-1.14.0", "the default Jev backend is pinned to the tested version");
   ok(upstreamJevModel("jev-latest") === JEV_PINNED && upstreamJevModel(undefined) === JEV_PINNED, "a buyer's jev-latest, or no model, is sent as the pinned version");
   ok(upstreamJevModel("jev-preview") === "jev-preview", "jev-preview stays the explicit opt-in to the newer release");
   const src = (await import("node:fs")).readFileSync(new URL("../src/tools/judge-kit.js", import.meta.url), "utf8");
   ok(/model: upstreamJevModel\(body\.model\)/.test(src), "every Jev call goes through the pin");
   for (const f of ["../src/tool-judge.js", "../src/discovery-rerank.js", "../src/wish-classify.js", "../services/decide/jev.js"]) {
     const t = (await import("node:fs")).readFileSync(new URL(f, import.meta.url), "utf8");
-    ok(/"jev-1\.13\.0"/.test(t) && !/\|\| "jev-latest"/.test(t), `${f.split("/").pop()} defaults to the pinned version, not the moving alias`);
+    ok(t.includes(`"${JEV_PINNED}"`) && !/\|\| "jev-latest"/.test(t), `${f.split("/").pop()} defaults to the pinned version, not the moving alias`);
   }
 }
 console.warn = quiet;

@@ -29,7 +29,7 @@ const tool = LOOP_GATE_TOOLS[0];
 
 // ---- the stubbed judgment upstream: answers each question the route asked ----
 const calls = [];
-function stub({ goalMet = 0.1, stuck = 0.1, breach = 0.1, next = "iterate", confidence = 0.8, model = "jev-1.13.0" } = {}) {
+function stub({ goalMet = 0.1, stuck = 0.1, breach = 0.1, next = "iterate", confidence = 0.8, model = "jev-1.14.0" } = {}) {
   return async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push(body);
@@ -87,7 +87,7 @@ ok(/same price/.test(tool.description), "the description says the code-only stop
 {
   calls.length = 0;
   const c = await run(base);
-  ok(c.decision === "continue" && c.nextStep === "iterate" && c.model === "jev-1.13.0" && c.checks.goalMet === false && c.checks.stuck === false, `goal unmet and not stuck: continue (${c.reason})`);
+  ok(c.decision === "continue" && c.nextStep === "iterate" && c.model === "jev-1.14.0" && c.checks.goalMet === false && c.checks.stuck === false, `goal unmet and not stuck: continue (${c.reason})`);
   ok(c.confidence === 0.8, "confidence is the decisive signal's (the next-step choice)");
   ok(calls.length === 1 && calls[0].questions.goal_met && calls[0].questions.stuck && calls[0].questions.next_step && !calls[0].questions.constraint_breach, "one model call; no constraint question without constraints");
   const state = JSON.parse(calls[0].state);

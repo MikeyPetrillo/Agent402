@@ -319,6 +319,7 @@ export const TIERS = {
     fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
+      // gpt-5-nano shuts down 2026-12-11 (RETIRING_MODELS serves gpt-5.6-luna from then); this prefix goes before that day.
       "openai/gpt-5-nano",
       // gpt-5.6-luna: frontier-lab model in the nano class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
@@ -350,6 +351,12 @@ export const TIERS = {
     maxInputChars: 32_000,
     maxTokens: 2048,
     maxPrice: { prompt: 2.5, completion: 8 }, // catastrophe bound above the priciest family prefix
+    // Server-chosen failover after the requested model's own successor, as on
+    // nano: a base call whose model has no available host is answered by one
+    // of these instead of an error. Each fallback is re-clamped at its own
+    // price (clampToMargin runs per link), so a dearer one gets a smaller
+    // output budget or is skipped, never served at a loss.
+    fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-chat"],
     prefixes: [
       // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
       // harmless), the way gpt-4.1-nano was until its 2026-10-23 retirement.
@@ -421,6 +428,17 @@ export const TIERS = {
       // entry: prefix matching is boundary-aware, so gpt-6-sol does not admit it.
       // The prefix also admits gpt-6.1-sol-pro (same price).
       "openai/gpt-6.1-sol",
+      // gpt-6.1-terra (live 2026-10-26, 1M context, tools, flex endpoint):
+      // the 6.1 generation's mid model, listed below gpt-6.1-sol, so the pro
+      // caps leave it more output room under the clamp. The prefix also admits
+      // gpt-6.1-terra-pro (same price; reasoning mandatory, see REASONING_MODELS).
+      "openai/gpt-6.1-terra",
+      // Kimi K3.1 Pro (live 2026-10-23, 1M context, tools, text/image/video
+      // in): its standard endpoint lists at gpt-6.1-sol's standard price; its
+      // high-speed endpoint lists at this tier's completion bound, so
+      // provider.max_price still admits it. Exact id: the moonshotai/ family
+      // is not admitted.
+      "moonshotai/kimi-k3.1-pro",
     ],
   },
   "v1-chat-premium": {
@@ -478,6 +496,8 @@ export const TIERS = {
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
       // 2026-10-23 removal; o4-mini left the upstream catalog 2026-10-27 and a
       // request naming it is served by gpt-5.6-terra (RETIRING_MODELS).
+      // gpt-5 (and -mini, -nano, -pro), o3 and o3-pro shut down 2026-12-11:
+      // RETIRING_MODELS serves the gpt-5.6 successors from then.
       "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
@@ -634,9 +654,13 @@ const METERED_PREFIXES = [...new Set(Object.values(TIERS)
   .filter((t) => !t.router && !t.lockedModel && !t.stealth)
   .flatMap((t) => t.prefixes || []))];
 TIERS["v1-chat-metered"] = {
-  // Haiku 5.5 is served by its explicit id (refuseUnsupportedParams covers the
-  // parameters it does not take); the default stays Haiku 4.5.
-  defaultModel: "anthropic/claude-haiku-4.5", // served when the caller names no model (quoted like any explicit model)
+  // The default is Haiku 5.5 (measured 2026-11-01 against 4.5 on metered-shaped
+  // traffic: no errors, equal or better answers, faster, a lower quote). It
+  // takes no sampling parameters, prefill or fixed reasoning budget, so a
+  // default call that sends one is served by defaultModelCompat instead of a
+  // 400 (defaultModelFor). A caller naming either model gets that model.
+  defaultModel: "anthropic/claude-haiku-5.5", // served when the caller names no model (quoted like any explicit model)
+  defaultModelCompat: "anthropic/claude-haiku-4.5",
   metered: true,
   reasoningDefault: "lowest", // the buyer pays for reasoning tokens: default to the cheapest effort, opt up explicitly
   route: "POST /v1/metered/chat/completions",
@@ -783,6 +807,27 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
   "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
   "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  // OpenAI shuts down GPT-5, GPT-5 mini, GPT-5 nano, GPT-5 pro, o3 and o3-pro on
+  // 2026-12-11 (OpenAI's deprecations page, notice of 2026-06-11). SCHEDULED
+  // like the entries above; each successor is the replacement that notice
+  // names (pro mode for the -pro ids is the -pro listing). A call naming one
+  // stays on every tier that admitted it (tierAllows' `requested`), served by
+  // the successor there, so gpt-5-nano on base or premium is not moved to
+  // nano; pinned in test-llm-gateway. Dropping one of those prefixes moves
+  // that tier's callers to the successor's own home tier instead.
+  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-5.6-terra", asItselfUntil: true },
+  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true },
+  "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
+  "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
+  // Shut down 2026-07-23 (OpenAI's deprecations page, notice of 2026-04-22,
+  // replacement gpt-5.6-sol) and gone from the upstream catalog; the premium
+  // tier's openai/gpt-5 family prefix still admitted them by name.
+  // gpt-5-chat is the upstream catalog's id for gpt-5-chat-latest.
+  "openai/gpt-5-codex": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
+  "openai/gpt-5-chat-latest": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
+  "openai/gpt-5-chat": { until: "2026-07-23", use: "openai/gpt-5.6-sol" },
   // Gone from the upstream catalog 2026-10-27 (the live-catalog guard). Its
   // family successor on premium, the one the /api/llm-premium proxy already
   // serves for the retired o3-mini and o4-mini ids (llm-kit.js).
@@ -816,9 +861,11 @@ export const AVAILABILITY_SUCCESSORS = Object.freeze({
   // Each value is an ordered list: the first entry the serving tier admits is used.
   "deepseek/deepseek-chat": ["deepseek/deepseek-v4-flash"],
   "qwen/qwen-2.5-7b-instruct": ["qwen/qwen3-235b-a22b-2507"],
-  // Not gpt-4.1-nano: OpenAI removes it 2026-10-23. Pro admits no current
-  // OpenAI model at or under gpt-4o-mini's cost, so pro keeps no successor.
-  "openai/gpt-4o-mini": ["openai/gpt-5-nano"],
+  // Not gpt-4.1-nano (removed 2026-10-23) or gpt-5-nano (removed 2026-12-11):
+  // gpt-6-luna lists below gpt-4o-mini, takes tools, and is served on the
+  // tiers that serve both (auto, grounded, metered). Base admits no current
+  // OpenAI model at or under gpt-4o-mini's cost, so base keeps its fallbacks.
+  "openai/gpt-4o-mini": ["openai/gpt-6-luna"],
   // gpt-4.1 shuts down with gpt-4o on 2027-01-14; from then canonicalModel
   // serves gpt-4o's scheduled successor, so this entry stops mattering.
   "openai/gpt-4o": ["openai/gpt-4.1"],
@@ -938,7 +985,18 @@ export function streamClientWatch(res) {
   };
 }
 
-export function tierAllows(tierSlug, model) {
+function prefixesAdmit(tier, id) {
+  return tier.prefixes.some((p) => (p.endsWith("/") ? id.startsWith(p) : id === p || id.startsWith(p + "-") || id.startsWith(p + ":")));
+}
+
+/** Whether a tier serves `model`. `requested` is the id the caller sent,
+ *  when the wire has it: a retired id (RETIRING_MODELS, its date passed) stays
+ *  on every tier whose prefixes admitted it, served there by its successor
+ *  under that tier's caps, price and clamp. Without this a base call naming
+ *  gpt-5-nano would move to nano on 2026-12-11 (gpt-5.6-luna's only flat
+ *  home), with nano's smaller input and output caps. A caller naming the
+ *  successor itself keeps the successor's own home tier and price. */
+export function tierAllows(tierSlug, model, requested) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
   const id = canonicalModel(model).toLowerCase();
@@ -946,7 +1004,9 @@ export function tierAllows(tierSlug, model) {
   // Belt for refuseCostVariants: a "-contributor" listing is never admitted
   // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
   if (/-contributor(?:$|:)/.test(id)) return false;
-  return tier.prefixes.some((p) => (p.endsWith("/") ? id.startsWith(p) : id === p || id.startsWith(p + "-") || id.startsWith(p + ":")));
+  if (prefixesAdmit(tier, id)) return true;
+  const from = requested == null ? null : substitutedFrom(requested);
+  return !!from && canonicalModel(requested).toLowerCase() === id && prefixesAdmit(tier, from);
 }
 
 /** Which gateway tier serves this model - for self-correcting 400s. */
@@ -989,7 +1049,7 @@ export function crossTierHome(routeTier, model) {
   if (!isFlatTier(routeTier)) return null;
   const m = canonicalModel(model);
   if (m === AUTO_MODEL && TIERS[AUTO_TIER]?.router === true) return AUTO_TIER;
-  if (!m || tierAllows(routeTier, m)) return null;
+  if (!m || tierAllows(routeTier, m, model)) return null;
   try { refuseCostVariants(m); } catch { return null; }
   const home = tierFor(m);
   return home && home !== routeTier && isFlatTier(home) ? home : null;
@@ -1136,6 +1196,36 @@ export function noSamplingKnobs(model) {
  *  depth control. Exported for the tests. */
 export function adaptiveOnlyClaude(model) {
   return /^anthropic\/claude-haiku-(?:[5-9]|\d{2,})(?=[.:-]|$)/.test(canonicalModel(model).toLowerCase());
+}
+
+/** The model a request that names none is served: the tier's default, or its
+ *  defaultModelCompat when the request carries a parameter the default refuses
+ *  (refuseUnsupportedParams), so a default call is never refused for it. Each
+ *  wire builds ONE ctx and passes the same object here and to
+ *  refuseUnsupportedParams, so the two can never read the request apart. */
+export function defaultModelFor(tier, ctx = {}) {
+  if (!tier?.defaultModel) return null;
+  if (!tier.defaultModelCompat) return tier.defaultModel;
+  try { refuseUnsupportedParams(tier.defaultModel, ctx); return tier.defaultModel; }
+  catch { return tier.defaultModelCompat; }
+}
+
+/** The plain clause every machine-readable surface carries beside a tier's
+ *  default when the tier names a compat model; null otherwise. Names come
+ *  from the tier object, never typed twice. */
+export function defaultModelCompatNote(tier) {
+  if (!tier?.defaultModel || !tier.defaultModelCompat) return null;
+  return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget) is served by ${tier.defaultModelCompat}.`;
+}
+
+/** The chat wire's refuseUnsupportedParams context, read once from the body. */
+function chatParamCtx(input) {
+  const msgs = Array.isArray(input.messages) ? input.messages : [];
+  return {
+    sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+    endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant",
+    reasoningBudget: input.reasoning?.max_tokens !== undefined,
+  };
 }
 
 /** One refusal for the parameters a model does not take, shared by the chat,
@@ -1761,7 +1851,14 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     throw bad('"quality" applies only when the gateway picks the model - omit "model" (or send "auto") to use it');
   }
   let defaultedModel = null;
-  if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // serve the tier default, never refuse a missing model (2026-08-28)
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = chatParamCtx(input);
+  if (!model && tier.defaultModel) {
+    // serve the tier default, never refuse a missing model (2026-08-28)
+    model = defaultModelFor(tier, paramCtx);
+    defaultedModel = model;
+  }
   if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints
@@ -1771,7 +1868,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // ":batch" is the asynchronous batch
   // API (24h window), not a chat completion this path can serve.
   refuseCostVariants(model);
-  if (!tierAllows(tierSlug, model)) {
+  if (!tierAllows(tierSlug, model, input.model)) {
     // "auto" reaches here only when the request was not gated at the auto
     // price (no request, or FREE_MODE): name the route that serves it.
     if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
@@ -1840,11 +1937,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // knob that did nothing. Say so, the way the Messages wire already does for
   // the post-Opus-4.6 Claude models. Claude Haiku 5 adds top_k, an assistant
   // prefill and a fixed reasoning budget (adaptiveOnlyClaude).
-  refuseUnsupportedParams(model, {
-    sampling: { temperature: body.temperature, top_p: body.top_p, top_k: input.top_k },
-    endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
-    reasoningBudget: input.reasoning?.max_tokens !== undefined,
-  });
+  refuseUnsupportedParams(model, paramCtx);
   // Buyer reasoning preference (changes the answer -> normalized body).
   const reasoning = validateReasoning(input, tier);
   if (reasoning !== undefined) body.reasoning = reasoning;
@@ -1975,6 +2068,8 @@ export const FLEX_MODELS = [
   "openai/gpt-6-luna", "openai/gpt-6-sol",
   // openai/flex endpoint tag on gpt-6.1-sol (live endpoints 2026-10-06).
   "openai/gpt-6.1-sol",
+  // openai/flex endpoint tag on gpt-6.1-terra and -pro (live endpoints 2026-11-01).
+  "openai/gpt-6.1-terra",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -2139,6 +2234,14 @@ export const REASONING_MODELS = [
   { prefix: "openai/gpt-6-sol", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   // gpt-6.1-sol and -pro: reasoning mandatory, no "none" (live catalog 2026-10-06).
   { prefix: "openai/gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // gpt-6.1-terra: reasoning default-on at medium, "none" supported; its -pro
+  // twin is mandatory with no "none" (live catalog 2026-11-01), so exact rows.
+  { id: "openai/gpt-6.1-terra", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  { id: "openai/gpt-6.1-terra-pro", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Kimi K3.1 Pro: reasoning default-on at "max", efforts none/low/high/max
+  // (live catalog 2026-11-01). Without this row a small budget is spent
+  // reasoning at "max" and comes back empty; pro injects "low".
+  { id: "moonshotai/kimi-k3.1-pro", efforts: ["none", "low", "high", "max"] },
   // Grok 4.5 / 4.6 / 4.7 (pro, via the x-ai/grok prefix): reasoning MANDATORY,
   // default effort high (live catalog 2026-09-24). Without a row a small
   // budget is spent reasoning at "high" and comes back empty.
@@ -3711,9 +3814,13 @@ const EXAMPLE_OUT = {
   usage: { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 },
 };
 
+// The metered default and its compat model, in one sentence derived from the
+// tier object (null when the tier names no compat model).
+const METERED_DEFAULT_NOTE = defaultModelCompatNote(TIERS["v1-chat-metered"]);
+
 const INPUT_SCHEMA = {
   properties: {
-    model: { type: "string", description: "Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change" },
+    model: { type: "string", description: `Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change.${METERED_DEFAULT_NOTE ? ` On ${TIERS["v1-chat-metered"].route.split(" ")[1]}: ${METERED_DEFAULT_NOTE}` : ""}` },
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
@@ -3749,7 +3856,7 @@ export const LLM_GATEWAY_TOOLS = [
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
     description:
-      `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
+      `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.${METERED_DEFAULT_NOTE ? ` ${METERED_DEFAULT_NOTE}` : ""}`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
     discovery: { bodyType: "json", input: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o-mini" } } },
     handler: makeHandler("v1-chat-metered"),
@@ -4031,6 +4138,7 @@ export function modelsList() {
         x402: {
           tier: slug, endpoint: tier.route.split(" ")[1], priceUsd: tier.price, maxTokens: tier.maxTokens,
           ...(tier.defaultModel ? { defaultModel: tier.defaultModel } : {}),
+          ...(tier.defaultModel && tier.defaultModelCompat ? { defaultModelCompat: tier.defaultModelCompat } : {}),
           ...(slug.startsWith("v1-chat") && !tier.lockedModel && !tier.router && TIERS["v1-chat-metered"]
             ? {
               meteredEndpoint: TIERS["v1-chat-metered"].route.split(" ")[1], meteredFromUsd: TIERS["v1-chat-metered"].price,
@@ -4041,6 +4149,11 @@ export function modelsList() {
               // not carry the flat cap onto the metered route (agent402-openclaw
               // did, and OpenClaw refused every turn as a context overflow).
               meteredMaxInputChars: TIERS["v1-chat-metered"].maxInputChars, meteredMaxTokens: TIERS["v1-chat-metered"].maxTokens,
+              // What a metered call naming no model gets (the metered tier is
+              // not listed on its own): the default, and the compat model a
+              // default call carrying a parameter the default does not take gets.
+              meteredDefaultModel: TIERS["v1-chat-metered"].defaultModel,
+              ...(TIERS["v1-chat-metered"].defaultModelCompat ? { meteredDefaultModelCompat: TIERS["v1-chat-metered"].defaultModelCompat } : {}),
             }
             : {}),
           maxInputChars: Math.min(tier.maxInputChars, ADVERTISED_MAX_INPUT_CHARS),

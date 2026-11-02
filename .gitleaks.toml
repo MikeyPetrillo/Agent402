@@ -63,6 +63,10 @@ regexes = [
   # scripts/test-tempo-sender.js: an IDENTIFIER, not a value - the variable
   # holding a p256 key generated at runtime (P256.randomPrivateKey()).
   '''^newP256RootKey$''',
+  # src/payments.js: a tool slug, not a value. gitleaks 8.30.1's generic-api-key
+  # rule reads a description ending in "API key." and captures the next
+  # object key, the slug x402-trending. Pinned exactly.
+  '''^x402-trending$''',
   # EVM contract/wallet addresses are public identifiers, never secrets. This
   # is 40 hex chars precisely; a real EVM private key is 64 hex and is NOT
   # covered here, so it would still fire.

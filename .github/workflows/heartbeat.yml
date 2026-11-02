@@ -1043,6 +1043,40 @@ jobs:
               ;;
           esac
 
+      # The agent402-mcp version the site and server.describe tell people to
+      # install must exist on npm. A deploy ships the pin while the [publish]
+      # job publishes beside it, so a missing version is "pending" while a main
+      # deploy run is still in progress, and an alarm after (2026-11-01). The
+      # script re-checks a version npm answers 404 for once (NPM_RECHECK_MS,
+      # default 15 s) before it reads missing, so one registry miss opens nothing.
+      - name: MCP install pin check (alarm when the served agent402-mcp version is not on npm)
+        if: always()
+        continue-on-error: true
+        run: |
+          OUT=$(TARGET_URL="$PROD" node scripts/mcp-pin-on-npm.js 2>/dev/null | tail -1)
+          WORD=$(echo "$OUT" | jq -r '.word // "unknown"' 2>/dev/null || echo unknown)
+          if [ "$WORD" = "missing" ]; then
+            RUNNING=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy.yml --branch main --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+            [ "${RUNNING:-0}" -gt 0 ] && WORD=pending
+          fi
+          echo "mcp pin: $WORD ($OUT)"
+          TITLE="Served agent402-mcp version is not on npm"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            missing)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The site or server.describe tells people to install an agent402-mcp version npm does not have, so a copied install fails with ETARGET: $OUT. Check the publish job of the last main deploy run (npm auth, MCP Registry refusal) and re-run it, or move the pins back to the published version. Reproduce: \`node scripts/mcp-pin-on-npm.js\`. Auto-closes when every served pin resolves." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still missing at $(date -u +%FT%TZ): $OUT" >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every served agent402-mcp pin resolves on npm at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Private upstream-cost table (src/upstream-costs.js). Without it the
       # metered tier, embeddings, images, Exa and X reads refuse and the flat
       # tiers price at their caps. "partial" means it loaded without a key some

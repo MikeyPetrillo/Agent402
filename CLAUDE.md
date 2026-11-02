@@ -21,7 +21,8 @@ LLC: credit the entity, never a personal name.
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
   `src/mcp-mpp.js` makes wallet-only tools payable on the connector by replaying the call as a
-  loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks.
+  loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks;
+  `src/mcp-skills.js` serves skill packs over the Skills extension (`MCP_SKILLS=on`, negotiated only).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
@@ -298,6 +299,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
   facilitator only (`src/circle-facilitator.js`): `CIRCLE_FACILITATOR_API_KEY` is the switch,
   the client is Arc-only, reduces every upstream error to a status and a reason code, and Arc
   fails closed on Circle's own `/supported` (`scripts/test-arc-rail.js`).
+  `CIRCLE_FACILITATOR_EVM_FALLBACK` is off by default; with `=on`, the Arc key and
+  `PAYMENT_SETTLE_FALLBACK=true`, the issuer's facilitator is the last settle fallback on Base
+  and Polygon, only for networks its `/supported` lists (re-read every
+  `CIRCLE_EVM_SUPPORTED_REFRESH_MS`, default 10 minutes; a failed read tries none) (`src/circle-facilitator.js`,
+  `src/circle-supported.js`; `scripts/test-circle-evm-fallback.js`).
   `ROBINHOOD_FACILITATOR_URL` is an ordered list: the first settles, the rest are Robinhood's
   settle fallback (never routing facilitators), reached after a pre-broadcast refusal or, on
   `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).

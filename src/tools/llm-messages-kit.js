@@ -38,7 +38,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, smallBudgetEffort,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote, smallBudgetEffort,
   stripBilling,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
@@ -153,14 +153,28 @@ export function validateMessagesRequest(input, tierSlug) {
   let model = canonicalModel(input.model);
   const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
+  // One read of the parameters a model may not take, shared by the default
+  // choice and the refusal below, so the two can never disagree.
+  const paramCtx = (() => {
+    const msgs = Array.isArray(input.messages) ? input.messages : [];
+    return {
+      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
+      endsWithAssistant: msgs[msgs.length - 1]?.role === "assistant",
+      reasoningBudget: input.thinking?.type === "enabled",
+      effortField: "effort",
+    };
+  })();
   if (!isRouted) {
     refuseCostVariants(model);
     // No model named: serve the tier's default instead of refusing (30 days of
     // real callers: 82 refusals for a missing "model" across the LLM wires -
     // agents posting to a tier route expect that tier's model, 2026-08-28).
-    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; }
+    if (!model && tier.defaultModel) {
+      model = defaultModelFor(tier, paramCtx);
+      defaultedModel = model;
+    }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
-    if (!tierAllows(tierSlug, model)) {
+    if (!tierAllows(tierSlug, model, input.model)) {
       // "auto" when not gated at the auto price: name the auto route.
       const home = model === AUTO_MODEL ? AUTO_TIER : tierFor(model);
       // Not every chat tier has a Messages twin (MESSAGES_PATH_BY_TIER is an
@@ -217,12 +231,7 @@ export function validateMessagesRequest(input, tierSlug) {
   // silently upstream), refuses an assistant prefill and a fixed thinking
   // budget: named here, before any upstream call (refuseUnsupportedParams).
   if (!isRouted) {
-    refuseUnsupportedParams(model, {
-      sampling: { temperature: input.temperature, top_p: input.top_p, top_k: input.top_k },
-      endsWithAssistant: messages[messages.length - 1]?.role === "assistant",
-      reasoningBudget: input.thinking?.type === "enabled",
-      effortField: "effort",
-    });
+    refuseUnsupportedParams(model, paramCtx);
   }
   const strictSampling = isPostOpus46(model);
   if (strictSampling) {
@@ -530,10 +539,11 @@ const INPUT_SCHEMA = {
 
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
-  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
+  const compat = defaultModelCompatNote(t);
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.${compat ? ` ${compat}` : ""}` : "";
   const price = priceString(tierSlug);
   if (tierSlug === "v1-chat-metered") {
-    return `Anthropic Messages API priced per request from the request itself. The 402 quotes the input (system, messages and tools), estimated from its tokens with headroom, plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto or credits and settle actual usage; a card payment is charged the quote plus the processor fee. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+    return `Anthropic Messages API priced per request from the request itself. The 402 quotes the input (system, messages and tools), estimated from its tokens with headroom, plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto or credits and settle actual usage; a card payment is charged the quote plus the processor fee. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.${compat ? ` ${compat}` : ""}`;
   }
   const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+ and Haiku 5.5, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"

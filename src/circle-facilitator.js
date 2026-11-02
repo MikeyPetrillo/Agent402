@@ -21,7 +21,11 @@
 //      facilitators own here; getSupported() returns only the Arc `exact`
 //      kind on the Arc USDC asset, so this client can never win another
 //      chain's route, and a /supported that lacks that kind (or is malformed)
-//      drops Arc from the offer at boot (src/payments.js).
+//      drops Arc from the offer at boot (src/payments.js). A second instance,
+//      off unless CIRCLE_FACILITATOR_EVM_FALLBACK=on, settles Base and Polygon
+//      exact USDC as the LAST settle fallback only: it is never a routing
+//      client, so it never verifies and never wins a route, and it is asked
+//      only after every earlier settler refused before broadcasting.
 //   4. A local preflight on verify and settle: the requirement must be Arc
 //      exact USDC, the signed authorization must pay that payTo exactly that
 //      amount inside its validity window, and the signature (any ECDSA form)
@@ -46,15 +50,34 @@ import {
   ExecutionRevertedError, RawContractError,
 } from "viem";
 import {
-  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
-  CircleResponseError, safeReason, arcKindsFromSupported,
+  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, ARC_PROFILE, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
+  CircleResponseError, safeReason, arcKindsFromSupported, usdcKindsFromSupported,
 } from "./circle-supported.js";
+import { EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
 
 export {
-  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
-  safeReason, arcKindsFromSupported,
+  ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, ARC_PROFILE, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
+  safeReason, arcKindsFromSupported, usdcKindsFromSupported,
 };
 export { isArcNetwork, stripArcFromSupported, withoutArcKinds } from "./circle-supported.js";
+
+// The settle fallback on Base and Polygon (CIRCLE_FACILITATOR_EVM_FALLBACK=on):
+// the same client, the same key and the same rules, for the native USDC whose
+// EIP-712 domain src/evm-usdc-domain.js read from each chain. It is only ever
+// asked to settle after every earlier settler refused before broadcasting
+// (src/payments.js), and it is never a routing client.
+const domainRow = (caip2) => {
+  const r = EVM_TOKEN_DOMAINS.find((x) => x.network === caip2 && x.symbol === "USDC");
+  if (!r) throw new Error(`no measured USDC domain for ${caip2}`);
+  return r;
+};
+const evmProfile = (caip2) => {
+  const r = domainRow(caip2);
+  return Object.freeze({ caip2, chainId: Number(caip2.split(":")[1]), asset: r.asset, decimals: 6, name: r.name, version: r.version });
+};
+export const CIRCLE_EVM_FALLBACK_PROFILES = Object.freeze([evmProfile("eip155:8453"), evmProfile("eip155:137")]);
+export const CIRCLE_EVM_FALLBACK_NETWORKS = Object.freeze(CIRCLE_EVM_FALLBACK_PROFILES.map((p) => p.caip2));
+export const CIRCLE_EVM_LABEL = "Circle (EVM settle fallback)";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const SUPPORTED_TIMEOUT_MS = 10_000;
@@ -113,10 +136,11 @@ async function readJsonCapped(res, op) {
 }
 
 
-/** The EIP-3009 typed data a buyer signs for an Arc USDC exact payment. */
-function arcTypedData(auth) {
+/** The EIP-3009 typed data a buyer signs for a USDC exact payment on the
+ *  profile's chain (Arc by default). */
+function usdcTypedData(auth, profile = ARC_PROFILE) {
   return {
-    domain: { name: ARC_USDC.name, version: ARC_USDC.version, chainId: ARC_CHAIN_ID, verifyingContract: ARC_USDC.asset },
+    domain: { name: profile.name, version: profile.version, chainId: profile.chainId, verifyingContract: profile.asset },
     types: {
       TransferWithAuthorization: [
         { name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" },
@@ -136,14 +160,26 @@ function arcTypedData(auth) {
  * Circle, or { reason, payer } when it must be refused here.
  */
 export async function preflightArcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { contractVerifier = null } = {}) {
+  return preflightUsdcPayment(paymentPayload, requirements, nowSec, { contractVerifier, profiles: [ARC_PROFILE] });
+}
+
+/**
+ * The same preflight for any of `profiles` (the requirement's network picks
+ * one; any other network is refused). Only `exact` is accepted: an `upto`
+ * (Permit2) payment is refused here, before anything is sent. The contract
+ * wallet verifier applies on Arc only; elsewhere a signature this server
+ * cannot verify as an EOA's is refused.
+ */
+export async function preflightUsdcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { contractVerifier = null, profiles = [ARC_PROFILE] } = {}) {
   const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "exact") return refuse("unsupported_scheme");
-  if (requirements.network !== ARC_CAIP2) return refuse("invalid_network");
-  if (lc(requirements.asset) !== lc(ARC_USDC.asset)) return refuse("invalid_payment_requirements");
+  const profile = profiles.find((p) => p.caip2 === requirements.network);
+  if (!profile) return refuse("invalid_network");
+  if (lc(requirements.asset) !== lc(profile.asset)) return refuse("invalid_payment_requirements");
   if (!ADDR.test(String(requirements.payTo || "")) || !UINT.test(String(requirements.amount ?? ""))) return refuse("invalid_payment_requirements");
   if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_x402_version");
   const accepted = paymentPayload.accepted;
-  if (isObj(accepted) && (accepted.network !== ARC_CAIP2 || lc(accepted.asset) !== lc(ARC_USDC.asset))) return refuse("invalid_network");
+  if (isObj(accepted) && (accepted.network !== profile.caip2 || lc(accepted.asset) !== lc(profile.asset))) return refuse("invalid_network");
   const inner = paymentPayload.payload;
   const auth = isObj(inner) ? inner.authorization : null;
   const sig = isObj(inner) ? inner.signature : null;
@@ -168,21 +204,21 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
   // the curve order is the malleable twin of a valid one; refused here, the
   // same as the token contract itself would.
   if (sig.length === 132 && BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N) return refuse("invalid_exact_evm_payload_signature", payer);
-  if (await isLocalEoaSignature(auth, sig)) return null;
-  if (!contractVerifier) return refuse("invalid_exact_evm_payload_signature", payer);
+  if (await isLocalEoaSignature(auth, sig, profile)) return null;
+  if (!contractVerifier || profile.caip2 !== ARC_CAIP2) return refuse("invalid_exact_evm_payload_signature", payer);
   const verdict = await contractVerifier(auth, sig);
   if (verdict === true) return null;
   return refuse(verdict === "unverifiable" ? "contract_signature_unverifiable" : "invalid_exact_evm_payload_signature", payer);
 }
 
-/** True when `sig` is a valid ECDSA signature by `auth.from` over Arc's
- *  EIP-3009 typed data. Pure: no RPC call. */
-export async function isLocalEoaSignature(auth, sig) {
+/** True when `sig` is a valid ECDSA signature by `auth.from` over the
+ *  profile's (Arc by default) EIP-3009 typed data. Pure: no RPC call. */
+export async function isLocalEoaSignature(auth, sig, profile = ARC_PROFILE) {
   try {
     // viem verifies 65-byte signatures (v 27/28 or 0/1); a 64-byte EIP-2098
     // compact one is expanded to that form first.
     const full = sig.length === 130 ? serializeSignature(compactSignatureToSignature(parseCompactSignature(sig))) : sig;
-    return await verifyTypedData({ address: auth.from, ...arcTypedData(auth), signature: full });
+    return await verifyTypedData({ address: auth.from, ...usdcTypedData(auth, profile), signature: full });
   } catch { return false; }
 }
 
@@ -241,7 +277,7 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
     // The verdict covers the whole signed message (to, value, validity window,
     // nonce), so the key is its EIP-712 digest, not only the payer and nonce.
     let digest;
-    try { digest = hashTypedData(arcTypedData(auth)); } catch { return "unverifiable"; }
+    try { digest = hashTypedData(usdcTypedData(auth)); } catch { return "unverifiable"; }
     const key = `${lc(auth.from)}|${lc(digest)}|${lc(sig)}`;
     const hit = cache.get(key);
     if (hit && now() - hit.at < ttlMs) return hit.verdict;
@@ -288,7 +324,7 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
  * non-JSON error body. This client's errors are already reduced.
  */
 export class CircleFacilitatorClient extends HTTPFacilitatorClient {
-  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null, contractVerifier = null } = {}) {
+  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null, contractVerifier = null, profiles = [ARC_PROFILE], label = CIRCLE_LABEL } = {}) {
     super({ url: "http://127.0.0.1:0" });
     // The stock constructor sets `url`; remove it (see the class comment).
     delete this.url;
@@ -306,24 +342,52 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     this._onPending = typeof onPending === "function" ? onPending : null;
     // Set only with ARC_CONTRACT_WALLETS=on (circleClientFromEnv): verifies a
     // contract-wallet signature on chain; null refuses every one, as before.
-    this._contractVerifier = typeof contractVerifier === "function" ? contractVerifier : null;
+    // The networks this instance verifies and settles (Arc by default; the
+    // Base and Polygon settle fallback names its own). Nothing else passes
+    // the preflight, /supported reports only these, and a status or settle
+    // answer naming another network is not proof.
+    const list = Array.isArray(profiles) && profiles.length ? profiles : [ARC_PROFILE];
+    this._profiles = Object.freeze([...list]);
+    this._networks = new Set(this._profiles.map((p) => p.caip2));
+    // The verifier checks against Arc's domain and Arc's RPC, so it is kept
+    // only by an instance that settles Arc, and handed to the preflight only
+    // for an Arc requirement (_preflight). Any other network refuses every
+    // signature that is not a local EOA one, whatever was passed here.
+    this._contractVerifier = typeof contractVerifier === "function" && this._networks.has(ARC_CAIP2) ? contractVerifier : null;
+    this._label = String(label || CIRCLE_LABEL);
   }
 
-  /** Circle's final word on one payment: { status, transaction } with status
-   *  "pending" | "completed" | "failed", or null when it cannot be read. */
-  async paymentStatus(paymentId) {
+  /** The CAIP-2 networks this instance settles. */
+  get networks() { return [...this._networks]; }
+
+  _preflight(paymentPayload, paymentRequirements) {
+    const contractVerifier = paymentRequirements?.network === ARC_CAIP2 ? this._contractVerifier : null;
+    return preflightUsdcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier, profiles: this._profiles });
+  }
+
+  /** Circle's final word on one payment: { status, transaction, network } with
+   *  status "pending" | "completed" | "failed", or null when it cannot be read.
+   *  With `network` (the one the payment was booked or settled on), an answer
+   *  naming any other network is null, never a settlement. An answer naming
+   *  none is read as `network`: the payment id is the one issued for the
+   *  settle we sent on that network (the caller refuses an id booked twice). */
+  async paymentStatus(paymentId, { network: expected } = {}) {
     if (typeof paymentId !== "string" || !UUID.test(paymentId)) return null;
+    if (expected !== undefined && !this._networks.has(expected)) return null;
     let r;
     try { r = await this._request("status", `/status/${paymentId}`, { timeoutMs: VERIFY_TIMEOUT_MS }); } catch { return null; }
     if (!r.ok || r.parseError || !isObj(r.data)) return null;
     const { status, transaction, network } = r.data;
-    if (network !== undefined && network !== ARC_CAIP2) return null;
-    if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction } : null;
-    if (status === "failed" || status === "pending") return { status, transaction: null };
+    if (network !== undefined && !this._networks.has(network)) return null;
+    if (expected !== undefined && network !== undefined && network !== expected) return null;
+    if (expected === undefined && network === undefined && this._networks.size !== 1) return null;
+    const named = network === undefined ? expected : network;
+    if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction, network: named } : null;
+    if (status === "failed" || status === "pending") return { status, transaction: null, network: named };
     return null;
   }
 
-  toJSON() { return { facilitator: CIRCLE_LABEL }; }
+  toJSON() { return { facilitator: this._label }; }
 
   async _request(op, path, { method = "GET", body, auth = true, timeoutMs }) {
     const headers = { Accept: "application/json" };
@@ -357,11 +421,11 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const r = await this._request("supported", "/supported", { auth: false, timeoutMs: SUPPORTED_TIMEOUT_MS });
     if (!r.ok) throw new CircleResponseError("supported", r.status, r.parseError ? r.parseError.reason : reasonFromErrorBody(r.data, r.status));
     if (r.parseError) throw r.parseError;
-    return arcKindsFromSupported(r.data);
+    return usdcKindsFromSupported(r.data, this._profiles);
   }
 
   async verify(paymentPayload, paymentRequirements) {
-    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier: this._contractVerifier });
+    const refused = await this._preflight(paymentPayload, paymentRequirements);
     if (refused) return { isValid: false, invalidReason: refused.reason, payer: refused.payer };
     const r = await this._request("verify", "/verify", {
       method: "POST", timeoutMs: VERIFY_TIMEOUT_MS,
@@ -380,9 +444,11 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   }
 
   async settle(paymentPayload, paymentRequirements) {
-    const network = ARC_CAIP2;
+    // The requirement's network once the preflight has accepted it; a refusal
+    // names it only when it is one of ours.
+    const network = this._networks.has(paymentRequirements?.network) ? paymentRequirements.network : this._profiles[0].caip2;
     const signedFrom = paymentPayload?.payload?.authorization?.from;
-    const refused = await preflightArcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier: this._contractVerifier });
+    const refused = await this._preflight(paymentPayload, paymentRequirements);
     if (refused) return { success: false, errorReason: refused.reason, transaction: "", network, payer: refused.payer };
     const r = await this._request("settle", "/settle", {
       method: "POST", timeoutMs: SETTLE_TIMEOUT_MS,
@@ -398,8 +464,9 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     if (!isObj(d) || typeof d.success !== "boolean") throw bad(502, "invalid_settle_response");
     const payer = signedFrom; // verified by the preflight above, never Circle's word
     if (d.success === true) {
-      // A success must name an Arc transaction; anything else is not proof.
-      if (!TX.test(String(d.transaction || "")) || (d.network !== undefined && d.network !== ARC_CAIP2)) {
+      // A success must name a transaction on the requirement's network;
+      // anything else is not proof.
+      if (!TX.test(String(d.transaction || "")) || (d.network !== undefined && d.network !== network)) {
         throw bad(502, "invalid_settle_response");
       }
       return { success: true, transaction: d.transaction, network, payer };
@@ -408,7 +475,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     if (reason === "settlement_pending") {
       const paymentId = d?.extensions?.["settlement-status"]?.paymentId;
       if (typeof paymentId === "string" && UUID.test(paymentId)) {
-        const resolved = await this._awaitPending(paymentId, payer);
+        const resolved = await this._awaitPending(paymentId, payer, network);
         if (resolved) return resolved;
         // Still unresolved: the buyer is refused now, and the payment is booked
         // by paymentId so a later pass turns a late completion into an owed
@@ -419,20 +486,20 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
           } catch { /* booking never breaks the settle path */ }
         }
       }
-      console.warn("[circle] Arc settlement still pending after the reconcile window; not reported as settled");
+      console.warn(`[circle] ${network} settlement still pending after the reconcile window; not reported as settled`);
     }
     return { success: false, errorReason: reason, transaction: "", network, payer };
   }
 
   /** Poll /status/{paymentId} until terminal or the budget runs out. Returns
    *  a settle result for a terminal outcome, null while still pending. */
-  async _awaitPending(paymentId, payer) {
+  async _awaitPending(paymentId, payer, network = ARC_CAIP2) {
     const deadline = this._now() + this._pendingBudgetMs;
     while (this._now() < deadline) {
       await new Promise((r) => setTimeout(r, this._pendingPollMs));
-      const s = await this.paymentStatus(paymentId);
-      if (s?.status === "completed") return { success: true, transaction: s.transaction, network: ARC_CAIP2, payer };
-      if (s?.status === "failed") return { success: false, errorReason: "settlement_failed", transaction: "", network: ARC_CAIP2, payer };
+      const s = await this.paymentStatus(paymentId, { network });
+      if (s?.status === "completed") return { success: true, transaction: s.transaction, network, payer };
+      if (s?.status === "failed") return { success: false, errorReason: "settlement_failed", transaction: "", network, payer };
     }
     return null;
   }
@@ -446,6 +513,24 @@ export function circleClientFromEnv(env = process.env, opts = {}) {
     ? (opts.contractVerifier || createContractVerifier({ rpcUrl: EVM_RPCS[ARC_CAIP2] }))
     : null;
   return new CircleFacilitatorClient({ apiKey: key, ...opts, contractVerifier });
+}
+
+/** CIRCLE_FACILITATOR_EVM_FALLBACK=on turns the Base and Polygon settle
+ *  fallback on; anything else (unset included) is off. */
+export function circleEvmFallbackEnabled(env = process.env) {
+  return String(env.CIRCLE_FACILITATOR_EVM_FALLBACK || "").trim().toLowerCase() === "on";
+}
+
+/** The Base and Polygon settle-fallback client when its switch is on and the
+ *  key is set, else null. Restricted to `networks` (those offered), never
+ *  given the Arc contract-wallet verifier. */
+export function circleEvmFallbackFromEnv(env = process.env, { networks = CIRCLE_EVM_FALLBACK_NETWORKS, ...opts } = {}) {
+  if (!circleEvmFallbackEnabled(env)) return null;
+  const key = String(env.CIRCLE_FACILITATOR_API_KEY || "").trim();
+  if (!key) return null;
+  const profiles = CIRCLE_EVM_FALLBACK_PROFILES.filter((p) => networks.includes(p.caip2));
+  if (!profiles.length) return null;
+  return new CircleFacilitatorClient({ apiKey: key, ...opts, contractVerifier: null, profiles, label: CIRCLE_EVM_LABEL });
 }
 
 /** True when the Arc rail's switch (the Circle key) is set. Never returns the key. */

@@ -794,12 +794,12 @@ const dataTools = [
     tags: ["xml", "json", "convert", "parse"],
     discovery: {
       bodyType: "json",
-      input: { xml: "<user id='1'><name>Ada</name></user>" },
+      input: { xml: "<person id='1'><name>Ada</name></person>" },
       inputSchema: {
         properties: { xml: { type: "string", description: "XML text (max 100KB)" } },
         required: ["xml"],
       },
-      output: { example: { json: { user: { _attrs: { id: "1" }, name: "Ada" } } } },
+      output: { example: { json: { person: { _attrs: { id: "1" }, name: "Ada" } } } },
     },
     handler: async (input) => {
       const text = capText(need(input, "xml"), 100_000, "xml");

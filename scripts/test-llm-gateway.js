@@ -1492,7 +1492,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // ---- a missing model is served as the tier default, never refused (2026-08-28) ----
 {
   const { validateRequest: vr, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
-  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-4.5"]]) {
+  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
     const b = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false });
     ok(b.model === expect && b.__defaultedModel === expect && !Object.keys(b).includes("__defaultedModel") && T[slug].defaultModel === expect, `${slug}: no model -> ${expect} (marker non-enumerable)`);
     ok(T[slug].prefixes.some((p) => expect === p || expect.startsWith(p.endsWith("/") ? p : p + "-") || expect === p), `${slug}: the default is inside the tier's own allowlist`);
@@ -1753,6 +1753,80 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(after.model === use && after.__substitutedFrom === id, `from 2026-11-30 the dated Anthropic id is served as ${use}, the swap named (${after.model}, from ${after.__substitutedFrom})`);
     K.setRetiringClockForTest(null);
   }
+  // gpt-5-codex and gpt-5-chat-latest (and the catalog's gpt-5-chat) shut down
+  // 2026-07-23: a call naming one on premium is served now by gpt-5.6-sol there.
+  for (const id of ["openai/gpt-5-codex", "openai/gpt-5-chat-latest", "openai/gpt-5-chat"]) {
+    const r = validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, "v1-chat-premium");
+    ok(RETIRING_MODELS[id]?.until === "2026-07-23" && r.model === "openai/gpt-5.6-sol" && r.__substitutedFrom === id, `${id}: shut down 2026-07-23, served on premium as gpt-5.6-sol with the swap named`);
+  }
+  // OpenAI's 2026-12-11 shutdown of GPT-5 (mini, nano, pro), o3 and o3-pro:
+  // each served as itself on its tier until the day, then by the named
+  // successor on that same tier, the swap named, a dated snapshot following.
+  {
+    const sched = [
+      ["openai/gpt-5", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/gpt-5-mini", "openai/gpt-5.6-terra", "v1-chat-premium"],
+      ["openai/gpt-5-nano", "openai/gpt-5.6-luna", "v1-chat-nano"], ["openai/gpt-5-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
+      ["openai/o3", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/o3-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
+    ];
+    const m1 = [{ role: "user", content: "hi" }];
+    for (const [id, use, home] of sched) {
+      ok(RETIRING_MODELS[id]?.until === "2026-12-11" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true && tierAllows(home, use), `${id}: scheduled to retire 2026-12-11, successor ${use} admitted on ${home}`);
+      K.setRetiringClockForTest(() => Date.parse("2026-12-10T23:59:59Z"));
+      const before = validateRequest({ model: id, messages: m1 }, home);
+      ok(!retiringModel(id) && tierFor(id) === home && before.model === id && before.__substitutedFrom === undefined, `${id}: the day before, served as itself on ${home}`);
+      K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+      const after = validateRequest({ model: id, messages: m1 }, home);
+      ok(after.model === use && after.__substitutedFrom === id && retiringModel(`${id}-2025-08-07`)?.use === use, `${id}: from 2026-12-11 served as ${use} on ${home}, the swap named, a dated snapshot retiring with it`);
+      K.setRetiringClockForTest(null);
+    }
+    // A call naming a scheduled id stays, from its date, on every tier that
+    // admitted it the day before, served there by the successor (2026-11-01:
+    // gpt-5-nano on base and premium would have moved to nano, gpt-5.6-luna's
+    // only flat home, or answered 400 where no price was gated). On each flat
+    // home the margin clamp prices the successor from its own row and serves a
+    // short prompt (a 400 there would mean the tier price no longer covers it),
+    // and the route's own price holds (no cross-tier move).
+    const scheduled = Object.keys(RETIRING_MODELS).filter((id) => RETIRING_MODELS[id].asItselfUntil);
+    ok(["openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5-pro", "openai/o3", "openai/o3-pro"].every((id) => scheduled.includes(id)), `all six 2026-12-11 ids are looped (${scheduled.length} scheduled ids)`);
+    for (const id of scheduled) {
+      const { use, until } = RETIRING_MODELS[id];
+      const day = Date.parse(`${until}T00:00:00Z`);
+      K.setRetiringClockForTest(() => day - 1000);
+      const homes = Object.keys(TIERS).filter((s) => tierAllows(s, id));
+      K.setRetiringClockForTest(() => day);
+      const lost = homes.filter((s) => !tierAllows(s, K.canonicalModel(id), id));
+      ok(homes.length > 0 && lost.length === 0, `${id}: served by ${use} on every home tier (${homes.join(", ")})${lost.length ? `; lost on ${lost.join(", ")}` : ""}`);
+      for (const s of homes.filter((h) => K.isFlatTier(h))) {
+        let served = null, err = null;
+        try { served = validateRequest({ model: id, messages: m1, max_tokens: 64 }, s); } catch (e) { err = e; }
+        ok(served?.model === use && served.__substitutedFrom === id && cf(use) !== null && K.crossTierHome(s, id) === null && K.flatTierQuoteUsd(s, id) === TIERS[s].price,
+          `${id} on ${s}: served as ${use} under the margin clamp at ${s}'s own price, priced by its own row${err ? ` (${err.statusCode} ${err.message.slice(0, 80)})` : ""}`);
+      }
+      K.setRetiringClockForTest(null);
+    }
+    // gpt-5-nano on base and premium from 2026-12-11: gpt-5.6-luna keeps the
+    // whole tier output cap under the clamp. A caller naming gpt-5.6-luna
+    // itself keeps its nano home and price on either route.
+    K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+    for (const s of ["v1-chat", "v1-chat-premium"]) {
+      const b = validateRequest({ model: "openai/gpt-5-nano", messages: m1, max_tokens: TIERS[s].maxTokens }, s);
+      ok(b.model === "openai/gpt-5.6-luna" && b.max_tokens === TIERS[s].maxTokens, `gpt-5-nano on ${s} from 2026-12-11: gpt-5.6-luna with the full ${TIERS[s].maxTokens}-token cap`);
+      ok(!tierAllows(s, "openai/gpt-5.6-luna") && K.crossTierHome(s, "openai/gpt-5.6-luna") === "v1-chat-nano", `gpt-5.6-luna named on ${s} keeps its nano home`);
+    }
+    {
+      const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+      const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+      const mm = validateMessagesRequest({ model: "openai/gpt-5-nano", max_tokens: 64, messages: m1 }, "v1-chat");
+      const rr = validateResponsesRequest({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64 }, "v1-chat-premium");
+      ok(mm.body.model === "openai/gpt-5.6-luna" && rr.body.model === "openai/gpt-5.6-luna", `Messages (base) and Responses (premium): gpt-5-nano from 2026-12-11 served as gpt-5.6-luna on the route's tier (${mm.body.model}, ${rr.body.model})`);
+    }
+    K.setRetiringClockForTest(null);
+    // gpt-4o-mini's availability successor is not itself retiring, and serves
+    // where gpt-4o-mini does on the budget router.
+    const succ = K.AVAILABILITY_SUCCESSORS["openai/gpt-4o-mini"] || [];
+    ok(succ.length > 0 && succ.every((m) => !Object.hasOwn(RETIRING_MODELS, m)), `gpt-4o-mini's availability successors (${succ.join(", ")}) are not on the retirement table`);
+    ok(K.failoverChain("openai/gpt-4o-mini", "v1-chat-auto")[1] === "openai/gpt-6-luna", "on auto, gpt-4o-mini fails over to gpt-6-luna first");
+  }
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
   // and wire, the successor live on a tier we serve, gone from flex and pricing.
   for (const id of ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]) {
@@ -1830,7 +1904,62 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const K = await import("../src/tools/llm-gateway-kit.js");
   const H5 = "anthropic/claude-haiku-5.5", H4 = "anthropic/claude-haiku-4.5";
   const m1 = [{ role: "user", content: "hi" }];
-  ok(K.canonicalModel("anthropic/claude-haiku") === H4 && TIERS["v1-chat-metered"].defaultModel === H4, "the bare haiku family name and the metered default stay on Haiku 4.5 (5.5 kept off the defaults by the side-by-side)");
+  ok(K.canonicalModel("anthropic/claude-haiku") === H4, "the bare haiku family name stays on Haiku 4.5");
+  ok(TIERS["v1-chat-metered"].defaultModel === H5 && TIERS["v1-chat-metered"].defaultModelCompat === H4, "the metered default is Haiku 5.5, with Haiku 4.5 for default calls that send what 5.5 refuses (2026-11-01)");
+  // A call that names no model never gets a 400 for a parameter the default
+  // refuses: it is served by the compat model; one naming 5.5 still gets the 400.
+  {
+    const M = TIERS["v1-chat-metered"];
+    const base = { messages: m1, max_tokens: 64 };
+    const plain = validateRequest(base, "v1-chat-metered", { clamp: false });
+    ok(plain.model === H5 && plain.__defaultedModel === H5, `no model, no sampling -> ${H5} (${plain.model})`);
+    for (const extra of [{ temperature: 0.2 }, { top_p: 0.5 }, { top_k: 5 }, { reasoning: { max_tokens: 32 } }]) {
+      const v = validateRequest({ ...base, ...extra }, "v1-chat-metered", { clamp: false });
+      ok(v.model === H4 && v.__defaultedModel === H4, `no model + ${Object.keys(extra)[0]} -> ${H4}, not a 400 (${v.model})`);
+    }
+    const prefill = validateRequest({ messages: [...m1, { role: "assistant", content: "Sure" }], max_tokens: 64 }, "v1-chat-metered", { clamp: false });
+    ok(prefill.model === H4, `no model + an assistant prefill -> ${H4} (${prefill.model})`);
+    let named = null; try { validateRequest({ ...base, model: H5, temperature: 0.2 }, "v1-chat-metered", { clamp: false }); } catch (e) { named = e; }
+    ok(named?.statusCode === 400, "a caller naming Haiku 5.5 with temperature still gets the explaining 400");
+    // Every trigger, both ways: the default call is served by the compat model,
+    // the same call naming 5.5 is the 400 (one ctx feeds both decisions).
+    const triggers = [
+      ["temperature", { temperature: 0.2 }],
+      ["top_p", { top_p: 0.5 }],
+      ["top_k", { top_k: 5 }],
+      ["prefill", { messages: [...m1, { role: "assistant", content: "Sure" }] }],
+      ["reasoning budget", { reasoning: { max_tokens: 32 } }],
+    ];
+    for (const [name, extra] of triggers) {
+      const d = validateRequest({ ...base, ...extra }, "v1-chat-metered", { clamp: false });
+      let e = null; try { validateRequest({ ...base, ...extra, model: H5 }, "v1-chat-metered", { clamp: false }); } catch (x) { e = x; }
+      ok(d.model === H4 && e?.statusCode === 400, `chat wire, ${name}: no model -> ${H4} (${d.model}); naming ${H5} -> 400 (${e?.statusCode})`);
+    }
+    ok(K.defaultModelFor(M, {}) === H5 && K.defaultModelFor({ defaultModel: H5 }, { sampling: { temperature: 1 } }) === H5 && K.defaultModelFor({}, {}) === null, "defaultModelFor: compat only when the tier names one");
+    const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+    const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+    const mm = validateMessagesRequest({ messages: m1, max_tokens: 64, temperature: 0.3 }, "v1-chat-metered");
+    ok(mm.body.model === H4, `Messages wire: no model + temperature -> ${H4} (${mm.body.model})`);
+    const rr = validateResponsesRequest({ input: "hi", max_output_tokens: 64, top_p: 0.4 }, "v1-chat-metered");
+    ok(rr.body.model === H4, `Responses wire: no model + top_p -> ${H4} (${rr.body.model})`);
+    const mp = validateMessagesRequest({ messages: m1, max_tokens: 64 }, "v1-chat-metered");
+    ok(mp.body.model === H5, `Messages wire: no model, no sampling -> ${H5} (${mp.body.model})`);
+    // Machine-readable surfaces name both models, read from the tier object.
+    const note = K.defaultModelCompatNote(M);
+    ok(typeof note === "string" && note.includes(M.defaultModel) && note.includes(M.defaultModelCompat) && K.defaultModelCompatNote(TIERS["v1-chat"]) === null, `compat note names both models, null on a tier without one: ${note}`);
+    const chatEntries = K.modelsList().data.filter((d) => d.x402?.meteredEndpoint);
+    ok(chatEntries.length > 0 && chatEntries.every((d) => d.x402.meteredDefaultModel === M.defaultModel && d.x402.meteredDefaultModelCompat === M.defaultModelCompat), `/v1/models: every chat entry names the metered default and its compat model (${chatEntries.length} entries)`);
+    const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
+    const { LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
+    const meteredChat = K.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-metered");
+    const surfaces = {
+      "metered chat description": meteredChat?.description,
+      "chat input schema model field": meteredChat?.discovery?.inputSchema?.properties?.model?.description,
+      "metered Messages description": LLM_MESSAGES_TOOLS.find((t) => t.slug === "v1-chat-metered-messages")?.description,
+      "metered Responses description": LLM_RESPONSES_TOOLS.find((t) => t.slug === "v1-chat-metered-responses")?.description,
+    };
+    for (const [where, text] of Object.entries(surfaces)) ok(typeof text === "string" && text.includes(note), `${where} carries the compat clause`);
+  }
   ok(tierFor(H5) === "v1-chat" && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on base and metered");
   ok(K.costFor(H5) === ROW(H5) && K.costFor(H4) === ROW(H4), "Haiku 5.5 is priced by its own row, never by the 4.5 row or the family fallback");
   ok(K.adaptiveOnlyClaude(H5) && !K.adaptiveOnlyClaude(H4) && !K.adaptiveOnlyClaude("anthropic/claude-sonnet-5.5") && !K.adaptiveOnlyClaude("anthropic/claude-haiku"), "the Haiku 5 parameter rules apply to Haiku 5 only");

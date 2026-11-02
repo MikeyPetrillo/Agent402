@@ -1869,6 +1869,8 @@ jobs:
           t node scripts/test-rh-outage.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
           t node scripts/test-arc-rail.js
+          # The issuer's facilitator as the last Base/Polygon settle fallback: switch off = absent, last after every fallback, reached only past pre-broadcast refusals, exact only, fail closed (offline stubs + paid-mode boot)
+          t node scripts/test-circle-evm-fallback.js
           # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
           t node scripts/test-render-bytebudget.js
           # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
@@ -2695,6 +2697,9 @@ jobs:
           #  (verified first-party against prod, 2026-08-29). Boots the real server against a
           #  local /supported stub; no payment is made."
           t node scripts/test-bazaar-contracts.js
+          # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
+          # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
+          t node scripts/test-own-listing-screen.js
           # Every accept of every 402 asks list plus the chain's premium, raised to its
           # floor, as /api/pricing publishes them (three rails, a stub facilitator).
           t node scripts/test-accept-prices.js
@@ -2906,6 +2911,8 @@ jobs:
           t node scripts/test-network-names-own-keys.js
           t node scripts/test-email-text.js
           t node scripts/test-mcp-version-pins.js
+          # The heartbeat's MCP install-pin check: a served agent402-mcp version npm lacks reads missing; an unreadable site or registry reads unknown (offline, stub site + stub registry)
+          t node scripts/test-mcp-pin-on-npm.js
           t node scripts/test-env-num.js
           # post-deploy has() counts a needle only in a 2xx answer (runs the workflow's shell function locally)
           t node scripts/test-deploy-has-status.js
@@ -4009,10 +4016,12 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (2 scripts, one process each)
+      - name: Offline suites (3 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
+          # MCP Skills on /mcp (io.modelcontextprotocol/skills behind MCP_SKILLS - negotiated only, manifests verify, prompts unchanged - offline)
+          t node scripts/test-mcp-skills.js
           # MCP Tasks on /mcp (io.modelcontextprotocol/tasks - handle then poll to completed, failures never a silent empty success, cancel aborts the paid run, restart resolves orphans, composites only, no task without payment - offline)
           t node scripts/test-mcp-tasks.js
           # PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)
@@ -4938,6 +4947,9 @@ jobs:
         # this scoping is dishonest and CI fails). So it runs only when the push
         # touched facilitator/** or Dockerfile.facilitator.
         # FAIL-OPEN: an unreadable diff (first push, force-push, API error) RUNS it.
+        # A dev-branch push diffs the whole batch against main (main...SHA), not
+        # the previous push: a push whose run a newer one cancelled would
+        # otherwise hide a facilitator change from every later run (2026-11-01).
         run: |
           if [ -z "$TEST_PAYER_STELLAR_SECRET" ]; then
             echo "TEST_PAYER_STELLAR_SECRET unset - skipping facilitator/test.js (see facilitator/README.md)"
@@ -4965,7 +4977,10 @@ jobs:
         env:
           TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}
           GH_TOKEN: ${{ github.token }}
-          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          # PR: its base. Push to main: the previous head. Push to any other
+          # branch: main (the whole batch). Anything else (workflow_dispatch,
+          # a main push with no before): empty, so the gate runs (fail-open).
+          DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && (github.ref == 'refs/heads/main' && github.event.before || github.ref != 'refs/heads/main' && 'main')) || '' }}
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still

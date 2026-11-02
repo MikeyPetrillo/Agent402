@@ -27,6 +27,8 @@ import {
   ListToolsRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
   McpError,
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -38,6 +40,7 @@ import {
   TASKS_EXTENSION, CLIENT_CAPABILITIES_META, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
   mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
 } from "./mcp-tasks.js";
+import { SKILLS_EXTENSION, mcpSkillsEnabled, clientDeclaresSkills, isSkillMethod, buildSkillSet, handleSkillsRpc } from "./mcp-skills.js";
 import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { tempoEnabled, pushHashOf, tempoOfferedFor } from "./mpp-tempo.js";
@@ -264,6 +267,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const freeCount = [...tools.values()].filter((t) => t.free).length;
   const freeSlugs = new Set([...tools.entries()].filter(([, t]) => t.free).map(([slug]) => slug));
 
+  // Skills over MCP (io.modelcontextprotocol/skills, src/mcp-skills.js): each
+  // skill pack served as an Agent Skill. Armed by MCP_SKILLS=on, and only on a
+  // mount that lists catalog.call, the call every skill body names.
+  const skillSet = mcpSkillsEnabled() && !scoped
+    ? buildSkillSet({ freeSlugs, priceOf: (slug) => tools.get(slug)?.def?.price ?? null })
+    : null;
+
   // MCP Tasks (io.modelcontextprotocol/tasks). Armed only when tasks are enabled
   // AND the MPP loopback exists: the whole point is selling the long-running
   // composites, every one of which is wallet-only, so with no paid path there is
@@ -410,7 +420,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     ].join(" ");
   }
 
-  function buildServer(ip, signal, heartbeatToken = null) {
+  // `skillsCaps`: the skills capability is on THIS server instance. True for an
+  // initialize whose client declared the extension (the only answer that
+  // shows capabilities), and for every other request while skills are armed,
+  // so resources/list and resources/read are answered for a client that saw
+  // the declaration on its own initialize.
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -423,13 +438,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         capabilities: {
           tools: {},
           prompts: {},
+          // The skills extension requires the base resources capability.
+          ...(skillsCaps ? { resources: {} } : {}),
           // MCP Tasks extension (io.modelcontextprotocol/tasks). The 2026-07-28
           // spec has servers advertise extensions in the capabilities returned
           // by `server/discover`; this connector still speaks the initialize
           // handshake, so the same capabilities object is where it goes. Only
           // advertised when the extension is armed AND paid calls are actually
           // possible here - a task only exists to carry a PAID composite run.
-          ...(tasks ? { extensions: { [TASKS_EXTENSION]: {} } } : {}),
+          ...((tasks || skillsCaps) ? { extensions: { ...(tasks ? { [TASKS_EXTENSION]: {} } : {}), ...(skillsCaps ? { [SKILLS_EXTENSION]: {} } : {}) } } : {}),
           // MPP transport-mcp "MCP Capability Advertisement": the methods a
           // paid tool call here can be settled with, read from the gates that
           // are actually live. Only when the MPP loopback exists - without it a
@@ -464,6 +481,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
       return buildPromptMessages(pack, args, { freeSlugs });
     });
+
+    // Skill files as base resources (src/mcp-skills.js). skills/list and
+    // skills/get are answered ahead of the transport, in app.post below.
+    if (skillsCaps && skillSet) {
+      server.setRequestHandler(ListResourcesRequestSchema, async (req) => {
+        if (req.params?.cursor != null) throw new McpError(ErrorCode.InvalidParams, "Invalid cursor");
+        return {
+          resources: [...skillSet.fileByUri.values()].map(({ uri, name, title, description, mimeType, size }) => ({ uri, name, title, description, mimeType, size })),
+        };
+      });
+      server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+        const uri = String(req.params?.uri || "");
+        const file = skillSet.fileByUri.get(uri);
+        if (!file) throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri.slice(0, 200)}`);
+        return { contents: [{ uri: file.uri, mimeType: file.mimeType, text: file.text }] };
+      });
+    }
 
     // Titles + safety annotations on every tool are required for listing in
     // Anthropic's connector directory. Meta discovery tools are honestly
@@ -1554,6 +1588,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const handled = await handleTaskRpc(req.body);
       return res.status(200).json(handled);
     }
+    // Skills (io.modelcontextprotocol/skills): skills/list and skills/get are
+    // static answers over the skill set built at mount, answered here because
+    // the installed SDK has no such methods. Behind the per-IP limiter above.
+    // With skills off they fall through to the SDK's method-not-found.
+    if (skillSet && isSkillMethod(req.body?.method)) {
+      const answer = handleSkillsRpc(req.body, skillSet);
+      // A notification gets no JSON-RPC reply: an empty 202, as the SDK transport answers one.
+      return answer ? res.status(200).json(answer) : res.status(202).end();
+    }
+    const isInitialize = req.body?.method === "initialize";
+    const skillsCaps = Boolean(skillSet) && (!isInitialize || clientDeclaresSkills(req.body?.params));
     // R-11 outer gate #2: global in-flight transport ceiling, BEFORE building
     // the server/transport (bounds allocation under an initialize/malformed flood).
     if (mcpInFlight >= MCP_MAX_CONCURRENT) {
@@ -1561,7 +1606,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     }
     // Adoption telemetry: every MCP session announces its client at
     // initialize (e.g. "claude-ai", "claude-code"). In-memory since boot.
-    const ci = req.body?.method === "initialize" ? req.body?.params?.clientInfo : null;
+    const ci = isInitialize ? req.body?.params?.clientInfo : null;
     if (ci?.name && mcpClients.size < 500) {
       // clientInfo is attacker-controlled — sanitize before it lands in the log
       // line OR the in-memory telemetry map (audit F24).
@@ -1579,7 +1624,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport.close(); } catch { /* already closing */ } });
-      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null).connect(transport);
+      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps }).connect(transport);
       run = transport.handleRequest(req, res, req.body);
       // R-11/F14: per-request deadline. On fire, abort the handler and close the
       // transport so it settles, then (in finally) await that settle before the

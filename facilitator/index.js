@@ -11,14 +11,14 @@
 import express from "express";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
-import { getHorizonClient } from "@x402/stellar";
+import { getHorizonClient, DEFAULT_TESTNET_RPC_URL } from "@x402/stellar";
 import { loadSigner, NETWORK, RPC_CONFIG } from "./signer.js";
 import { invalidVerify, invalidSettle, normalizeVerify, normalizeSettle } from "./shape.js";
 import { createSerialQueue, holdMaxFrom } from "./queue.js";
 import { withTimeout } from "./timeout.js";
 import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
-import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
+import { installRpcFailover, resolveFallbackUrls, checkRpcVersions, resolveMinRpcMajor } from "./rpc-failover.js";
 import { installSignerReread } from "./signer-reread.js";
 import { installSettleDeadline, newSettleContext, payerOfPayload, settleJob } from "./settle-deadline.js";
 import { installPollClamp } from "./settle-poll.js";
@@ -363,6 +363,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const httpServer = app.listen(PORT, () => {
     console.log(`agent402-facilitator (Stellar, ${NETWORK}) listening on :${PORT}`);
     console.log(`facilitator address: ${signer.address}`);
+    // Once, after listen, off every settle: a log line per RPC, a warning for
+    // one below the network's or the next scheduled protocol.
+    const minRpcMajor = resolveMinRpcMajor(process.env.FACILITATOR_RPC_MIN_VERSION);
+    if (minRpcMajor !== null) {
+      checkRpcVersions([RPC_CONFIG?.url || DEFAULT_TESTNET_RPC_URL, ...resolveFallbackUrls(NETWORK, process.env.FACILITATOR_RPC_FALLBACK_URLS)], { minMajor: minRpcMajor })
+        .catch(() => {});
+    }
   });
 
   // Graceful shutdown: a Railway redeploy sends SIGTERM. Stop accepting new

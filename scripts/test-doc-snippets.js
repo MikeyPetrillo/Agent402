@@ -37,7 +37,7 @@
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-doc-snippets.js
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { requestExampleOf } from "../src/openapi-request.js";
 import { stripTags as stripTagsSep } from "./lib/html-text.js";
 
@@ -342,6 +342,22 @@ ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something
   }
   ok(openclawBlocks >= 3, `the wallet proxy blocks were seen (${openclawBlocks})`);
   ok(tollBlocks >= 1 && payFetchBlocks >= 1, `the tollbooth and payFetch blocks were seen (${tollBlocks}, ${payFetchBlocks})`);
+}
+// server.describe's install block (mcpInstallHints) and the initialize
+// instructions, from both connectors' copies of the module: the closed
+// add-server form must not be offered there either; the hosted connector is.
+{
+  const DEAD = /smithery\.ai\//;
+  ok(DEAD.test("Paste it at https://smithery.ai/new"), "control: the dead add-server link pattern matches");
+  for (const rel of ["mcp/output-schemas.js", "src/mcp-flagship.js"]) {
+    const mod = await import(pathToFileURL(join(ROOT, rel)).href);
+    const base = "https://agent402.tools";
+    const hints = mod.mcpInstallHints(base);
+    const text = JSON.stringify(hints) + "\n" + mod.mcpInitializeInstructions(base) + "\n" + mod.mcpInitializeInstructions(base, { decide: true, mpp: true });
+    ok(!DEAD.test(text), `${rel}: server.describe install text has no dead add-server link`);
+    ok(hints.hostedUrl === `${base}/mcp` && text.includes(`claude mcp add --transport http agent402 ${base}/mcp`), `${rel}: server.describe offers the hosted connector`);
+    ok(!DEAD.test(readFileSync(join(ROOT, rel), "utf8")), `${rel}: no dead add-server link anywhere in the module`);
+  }
 }
 // The idempotent replay needs the same credential on the retry: an example
 // with no payment header on either call never replays in paid mode.
