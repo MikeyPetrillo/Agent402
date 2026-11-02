@@ -2,9 +2,10 @@
 // @coinbase/x402's createFacilitatorConfig: the URL, the four header groups
 // @x402/core's HTTPFacilitatorClient reads, the Correlation-Context string,
 // and per-path JWTs whose header and claims match the SDK's generateJwt and
-// whose signatures verify, for both CDP key formats. Also pins that the
-// server reaches it (not the removed package) and that the package is gone
-// from package.json. Offline.
+// whose signatures verify, for both CDP key formats, minted fresh on every
+// call, and the same on the wire for supported, verify and settle through
+// @x402/core's client. Also pins that the server reaches it (not the
+// removed package) and that the package is gone from package.json. Offline.
 //   node scripts/test-cdp-facilitator.js
 import { generateKeyPairSync, verify as edVerify, createVerify } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -54,6 +55,26 @@ for (const [label, secret, alg, check] of [
   ok(nonces.size === 3, `${label}: a fresh nonce per path`);
 }
 
+// A fresh JWT per call: CDP refuses a token past its 120 s window, so a
+// config that cached its headers would 401 every verify and settle two
+// minutes after boot. Two calls differ, and a call made later carries the
+// later clock.
+{
+  const cfg = cdpFacilitatorConfig("kid-fresh", edSecret);
+  const a = await cfg.createAuthHeaders();
+  const b = await cfg.createAuthHeaders();
+  for (const path of Object.keys(PATHS)) {
+    const ta = a[path].Authorization, tb = b[path].Authorization;
+    ok(ta && tb && ta !== tb && part(ta.slice(7), 0).nonce !== part(tb.slice(7), 0).nonce, `fresh per call: ${path} gets a new token and nonce on each call`);
+  }
+  const realNow = Date.now;
+  const before = part(a.settle.Authorization.slice(7), 1);
+  Date.now = () => realNow() + 600_000;
+  let later;
+  try { later = part((await cfg.createAuthHeaders()).settle.Authorization.slice(7), 1); } finally { Date.now = realNow; }
+  ok(later.iat >= before.iat + 600 && later.exp === later.iat + 120, `fresh per call: a call 600 s later is signed at its own time (iat ${before.iat} -> ${later.iat})`);
+}
+
 // No keys: correlation only, no Authorization anywhere (the package's shape).
 {
   const saved = [process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET];
@@ -80,6 +101,7 @@ for (const [label, secret, alg, check] of [
     req.on("end", () => {
       res.setHeader("Content-Type", "application/json");
       if (req.url.endsWith("/supported")) res.end(JSON.stringify({ kinds: [], extensions: [], signers: {} }));
+      else if (req.url.endsWith("/settle")) res.end(JSON.stringify({ success: false, errorReason: "stub", transaction: "", network: "eip155:8453", payer: "0x0000000000000000000000000000000000000000" }));
       else res.end(JSON.stringify({ isValid: false, invalidReason: "stub", payer: "0x0000000000000000000000000000000000000000" }));
     });
   });
@@ -88,8 +110,9 @@ for (const [label, secret, alg, check] of [
   const client = new HTTPFacilitatorClient({ ...cfg, url: `http://127.0.0.1:${srv.address().port}/platform/v2/x402` });
   try { await client.getSupported(); } catch { /* the stub's body shape is not under test */ }
   try { await client.verify({ x402Version: 2, payload: {}, accepted: {} }, { scheme: "exact", network: "eip155:8453" }); } catch { /* same */ }
+  try { await client.settle({ x402Version: 2, payload: {}, accepted: {} }, { scheme: "exact", network: "eip155:8453" }); } catch { /* same */ }
   srv.close();
-  for (const [path, method] of [["supported", "GET"], ["verify", "POST"]]) {
+  for (const [path, method] of [["supported", "GET"], ["verify", "POST"], ["settle", "POST"]]) {
     const r = seen.find((s) => s.url === `/platform/v2/x402/${path}`);
     ok(r && r.method === method, `wire: ${path} reached the stub as ${method}`);
     const claims = r && r.auth.startsWith("Bearer ") ? part(r.auth.slice(7), 1) : {};

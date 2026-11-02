@@ -7,6 +7,8 @@
 // (`self_send_not_allowed`, measured 2026-08-27), so no self-pay proof exists. Asserts: 402 with a Base USDC accept naming the payTo, then a
 // paid 200 whose PAYMENT-RESPONSE receipt says success with a transaction.
 // Dispatch-only (.github/workflows/tollbooth-cdp-live.yml); never in CI lanes.
+// The CDP path needs @coinbase/x402, tollbooth's optional peer and not a root
+// dependency: the workflow installs it after `npm ci` with --no-save.
 import { randomBytes } from "node:crypto";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import express from "express";

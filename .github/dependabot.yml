@@ -45,10 +45,11 @@ updates:
       # 0.13.6 through 0.17.0 all declare 0.14.45.
       - dependency-name: "ox"
       - dependency-name: "@solana-program/*"
-      # @solana/kit itself: @solana-program/* declare a peer of kit ^5 and
-      # @coinbase/cdp-sdk depends on kit ^5, so a kit major (5 -> 8, #1214)
-      # cannot install until that whole line moves. It moves with the @x402 set,
-      # deliberately, with a paid-canary run; a weekly red PR proves nothing.
+      # @solana/kit itself: the root pins kit 8 and overrides the program
+      # packages @x402/svm nests to their kit-8-peered releases
+      # (scripts/test-solana-kit-deps.js), so a kit major moves with the @x402
+      # set and those overrides, deliberately, with a paid-canary run; a weekly
+      # red PR proves nothing.
       - dependency-name: "@solana/kit"
         update-types: ["version-update:semver-major"]
       # better-sqlite3 major: native module, and REFUSED TWICE by the real image.

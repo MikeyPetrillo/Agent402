@@ -64,6 +64,22 @@ for (const t of CDP_TOOLS) {
   ok(v.verify({ key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(s, "base64url")), "ES256 signature verifies (ieee-p1363)");
 }
 
+// --- JWT: a PEM that is not EC P-256 is refused at mint time, key not echoed ---
+for (const [label, kp] of [
+  ["EC secp384r1", generateKeyPairSync("ec", { namedCurve: "secp384r1" })],
+  ["EC secp256k1", generateKeyPairSync("ec", { namedCurve: "secp256k1" })],
+  ["RSA", generateKeyPairSync("rsa", { modulusLength: 2048 })],
+]) {
+  const pem = kp.privateKey.export({ type: "pkcs8", format: "pem" });
+  const body = pem.split("\n")[1];
+  try {
+    await mintCdpJwt({ method: "GET", path: "/platform/v2/evm/token-balances/base/0xabc", apiKeyId: "ec-key", apiKeySecret: pem });
+    ok(false, `${label} PEM is refused (minted a token)`);
+  } catch (e) {
+    ok(e.statusCode === 503 && /P-256/.test(e.message) && !e.message.includes(body) && !/BEGIN/.test(e.message), `${label} PEM is refused with a 503 naming the key type, never the key (${e.statusCode}: ${String(e.message).slice(0, 80)})`);
+  }
+}
+
 // --- env gate: no keys → 503, and validation fires BEFORE the gate -------------
 await rejects(() => tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" }), 503, "wallet-balances without CDP keys → 503");
 await rejects(() => tool("wallet-balances").handler({ address: "nope" }), 400, "wallet-balances bad address → 400");

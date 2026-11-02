@@ -54,7 +54,14 @@ export async function mintCdpJwt({ method, path, apiKeyId = keyId(), apiKeySecre
   let alg, key;
   if (apiKeySecret.includes("-----BEGIN")) {
     alg = "ES256";
-    key = { key: createPrivateKey(apiKeySecret), dsaEncoding: "ieee-p1363" };
+    // ES256 is P-256 only: a PEM holding another curve or key type would sign
+    // a token CDP refuses, so it is refused here, naming the type, never the key.
+    const pk = createPrivateKey(apiKeySecret);
+    const curve = pk.asymmetricKeyDetails?.namedCurve;
+    if (pk.asymmetricKeyType !== "ec" || curve !== "prime256v1") {
+      throw bad(`CDP key secret is a PEM ${pk.asymmetricKeyType}${curve ? ` (${curve})` : ""} key; ES256 needs an EC P-256 key`, 503);
+    }
+    key = { key: pk, dsaEncoding: "ieee-p1363" };
   } else {
     const decoded = Buffer.from(apiKeySecret, "base64");
     if (decoded.length !== 64) throw bad("CDP key secret is neither a PEM EC key nor a base64 Ed25519 key", 503);
