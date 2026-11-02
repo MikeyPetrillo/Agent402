@@ -431,6 +431,32 @@ try {
     ok(resp.status === 200 && heldUnder(ms, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (${ROUTE.note}; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
   }
   {
+    // The operator's sales page reads the detailed summary across turns too,
+    // and it is the ledger's own detailed summary.
+    await fetch(`${base}/__operator/perf.json?reset=1`, op);
+    const resp = await fetch(`${base}/__operator/sales.json`, op);
+    const body = await resp.json();
+    await sleep(300);
+    const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
+    ok(resp.status === 200 && heldUnder(worstMs - worstGcMs, ROUTE_BOUND_MS), `GET /__operator/sales.json: 200, the loop held at most ${worstMs - worstGcMs} ms (${ROUTE.note})`);
+    const { mppAgentsThisWeek, feedback, ...summary } = body;
+    const direct = JSON.parse(JSON.stringify(sales.salesSummary({ days: 30, detailed: true })));
+    ok(isDeepStrictEqual(summary.totals, direct.totals) && summary.distinctExternalBuyers === direct.distinctExternalBuyers && isDeepStrictEqual(summary.repeatBuyers, direct.repeatBuyers) && feedback && "mppAgentsThisWeek" in body,
+      "/__operator/sales.json carries the ledger's detailed summary, feedback and the weekly MPP count");
+  }
+  {
+    // Neither ledger read behind a request runs the one-turn walk: the
+    // operator's sales page awaits the sliced summary, and a cold shared
+    // reading starts the sliced build instead of reading in line.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const route = src.slice(src.indexOf('app.get("/__operator/sales.json"'), src.indexOf('app.get("/__operator/sales.json"') + 1400);
+    ok(/await salesSummaryAsync\(\{ detailed: true \}\)/.test(route) && !/[^a-zA-Z]salesSummary\(/.test(route), "/__operator/sales.json awaits salesSummaryAsync, never the one-turn salesSummary");
+    const cold = src.slice(src.indexOf("function currentLedgerFigures()"), src.indexOf("const ledgerFiguresBoot"));
+    ok(cold.length > 0 && !/salesSummary\(|externalByNetwork\(/.test(cold) && /refreshLedgerFigures\(\)/.test(cold), "a cold shared ledger reading starts the sliced build, never a one-turn read");
+    ok(/await Promise\.race\(\[ledgerFiguresBoot,/.test(src) && src.indexOf("await Promise.race([ledgerFiguresBoot,") < src.indexOf("const httpServer = app.listen("), "the first shared ledger reading is awaited (bounded) before the server listens");
+  }
+  {
     // The shared labelled snapshot reaches the page: every external row of the
     // full roster carries its dispatch badge, the host's row none.
     const html = await (await fetch(`${base}/marketplace?all=1`)).text();

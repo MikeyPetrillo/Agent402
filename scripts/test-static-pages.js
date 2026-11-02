@@ -28,8 +28,9 @@ import { vendorHits, loadVendorData } from "./lib/vendor-names.js";
 import { stripScripts, stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3089;
-const BASE = `http://127.0.0.1:${PORT}`;
+// Port 0: the kernel assigns a free port, read back from the server's
+// "listening on :<port>" line (scripts/test-port-hygiene.js).
+let BASE = null;
 
 let pass = 0;
 const fail = (m) => { console.error("FAIL:", m); try { proc.kill("SIGKILL"); } catch {} process.exit(1); };
@@ -76,11 +77,15 @@ const PAGES = [
 
 const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false" },
-  stdio: "ignore",
+  env: { ...process.env, FREE_MODE: "true", PORT: "0", X402_SYNC_ON_START: "false" },
+  stdio: ["ignore", "pipe", "ignore"],
 });
+let bootLog = "";
+proc.stdout.on("data", (d) => { if (!BASE) bootLog = (bootLog + d).slice(-20_000); });
 
 try {
+  for (let i = 0; i < 180 && !BASE; i++) { const m = bootLog.match(/listening on :(\d+)/); if (m) BASE = `http://127.0.0.1:${m[1]}`; else await sleep(500); }
+  if (!BASE) fail(`server never printed its port:\n${bootLog.slice(-600)}`);
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch {} await sleep(500); }
 
   for (const { path, titleSubstr } of PAGES) {

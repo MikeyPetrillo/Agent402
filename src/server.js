@@ -4867,7 +4867,7 @@ app.get("/__operator/settlement-reconciliation.json", (req, res) => {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
 });
-app.get("/__operator/sales.json", (req, res) => {
+app.get("/__operator/sales.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
   try {
@@ -4879,7 +4879,9 @@ app.get("/__operator/sales.json", (req, res) => {
     // the series and method split live on /__operator/mpp-agents.json.
     let mppAgentsThisWeek = null;
     try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
-    res.json({ ...salesSummary({ detailed: true }), mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
+    // The detailed summary walks the whole window: read across turns, never in line.
+    const summary = await salesSummaryAsync({ detailed: true });
+    res.json({ ...summary, mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -8004,23 +8006,30 @@ function refreshLedgerFigures() {
   }
   return ledgerFiguresBuild;
 }
-// The shared reading, never older than the TTL plus one background build. Cold
-// (before the boot build lands) it is read once in line, as the per-page read
-// always was, and shared from then on.
+// The shared reading, never older than the TTL plus one background build. The
+// first build is awaited before the server listens (bounded, below), so a
+// request finds it. Cold (that build failed or outlasted its wait) it is never
+// read in line: the build is started across turns and the readers get no
+// figures (a host entry is left out) until it lands.
+const warnLedgerFigures = (e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
 function currentLedgerFigures() {
   const f = ledgerFigures;
   if (f) {
-    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch((e) => console.warn(`[ledger-figures] rebuild failed: ${String(e?.message || e).slice(0, 120)}`));
+    if (Date.now() - f.at >= HOST_FIGURES_TTL_MS) refreshLedgerFigures().catch(warnLedgerFigures);
     return f;
   }
-  const summary = new Map(), byNetwork = new Map();
-  for (const days of LEDGER_FIGURE_WINDOWS) { summary.set(days, salesSummary({ days })); byNetwork.set(days, externalByNetwork({ days })); }
-  ledgerFigures = { at: Date.now(), summary, byNetwork };
-  return ledgerFigures;
+  refreshLedgerFigures().catch(warnLedgerFigures);
+  return null;
 }
-setImmediate(() => { salesLedgerReady().then(() => refreshLedgerFigures()).catch(() => { /* the first page read builds it */ }); });
-const sharedSummary = ({ days = 30 } = {}) => currentLedgerFigures().summary.get(days) ?? salesSummary({ days });
-const sharedByNetwork = ({ days = 30 } = {}) => currentLedgerFigures().byNetwork.get(days) ?? externalByNetwork({ days });
+const ledgerFiguresBoot = new Promise((ok) => setImmediate(ok)).then(() => salesLedgerReady()).then(() => refreshLedgerFigures()).catch(() => { /* the first page read starts it */ });
+const LEDGER_FIGURES_BOOT_WAIT_MS = 10_000;
+function ledgerFiguresOrThrow() {
+  const f = currentLedgerFigures();
+  if (!f) throw new Error("ledger figures are still building");
+  return f;
+}
+const sharedSummary = ({ days = 30 } = {}) => ledgerFiguresOrThrow().summary.get(days) ?? salesSummary({ days });
+const sharedByNetwork = ({ days = 30 } = {}) => ledgerFiguresOrThrow().byNetwork.get(days) ?? externalByNetwork({ days });
 function hostEntryFigures(chainKey = null) {
   const key = chainKey || "";
   const hit = hostFiguresCache.get(key);
@@ -11677,6 +11686,10 @@ setUnloadedStoresProbe(unloadedStores);
 // The all-time ledger totals behind the home page count and /revenue are built
 // now, across turns, so the first visitor's request does not read them in line.
 revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) storeSettledCount(t); }).catch(() => { /* the first read takes it */ });
+// The shared ledger figures behind the host entries (chain pages, /marketplace,
+// /leaderboard, /api/index) are built across turns before the first request,
+// so no reader finds them cold; bounded, so a slow build never holds the boot.
+await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   // The bound port, so a PORT=0 boot (a test reading the port back) prints
