@@ -6,6 +6,22 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (agent front door)
+Surfaces:
+- /llms.txt, the MCP server.describe answer and the unpaid 402 body open
+  with the same front door: the first call (web.search) and its catalog
+  price, access with no account or API key, when to use the service and
+  when not to, and four recovery lines, each scoped to where it holds.
+  Rails and wire detail follow it unchanged.
+- New /agents.md (text/markdown, free): the front door, then how to
+  connect, pay and find more tools. Linked from /llms.txt, listed in the
+  sitemap and robots.txt.
+- The OpenAPI info description and the /.well-known/x402 summary lead with
+  what the first call returns for its price.
+- The Bazaar listings of web search, web answer, news search and browser
+  render say what one call returns; the search and news sample outputs
+  show two results with a matching count.
+
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:
 - route-execute moves on to the next Tempo seller when a seller fails

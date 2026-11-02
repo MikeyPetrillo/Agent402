@@ -89,7 +89,7 @@ const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\
 // Copy surfaces: every tracked text file outside src, every markdown file,
 // and the src modules that render pages or documents rather than answer a
 // paid request (their names say so). Pinned below against the known ones.
-const COPY_SURFACES = /\.md$|^(?!src\/)|^src\/[\w-]*(?:page|pages|guides?|learn|seo|blog|skill-md|how-to-pay|what-is-x402|webhooks|terms|privacy|company|glossary|faq|why|docs|integration)[\w-]*\.js$/;
+const COPY_SURFACES = /\.md$|^(?!src\/)|^src\/[\w-]*(?:page|pages|guides?|learn|seo|blog|skill-md|how-to-pay|what-is-x402|webhooks|terms|privacy|company|glossary|faq|why|docs|integration|front-door)[\w-]*\.js$/;
 const FORBIDDEN = [
   {
     // "Never charged" is true of x402 (settlement runs after the handler) and

@@ -30,6 +30,7 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { frontDoorMarkdown, AGENTS_MD_PATH } from "./front-door.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -214,7 +215,7 @@ User-agent: *
 Allow: /
 ${searchRules}
 
-# Machine-readable catalogs for agents: ${baseUrl}/SKILL.md , ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/.well-known/agent-card.json , ${baseUrl}/.well-known/agent-registration.json , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
+# Machine-readable catalogs for agents: ${baseUrl}/agents.md , ${baseUrl}/SKILL.md , ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/.well-known/agent-card.json , ${baseUrl}/.well-known/agent-registration.json , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 # Crawling this catalog: every route and price is in ${baseUrl}/.well-known/x402 , ${baseUrl}/openapi.json and ${baseUrl}/api/pricing ; read those rather than each priced route. Crawl policy, including the hourly budget on unpaid price checks: ${baseUrl}/crawler
 Sitemap: ${baseUrl}/sitemap.xml
 Sitemap: ${baseUrl}/sitemapindex.xml
@@ -236,6 +237,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/docs`, priority: "0.8" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
+    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
     { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
@@ -610,6 +612,7 @@ ${meteredCurl(baseUrl)}
 ${flatTiersLine()}
 
 ## Key machine surfaces
+- [/agents.md](${baseUrl}${AGENTS_MD_PATH}): the front door for an agent in markdown - the first call and its price, access with no account or API key, when to use the service and when not to, the recovery contract, then how to connect and pay
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): **front door** - cited answer grounded in live web search results
@@ -678,7 +681,7 @@ ${toolSections}
 `;
 }
 
-/** /llms.txt: the short index an agent reads first (under 15 KB). Its title,
+/** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
  *  summary line and sections are taken from the full text, so they never drift;
  *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
 export function llmsTxt(baseUrl, catalog) {
@@ -699,7 +702,12 @@ export function llmsTxt(baseUrl, catalog) {
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
 - Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
+  // The front door leads: the first call and its price, access, when to use
+  // it, and the recovery contract (src/front-door.js); the summary, rails and
+  // wire detail follow it unchanged.
   return `${title}
+
+${frontDoorMarkdown(catalog, baseUrl)}
 
 ${summary}
 
