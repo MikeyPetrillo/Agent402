@@ -325,7 +325,9 @@ const assertErrorFirstReaders = async (label, status, text, decoded, explanation
   const sdk = await new Agent402({ baseUrl: B, cache: false })._failureDetail("t", new Response(text, { status }));
   ok(sdk === `call "t" failed: HTTP ${status} - ${explanation}`, `${label}: agent402-client's failure text is the explanation (${sdk.slice(0, 160)})`);
 };
-let nonceN = 0;
+// Nonces unique to this run: the replay guard keys a payment on its nonce, and
+// on a Redis another suite shares a small fixed nonce may already be consumed.
+let nonceN = Math.floor(Math.random() * 2 ** 40) * 1024;
 const credential = (accepted, payer = PAYER) => b64({
   x402Version: 2, resource: accepted.resource, accepted,
   payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (++nonceN).toString(16).padStart(64, "0") } },

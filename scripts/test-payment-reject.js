@@ -12,7 +12,7 @@
 // the real server: a bare 402 is untouched, a refused one carries reason/hint.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { classifyPaymentRejection, unclassifiedPaymentShape } from "../src/payment-reject.js";
+import { classifyPaymentRejection, unclassifiedPaymentShape, pendingSettleRefusal, withPendingSettleRefusal, PENDING_REFUSAL_MAX_TXS, REJECTION_REASONS } from "../src/payment-reject.js";
 import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, proc = null;
@@ -106,6 +106,30 @@ ok(/maxTimeoutSeconds/.test(classify(withMissing)?.detail || ""), "a MISSING fie
   ok(diff?.reason === "requirements-mismatch" && diff.fields.includes("maxAmountRequired(!=amount)"),
     `a v1 alias that disagrees is annotated (!=amount) (${JSON.stringify(diff?.fields)})`);
   ok(!JSON.stringify(same.fields).includes("20000") && !JSON.stringify(diff.fields).includes("999"), "the annotation never carries a value");
+}
+
+// A settle a facilitator answered as pending, with no transaction proven on
+// chain within the wait: the transfer may still land, so the 402 says it is
+// then owed and repaid after on-chain proof, names each noted transaction, and
+// never says nothing was charged.
+{
+  const TX = "0x" + "ab".repeat(32), TX2 = "0x" + "CD".repeat(32);
+  const one = pendingSettleRefusal({ network: "eip155:8453", transactions: [TX, TX.toUpperCase().replace("0X", "0x"), "0x1234", null] });
+  ok(one?.reason === "settlement-unconfirmed" && one.network === "eip155:8453" && JSON.stringify(one.transactions) === JSON.stringify([TX]),
+    `one valid hash, deduped case-blind, malformed entries dropped (${JSON.stringify(one?.transactions)})`);
+  ok(/may still land/.test(one.detail) && /owed/.test(one.detail) && /on-chain proof/.test(one.detail) && /new authorization/.test(one.detail), "the hint says it may land, is then owed and repaid after proof, and that a new signature is a new payment");
+  ok(!/not charged|nothing (?:was|is) charged|never charged/i.test(one.detail), "the hint never says nothing was charged");
+  ok(/its transaction was not confirmed on chain/.test(one.detail) && /none of its transactions was confirmed on chain/.test(pendingSettleRefusal({ transactions: [TX, TX2] }).detail), "the hint says the transaction was not confirmed (one and many)");
+  ok(!/\u2014/.test(one.detail), "no em dash in the hint");
+  ok(REJECTION_REASONS.some((r) => r.reason === "settlement-unconfirmed" && !/not charged|nothing (?:was|is) charged/i.test(r.means)), "the class is documented, without a not-charged claim");
+  const many = pendingSettleRefusal({ network: "eip155:8453", transactions: Array.from({ length: 20 }, (_, i) => "0x" + i.toString(16).padStart(64, "0")) });
+  ok(many.transactions.length === PENDING_REFUSAL_MAX_TXS && /transactions listed/.test(many.detail), `at most ${PENDING_REFUSAL_MAX_TXS} transactions are named (${many.transactions.length})`);
+  ok(pendingSettleRefusal({ network: "eip155:8453", transactions: [] }) === null && pendingSettleRefusal({ transactions: ["0xnope"] }) === null, "no transaction, no explanation");
+  ok(pendingSettleRefusal({ network: "<script>", transactions: [TX2] }).network === null, "a network that is not a CAIP-2 id is not echoed");
+  const body = withPendingSettleRefusal({ altPayment: { protocol: "proof-of-work" }, error: "Payment rail temporarily unavailable", reason: "facilitator-quota", retry: "other-network", hint: "Nothing was charged." }, many);
+  ok(body.reason === "settlement-unconfirmed" && body.retry === "watch-transaction" && body.error === undefined && body.hint === many.detail && body.altPayment?.protocol === "proof-of-work",
+    "merged into a 402 body: our fields replace an earlier explanation, no error sentence, other fields kept");
+  ok(Buffer.byteLength(JSON.stringify(body)) <= 2048, `the merged body stays small (${Buffer.byteLength(JSON.stringify(body))} bytes with ${many.transactions.length} transactions)`);
 }
 
 // When we refuse but cannot say why, record the SHAPE - key names only. Three

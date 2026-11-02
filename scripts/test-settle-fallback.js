@@ -356,7 +356,9 @@ await (async () => {
   const tmp = mkdtempSync(join(tmpdir(), "a402-settle-fallback-"));
   const salesDb = join(tmp, "sales.db");
   const env = { ...process.env };
-  delete env.STATE_DATABASE_URL;
+  // Its nonces count from 1: on a Redis another suite shares, the replay
+  // guard (keyed on the nonce) would keep them consumed for that suite too.
+  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
   const proc = spawn(process.execPath, ["src/server.js"], {
     cwd: new URL("..", import.meta.url).pathname,
     env: {
@@ -676,6 +678,213 @@ await (async () => {
     if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
     proc.kill("SIGKILL");
     for (const s of [baseFac, celoFac, svFac]) s.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+})();
+
+// A FALLBACK's pending answer is read on chain like the primary's. Base: the
+// primary refuses before broadcast (an HTTP 402, plain or a billing quota),
+// Solvador (the fallback) broadcasts and answers settlement_pending with its
+// transaction. A receipt that proves the transfer within the wait serves the
+// call (200 naming the tx, counted recovered under Solvador). One that never
+// lands is a 402 whose body says the transfer may still land and is then
+// owed, names the transaction, and never says nothing was charged; the tx is
+// booked in the late-settlement book under Solvador. A pending primary's
+// unrecovered 402 carries the same explanation.
+await (async () => {
+  const { createHash } = await import("node:crypto");
+  const [PORT, BASE_FAC, SV_FAC] = await getFreePorts(3);
+  const B = `http://127.0.0.1:${PORT}`;
+  const BASE = "eip155:8453";
+  const OP = "fallback-pending-read-operator-token-0123456789";
+  const PENDING_MSG = "transaction did not confirm in time: context deadline exceeded";
+  const AUTH_USED = "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
+  const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+  const topic = (a) => "0x" + "0".repeat(24) + String(a).slice(2).toLowerCase();
+  const word = (n) => "0x" + BigInt(n).toString(16).padStart(64, "0");
+  const txFor = (nonce, who) => "0x" + createHash("sha256").update(`${who}:${String(nonce).toLowerCase()}`).digest("hex");
+  // primary: refuse402 | billing402 | pending.  fallback: pending-mined | pending-never (graceful 200)
+  const st = { primary: "refuse402", fallback: "pending-mined", prim: 0, sv: 0, mineAfterMs: 600 };
+  const pays = new Map(); // tx -> { payer, nonce, asset, amount, payTo, minedAt }
+  const json = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const stub = (handler) => createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* ignore */ } handler(req, res, body); });
+  });
+  const remember = (tx, body) => {
+    const a = body?.paymentPayload?.payload?.authorization || {};
+    const rq = body?.paymentRequirements || {};
+    if (!pays.has(tx)) pays.set(tx, { payer: a.from, nonce: a.nonce, asset: rq.asset, amount: rq.amount, payTo: rq.payTo, minedAt: st.fallback === "pending-mined" ? Date.now() + st.mineAfterMs : Infinity });
+  };
+  const baseFac = stub((req, res, body) => {
+    if (req.url === "/supported") return json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }], extensions: [], signers: {} });
+    if (req.url === "/verify") return json(res, 200, { isValid: true, payer: body?.paymentPayload?.payload?.authorization?.from });
+    if (req.url === "/settle") {
+      st.prim++;
+      const from = body?.paymentPayload?.payload?.authorization?.from;
+      if (st.primary === "billing402") return json(res, 402, { success: false, errorReason: "free_tier_exhausted", errorMessage: "free_tier_exhausted", transaction: "", network: BASE, payer: from });
+      if (st.primary === "pending") {
+        const tx = txFor(body?.paymentPayload?.payload?.authorization?.nonce, "primary");
+        const keep = st.fallback; st.fallback = "pending-never"; remember(tx, body); st.fallback = keep;
+        return json(res, 500, { success: false, errorReason: "settlement_pending", errorMessage: PENDING_MSG, transaction: tx, network: BASE, payer: from });
+      }
+      return json(res, 402, { success: false, errorReason: "unexpected_settle_error", errorMessage: "settle refused", transaction: "", network: BASE, payer: from });
+    }
+    if (req.url === "/evm-rpc") {
+      const rpcReply = (result) => json(res, 200, { jsonrpc: "2.0", id: body.id ?? 1, result });
+      if (body.method !== "eth_getTransactionReceipt") return rpcReply("0x0");
+      const tx = String(body.params?.[0] || "").toLowerCase();
+      const p = pays.get(tx);
+      if (!p || !(p.minedAt <= Date.now())) return rpcReply(null);
+      return rpcReply({
+        status: "0x1", transactionHash: tx, blockNumber: "0x10",
+        logs: [
+          { address: p.asset, topics: [AUTH_USED, topic(p.payer), p.nonce], data: "0x" },
+          { address: p.asset, topics: [TRANSFER, topic(p.payer), topic(p.payTo)], data: word(p.amount) },
+        ],
+      });
+    }
+    return json(res, 404, {});
+  });
+  const svFac = stub((req, res, body) => {
+    // Solvador lists nothing here: it is only Base's settle fallback.
+    if (req.url === "/supported") return json(res, 200, { kinds: [], extensions: [], signers: {} });
+    if (req.url === "/settle") {
+      st.sv++;
+      const tx = txFor(body?.paymentPayload?.payload?.authorization?.nonce, "solvador");
+      remember(tx, body);
+      const answer = { success: false, errorReason: "settlement_pending", errorMessage: PENDING_MSG, transaction: tx, network: BASE, payer: body?.paymentPayload?.payload?.authorization?.from };
+      return json(res, st.fallback === "pending-never" ? 200 : 500, answer);
+    }
+    return json(res, 404, {});
+  });
+  await Promise.all([[baseFac, BASE_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  const tmp = mkdtempSync(join(tmpdir(), "a402-fallback-pending-read-"));
+  const LATE = join(tmp, "late.json");
+  const env = { ...process.env };
+  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
+  const proc = spawn(process.execPath, ["src/server.js"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: {
+      ...env, PORT: String(PORT), FREE_MODE: "",
+      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/evm-rpc`, EVM_RPC_8453: `http://127.0.0.1:${BASE_FAC}/evm-rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
+      SOLVADOR_KEY: "solvador-test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${SV_FAC}`,
+      PAYMENT_SETTLE_FALLBACK: "true", PENDING_SETTLE_RECEIPT_WAIT_MS: "2500", PENDING_SETTLE_POLL_MS: "250",
+      LATE_SETTLE_RECONCILE: "off", LATE_SETTLE_FILE: LATE,
+      AGENT402_OPERATOR_TOKEN: OP, SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, STATS_ALLOW_EPHEMERAL: "true",
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const log = [];
+  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let n = 0;
+  const PATH = "/api/hash";
+  const BODY = JSON.stringify({ text: "x" });
+  let accepted = null;
+  const pay = async () => {
+    n++;
+    const nonce = word(BigInt(Date.now()) * 1000n + BigInt(n));
+    const payer = "0x" + (0xf100 + n).toString(16).padStart(40, "0");
+    const cred = Buffer.from(JSON.stringify({
+      x402Version: 2, resource: accepted.resource, accepted,
+      payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce } },
+    })).toString("base64");
+    const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": cred }, body: BODY });
+    const text = await r.text();
+    let body = null; try { body = JSON.parse(text); } catch { /* not json */ }
+    const hdr = r.headers.get("payment-response");
+    const receipt = hdr ? JSON.parse(Buffer.from(hdr, "base64").toString("utf8")) : null;
+    return { status: r.status, text, body, receipt, nonce, payer };
+  };
+  const pendingRow = async () => {
+    const j = await (await fetch(`${B}/__operator/tool-failures.json`, { headers: { "X-Operator-Token": OP } })).json();
+    const row = (j.pendingSettles?.rows || []).find((x) => x.network === BASE && x.facilitator === "Solvador");
+    return row?.day || {};
+  };
+  const lateEntry = (tx) => {
+    try { return Object.values(JSON.parse(readFileSync(LATE, "utf8")).pending || {}).find((e) => String(e.tx || "").toLowerCase() === tx.toLowerCase()) || null; } catch { return null; }
+  };
+  const waitFor = async (fn, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(100); } return !!(await fn()); };
+  const assertExplained = (r, txs, label) => {
+    assert.equal(r.status, 402, `${label}: status ${r.status}`);
+    assert.ok(r.body && typeof r.body === "object", `${label}: a JSON body (${r.text.slice(0, 120)})`);
+    assert.equal(r.body.reason, "settlement-unconfirmed", `${label}: reason (${r.text.slice(0, 300)})`);
+    assert.equal(r.body.network, BASE, `${label}: network`);
+    assert.deepEqual(r.body.transactions, txs, `${label}: the noted transactions`);
+    assert.equal(typeof r.body.retry, "string", `${label}: a retry verb`);
+    assert.match(r.body.hint, /may still land/, `${label}: the hint says the transfer may still land`);
+    assert.match(r.body.hint, /owed/, `${label}: the hint says it is then owed`);
+    assert.match(r.body.hint, /on-chain proof/, `${label}: repaid after on-chain proof`);
+    assert.doesNotMatch(r.text, /not charged|nothing (?:was|is) charged|never charged/i, `${label}: never says nothing was charged`);
+    assert.equal(r.body.error, undefined, `${label}: no error sentence ahead of the hint`);
+    assert.ok(Buffer.byteLength(r.text) <= 2048, `${label}: the body stays small (${Buffer.byteLength(r.text)} bytes)`);
+    assert.ok(r.receipt && r.receipt.success === false, `${label}: PAYMENT-RESPONSE still carries the failed receipt`);
+  };
+  const failuresBefore = failures;
+  try {
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
+    await check("fallback pending e2e: boots, offers exact on Base", async () => {
+      assert.ok(up, "server never came up");
+      const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: BODY });
+      assert.equal(r.status, 402);
+      const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf8"));
+      accepted = (req402.accepts || []).find((a) => a.network === BASE && a.scheme === "exact");
+      assert.ok(accepted, "a Base exact accept");
+    });
+    await check("fallback pending e2e: primary refuses pre-broadcast, the fallback's pending tx lands within the wait -> 200 naming it, counted under the fallback", async () => {
+      st.primary = "refuse402"; st.fallback = "pending-mined";
+      const before = await pendingRow();
+      const p0 = st.prim, s0 = st.sv;
+      const r = await pay();
+      const tx = txFor(r.nonce, "solvador");
+      assert.equal(r.status, 200, `status ${r.status} ${r.text.slice(0, 200)}`);
+      assert.equal(r.receipt?.success, true);
+      assert.equal(String(r.receipt?.transaction).toLowerCase(), tx);
+      assert.equal(st.sv - s0, 1, "the fallback was asked once");
+      assert.ok(st.prim - p0 >= 1, "the primary was asked");
+      assert.ok(log.some((l) => l.includes(`tx ${tx}`) && /recovered eip155:8453 settlement after a pending answer/.test(l)), "the recovery is logged with the tx");
+      const after = await pendingRow();
+      assert.equal((after.recovered || 0) - (before.recovered || 0), 1, `counted recovered under Solvador (${JSON.stringify(after)})`);
+      await sleep(300);
+      assert.equal(lateEntry(tx), null, "nothing booked in the late-settlement book");
+    });
+    await check("fallback pending e2e: the fallback's pending tx never lands -> 402 explained, booked under the fallback", async () => {
+      st.primary = "refuse402"; st.fallback = "pending-never";
+      const before = await pendingRow();
+      const r = await pay();
+      const tx = txFor(r.nonce, "solvador");
+      assertExplained(r, [tx], "never lands");
+      const after = await pendingRow();
+      assert.equal((after.notMined || 0) - (before.notMined || 0), 1, `counted notMined under Solvador (${JSON.stringify(after)})`);
+      assert.ok(await waitFor(() => !!lateEntry(tx)), "the fallback's tx is booked in the late-settlement book");
+      assert.equal(lateEntry(tx).via, "Solvador", `booked under the fallback (${lateEntry(tx)?.via})`);
+    });
+    await check("fallback pending e2e: a billing-quota primary refusal and an unlanded fallback tx never reads as 'nothing was charged'", async () => {
+      st.primary = "billing402"; st.fallback = "pending-never";
+      const r = await pay();
+      const tx = txFor(r.nonce, "solvador");
+      assertExplained(r, [tx], "billing primary");
+      assert.notEqual(r.body.reason, "facilitator-quota");
+    });
+    await check("pending primary e2e: the primary's unrecovered pending tx -> 402 explained with that tx; the fallback is never asked", async () => {
+      st.primary = "pending";
+      const s0 = st.sv;
+      const r = await pay();
+      const tx = txFor(r.nonce, "primary");
+      assertExplained(r, [tx], "pending primary");
+      assert.equal(st.sv, s0, "no fallback after a pending answer");
+    });
+  } finally {
+    if (failures > failuresBefore) for (const l of log.slice(-40)) console.log("  server:", l);
+    proc.kill("SIGKILL");
+    for (const s of [baseFac, svFac]) s.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 })();

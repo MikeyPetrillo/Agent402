@@ -88,6 +88,12 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   const uniq = () => word(Date.now() * 1000 + Math.floor(Math.random() * 1000));
   const provedTx = (tx) => async () => ({ proven: true, transaction: tx, payer: "0x" + "a1".repeat(20) });
   const unsold = async () => null;
+  // Transactions unique to this run: a claim lives in the shared Redis for
+  // 30 days, so a fixed hash claimed by an earlier run (one that stopped
+  // before its cleanup, or another suite on the same Redis) would already be
+  // held here.
+  const RUN = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+  const runTx = (b) => "0x" + RUN + b.repeat(28);
 
   // A second request with the same authorization is refused before settle.
   let nonce = uniq();
@@ -99,10 +105,10 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   ok(refusal?.abort === true && refusal.reason === claims.DUPLICATE_AUTHORIZATION, `claims: a second request with the same authorization is aborted before the facilitator (${refusal?.reason})`);
   // ...and cannot recover the original's transaction either.
   otherReplica();
-  let rb = await recoverAlreadyOnChain(b, { prove: provedTx("0x" + "c1".repeat(32)), saleByTx: unsold });
+  let rb = await recoverAlreadyOnChain(b, { prove: provedTx(runTx("c1")), saleByTx: unsold });
   ok(!rb.recovered && /another request owns this authorization/.test(rb.reason), `claims: the replay's recovery is refused (${rb.reason})`);
   // The original settles normally; a later replay still cannot recover.
-  await run(hooks.afterSettle, { ...a, result: { success: true, transaction: "0x" + "c1".repeat(32), network: NET } });
+  await run(hooks.afterSettle, { ...a, result: { success: true, transaction: runTx("c1"), network: NET } });
   otherReplica();
   const c = ctxFor(nonce);
   await run(hooks.beforeVerify, c);
@@ -118,7 +124,7 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   ok((await run(hooks.beforeSettle, e)) === undefined, "claims: after an unrecovered failure, a retry of the authorization proceeds");
 
   // Recovery: the holder recovers once; the tx cannot be served twice.
-  const txR = "0x" + "d1".repeat(32);
+  const txR = runTx("d1");
   let rr = await recoverAlreadyOnChain(e, { prove: provedTx(txR), saleByTx: unsold });
   ok(rr.recovered && rr.result.transaction === txR, "claims: the authorization's holder recovers its own transaction");
   nonce = uniq();
@@ -131,16 +137,56 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   nonce = uniq();
   const g = ctxFor(nonce);
   await run(hooks.beforeVerify, g); await run(hooks.beforeSettle, g);
-  rr = await recoverAlreadyOnChain(g, { prove: provedTx("0x" + "e1".repeat(32)), saleByTx: async () => ({ id: 1 }) });
+  rr = await recoverAlreadyOnChain(g, { prove: provedTx(runTx("e1")), saleByTx: async () => ({ id: 1 }) });
   ok(!rr.recovered && /already a recorded sale/.test(rr.reason), `claims: a transaction in the sales ledger is refused (${rr.reason})`);
   // The proof is asked for "no earlier than first seen".
   let asked = null;
   await recoverAlreadyOnChain(g, { prove: async (o) => { asked = o.notBeforeMs; return { proven: false, reason: "x" }; }, saleByTx: unsold });
   ok(typeof asked === "number" && asked <= Date.now() && asked > Date.now() - 60_000, "claims: the proof is bound to the time this request's payment was first seen");
   // No stamp, no recovery.
-  rr = await recoverAlreadyOnChain(ctxFor(uniq()), { prove: provedTx("0x" + "f1".repeat(32)), saleByTx: unsold });
+  rr = await recoverAlreadyOnChain(ctxFor(uniq()), { prove: provedTx(runTx("f1")), saleByTx: unsold });
   ok(!rr.recovered, `claims: a request with no first-seen stamp never recovers (${rr.reason})`);
   if (REDIS_URL) { const { closeSharedRedis } = await import("../src/shared-limit.js"); await closeSharedRedis(); }
+}
+
+// --- One key, one owner, whatever the process's loop or connection did -------
+// A replica whose event loop is blocked while its claim's SET NX is in flight
+// reads the reply only after the command deadline's timer: that timer must not
+// turn another replica's "already held" into a local claim. And a claim made
+// in this process before Redis answered (the connection still opening) still
+// holds the key once Redis is reachable.
+if (REDIS_URL) {
+  const claims = await import("../src/settlement-claims.js");
+  const shared = await import("../src/shared-limit.js");
+  const key = () => `tx:eip155:8453:0x${Math.random().toString(16).slice(2).padEnd(64, "0")}`;
+  const block = (ms) => { const t = Date.now(); while (Date.now() - t < ms) { /* a GC pause or a synchronous load */ } };
+  let k = key();
+  ok((await claims.claimSettlementKey(k, "replica-B")).claimed, "claims: replica B holds a key in Redis");
+  claims.__resetSettlementClaims();
+  const pending = claims.claimSettlementKey(k, "replica-A");
+  await new Promise((r) => setImmediate(r));
+  block(claims.COMMAND_DEADLINE_MS * 3);
+  const a = await pending;
+  ok(!a.claimed && a.holder === "replica-B", `claims: a loop blocked past the deadline while the claim was in flight never claims a key another replica holds (${JSON.stringify(a)})`);
+  await shared.closeSharedRedis();
+  // Redis not answering yet (a connection still opening, a command past its
+  // deadline): the claim is made in this process.
+  claims.__resetSettlementClaims();
+  k = key();
+  const { createClient } = await import("redis");
+  const c = createClient({ url: REDIS_URL }); await c.connect();
+  shared.__setTestClient({ set: async () => { throw new Error("connecting"); }, get: async () => { throw new Error("connecting"); }, del: async () => { throw new Error("connecting"); } });
+  ok((await claims.claimSettlementKey(k, "first-request")).claimed, "claims: a claim while Redis does not answer is made in this process");
+  shared.__setTestClient(c);
+  const second = await claims.claimSettlementKey(k, "second-request");
+  ok(!second.claimed && second.holder === "first-request", `claims: once Redis answers, the key this process claimed without it is not claimed again (${JSON.stringify(second)})`);
+  ok((await c.get(`settle-claim:${k}`)) === "first-request", "claims: and the local claim is written to Redis for the other replicas");
+  claims.__resetSettlementClaims();
+  const other = await claims.claimSettlementKey(k, "replica-C");
+  ok(!other.claimed, "claims: another replica then sees it held");
+  shared.__setTestClient(null);
+  await c.quit();
+  await shared.closeSharedRedis();
 }
 
 // Stub state.

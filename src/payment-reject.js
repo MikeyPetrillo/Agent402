@@ -67,7 +67,53 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "no-token-account", means: "A Solana payment whose paying wallet has no USDC token account, so the transfer could not run in the facilitator's simulation. Nothing was charged. Send USDC on Solana to the wallet (that creates the account) or pay on another network listed in accepts; retry is fund-wallet, and Retry-After says when the wallet is checked again." },
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
+  { reason: "settlement-unconfirmed", means: "A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait, so the answer was withheld. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction; a new authorization for the same call is a new payment, not a step in that repayment." },
 ]);
+
+/** The most transactions an unconfirmed-settlement 402 names. */
+export const PENDING_REFUSAL_MAX_TXS = 8;
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * The 402 a buyer gets when a facilitator answered a settle as still pending
+ * with a transaction, and no noted transaction was proven on chain within the
+ * receipt wait (src/pending-settle.js). The transfer may still land, so this
+ * never says the buyer was not charged: it says the transfer is then owed and
+ * repaid after on-chain proof, and names each noted transaction so the buyer
+ * can watch it. Null when no transaction hash is given.
+ */
+export function pendingSettleRefusal({ network = null, transactions = [] } = {}) {
+  const txs = [];
+  for (const t of Array.isArray(transactions) ? transactions : []) {
+    const tx = String(t || "").toLowerCase();
+    if (TX_HASH.test(tx) && !txs.includes(tx)) txs.push(tx);
+    if (txs.length >= PENDING_REFUSAL_MAX_TXS) break;
+  }
+  if (!txs.length) return null;
+  const net = typeof network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(network) ? network : null;
+  const one = txs.length === 1;
+  return {
+    reason: "settlement-unconfirmed",
+    retry: "watch-transaction",
+    network: net,
+    transactions: txs,
+    detail:
+      `The facilitator broadcast this payment's transfer, and ${one ? "its transaction was not" : "none of its transactions was"} confirmed on chain within this server's wait, so the answer was withheld. ` +
+      "The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof, with nothing more for you to send. " +
+      `Watch the transaction${one ? "" : "s"} listed in transactions${net ? ` on ${net}` : ""}. ` +
+      "Signing a new authorization for this call is a new payment; it does not start or speed that repayment.",
+  };
+}
+
+/** A 402 body with the unconfirmed-settlement explanation merged in: its
+ *  reason, retry verb, network, transactions and hint replace any earlier
+ *  ones, and no `error` sentence stands ahead of the hint (a rail-quota
+ *  explanation of the primary's refusal would say nothing was charged). */
+export function withPendingSettleRefusal(body, refusal) {
+  if (!refusal || !body || typeof body !== "object" || Array.isArray(body)) return body;
+  const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, ...rest } = body;
+  return { ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}), transactions: refusal.transactions, hint: refusal.detail };
+}
 
 /**
  * A facilitator refusing to SETTLE for a quota or billing reason on OUR
