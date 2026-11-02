@@ -173,7 +173,9 @@ const pool = await import("../src/router-pool.js");
   const fn = serverSrc.slice(serverSrc.indexOf("async function resolveExternalSeller("), serverSrc.indexOf("const { probePublicUrl } = await import(\"./tools/fetch-guard.js\");"));
   const filterAt = fn.indexOf("if (!routeExcludedCategory(r)) return true;");
   ok(filterAt > fn.indexOf('} else if (chain === "algorand") {') && filterAt > fn.indexOf('} else if (chain === "solana") {') && filterAt < fn.indexOf("orderByJudgment("), "the resolver filters the candidates of every chain branch, before judging or probing any");
-  ok(/description: r\.description, tags: r\.tags,/.test(fn) && /\/\/ The route's own text, for the category filter below\.\n\s+description: r\.description,\n\s+\}\)\);/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");
+  const { tempoCandidateOf } = await import("../src/sor-candidates.js");
+  const tc = tempoCandidateOf({ origin: "https://s.example", path: "/p", url: "https://s.example/p", method: "POST", priceUsd: 0.01, networks: ["tempo"], description: "people search", tags: ["people"] });
+  ok(tc.description === "people search" && tc.tags.join() === "people" && /\.map\(tempoCandidateOf\)/.test(fn) && /\/\/ The route's own text, for the category filter below\.\n\s+description: r\.description,\n\s+\}\)\);/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");
   ok(/routeText: r, usdcDomain:/.test(fn) && /routeText: r, binding: r\.binding, livePayTo \}\)/.test(serverSrc), "the Base pre-probe gate and the live gate both read the route text");
   ok(/rowLevel \? \{ priceUsd: row\.priceUsd \?\? null, urlTemplate: !!row\.urlTemplate, routeText: row \}/.test(serverSrc), "every public route row's label reads the route text (withDispatchFields)");
 }

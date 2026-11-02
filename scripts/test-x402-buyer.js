@@ -429,7 +429,10 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const fn = server.slice(server.indexOf("async function resolveExternalSeller("), server.indexOf("async function diagnoseExternalSeller("));
   ok(/evidenceWallets = gate\.evidenceWallets;/.test(fn) && fn.indexOf("evidenceWallets = gate.evidenceWallets;") > fn.indexOf("const gate = baseLiveGate({"),
     "A7: resolveExternalSeller's Base branch sets evidenceWallets from the passed binding gate (the wallets whose own evidence clears)");
-  ok(/resolved\.push\(\{[^\n]*\bevidenceWallets,/.test(fn), "A7: the resolved candidate carries evidenceWallets");
+  const { resolvedCandidateOf } = await import("../src/sor-candidates.js");
+  const ew = ["0x00000000000000000000000000000000000000aa"];
+  ok(/resolved\.push\(resolvedCandidateOf\([^\n]*\bevidenceWallets \}\)\)/.test(fn) && resolvedCandidateOf({ seller: "https://s.example" }, { evidenceWallets: ew }).evidenceWallets === ew,
+    "A7: the resolved candidate carries evidenceWallets");
   const re = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
   ok(/payExternal\(extUrl, \{[^\n]*evidenceWallets: ext\.evidenceWallets/.test(re), "A7: route-execute passes evidenceWallets: ext.evidenceWallets to payExternal");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
