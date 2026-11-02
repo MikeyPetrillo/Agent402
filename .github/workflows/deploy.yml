@@ -5180,7 +5180,7 @@ jobs:
           '
       - name: Gate agent402-tollbooth (tests run with NO npm token in env)
         run: |
-          node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js   # gate: node + edge + feature/security + tempo assertions must pass before shipping
+          node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js && node tollbooth/nano.test.js   # gate: node + edge + feature/security + tempo + nano assertions must pass before shipping
 
       - name: Gate agent402-client (tests run with NO npm token in env)
         run: |

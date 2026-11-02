@@ -5,7 +5,7 @@ import express from "express";
 import { createHash } from "node:crypto";
 import { Challenge } from "mppx";
 import { createTollbooth, nanoFromEnv, nanoConfig, mintNanoChallenge, parseNanoCredential, checkNanoBinding, nanoAddressToPublicKey, NANO_MAINNET } from "./index.js";
-import { blake2b, NANO_SUFFIX_SPACE } from "./nano.js";
+import { blake2b, NANO_SUFFIX_SPACE, lookupLimiter } from "./nano.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -28,15 +28,21 @@ ok(nanoAddressToPublicKey(RECIPIENT.slice(0, -1) + "d") === null && nanoAddressT
 
 // ---- config + env ----
 const threw = (f) => { try { f(); return null; } catch (e) { return e.message; } };
-ok(/checksum/.test(threw(() => nanoConfig({ recipient: RECIPIENT.slice(0, -1) + "d", priceRaw: PRICE_RAW, rpcUrl: "http://node.test" }))), "config: recipient with a bad checksum throws");
-ok(/priceRaw/.test(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: "0.001", rpcUrl: "http://node.test" }))), "config: priceRaw must be an integer raw amount");
+ok(/checksum/.test(threw(() => nanoConfig({ recipient: RECIPIENT.slice(0, -1) + "d", priceRaw: PRICE_RAW, rpcUrl: "https://node.test" }))), "config: recipient with a bad checksum throws");
+ok(/priceRaw/.test(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: "0.001", rpcUrl: "https://node.test" }))), "config: priceRaw must be an integer raw amount");
 ok(/rpcUrl/.test(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW }))), "config: rpcUrl required (no default third-party node)");
+ok(/https/.test(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "http://node.test" }))), "config: plain http:// to a non-loopback node is refused");
+ok(/https/.test(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "http://10.0.0.5:7076" }))), "config: plain http:// to a private LAN address is refused too (only loopback is exempt)");
+ok(["http://127.0.0.1:7076", "http://localhost:7076", "http://[::1]:7076", "https://node.test"].every((u) => threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: u })) === null), "config: loopback http and any https are accepted");
+ok(threw(() => nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "http://127.0.0.1.evil.test" })) !== null, "config: a hostname that merely starts with 127.0.0.1 is not loopback");
+ok(/replayStore/.test(threw(() => createTollbooth({ price: "$0.001", mode: "all", pow: false, nano: { recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "https://node.test" } }))), "replay: the rail refuses to start without a shared replayStore");
+ok(threw(() => createTollbooth({ price: "$0.001", mode: "all", pow: false, nano: { recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "https://node.test", allowInProcessReplay: true } })) === null, "replay: nano.allowInProcessReplay is the explicit single-process opt-out");
 ok(nanoFromEnv({}) === null, "env: no TOLLBOOTH_NANO_RECIPIENT -> off");
-const envCfg = nanoFromEnv({ TOLLBOOTH_NANO_RECIPIENT: RECIPIENT, TOLLBOOTH_NANO_PRICE_RAW: PRICE_RAW, TOLLBOOTH_NANO_RPC_URL: "http://node.test" });
-ok(envCfg.recipient === RECIPIENT && envCfg.priceRaw === PRICE_RAW && envCfg.rpcUrl === "http://node.test", "env: recipient, price, rpc parse");
+const envCfg = nanoFromEnv({ TOLLBOOTH_NANO_RECIPIENT: RECIPIENT, TOLLBOOTH_NANO_PRICE_RAW: PRICE_RAW, TOLLBOOTH_NANO_RPC_URL: "https://node.test" });
+ok(envCfg.recipient === RECIPIENT && envCfg.priceRaw === PRICE_RAW && envCfg.rpcUrl === "https://node.test", "env: recipient, price, rpc parse");
 
 // ---- minting ----
-const cfg = nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "http://node.test" });
+const cfg = nanoConfig({ recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "https://node.test" });
 const www = mintNanoChallenge({ realm: "site.test", secretKey: SECRET, nano: cfg });
 const parsed = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": www }));
 ok(parsed.length === 1 && parsed[0].method === "nano" && parsed[0].intent === "charge", "mint: mppx parses our challenge as nano/charge");
@@ -66,7 +72,8 @@ const block = (amount, over = {}) => ({
 let nextHash = 1;
 const newHash = () => (nextHash++).toString(16).toUpperCase().padStart(64, "A");
 
-const NANO = { recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "http://node.test/rpc", fetch: fakeFetch };
+const NANO = { recipient: RECIPIENT, priceRaw: PRICE_RAW, rpcUrl: "https://node.test/rpc", fetch: fakeFetch, retryableNegativeCacheMs: 1, maxLookupsPerChallenge: 50, maxLookupsPerMinute: 10_000 };
+const tick = () => new Promise((r) => setTimeout(r, 5));
 const claims = [];
 const store = new Map();
 const replayStore = { claim(k, exp) { claims.push(k); if (store.has(k)) return false; store.set(k, exp); return true; } };
@@ -94,13 +101,16 @@ let r = await pay(c1.ch, h1);
 const receipt = JSON.parse(Buffer.from(r.headers.get("payment-receipt") || "", "base64url").toString("utf8") || "{}");
 ok(r.status === 200 && (await r.json()).result === "ok" && r.headers.get("x-tollbooth-paid") === "mpp-nano", `gate: confirmed exact send to the recipient -> 200 (got ${r.status})`);
 ok(receipt.method === "nano" && receipt.reference === h1 && receipt.status === "success", "gate: Payment-Receipt names the block hash");
-ok(rpc.calls.at(-1).url === "http://node.test/rpc" && rpc.calls.at(-1).body.action === "block_info" && rpc.calls.at(-1).body.json_block === "true", "gate: asks the node with block_info");
+ok(rpc.calls.at(-1).url === "https://node.test/rpc" && rpc.calls.at(-1).body.action === "block_info" && rpc.calls.at(-1).body.json_block === "true", "gate: asks the node with block_info");
 ok(claims.at(-1) === `nano:${h1}` && gate.stats().nanoPaid === 1, "gate: hash claimed in the shared replayStore as nano:<HASH>, nanoPaid counted");
 
 r = await pay(c1.ch, h1);
-ok(r.status === 402 && (await problemOf(r)).type.endsWith("invalid-challenge"), "replay: same credential again -> 402 invalid-challenge");
+let pr = await problemOf(r);
+ok(r.status === 402 && pr.type.endsWith("verification-failed") && pr.detail === "Payment verification failed.", "replay: same credential again -> 402 with the generic verification-failed wording (does not say 'already used')");
+ok(!/used|already|replay/i.test(JSON.stringify(pr)), "replay: the refusal never reveals reuse");
 r = await pay(c1.ch, h1.toLowerCase());
-ok(r.status === 402 && (await problemOf(r)).type.endsWith("invalid-challenge"), "replay: same hash in lowercase -> still refused (canonical key)");
+ok(r.status === 402 && (await problemOf(r)).type.endsWith("verification-failed"), "replay: same hash in lowercase -> still refused (canonical key)");
+ok(store.has(`nano:ch:${c1.ch.id}`) && store.has(`nano:${h1}`), "replay: recorded per challenge id AND per block hash");
 const c2 = await challenge();
 r = await pay(c2.ch, h1);
 ok(r.status === 402 && r.headers.get("x-tollbooth-error") !== null, "replay: old block against a fresh challenge -> 402 (amount differs)");
@@ -123,6 +133,7 @@ r = await pay(c2.ch, pending);
 ok(r.status === 402 && /not confirmed/.test((await problemOf(r)).detail) && r.headers.get("retry-after") === "1", "unconfirmed -> 402 verification-failed with Retry-After");
 ok(!store.has(`nano:${pending}`), "unconfirmed: hash NOT consumed");
 blocks.set(pending, block(c2.amount));
+await tick();
 r = await pay(c2.ch, pending);
 ok(r.status === 200, "unconfirmed then confirmed: the same credential now pays");
 
@@ -143,15 +154,56 @@ rpc.down = true;
 r = await pay(c3.ch, fresh);
 ok(r.status === 402 && /unreachable/.test((await problemOf(r)).detail) && !store.has(`nano:${fresh}`), "RPC down -> 402 verification-failed, hash not consumed");
 rpc.down = false; rpc.status = 500;
+await tick();
 r = await pay(c3.ch, fresh);
 ok(r.status === 402 && /HTTP 500/.test((await problemOf(r)).detail), "RPC 500 -> 402 verification-failed");
 rpc.status = 200;
+await tick();
 r = await pay(c3.ch, newHash());
 ok(r.status === 402 && /not found/.test((await problemOf(r)).detail), "unknown block -> 402 verification-failed");
+await tick();
 r = await pay(c3.ch, fresh);
 ok(r.status === 200, "node back: same credential pays");
 
 ok(checkNanoBinding(parseNanoCredential(`Payment ${b64url(JSON.stringify({ challenge: c3.ch, payload: { type: "hash", hash: fresh } }))}`), { secretKey: SECRET, realm: "other.test", nano: cfg }).ok === false, "binding: realm must be ours");
+
+// ---- ask 1: one challenge, two different exact-amount blocks -> only the first is served ----
+{
+  const c = await challenge();
+  const a = newHash(), b = newHash();
+  blocks.set(a, block(c.amount)); blocks.set(b, block(c.amount));
+  const ra = await pay(c.ch, a), rb = await pay(c.ch, b);
+  ok(ra.status === 200 && rb.status === 402 && (await problemOf(rb)).detail === "Payment verification failed.", "per challenge: a second exact block for the SAME challenge is refused (recorded per challenge as well as per hash)");
+}
+
+// ---- ask 3: bounded node lookups ----
+{
+  const calls0 = () => rpc.calls.length;
+  const lim = lookupLimiter(nanoConfig({ ...NANO, maxLookupsPerChallenge: 3, maxLookupsPerMinute: 5, negativeCacheMs: 1000 }), () => T);
+  var T = 1_000_000;
+  const exp = T + 60_000;
+  ok([1, 2, 3].every((i) => lim.allow("c1", "H" + i, exp).ok) && !lim.allow("c1", "H4", exp).ok, "limiter: a challenge gets its attempts and then no more node lookups");
+  lim.deny("HX", 1000);
+  ok(!lim.allow("c2", "HX", exp).ok && lim.allow("c2", "HY", exp).ok, "limiter: a refused hash is not looked up again inside the negative cache");
+  T += 1500;
+  ok(lim.allow("c2", "HX", exp).ok, "limiter: the negative cache expires");
+  ok(lim.allow("c3", "HZ", exp).ok === false, "limiter: gate-wide lookups-per-minute budget stops many challenges, each within its own limit");
+  T += 61_000;
+  ok(lim.allow("c4", "HW", T + 60_000).ok, "limiter: the budget resets after a minute");
+
+  // through the gate: a tight limit answers 402 without asking the node
+  const tight = createTollbooth({ price: "$0.001", mode: "all", pow: false, powSecret: SECRET, resourceBaseUrl: "https://site.test", replayStore: { claim: () => true }, nano: { ...NANO, maxLookupsPerChallenge: 2 } });
+  const app2 = express(); app2.use(tight); app2.get("/paid", (q, s) => s.json({ ok: 1 }));
+  const s2 = await listen(app2);
+  const rr = await fetch(`${s2.url}/paid`); const hh = rr.headers.get("www-authenticate");
+  const cc = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": hh }))[0];
+  const chh = { id: cc.id, realm: cc.realm, method: "nano", intent: "charge", request: hh.match(/request="([^"]+)"/)[1], expires: cc.expires };
+  const send = (hash) => fetch(`${s2.url}/paid`, { headers: { Authorization: `Payment ${b64url(JSON.stringify({ challenge: chh, payload: { type: "hash", hash } }))}` } });
+  const n0 = calls0();
+  await send(newHash()); await send(newHash()); const third = await send(newHash());
+  ok(third.status === 402 && calls0() - n0 === 2 && /too many attempts/.test((await problemOf(third)).detail), "gate: after the per-challenge limit the node is not asked (2 lookups for 3 requests)");
+  s2.server.close();
+}
 server.close();
 
 // ---- Nano unset: the 402 is what it was before this rail existed ----

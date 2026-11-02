@@ -101,6 +101,32 @@ export function nanoAddressToPublicKey(address) {
   return checksum === expected ? key.toString("hex").toUpperCase() : null;
 }
 
+const posInt = (v, d) => (Number.isInteger(v) && v > 0 ? v : d);
+
+/** Bounded lookup accounting for one gate: callers ask `allow(challengeId, hash, expiresAtMs)` before a node call and
+ *  report a refused-by-the-node result with `deny(hash, ms)`. In-process by design (it protects THIS gate's node
+ *  budget; a replay store is for correctness, this is for cost). Maps are size-capped, oldest first. */
+export function lookupLimiter(nano, now = () => Date.now()) {
+  const perChallenge = new Map(); // challenge id -> { n, exp }
+  const negative = new Map(); // HASH -> until
+  let windowStart = 0, windowN = 0;
+  const trim = (m) => { while (m.size > 10_000) m.delete(m.keys().next().value); };
+  return {
+    allow(id, hash, expiresAtMs) {
+      const t = now();
+      for (const [k, v] of perChallenge) { if (v.exp <= t) perChallenge.delete(k); else break; }
+      if ((negative.get(hash) || 0) > t) return { ok: false, reason: "recently checked" };
+      const e = perChallenge.get(id) || { n: 0, exp: expiresAtMs };
+      if (e.n >= nano.maxLookupsPerChallenge) return { ok: false, reason: "too many attempts for this challenge" };
+      if (t - windowStart >= 60_000) { windowStart = t; windowN = 0; }
+      if (windowN >= nano.maxLookupsPerMinute) return { ok: false, reason: "node lookup budget used up for now" };
+      windowN++; e.n++; perChallenge.set(id, e); trim(perChallenge);
+      return { ok: true };
+    },
+    deny(hash, ms = nano.negativeCacheMs) { negative.set(hash, now() + ms); trim(negative); },
+  };
+}
+
 /** Normalise + validate the operator's nano config once, at createTollbooth time. */
 export function nanoConfig(cfg = {}) {
   const recipient = String(cfg.recipient || "").trim();
@@ -110,6 +136,12 @@ export function nanoConfig(cfg = {}) {
   if (!RAW.test(priceRaw)) throw new Error("tollbooth nano: `priceRaw` must be a positive integer amount of raw (1 XNO = 10^30 raw)");
   const rpcUrl = String(cfg.rpcUrl || "").trim();
   if (!/^https?:\/\//i.test(rpcUrl)) throw new Error("tollbooth nano: `rpcUrl` (a Nano node RPC you trust, ideally your own) is required");
+  // The node's answer is the whole proof of payment, so it travels over TLS. Plain http is accepted only to a
+  // loopback address (a node on the same host), as draft-nano-charge-00 asks.
+  let u;
+  try { u = new URL(rpcUrl); } catch { throw new Error("tollbooth nano: `rpcUrl` is not a valid URL"); }
+  const loopback = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(u.hostname);
+  if (u.protocol === "http:" && !loopback) throw new Error("tollbooth nano: `rpcUrl` must be https:// unless the node is on a loopback address (a plain-http node answer can be forged in transit)");
   return {
     recipient, recipientKey, priceRaw: BigInt(priceRaw), rpcUrl,
     network: String(cfg.network || NANO_MAINNET),
@@ -117,6 +149,14 @@ export function nanoConfig(cfg = {}) {
     rpcTimeoutMs: Number.isFinite(cfg.rpcTimeoutMs) ? cfg.rpcTimeoutMs : 10_000,
     description: cfg.description ? String(cfg.description).slice(0, 200) : undefined,
     fetch: cfg.fetch || globalThis.fetch,
+    // Bounds on node lookups. A challenge costs nothing to obtain, so each lookup is capped three ways: attempts
+    // per challenge, a short negative cache per block hash, and a gate-wide lookups-per-minute budget.
+    maxLookupsPerChallenge: posInt(cfg.maxLookupsPerChallenge, 10),
+    negativeCacheMs: posInt(cfg.negativeCacheMs, 15_000),
+    // a block the node cannot show yet (unconfirmed, propagating, node briefly down) is retried soon; a wrong one is not
+    retryableNegativeCacheMs: posInt(cfg.retryableNegativeCacheMs, 2_000),
+    maxLookupsPerMinute: posInt(cfg.maxLookupsPerMinute, 120),
+    allowInProcessReplay: cfg.allowInProcessReplay === true,
   };
 }
 

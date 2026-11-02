@@ -22,7 +22,7 @@ import { makeBotMatcher, AI_BOTS } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, isMppCredential, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
 import { tempoConfig, mintTempoChallenges, parseTempoCredential, checkTempoBinding, tempoRelay, relayInput, broadcastIdempotencyKey, tempoReceiptHeader, tempoProblem, confirmTempoSettlement } from "./tempo.js";
-import { nanoConfig, mintNanoChallenge, parseNanoCredential, checkNanoBinding, verifyNanoPayment, nanoReceiptHeader, nanoProblem } from "./nano.js";
+import { nanoConfig, lookupLimiter, mintNanoChallenge, parseNanoCredential, checkNanoBinding, verifyNanoPayment, nanoReceiptHeader, nanoProblem } from "./nano.js";
 
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
@@ -257,6 +257,15 @@ export function createTollbooth(config = {}) {
   };
 
   const nanoCfg = nano ? nanoConfig(nano) : null; // throws on a bad config, like tempo
+  const hasStore = !!(replayStore && typeof replayStore.claim === "function");
+  // The Nano rail refuses to start without a shared replay store: without one, each process keeps its own record, so
+  // two instances sharing a secret both accept the same credential. `nano.allowInProcessReplay: true` is the explicit
+  // single-process opt-out, and it warns.
+  if (nanoCfg && !hasStore) {
+    if (!nanoCfg.allowInProcessReplay) throw new Error("tollbooth nano: a shared `replayStore` ({ claim(key, expiresAtMs) }, e.g. sqliteReplayStore / redisReplayStore) is required, or each process accepts the same credential once. For a single-process deploy only, pass nano.allowInProcessReplay: true.");
+    console.warn("[agent402-tollbooth] WARNING: Nano rail enabled with allowInProcessReplay and NO shared replayStore - each credential is single-use PER PROCESS only. Use sqliteReplayStore / redisReplayStore for any multi-process deploy.");
+  }
+  const nanoLimit = nanoCfg ? lookupLimiter(nanoCfg) : null;
   const nanoKey = nanoCfg
     ? (mppKey || tempoKey || String(mppSecret || powSecret || process.env.TOLLBOOTH_MPP_SECRET || process.env.TOLLBOOTH_SECRET || randomBytes(32).toString("hex")))
     : null;
@@ -266,14 +275,21 @@ export function createTollbooth(config = {}) {
   // Single-use record for nano block hashes, kept until the challenge expires:
   // a challenge's amount is unique, so after it expires no other challenge
   // can be answered by the same block.
-  const nanoSeen = new Map(); // HASH -> expiresAt (in-process fallback)
-  const nanoClaim = async (hash, expiresAtMs) => {
-    if (replayStore && typeof replayStore.claim === "function") return replayStore.claim(`nano:${hash}`, expiresAtMs);
+  const nanoSeen = new Map(); // key -> expiresAt (in-process fallback, only with allowInProcessReplay)
+  const nanoClaim = async (key, expiresAtMs) => {
+    if (hasStore) return replayStore.claim(`nano:${key}`, expiresAtMs);
     const now = Date.now();
     for (const [k, exp] of nanoSeen) if (exp <= now) nanoSeen.delete(k);
-    if (nanoSeen.has(hash)) return false;
-    nanoSeen.set(hash, expiresAtMs);
+    if (nanoSeen.has(key)) return false;
+    nanoSeen.set(key, expiresAtMs);
     return true;
+  };
+  // One payment settles one challenge, recorded both ways: by challenge id (`ch:<id>`) and by block hash. The claim
+  // contract is one key per call, so the two are written in a fixed order, challenge first. A crash between them
+  // burns the challenge (the buyer asks for a fresh one) and can never let a second block answer the same challenge.
+  const nanoClaimBoth = async (id, hash, expiresAtMs) => {
+    if (!(await nanoClaim(`ch:${id}`, expiresAtMs))) return false;
+    return nanoClaim(hash, expiresAtMs);
   };
 
   // Passive analytics, never affects request handling, just counts what happens.
@@ -474,11 +490,15 @@ export function createTollbooth(config = {}) {
       const binding = checkNanoBinding(cred, { secretKey: nanoKey, realm: mppRealm(req), nano: nanoCfg });
       if (!binding.ok) return reject("invalid-challenge", `Challenge is invalid: ${binding.reason}. Request the resource again for a fresh challenge.`);
       if (!cred.blockHash) return reject("malformed-credential", "Credential payload must be {type:\"hash\", hash:<64 hex block hash>}.");
+      // Bound the node lookups before spending one: a challenge costs nothing to obtain.
+      const gateAllows = nanoLimit.allow(cred.challenge.id, cred.blockHash, binding.expiresAtMs);
+      if (!gateAllows.ok) return reject("verification-failed", `Payment verification failed: ${gateAllows.reason}.`, true);
       const v = await verifyNanoPayment(cred.blockHash, { amount: binding.amount, nano: nanoCfg });
-      if (!v.ok) return reject(v.kind, `Payment verification failed: ${v.reason}.`, v.retry);
+      if (!v.ok) { nanoLimit.deny(cred.blockHash, v.retry ? nanoCfg.retryableNegativeCacheMs : undefined); return reject(v.kind, `Payment verification failed: ${v.reason}.`, v.retry); }
       let claimed;
-      try { claimed = await nanoClaim(cred.blockHash, binding.expiresAtMs); } catch { claimed = false; }
-      if (!claimed) return reject("invalid-challenge", "Challenge is invalid: this payment was already used. Request the resource again for a fresh challenge.");
+      try { claimed = await nanoClaimBoth(cred.challenge.id, cred.blockHash, binding.expiresAtMs); } catch { claimed = false; }
+      // Same words as any other failed check: a refusal must not tell a prober that a payment already exists.
+      if (!claimed) return reject("verification-failed", "Payment verification failed.");
       incr("nanoPaid");
       res.setHeader("Payment-Receipt", nanoReceiptHeader(cred.blockHash));
       res.setHeader("X-Tollbooth-Paid", "mpp-nano");

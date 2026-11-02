@@ -313,6 +313,7 @@ app.use(createTollbooth({
     priceRaw: "1000000000000000000000000000",   // 0.001 XNO in raw
     rpcUrl: "http://127.0.0.1:7076",            // a node you trust, ideally your own
   },
+  replayStore: sqliteReplayStore(db),            // required: shared, atomic `claim` (see below)
 }));
 ```
 
@@ -324,10 +325,35 @@ suffix below 10^24 raw (under 0.000001 XNO), and only a confirmed `send` of
 exactly that amount to `recipient` answers that challenge (`binding:
 "amount"`). The amount sits inside the HMAC-bound challenge, so a buyer cannot
 choose its own. A paid request is served with a `Payment-Receipt` and
-`X-Tollbooth-Paid: mpp-nano`; the block hash is claimed in the `replayStore`
-as `nano:<HASH>`. An unconfirmed block, or a node that is down, gets a 402
-with `Retry-After` and does not use up the hash. The gate trusts the node's
-`confirmed` flag, so point `rpcUrl` at a node you run.
+`X-Tollbooth-Paid: mpp-nano`. An unconfirmed block, or a node that is down,
+gets a 402 with `Retry-After` and does not use up the hash. The gate trusts the
+node's `confirmed` flag, so point `rpcUrl` at a node you run.
+
+Hardening (all of it applies by default):
+
+- **One payment, one challenge, recorded both ways.** After the node confirms
+  the block, the gate claims `nano:ch:<challenge id>` and then `nano:<HASH>` in
+  the `replayStore` (the hash uppercased). Two different exact-amount blocks for
+  one challenge cannot both be served. The `claim` contract takes one key per
+  call, so the two are written in that fixed order: a crash between them burns
+  the challenge (the buyer asks for a fresh one) and cannot serve a second block.
+- **A shared replay store is required.** Without a `replayStore` with an atomic
+  `claim` (`sqliteReplayStore`, `redisReplayStore`, or your own) the rail refuses
+  to start: per-process memory would let every instance accept the same
+  credential once. For a single-process deploy only, `nano.allowInProcessReplay: true`
+  opts out and logs a warning.
+- **Node lookups are bounded.** A challenge costs nothing to obtain, so a lookup
+  is refused (402, `Retry-After`, no node call) after `maxLookupsPerChallenge`
+  attempts on one challenge (default 10), for a block hash the node just refused
+  (`negativeCacheMs` 15 s for a wrong block, `retryableNegativeCacheMs` 2 s for
+  one not yet confirmed or visible), and past `maxLookupsPerMinute` (default
+  120) across the whole gate. These counters are in-process: they protect this
+  gate's node budget; the replay store is what keeps payments single-use.
+- **TLS for the node.** `rpcUrl` must be `https://`; plain `http://` is accepted
+  only for a loopback address (`127.x.x.x`, `localhost`, `[::1]`).
+- **Refusals do not reveal reuse.** A block that was already used gets the same
+  `verification-failed` answer ("Payment verification failed.") as any other
+  failed check.
 
 ## Configuration
 
