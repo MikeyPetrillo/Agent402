@@ -48,11 +48,23 @@ const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js")
 requireUpstreamCosts("test-hangup-settlement");
 import { join } from "node:path";
 import express from "express";
-import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } from "../src/hangup-settlement.js";
-import { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupForgivenessConfig, hangupTicketDenial, hasLastingEffect, LASTING_EFFECT_SLUG_LIST, _resetHangupForgiveness, hangupKeyDigest, persistPath, persistNow, flushHangupForgiveness, loadHangupForgiveness } from "../src/hangup-forgiveness.js";
-import { createCredits } from "../src/credits.js";
+import { randomBytes } from "node:crypto";
 import { getFreePorts } from "./lib/free-port.js";
-import { planRefunds, REPEAT_HANGUP_HOLD } from "./refund-run.js";
+// Part 1 drives the IN-PROCESS budget: its calls are synchronous and inject
+// their own clocks, and it resets the module between cases. A REDIS_URL in
+// the caller's environment would put the module in shared mode at import,
+// where a reservation is a promise and the windows outlive the process, so
+// Part 1 pins SHARED_LIMITS=off for this process (the shared budget has its
+// own suite, scripts/test-hangup-forgiveness-redis.js). The booted server in
+// Part 2 keeps the caller's REDIS_URL, under a per-run key prefix so no run
+// reads another run's shared windows (and per-run nonces below).
+const CALLER_SHARED_LIMITS = process.env.SHARED_LIMITS;
+const RUN_PREFIX = process.env.SHARED_LIMITS_PREFIX || `hangup-${process.pid}-${randomBytes(4).toString("hex")}`;
+process.env.SHARED_LIMITS = "off";
+const { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } = await import("../src/hangup-settlement.js");
+const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupForgivenessConfig, hangupTicketDenial, hasLastingEffect, LASTING_EFFECT_SLUG_LIST, _resetHangupForgiveness, hangupKeyDigest, persistPath, persistNow, flushHangupForgiveness, loadHangupForgiveness, _hangupForgivenessShared } = await import("../src/hangup-forgiveness.js");
+const { createCredits } = await import("../src/credits.js");
+const { planRefunds, REPEAT_HANGUP_HOLD } = await import("./refund-run.js");
 let pass = 0, proc = null, facilitator = null, orStub = null;
 const serverLog = [];
 const TMP = mkdtempSync(join(tmpdir(), "hangup-"));
@@ -134,6 +146,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 // 1c. chargeCancelledForClientGone: gone before the first byte AND a granted
 // forgiveness ticket. Either alone keeps the charge.
 {
+  ok(_hangupForgivenessShared === false, "Part 1 runs the in-process budget whatever REDIS_URL the caller set (SHARED_LIMITS=off here)");
   _resetHangupForgiveness();
   const gone = () => ({ __a402ClientGoneAt: Date.now() });
   const g1 = gone(); reserveHangupForgiveness(g1, { keys: ["0xaa", "ip:1.1.1.1"], priceUsd: 0.01 });
@@ -419,7 +432,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 2000, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
     ok(closeAt > tempoAt && closeAt < awaitAt, "the close listener is registered before the shared budget read, so a socket that closes during it is not missed");
     const tail = server.slice(awaitAt, awaitAt + 900);
-    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) \}\);/.test(server.slice(tempoAt, awaitAt)) && /reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close (abandoned when gone before the first byte), including a close during the read");
+    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && !settleSentWhileConnected\(req\) \}\);/.test(server.slice(tempoAt, awaitAt)) && /reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close (abandoned when gone before the first byte and no settlement was sent), including a close during the read");
   }
   ok(/const who = payer \|\| \(req\.mppTempoSender \? `tempo:\$\{req\.mppTempoSender\}` : req\.creditsKeyId \? `credits:\$\{req\.creditsKeyId\}` : null\);\s*\n\s*return \[who, `ip:\$\{clientIp\(req\)\}`\];/.test(server), "ticket keys: the verified payer (never the Tempo source hint) AND always the client IP");
   ok(!/mppTempoPayer/.test(server.slice(server.indexOf("function hangupForgivenessKeys("), server.indexOf("function hangupForgivenessKeys(") + 600)), "the ticket keys never read the client-supplied Tempo payer hint");
@@ -461,7 +474,7 @@ const OP = "test-hangup-operator-token-0123456789";
 
 // Stub facilitator: verify/settle counters with optional delays. Every settle
 // answers a DISTINCT tx hash (the refund ledger is idempotent on it).
-const fac = { verify: 0, settle: 0, verifyDelayMs: 0, settleDelayMs: 0 };
+const fac = { verify: 0, settle: 0, verifyDelayMs: 0, settleDelayMs: 0, settleFails: false };
 const txFor = (n) => (n === 1 ? TX : `0x${n.toString(16).padStart(64, "0")}`);
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -479,7 +492,7 @@ facilitator = createServer((req, res) => {
     let parsed = {}; try { parsed = b ? JSON.parse(b) : {}; } catch { /* ignore */ }
     const payer = parsed.paymentPayload?.payload?.authorization?.from;
     if (req.url === "/verify") { fac.verify++; if (fac.verifyDelayMs) await sleep(fac.verifyDelayMs); return reply({ isValid: true, payer }); }
-    if (req.url === "/settle") { const n = ++fac.settle; fac.lastTx = txFor(n); if (fac.settleDelayMs) await sleep(fac.settleDelayMs); return reply({ success: true, transaction: txFor(n), network: "eip155:8453", payer }); }
+    if (req.url === "/settle") { const n = ++fac.settle; fac.lastTx = txFor(n); if (fac.settleDelayMs) await sleep(fac.settleDelayMs); if (fac.settleFails) return reply({ success: false, errorReason: "unexpected_settle_error", transaction: "", network: "eip155:8453", payer }); return reply({ success: true, transaction: txFor(n), network: "eip155:8453", payer }); }
     reply({});
   });
 });
@@ -520,7 +533,7 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // case m stops this server gracefully and boots a second one on the same file.
 const HANGUP_FILE = join(TMP, "hangup-forgiveness.json");
 const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { ...process.env, SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
@@ -549,10 +562,13 @@ const refunds = async () => (await refundsDoc()).refunds || [];
 // Crafted credentials: the stub facilitator is the only verifier, so a
 // credential names its payer in authorization.from and a fresh nonce makes it
 // a fresh authorization from the SAME wallet.
+// Each run's nonces are its own: the replay guard, the idempotency store and
+// the settlement claims key on the nonce in a Redis shared across runs.
 let nonceN = 0;
+const RUN_NONCE = randomBytes(16).toString("hex");
 const credential = (accepted, payer) => Buffer.from(JSON.stringify({
   x402Version: 2, resource: accepted.resource, accepted,
-  payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + (0x7000 + ++nonceN).toString(16).padStart(64, "0") } },
+  payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + RUN_NONCE + (0x7000 + ++nonceN).toString(16).padStart(32, "0") } },
 })).toString("base64");
 const CHAT = { path: "/v1/nano/chat/completions", method: "POST", body: JSON.stringify({ messages: [{ role: "user", content: "say ok" }], max_tokens: 16 }) };
 const PRO = { path: "/v1/images/pro", method: "POST", body: JSON.stringify({ prompt: "a red fox in the snow" }) };
@@ -629,6 +645,7 @@ try {
     };
     await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
     ok(!!minted, "b. captured a genuine signed payment header");
+    const hfBefore = (await refundsDoc()).hangupForgiveness;
     fac.settleDelayMs = 1_200;
     const settlesBefore = fac.settle, logAt = serverLog.length;
     const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
@@ -642,6 +659,10 @@ try {
       `b. the debt carries the settle tx, rail and a 499 marker (${JSON.stringify(rows[0])})`);
     ok(rows[0].hangupReason === "settled in flight", `b. the debt records that a granted ticket lost the race to the settle (${rows[0].hangupReason})`);
     ok(/\[hangup\] CHARGED-BUT-NOT-SERVED/.test(logSince(logAt)), "b. the log says CHARGED-BUT-NOT-SERVED");
+    // The charge went out before the close: it is the refund ledger's, so
+    // the run spends no forgiveness budget (its ticket is released).
+    const hfAfter = (await refundsDoc()).hangupForgiveness;
+    ok(hfAfter.abandonedInWindow === hfBefore.abandonedInWindow && hfAfter.inflightUsd === 0, `b. a hang-up whose charge was already sent spends no forgiveness budget (abandoned ${hfBefore.abandonedInWindow} -> ${hfAfter.abandonedInWindow})`);
     // The answer was charged and never delivered: the resend of the same
     // payment is served from the stored answer (no handler, no second
     // settle), and the debt booked for it is void.
@@ -689,6 +710,38 @@ try {
     ok(after.length === 1 && after[0].status === "paid", `b2. the row stays paid (${JSON.stringify(after.map((r) => r.status))})`);
   }
 
+  // b3. The same race, but the settle that was sent does not confirm: no
+  // receipt proves a charge, yet the transfer may still land (a failure
+  // naming one is booked by the late-settlement check). The log must not
+  // say the buyer was not charged, and the run spends no forgiveness budget.
+  {
+    const client = new x402Client();
+    registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+    let minted = null, mintedHeader = null;
+    const capturing = async (input, init) => {
+      const r = input instanceof Request ? input : new Request(input, init);
+      for (const name of ["payment-signature", "x-payment"]) { const v = r.headers.get(name); if (v) { minted = v; mintedHeader = name; } }
+      if (minted) return new Response("{}", { status: 402, headers: { "Content-Type": "application/json" } });
+      return fetch(input, init);
+    };
+    await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
+    ok(!!minted, "b3. captured a genuine signed payment header");
+    const hfBefore = (await refundsDoc()).hangupForgiveness;
+    const rowsBefore = (await refunds()).length;
+    fac.settleDelayMs = 1_200; fac.settleFails = true;
+    const settlesBefore = fac.settle, logAt = serverLog.length;
+    const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
+    await hangUp(`${B}/api/uuid`, { headers: { [mintedHeader]: minted, "x-forwarded-for": "10.0.0.23" }, abortWhen: settleSeen.then(() => sleep(100)) });
+    await sleep(1_800);
+    fac.settleDelayMs = 0; fac.settleFails = false;
+    const line = logSince(logAt).split("\n").find((l) => /\[hangup\]/.test(l) && l.includes("GET /api/uuid ")) || "";
+    ok(fac.settle - settlesBefore === 1 && /\[hangup\] SETTLE UNCONFIRMED: [^\n]*settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; no forgiveness budget spent/.test(line), `b3. a sent settle that did not confirm is logged as unconfirmed, never as not charged (${line.slice(0, 160)})`);
+    ok(!/NOT CHARGED|SETTLE WITHHELD/.test(line), "b3. the line claims nothing was withheld");
+    const hfAfter = (await refundsDoc()).hangupForgiveness;
+    ok(hfAfter.abandonedInWindow === hfBefore.abandonedInWindow && hfAfter.inflightUsd === 0, `b3. and it spends no forgiveness budget (abandoned ${hfBefore.abandonedInWindow} -> ${hfAfter.abandonedInWindow})`);
+    ok((await refunds()).length === rowsBefore, "b3. no receipt proves a charge: no debt row from the hang-up itself");
+  }
+
   // c. The buyer leaves while the payment is being verified: the handler never
   // runs, nothing settles, nothing is owed, and no forgiveness is spent.
   {
@@ -726,7 +779,7 @@ try {
     ok(or.chat - c0 === 1 && fac.settle === s0, `d. gone mid-handler: the handler ran (chat stub +${or.chat - c0}), the payment was NOT settled (settles +${fac.settle - s0})`);
     ok((await refunds()).length === 2, "d. a cancelled charge is not a refund-ledger debt: no row");
     const log = logSince(logAt);
-    ok(/\[hangup\] NOT CHARGED: [^\n]*POST \/v1\/nano\/chat\/completions rail=x402[^\n]*within the hang-up forgiveness budget/.test(log) && !/CHARGED-BUT-NOT-SERVED/.test(log), "d. the log says NOT CHARGED within the forgiveness budget");
+    ok(/\[hangup\] SETTLE WITHHELD: [^\n]*POST \/v1\/nano\/chat\/completions rail=x402[^\n]*within the hang-up forgiveness budget/.test(log) && !/CHARGED-BUT-NOT-SERVED/.test(log), "d. the log says SETTLE WITHHELD within the forgiveness budget");
     const c1 = or.chat;
     const again = await fetch(`${B}${CHAT.path}`, { method: "POST", headers, body: CHAT.body });
     ok(again.status === 409 && or.chat === c1, `d. re-sending the same credential is refused 409 and runs nothing (status ${again.status}, chat stub +${or.chat - c1})`);
@@ -748,7 +801,7 @@ try {
       ok(cut && or.imagesClosedAt - abortedAt() < 1_000, `e${i}. forgiven: the image call in flight is cut off within a second of the buyer leaving (${or.imagesClosedAt - abortedAt()} ms)`);
       await sleep(600);
       ok(or.images - i0 === 1 && fac.settle === s0, `e${i}. exactly one upstream POST (no failover link after the buyer left), nothing settled (POSTs +${or.images - i0}, settles +${fac.settle - s0})`);
-      if (i === 1) ok(/\[hangup\] NOT CHARGED: [^\n]*POST \/v1\/images\/pro rail=x402 after \d+ ms of work\) - payment not settled; within the hang-up forgiveness budget/.test(logSince(logAt)), "e1. the log says NOT CHARGED on /v1/images/pro");
+      if (i === 1) ok(/\[hangup\] SETTLE WITHHELD: [^\n]*POST \/v1\/images\/pro rail=x402 after \d+ ms of work\) - no settlement sent; within the hang-up forgiveness budget/.test(logSince(logAt)), "e1. the log says SETTLE WITHHELD on /v1/images/pro");
     }
     or.imagesDelayMs = 0;
     const s1 = fac.settle;
@@ -835,7 +888,7 @@ try {
       const logAt = await heldHangUp(UUID, wallet(0x9a0), "10.0.9.1");
       await sleep(1_500);
       ok(fac.settle === s0 && (await refunds()).length === owed0, `l0. an ordinary tool whose buyer left after the handler ran, inside the budget: NOT settled, nothing owed (settles +${fac.settle - s0})`);
-      ok(/\[hangup\] NOT CHARGED: [^\n]*GET \/api\/uuid[^\n]*within the hang-up forgiveness budget/.test(logSince(logAt)), "l0. the log says NOT CHARGED within the forgiveness budget");
+      ok(/\[hangup\] SETTLE WITHHELD: [^\n]*GET \/api\/uuid[^\n]*within the hang-up forgiveness budget/.test(logSince(logAt)), "l0. the log says SETTLE WITHHELD within the forgiveness budget");
     }
     const budgetBefore = (await refundsDoc()).hangupForgiveness;
     const lasting = async (label, t, payer, ip, slug) => {
@@ -843,7 +896,7 @@ try {
       const logAt = await heldHangUp(t, payer, ip);
       // Wait on the server's own line, not by polling the operator surface
       // (it is rate limited).
-      const lineOf = () => logSince(logAt).split("\n").find((l) => /\[hangup\] (CHARGED-BUT-NOT-SERVED|NOT CHARGED)/.test(l) && l.includes(`${t.method} ${t.path.split("?")[0]} `)) || "";
+      const lineOf = () => logSince(logAt).split("\n").find((l) => /\[hangup\] (CHARGED-BUT-NOT-SERVED|SETTLE WITHHELD)/.test(l) && l.includes(`${t.method} ${t.path.split("?")[0]} `)) || "";
       await waitFor(() => !!lineOf(), 6000);
       await sleep(100);
       ok(fac.settle === s0 + 1, `${label}. ${slug}: the buyer left after the handler ran, with budget to spare, and the payment SETTLED (settles +${fac.settle - s0})`);
@@ -895,12 +948,14 @@ try {
   }
 
   // h. Rotating wallets AND IPs: bounded by the service-wide budget ($0.40).
-  // Forgiven so far: $0.001 (b) + $0.001 (b2) + $0.003 (d) + $0.10 (e) + $0.10
-  // (f) + $0.10 (g) + $0.001 (l0) = $0.306, so one more $0.05 run fits and the
-  // next does not. The lasting-effect hang-ups in l took no ticket and add nothing.
+  // Forgiven so far: $0.003 (d) + $0.10 (e) + $0.10 (f) + $0.10 (g) + $0.001
+  // (l0) = $0.304, so one more $0.05 run fits and the next does not. The
+  // residual-window hang-ups in b, b2 and b3 had their settlement sent before
+  // the close (charged, or unconfirmed and booked if it lands), so their
+  // tickets were released, and the lasting-effect hang-ups in l took none.
   {
     const st = (await refundsDoc()).hangupForgiveness;
-    ok(Math.abs(st.abandonedUsdInWindow - 0.306) < 1e-9 && st.inflightUsd === 0 && st.perKeyBudgetUsd === 0.1 && st.globalBudgetUsd === 0.4, `h. the operator surface reports the budget in use (${JSON.stringify(st)})`);
+    ok(Math.abs(st.abandonedUsdInWindow - 0.304) < 1e-9 && st.inflightUsd === 0 && st.perKeyBudgetUsd === 0.1 && st.globalBudgetUsd === 0.4, `h. the operator surface reports the budget in use (${JSON.stringify(st)})`);
     or.imagesDelayMs = 1_500;
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly;
     await hangUpMidRun(PRO, wallet(0x71), "10.0.4.1"); await sleep(2_300);
