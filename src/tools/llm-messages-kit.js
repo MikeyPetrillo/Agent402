@@ -38,7 +38,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, smallBudgetEffort,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote, smallBudgetEffort,
   stripBilling,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
@@ -539,10 +539,11 @@ const INPUT_SCHEMA = {
 
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
-  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
+  const compat = defaultModelCompatNote(t);
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.${compat ? ` ${compat}` : ""}` : "";
   const price = priceString(tierSlug);
   if (tierSlug === "v1-chat-metered") {
-    return `Anthropic Messages API priced per request from the request itself. The 402 quotes the input (system, messages and tools), estimated from its tokens with headroom, plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto or credits and settle actual usage; a card payment is charged the quote plus the processor fee. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+    return `Anthropic Messages API priced per request from the request itself. The 402 quotes the input (system, messages and tools), estimated from its tokens with headroom, plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto or credits and settle actual usage; a card payment is charged the quote plus the processor fee. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.${compat ? ` ${compat}` : ""}`;
   }
   const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+ and Haiku 5.5, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"

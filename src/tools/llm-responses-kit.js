@@ -31,7 +31,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   defaultReasoningFor, validateReasoning, fitReasoningToCap,
-  refuseCostVariants, refuseUnsupportedParams, defaultModelFor,
+  refuseCostVariants, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote,
   assertUpstreamBody,
   stripBilling,
 } from "./llm-gateway-kit.js";
@@ -449,11 +449,12 @@ const INPUT_SCHEMA = {
 };
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
+  const compat = defaultModelCompatNote(t);
   if (tierSlug === "v1-chat-metered") {
-    return `OpenAI Responses API priced per request from the request itself. The 402 quotes the input (instructions, input items and tools), estimated from its tokens with headroom, plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.`;
+    return `OpenAI Responses API priced per request from the request itself. The 402 quotes the input (instructions, input items and tools), estimated from its tokens with headroom, plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.${compat ? ` ${compat}` : ""}`;
   }
   const base = `OpenAI Responses API over x402 - point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes (a namespace is flattened into its functions; function_call items carry a namespace field on non-streamed output), server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
-  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.${compat ? ` ${compat}` : ""}` : "";
   return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base + dflt;
 }
 

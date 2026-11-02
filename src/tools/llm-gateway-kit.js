@@ -3807,9 +3807,13 @@ const EXAMPLE_OUT = {
   usage: { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 },
 };
 
+// The metered default and its compat model, in one sentence derived from the
+// tier object (null when the tier names no compat model).
+const METERED_DEFAULT_NOTE = defaultModelCompatNote(TIERS["v1-chat-metered"]);
+
 const INPUT_SCHEMA = {
   properties: {
-    model: { type: "string", description: "Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change" },
+    model: { type: "string", description: `Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change.${METERED_DEFAULT_NOTE ? ` On ${TIERS["v1-chat-metered"].route.split(" ")[1]}: ${METERED_DEFAULT_NOTE}` : ""}` },
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
@@ -3845,7 +3849,7 @@ export const LLM_GATEWAY_TOOLS = [
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
     description:
-      `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
+      `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.${METERED_DEFAULT_NOTE ? ` ${METERED_DEFAULT_NOTE}` : ""}`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
     discovery: { bodyType: "json", input: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o-mini" } } },
     handler: makeHandler("v1-chat-metered"),
@@ -4127,6 +4131,7 @@ export function modelsList() {
         x402: {
           tier: slug, endpoint: tier.route.split(" ")[1], priceUsd: tier.price, maxTokens: tier.maxTokens,
           ...(tier.defaultModel ? { defaultModel: tier.defaultModel } : {}),
+          ...(tier.defaultModel && tier.defaultModelCompat ? { defaultModelCompat: tier.defaultModelCompat } : {}),
           ...(slug.startsWith("v1-chat") && !tier.lockedModel && !tier.router && TIERS["v1-chat-metered"]
             ? {
               meteredEndpoint: TIERS["v1-chat-metered"].route.split(" ")[1], meteredFromUsd: TIERS["v1-chat-metered"].price,
@@ -4137,6 +4142,11 @@ export function modelsList() {
               // not carry the flat cap onto the metered route (agent402-openclaw
               // did, and OpenClaw refused every turn as a context overflow).
               meteredMaxInputChars: TIERS["v1-chat-metered"].maxInputChars, meteredMaxTokens: TIERS["v1-chat-metered"].maxTokens,
+              // What a metered call naming no model gets (the metered tier is
+              // not listed on its own): the default, and the compat model a
+              // default call carrying a parameter the default does not take gets.
+              meteredDefaultModel: TIERS["v1-chat-metered"].defaultModel,
+              ...(TIERS["v1-chat-metered"].defaultModelCompat ? { meteredDefaultModelCompat: TIERS["v1-chat-metered"].defaultModelCompat } : {}),
             }
             : {}),
           maxInputChars: Math.min(tier.maxInputChars, ADVERTISED_MAX_INPUT_CHARS),

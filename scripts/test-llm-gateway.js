@@ -1938,6 +1938,21 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(rr.body.model === H4, `Responses wire: no model + top_p -> ${H4} (${rr.body.model})`);
     const mp = validateMessagesRequest({ messages: m1, max_tokens: 64 }, "v1-chat-metered");
     ok(mp.body.model === H5, `Messages wire: no model, no sampling -> ${H5} (${mp.body.model})`);
+    // Machine-readable surfaces name both models, read from the tier object.
+    const note = K.defaultModelCompatNote(M);
+    ok(typeof note === "string" && note.includes(M.defaultModel) && note.includes(M.defaultModelCompat) && K.defaultModelCompatNote(TIERS["v1-chat"]) === null, `compat note names both models, null on a tier without one: ${note}`);
+    const chatEntries = K.modelsList().data.filter((d) => d.x402?.meteredEndpoint);
+    ok(chatEntries.length > 0 && chatEntries.every((d) => d.x402.meteredDefaultModel === M.defaultModel && d.x402.meteredDefaultModelCompat === M.defaultModelCompat), `/v1/models: every chat entry names the metered default and its compat model (${chatEntries.length} entries)`);
+    const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
+    const { LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
+    const meteredChat = K.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-metered");
+    const surfaces = {
+      "metered chat description": meteredChat?.description,
+      "chat input schema model field": meteredChat?.discovery?.inputSchema?.properties?.model?.description,
+      "metered Messages description": LLM_MESSAGES_TOOLS.find((t) => t.slug === "v1-chat-metered-messages")?.description,
+      "metered Responses description": LLM_RESPONSES_TOOLS.find((t) => t.slug === "v1-chat-metered-responses")?.description,
+    };
+    for (const [where, text] of Object.entries(surfaces)) ok(typeof text === "string" && text.includes(note), `${where} carries the compat clause`);
   }
   ok(tierFor(H5) === "v1-chat" && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on base and metered");
   ok(K.costFor(H5) === ROW(H5) && K.costFor(H4) === ROW(H4), "Haiku 5.5 is priced by its own row, never by the 4.5 row or the family fallback");
