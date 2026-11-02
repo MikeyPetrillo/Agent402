@@ -66,6 +66,8 @@ export const CORS_EXPOSE_HEADERS = [
   "X-Metered-Usd",
   "X-Idempotent-Replay",
   "X-Replayed-Answer",
+  // A first-call allowance grant (src/first-call-allowance.js).
+  "X-Agent402-Allowance",
   "Retry-After",
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",

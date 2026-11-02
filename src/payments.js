@@ -36,6 +36,7 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
+import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
@@ -1963,6 +1964,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
+  // A first-call allowance grant (src/first-call-allowance.js) skips the
+  // settle of its served 200: after the hooks that abort a settle, before the
+  // authorization claim, so a skipped settle never holds that claim.
+  registerFirstCallAllowanceSettleHook(server);
   // One authorization, one answer (src/settlement-claims.js). The claim runs
   // after the hooks that may abort a settle, so an aborted settle never holds
   // the authorization; the release runs after the failure hooks, so it fires

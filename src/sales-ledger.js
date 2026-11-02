@@ -796,6 +796,15 @@ const qPayerBySlug = db.prepare(`
   SELECT slug, COUNT(*) AS n, SUM(price_usd) AS usd, MAX(ts) AS last_ts
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
   GROUP BY slug ORDER BY n DESC, usd DESC LIMIT 50`);
+const qPayerAnySale = db.prepare(`SELECT 1 AS hit FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} LIMIT 1`);
+/** True when this payer has any paid sale on the books, at any time (the
+ *  first-call allowance's "not new" test, src/first-call-allowance.js).
+ *  Database mode: the mirror, at most REFRESH_MS behind another container. */
+export function payerHasPaidSale(payer) {
+  const p = normalizePayerAddress(payer);
+  if (!p) return false;
+  return Boolean(qPayerAnySale.get(p));
+}
 const qPayerByNetwork = db.prepare(`
   SELECT network, COUNT(*) AS n, SUM(price_usd) AS usd
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
