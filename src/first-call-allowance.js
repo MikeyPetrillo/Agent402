@@ -58,6 +58,7 @@
 // only on a settled 200, and a grant is never settled.
 
 import { createHash } from "node:crypto";
+import { ALLOWANCE_STATE, allowanceOf, allowanceServed } from "./allowance-state.js";
 import { FLAGSHIP_SLUGS } from "./mcp-flagship.js";
 import { hasLastingEffect, hangupKeyDigest } from "./hangup-forgiveness.js";
 import { isLongRunningSlug } from "./composite-spend-guard.js";
@@ -85,7 +86,7 @@ const DAY_TTL_SECONDS = 2 * 86_400;
 // was never released (a crash, a lost release) frees the wallet again.
 const CLAIM_TTL_MS = 30 * 60_000;
 const CLAIM_TTL_SECONDS = CLAIM_TTL_MS / 1000;
-const STATE = "__a402Allowance";
+const STATE = ALLOWANCE_STATE;
 const ALLOWANCE_NOTE = "First paid call from this wallet: served by the first-call allowance. The payment was verified and not settled; nothing was charged.";
 
 function envNumber(name, dflt) {
@@ -128,15 +129,7 @@ export function allowanceRouteRefusal(def, cfg = firstCallAllowanceConfig()) {
   return null;
 }
 
-/** The allowance state on a request, or null. Own property only: a polluted
- *  prototype must never make a request look granted (and so unsettled). */
-export function allowanceOf(req) {
-  if (!req || typeof req !== "object" || !Object.hasOwn(req, STATE)) return null;
-  const a = req[STATE];
-  return a && typeof a === "object" ? a : null;
-}
-/** True once settlement of this request was skipped under a grant. */
-export function allowanceServed(req) { return allowanceOf(req)?.state === "served"; }
+export { allowanceOf, allowanceServed };
 
 const isOurs = (payer) => {
   const p = String(payer || "").toLowerCase();

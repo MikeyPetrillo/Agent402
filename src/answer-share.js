@@ -42,7 +42,7 @@ import { stateDbEnabled, stateDbSchema, stateQuery, records, leased } from "./st
 import { payerFromRequest } from "./payer.js";
 import { createLimiter } from "./rate-limit.js";
 import { onResponseEnd } from "./hangup-settlement.js";
-import { allowanceOf } from "./first-call-allowance.js";
+import { allowanceOf } from "./allowance-state.js";
 
 const DAY_MS = 86_400_000;
 /** The switch: shares are created only while ANSWER_SHARE is exactly "on" (read per call). */

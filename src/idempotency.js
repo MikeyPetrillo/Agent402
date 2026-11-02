@@ -6,7 +6,7 @@ import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
 import { onResponseEnd } from "./hangup-settlement.js";
-import { allowanceServed } from "./first-call-allowance.js";
+import { allowanceServed } from "./allowance-state.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this

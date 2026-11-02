@@ -52,7 +52,7 @@
 // stream that was cut part way through was (partly) delivered.
 
 import { hangupForgiven } from "./hangup-forgiveness.js";
-import { allowanceServed } from "./first-call-allowance.js";
+import { allowanceServed } from "./allowance-state.js";
 
 export const CLIENT_GONE_TEXT = "The connection closed before the response was ready, so the payment was not settled and nothing was charged.";
 
