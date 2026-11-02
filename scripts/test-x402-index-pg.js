@@ -89,10 +89,23 @@ try {
     let last = performance.now(), worst = 0;
     const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
     const storedBig = await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    worst = Math.max(worst, performance.now() - last - 2); // the gap still open when persist settles
     clearInterval(iv);
     const row = await sdb.records.get(COLLECTION, BIG);
     ok(storedBig === true && row?.tools?.length === 120_000 && row.tools[17].name === 'Route "17"' && row.tools[0].description === "Quotes \"inside\" and a back\\slash.", "a multi-megabyte row is stored whole, quotes and backslashes intact");
     ok(worst < bound, `persisting a ${mb.toFixed(0)} MB row never holds the loop past ${Math.round(bound)} ms (longest ${Math.round(worst)} ms)`);
+    // Newer wins on the single-row path as on the batch path: an older copy in
+    // memory never overwrites the stored row, a newer one replaces it.
+    // Both copies are past the single-row size, so each takes that path. The
+    // older one goes straight to the upsert (no pull first), as a second
+    // container's write does when it lands between this one's pull and write.
+    const older = tools.map((t) => ({ ...t, price: "$0.009" }));
+    await m1.__testPersistToStateDb([[BIG, entry("/big", { tools: older, fetchedAt: 1700000000000 })]]);
+    ok((await sdb.records.get(COLLECTION, BIG))?.tools?.[5]?.price === "$0.001", "an older copy of a large row does not overwrite the stored row (the SQL newer-wins rule)");
+    const newer = tools.map((t) => ({ ...t, price: "$0.002" }));
+    m1.__testSeedCache([[BIG, entry("/big", { tools: newer, fetchedAt: 1700000000002 })]]);
+    await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
+    ok((await sdb.records.get(COLLECTION, BIG))?.tools?.[5]?.price === "$0.002", "a newer copy of a large row replaces the stored row");
     // Out of the table and the cache again, so the boots below see A and C only.
     await sdb.records.del(COLLECTION, BIG);
     m1._cacheForTests().delete(BIG);

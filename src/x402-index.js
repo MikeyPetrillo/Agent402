@@ -1253,6 +1253,11 @@ export function __testResetSubmitted() { submittedSeeds.clear(); successions.cle
 /** Test hook: put entries in the crawl cache so cache-dependent paths can be driven. */
 export function __testSeedCache(entries = []) { for (const [o, e] of entries) cache.set(o, e); }
 
+/** Test hook: the state-database upsert alone, for `[origin, entry]` pairs,
+ *  with no pull first (the SQL newer-wins rule is what a race between two
+ *  containers meets, after one's pull and before its write). */
+export function __testPersistToStateDb(entries) { return persistIndexCacheToStateDb(entries, entries.map((e) => JSON.stringify(e))); }
+
 /** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
 export function __testSetBazaarTools(origin, rows) { if (Array.isArray(rows)) bazaarToolsByOrigin.set(origin, rows); else bazaarToolsByOrigin.delete(origin); }
 

@@ -15,6 +15,10 @@
 process.env.X402_INDEX_CRAWL = "off";
 process.env.ROUTER_WORKERS = "0";
 process.env.DECIDE_INTERNAL_TOKEN = "t".repeat(32);
+// The index under test is the one seeded here: a state database in the
+// environment would load its own (empty) rows over it.
+delete process.env.STATE_DATABASE_URL;
+delete process.env.REDIS_URL;
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,7 +37,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 async function longestGap(fn) {
   let last = performance.now(), worst = 0;
   const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
-  try { const out = await fn(); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
+  // The gap still open when `fn` settles counts too: an `fn` that never
+  // yields lets no tick fire at all.
+  try { const out = await fn(); worst = Math.max(worst, performance.now() - last - 2); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
 }
 const spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* a costly verdict */ } };
 const BOUND_MS = Number(process.env.LOOP_SLICE_BOUND_MS || 120);
