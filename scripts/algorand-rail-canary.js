@@ -54,6 +54,7 @@ import { createHmac } from "node:crypto";
 import { isIdentityBoundRoute } from "../src/payments.js";
 import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 import { railsReportSubcentPause } from "../src/avm-sponsorship.js";
+import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 
 import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
@@ -183,6 +184,7 @@ function walkTools(o) {
 }
 
 const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
+const readOpenapi = openapiReader(TARGET);
 let tools = walkTools(pricing).map((t) => ({
   method: String(t.method).toUpperCase(),
   path: t.path || (t.route || "").replace(/^[A-Z]+\s+/, ""),
@@ -320,7 +322,15 @@ for (const t of tools) {
     }
     const bareBody = await bare.json().catch(() => undefined);
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
-    exampleInput = paymentRequired?.extensions?.bazaar?.info?.input || {};
+    // A long string in the 402's example is a placeholder (the challenge's
+    // byte budget); the full example comes from /openapi.json.
+    const replayable = await resolveReplayableInput(paymentRequired?.extensions?.bazaar?.info?.input || {}, { method: t.method, path: t.path, readOpenapi });
+    if (!replayable) {
+      report.toolFail.push({ key, slug: t.slug, reason: "the 402's example input is shortened and /openapi.json carries no full example for this route" });
+      console.log(`FAIL ${key.padEnd(46)} shortened example with no full example on /openapi.json`);
+      continue;
+    }
+    exampleInput = replayable;
     // A function-priced route (the metered tiers) quotes its 402 from the
     // BODY: the bare `{}` request above quoted the floor, the paid retry
     // below sends the example body, and the accept echoed with the payment

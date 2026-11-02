@@ -30,9 +30,11 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { multipartBodyFrom } from "../src/openapi-request.js";
+import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 import { createHmac } from "node:crypto";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const readOpenapi = openapiReader(TARGET);
 const BAZAAR = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 const BASE_CAIP2 = "eip155:8453";
 
@@ -185,7 +187,8 @@ for (const entry of ROUTES) {
     if (bare.status !== 402) { report.failed.push({ entry, reason: `bare request HTTP ${bare.status}` }); continue; }
     const body = await bare.json().catch(() => undefined);
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), body);
-    example = paymentRequired?.extensions?.bazaar?.info?.input || {};
+    example = await resolveReplayableInput(paymentRequired?.extensions?.bazaar?.info?.input || {}, { method, path, readOpenapi });
+    if (!example) { report.failed.push({ entry, reason: "shortened 402 example with no full example on /openapi.json" }); continue; }
   } catch (e) { report.failed.push({ entry, reason: `challenge: ${e.message}` }); continue; }
 
   const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network || "") === BASE_CAIP2);

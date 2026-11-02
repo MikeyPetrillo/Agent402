@@ -821,6 +821,11 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_900;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
 const LONG_EXAMPLE_STRING = 200;
+// A shortened input string is a placeholder, not a value: a buyer or a sweep
+// that replays the 402's example must take the full one from /openapi.json
+// (scripts/lib/replayable-example.js), or the tool answers 400.
+const SHORTENED_EXAMPLE_RE = /^<\d+ characters; the full example is in \/openapi\.json>$/;
+export const isShortenedExampleString = (v) => typeof v === "string" && SHORTENED_EXAMPLE_RE.test(v);
 function shortExampleStrings(v) {
   if (typeof v === "string") return v.length > LONG_EXAMPLE_STRING ? `<${v.length} characters; the full example is in /openapi.json>` : v;
   if (Array.isArray(v)) return v.map(shortExampleStrings);

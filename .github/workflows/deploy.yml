@@ -2726,6 +2726,8 @@ jobs:
           #  (verified first-party against prod, 2026-08-29). Boots the real server against a
           #  local /supported stub; no payment is made."
           t node scripts/test-bazaar-contracts.js
+          # A 402's shortened example is replayed from /openapi.json; html-frames' example fits whole (offline)
+          t node scripts/test-replayable-example.js
           # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
           # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
           t node scripts/test-own-listing-screen.js

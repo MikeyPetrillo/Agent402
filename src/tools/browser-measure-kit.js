@@ -181,11 +181,16 @@ function attachFrameCheck(result, baselineByT, { width, height, source, baseline
   return result;
 }
 
-const FRAMES_EXAMPLE_HTML =
-  "<!doctype html><html><body style=\"margin:0\"><canvas id=\"c\" width=\"320\" height=\"180\"></canvas><script>" +
-  "const x=document.getElementById('c').getContext('2d');" +
-  "window.renderAt=function(t){x.fillStyle='#10243e';x.fillRect(0,0,320,180);x.fillStyle='#4cc38a';x.fillRect(20+t*100,70,40,40);};" +
-  "</script></body></html>";
+// At most FRAMES_EXAMPLE_MAX_CHARS, so the 402's example keeps the document
+// itself: a longer input string is shortened there to a placeholder that
+// pointed at /openapi.json, and a buyer that replayed the 402's example got
+// a 400 ("does not define window.renderAt(t)").
+export const FRAMES_EXAMPLE_MAX_CHARS = 200;
+export const FRAMES_EXAMPLE_HTML =
+  "<body style=margin:0><canvas id=c width=320 height=180></canvas><script>" +
+  "x=c.getContext('2d');x.fillStyle='#4cc38a';" +
+  "renderAt=t=>{x.clearRect(0,0,320,180);x.fillRect(20+t*100,70,40,40)}" +
+  "</script>";
 
 export const BROWSER_MEASURE_TOOLS = [
   {
@@ -434,9 +439,9 @@ export const BROWSER_MEASURE_TOOLS = [
       output: {
         example: {
           width: 320, height: 180, frameCount: 3,
-          frames: [{ t: 0, bytes: 645, pngBase64: "iVBORw0KGgo…" }, { t: 1, bytes: 645, pngBase64: "iVBORw0KGgo…" }, { t: 2, bytes: 644, pngBase64: "iVBORw0KGgo…" }],
-          contactSheet: { columns: 2, rows: 2, width: 664, height: 420, bytes: 3282, pngBase64: "iVBORw0KGgo…" },
-          totalBytes: 5216,
+          frames: [{ t: 0, bytes: 641, pngBase64: "iVBORw0KGgo…" }, { t: 1, bytes: 641, pngBase64: "iVBORw0KGgo…" }, { t: 2, bytes: 640, pngBase64: "iVBORw0KGgo…" }],
+          contactSheet: { columns: 2, rows: 2, width: 664, height: 420, bytes: 3246, pngBase64: "iVBORw0KGgo…" },
+          totalBytes: 5168,
           network: { blockedRequests: 0, policy: "all network access refused; only inline script and style, and data: or blob: URLs the document builds itself" },
         },
       },

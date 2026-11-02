@@ -20,8 +20,10 @@
 //   node scripts/challenge-sweep.js [--out report.json] [--max-usd 25] [--limit N]
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
+import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const readOpenapi = openapiReader(TARGET);
 const GP_RESOURCES = "https://facilitator.goplausible.xyz/discovery/resources";
 const AVM_CAIP2_PREFIX = "algorand:";
 const args = process.argv.slice(2);
@@ -139,7 +141,8 @@ for (const t of tools) {
     if (bare.status !== 402) { report.failed.push({ key, reason: `bare request HTTP ${bare.status}` }); continue; }
     const bareBody = await bare.json().catch(() => undefined);
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
-    exampleInput = paymentRequired?.extensions?.bazaar?.info?.input || {};
+    exampleInput = await resolveReplayableInput(paymentRequired?.extensions?.bazaar?.info?.input || {}, { method: t.method, path: t.path, readOpenapi });
+    if (!exampleInput) { report.failed.push({ key, reason: "shortened 402 example with no full example on /openapi.json" }); continue; }
   } catch (e) { report.failed.push({ key, reason: `challenge: ${e.message}` }); continue; }
 
   const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network || "").startsWith(AVM_CAIP2_PREFIX));

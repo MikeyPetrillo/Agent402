@@ -20,8 +20,10 @@
 //   BURNER_KEY=… [SOLANA_BURNER_KEY=… …] node scripts/cross-chain-matrix.js [N]   # real buys
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
+import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const readOpenapi = openapiReader(TARGET);
 const TOP_N = Number(process.argv[2] || process.env.MATRIX_TOP_N || 15);
 const DRY = process.env.MATRIX_DRY_RUN === "1" || process.env.MATRIX_DRY_RUN === "true";
 
@@ -138,7 +140,7 @@ async function main() {
     const bare = await synthFetch(`${TARGET}${ep.path}`, ep.method === "POST" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } : { method: "GET" });
     const pr = b64json(bare.headers.get("payment-required"));
     await bare.text().catch(() => "");
-    const example = pr?.extensions?.bazaar?.info?.input;
+    const example = await resolveReplayableInput(pr?.extensions?.bazaar?.info?.input, { method: ep.method, path: ep.path, readOpenapi });
     const offered = new Set((pr?.accepts || []).map((a) => String(a.network)));
     const { url, init } = buildRequest(ep.path, example);
 
