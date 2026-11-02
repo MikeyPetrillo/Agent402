@@ -241,8 +241,15 @@ function isClientTimeoutFlake(status, body, threw) {
 const RUNNER_PROBES = {
   // The exact request sol-token-safety's published example makes (JUP summary).
   RugCheck: "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary",
+  // The exact request weather-history's published example makes.
+  "Open-Meteo archive": "https://archive-api.open-meteo.com/v1/archive?latitude=51.5074&longitude=-0.1278&start_date=2025-06-01&end_date=2025-06-07&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Cprecipitation_sum%2Cwind_speed_10m_max&temperature_unit=celsius&wind_speed_unit=kmh&timezone=auto",
 };
-export function runnerProbeLabel(status, body) {
+// A tool that relays its upstream's 5xx in the shared fetch helper's words
+// ("Source URL's host returned HTTP 5xx"), which names no upstream: the slug
+// says which one, and the same direct probe decides.
+const RELAYED_HOST_PROBES = { "weather-history": "Open-Meteo archive" };
+export function runnerProbeLabel(status, body, slug = null) {
+  if (status === 502 && RELAYED_HOST_PROBES[slug] && /^Source URL's host returned HTTP 5\d\d\b/.test(String(body?.error || ""))) return RELAYED_HOST_PROBES[slug];
   if (status !== 503) return null;
   // A report the upstream itself declined to build ("<Label> could not produce a
   // report right now (upstream)") is the same class: probed directly below.
@@ -556,6 +563,13 @@ function runControls() {
     && runnerProbeLabel(504, { error: "RugCheck upstream timed out" }) === null
     && runnerProbeLabel(503, { error: "RugCheck answered something unexpected" }) === null,
     "control: only a listed upstream's deadline, unreachable or report-refusal 503 is a candidate (an unlisted upstream, the old 504 words, or other words still fail)");
+  ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-history") === "Open-Meteo archive",
+    "control: weather-history's relayed upstream 5xx is a runner-probe candidate (excused only if the archive refuses the runner's direct request too)");
+  ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-forecast") === null
+    && runnerProbeLabel(502, { error: "Source URL's host returned HTTP 404" }, "weather-history") === null
+    && runnerProbeLabel(500, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-history") === null
+    && runnerProbeLabel(502, { error: "Open-Meteo returned no historical data" }, "weather-history") === null,
+    "control: a relayed 5xx is a candidate only for a listed slug, only as a 502 naming a 5xx (another slug, a 4xx, our own 500 or other words still fail)");
   // Upstream refusals: only a listed keyless upstream, only the tool's own
   // "<Label> upstream error (HTTP 5xx)" 502, is reported instead of failing.
   ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 503)" })?.label === "Jupiter",
@@ -779,7 +793,7 @@ async function main() {
       return;
     }
 
-    const probeLabel = runnerProbeLabel(r.status, r.body);
+    const probeLabel = runnerProbeLabel(r.status, r.body, t.slug);
     if (probeLabel && !(await upstreamAnswersRunner(probeLabel))) {
       skippedRunnerUnreachable++;
       console.log(`\nskip - ${t.slug}: ${probeLabel} does not answer this runner directly either (upstream refusing or unreachable from here; not our defect)`);
