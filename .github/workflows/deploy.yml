@@ -3180,6 +3180,8 @@ jobs:
           t node scripts/test-invariants.js
           # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
           t node scripts/test-cdp-kit.js
+          # CDP facilitator config built on the kit's JWT minter (header groups, claims, wire path; offline)
+          t node scripts/test-cdp-facilitator.js
           # Seller-trust honesty invariants (no evidence never reads as a bad verdict; advertised ≠ settled — offline)
           t node scripts/test-seller-trust.js
           # Seller-dossier honesty invariants (unknown is unknown; inherited wallets named; no score; flags name their evidence — offline)
