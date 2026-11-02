@@ -168,6 +168,22 @@ const PENDING_MSG = "transaction did not confirm in time: context deadline excee
   try { await retryOk.settle(payload3, {}); } catch { /* expected */ }
   await retryOk.settle(payload3, {});
   ok(handed?.length === 1 && handed[0].s5xx && ps.peekPendingAnswers(payload3).length === 0, "a retry that settles hands the first pending answer over for forgiveness and clears the notes");
+  // Another client (a settle fallback) succeeding after the primary's pending
+  // answers is not the library's retry: those answers are handed over as
+  // settled by another facilitator, never for forgiveness.
+  {
+    const got = { mine: null, other: null, fbMine: null, fbOther: null };
+    const prim = { settle: async () => { throw Object.assign(new Error("settlement_pending"), { statusCode: 502, ...pend() }); } };
+    const fb = { settle: async () => ({ success: true, transaction: TX2 }) };
+    ps.notePendingSettleAnswers(prim, "https://prim.example/x402", { lane: () => "outside", via: "Prim", onSettledAfterPending: (ns) => { got.mine = ns; }, onSettledByOther: (ns) => { got.other = ns; } });
+    ps.notePendingSettleAnswers(fb, "https://fb.example/x402", { lane: () => "outside", via: "Fb", onSettledAfterPending: (ns) => { got.fbMine = ns; }, onSettledByOther: (ns) => { got.fbOther = ns; } });
+    const pl = { payload: { authorization: { nonce: word(30) } } };
+    try { await prim.settle(pl, {}); } catch { /* expected */ }
+    ok(ps.peekPendingAnswers(pl)[0]?.via === "Prim", "a pending note carries the label of the facilitator that answered it");
+    await fb.settle(pl, {});
+    ok(got.fbMine === null && got.fbOther?.length === 1 && got.fbOther[0].via === "Prim" && got.mine === null,
+      `a fallback's success after another client's pending answer is not a retry (${JSON.stringify({ mine: !!got.fbMine, other: got.fbOther?.length })})`);
+  }
   // Circle Gateway batched payments are never noted or read.
   const batched = { accepted: { extra: { name: "GatewayWalletBatched" } }, payload: { authorization: { nonce: word(4) } } };
   try { await client.settle(batched, {}); } catch { /* expected */ }
@@ -192,6 +208,33 @@ const PENDING_MSG = "transaction did not confirm in time: context deadline excee
   ok(m.forgiveUpstream("fac.example", "s5xx", { at, origin: "background" }) === false, "a background recovery never forgives another lane's failure");
   const row2 = (await m.report()).upstreams.find((u) => u.upstream === "facilitator:fac.example");
   ok(row2?.hour?.synthetic?.s5xx === 1 && m.forgiveUpstream("fac.example", "s5xx", { at, origin: "synthetic" }) === true, "a synthetic recovery forgives in the synthetic lane only");
+  // The 5xx is counted when it arrives; the note's time is read when the
+  // settle returns, which can fall in the next five-minute bucket.
+  {
+    const mb5 = createToolFailureMonitor({});
+    mb5.registerUpstreamHost("https://edge.example/x402", "facilitator:edge.example");
+    const edge = Math.ceil(Date.now() / 300_000) * 300_000 - 300_000;
+    mb5.noteUpstream("edge.example", "s5xx", { origin: "outside", at: edge - 200 });
+    ok(mb5.forgiveUpstream("edge.example", "s5xx", { at: edge + 300, origin: "outside" }) === true, "a note taken just past a bucket edge forgives the 5xx counted just before it");
+    ok(mb5.forgiveUpstream("edge.example", "s5xx", { at: edge + 300, origin: "outside" }) === false, "across the edge, never more than was counted");
+    mb5.noteUpstream("edge.example", "s5xx", { origin: "outside", at: edge - 600_000 });
+    ok(mb5.forgiveUpstream("edge.example", "s5xx", { at: edge + 300, origin: "outside" }) === false, "a count two buckets back is not reached");
+  }
+
+  // Pending-settle keys whose counts have aged out are evicted; a key past the
+  // cap while every key is live is dropped and counted.
+  {
+    let clock = Date.now() - 2 * 86_400_000;
+    const mk = createToolFailureMonitor({ now: () => clock });
+    for (let i = 0; i < 64; i++) mk.notePendingSettle({ network: `eip155:${i}`, facilitator: "f", outcome: "notMined" });
+    clock += 86_400_000 + 600_000;
+    ok(mk.notePendingSettle({ network: "eip155:999", facilitator: "f", outcome: "recovered" }) === "recovered", "a new key is counted once the full set has aged out");
+    for (let i = 0; i < 63; i++) mk.notePendingSettle({ network: `eip155:${1000 + i}`, facilitator: "f", outcome: "notMined" });
+    ok(mk.notePendingSettle({ network: "eip155:5000", facilitator: "f", outcome: "notMined" }) === null, "past the cap with every key live, the outcome is dropped");
+    const kr = await mk.report();
+    ok(kr.pendingSettles.dropped?.hour === 1 && kr.pendingSettles.dropped?.day === 1 && kr.pendingSettles.rows.length === 64,
+      `the drop is counted on the operator view (${JSON.stringify(kr.pendingSettles.dropped)}, ${kr.pendingSettles.rows.length} rows)`);
+  }
 
   // Outcome counts: per network and facilitator, merged across replicas.
   const ma = createToolFailureMonitor({ replicaId: "a" });
@@ -266,6 +309,30 @@ const PENDING_MSG = "transaction did not confirm in time: context deadline excee
   ok(cands.length === 2 && cands.every((c) => c.authNonce === nonce.toLowerCase()) && cands.map((c) => c.tx).sort().join() === both.slice().sort().join(),
     `a failure whose answers named two txs leaves two entries, each pinned to the authorization (${cands.length})`);
   ok(late.lateSettleCandidates(ctxOf({ error: { errorReason: "unexpected_settle_error", transaction: TX } }))[0]?.authNonce === undefined, "a failure with no pending notes books as before (no nonce pin)");
+  // A stopping fallback's own transaction is booked under its name; the
+  // primary's noted pending transaction under the primary's, not the fallback's.
+  {
+    const TX3 = txOf("unit-fallback");
+    const primC = { settle: async () => { throw Object.assign(new Error("settlement_pending"), { statusCode: 500, ...pend() }); } };
+    ps.notePendingSettleAnswers(primC, "https://prim2.example/x402", { lane: () => "outside", via: "Primary label" });
+    const fctx = ctxOf({ error: pend() });
+    try { await primC.settle(fctx.paymentPayload, {}); } catch { /* expected */ }
+    fctx.__a402LateTx = { transaction: TX3, via: "Fallback name" };
+    const fc = late.lateSettleCandidates(fctx);
+    const byTx = Object.fromEntries(fc.map((e) => [e.tx.toLowerCase(), e.via]));
+    ok(fc.length === 2 && byTx[TX3.toLowerCase()] === "Fallback name" && byTx[TX.toLowerCase()] === "Primary label",
+      `each noted tx is booked under the facilitator that answered it (${JSON.stringify(byTx)})`);
+    ps.takePendingAnswers(fctx.paymentPayload);
+    // A note with no label never takes the stopping fallback's name.
+    const bareC = { settle: async () => { throw Object.assign(new Error("settlement_pending"), { statusCode: 500, ...pend() }); } };
+    ps.notePendingSettleAnswers(bareC, "https://bare.example/x402", { lane: () => "outside" });
+    const bctxF = ctxOf({ error: pend() });
+    try { await bareC.settle(bctxF.paymentPayload, {}); } catch { /* expected */ }
+    bctxF.__a402LateTx = { transaction: TX3, via: "Fallback name" };
+    const bareVia = late.lateSettleCandidates(bctxF).find((e) => e.tx.toLowerCase() === TX.toLowerCase())?.via;
+    ok(bareVia === "primary", `an unlabeled noted tx is booked as the primary's, not the fallback's (${bareVia})`);
+    ps.takePendingAnswers(bctxF.paymentPayload);
+  }
   const owed = [];
   const bookFile = join(DIR, "unit-late.json");
   let ts = Date.now();

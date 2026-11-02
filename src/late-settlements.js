@@ -48,7 +48,7 @@ import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
 import { ownFirstAttemptOf } from "./robinhood-order.js";
-import { pendingNotedTxsFor, takePendingAnswers, receiptUsesAuthorization } from "./pending-settle.js";
+import { pendingNotedTxsFor, takePendingAnswers, peekPendingAnswers, receiptUsesAuthorization } from "./pending-settle.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -146,7 +146,9 @@ export function lateSettleCandidate(ctx) {
 /**
  * Every entry a settle failure leaves: the one lateSettleCandidate names, and
  * each other pending transaction noted for the payment (src/pending-settle.js).
- * Entries from noted pending answers carry the authorization's nonce.
+ * Entries from noted pending answers carry the authorization's nonce. Each
+ * other noted transaction is booked under the facilitator that answered it
+ * (the note's label), never under the one that stopped the chain.
  */
 export function lateSettleCandidates(ctx) {
   const out = [];
@@ -156,10 +158,12 @@ export function lateSettleCandidates(ctx) {
   const nonce = String(ctx?.paymentPayload?.payload?.authorization?.nonce || "");
   const pin = (e) => (noted.includes(String(e.tx || "").toLowerCase()) && NONCE.test(nonce) ? { ...e, authNonce: nonce.toLowerCase() } : e);
   if (c) out.push(pin(c));
+  let viaOf = new Map();
+  try { viaOf = new Map(peekPendingAnswers(ctx?.paymentPayload).filter((n) => n?.tx && n.via).map((n) => [n.tx, n.via])); } catch { /* labels only */ }
   for (const tx of noted) {
     if (out.some((e) => String(e.tx || "").toLowerCase() === tx)) continue;
-    const base = c || lateSettleCandidate({ ...ctx, error: { transaction: tx }, __a402LateTx: null });
-    if (base) out.push(pin({ ...base, tx }));
+    const base = lateSettleCandidate({ ...ctx, error: { transaction: tx }, __a402LateTx: null });
+    if (base) out.push(pin({ ...base, tx, ...(viaOf.has(tx) ? { via: viaOf.get(tx) } : {}) }));
   }
   return out;
 }

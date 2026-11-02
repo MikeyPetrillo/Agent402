@@ -1038,11 +1038,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // words while PayAI owns that chain and may never have been reached.
     labelFacilitatorErrors(label, client);
     // Every pending settle answer is noted on its payload (its transaction,
-    // and whether it came as a 5xx), so each noted transaction is read and
-    // booked, and a transfer then proven, here or by the library's own retry,
-    // is not left counted as a facilitator failure (src/pending-settle.js).
+    // whether it came as a 5xx, and this facilitator's label), so each noted
+    // transaction is read and booked under the facilitator that named it, and
+    // a transfer then proven, here or by this facilitator's own retry, is not
+    // left counted as a facilitator failure (src/pending-settle.js). Another
+    // client's success after those answers (a settle fallback) proves none of
+    // their transactions: it is counted as fallbackSettled and their 5xx
+    // answers stay counted.
     notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url, {
+      via: label,
       onSettledAfterPending: (notes, payload) => forgivePendingAnswers(notes, { network: payload?.accepted?.network, outcome: "retrySettled" }),
+      onSettledByOther: (notes, payload) => countPendingOutcome(notes, { network: payload?.accepted?.network, outcome: "fallbackSettled" }),
     });
     // Arc is Circle's alone. @x402 routes a network to the FIRST client whose
     // /supported lists it, and CDP/PayAI are registered before Circle, so a
@@ -3148,6 +3154,13 @@ function forgivePendingAnswers(notes, { network = null, facilitator = null, outc
       if (m.forgiveUpstream(a.host, "s5xx", { at: a.at, origin: a.lane })) m.notePendingSettle({ network: net, facilitator: fac, outcome: "forgivenPending" });
     }
   } catch { /* bookkeeping only */ }
+}
+
+/** Count one pending-settle outcome for these notes, forgiving nothing. */
+function countPendingOutcome(notes, { network = null, facilitator = null, outcome } = {}) {
+  const list = Array.isArray(notes) ? notes : [];
+  const net = network || "unknown";
+  try { toolFailureMonitor().notePendingSettle({ network: net, facilitator: facilitator || pendingFacilitatorOf(list, null, net), outcome }); } catch { /* bookkeeping only */ }
 }
 
 /** True for a hook context whose payment or requirement is the Circle
