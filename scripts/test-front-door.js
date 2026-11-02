@@ -372,7 +372,7 @@ async function readSurfaces(B, tag, { mpp = false } = {}) {
 // --- boot 2: FIRST_CALL_ALLOWANCE on, a non-default cap -------------------------
 {
   const MAX_USD = "0.02";
-  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD, MPP_SECRET_KEY: "front-door-test-mpp-secret-0123456789abcdef" });
+  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD, MPP_SECRET_KEY: "front-door-test-mpp-secret" });
   const s = await readSurfaces(B, "on", { mpp: true });
   const texts = { "/llms.txt": s.llms, [AGENTS_MD_PATH]: s.agents, "server.describe": JSON.stringify(s.fd), "402 body": JSON.stringify(s.body402) };
   for (const [where, text] of Object.entries(texts)) ok(FIRST_CALL_FREE_COPY.test(text), `on: ${where} offers the free first call`);
