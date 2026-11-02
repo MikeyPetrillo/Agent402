@@ -606,7 +606,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   ok(/adjustSpend\(spendHandle, spentMaybe \? \(e\?\.signedUsd != null && Number\.isFinite\(signedUsd\) && signedUsd >= 0 \? signedUsd : cap\) : 0\)/.test(katch),
     "route-execute books a committed candidate at the amount it signed (the cap only when none is named), an uncommitted one at $0");
   ok(/e\?\.paidUnanswered === true \? "; no other seller is tried for this request" : ""/.test(katch), "route-execute's own error names the no-second-seller rule for an unanswered paid request");
-  ok(/!spentMaybe && !unanswered && chain !== "tempo"/.test(katch), "route-execute falls through only when the attempt is neither committed nor unanswered");
+  ok(/!spentMaybe && !unanswered && !tempoOutOfTime/.test(katch), "route-execute falls through only when the attempt is neither committed nor unanswered");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/payExternal: \(url, opts\) => \{ const o = \{ \.\.\.opts, memoizeDelivery: true \}; return opts\?\.chain === "tempo" \? payTempo\(url, o\) : payX402\(url, o\); \}/.test(server),
     "only the router's own purchases opt into the memos, on both rails (server.js payExternal)");

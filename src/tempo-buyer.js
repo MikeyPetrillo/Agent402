@@ -161,6 +161,80 @@ export function primeTempoInboundCount(recipient, count, now = Date.now(), payer
  *  endpoint + timeout, and tests inject a stub in one place). */
 export const tempoRpc = (method, params, opts) => rpc(method, params, opts);
 
+// ---- was a pull credential used? (chain truth after its expiry) ------------
+// A pull credential is a sender-signed Tempo transaction on an expiring nonce:
+// it can be included only in a block whose timestamp is below its
+// validBefore. So once the chain's head has reached validBefore, the question
+// "did it move money" has a final answer on chain: a USDC.e Transfer from the
+// credential's signer between its signing and that head block, or none. The
+// read takes every Transfer from the signer to anyone, so another payment from
+// the same wallet in the window reads as used (the safe direction), never the
+// reverse.
+const SIGNED_LOOKBACK_S = 60;
+// Assumed at least this many seconds per block when estimating how far back
+// the window starts; the start block's own timestamp is then checked, so a
+// faster chain can only make the read refuse to answer, never miss a block.
+const MIN_BLOCK_S = 0.1;
+
+async function credentialExpiry(credential) {
+  try {
+    const { Credential } = await import("mppx");
+    const payload = Credential.deserialize(String(credential)).payload;
+    if (payload?.type !== "transaction" || typeof payload.signature !== "string") return null;
+    const { TxEnvelopeTempo } = await import("ox/tempo");
+    const tx = TxEnvelopeTempo.deserialize(payload.signature);
+    const validBefore = Number(tx?.validBefore);
+    const from = String(tx?.from || "").toLowerCase();
+    if (!Number.isInteger(validBefore) || validBefore <= 0 || !/^0x[0-9a-f]{40}$/.test(from)) return null;
+    // A sponsored (0x78) envelope names its sender rather than recovering it:
+    // with the spending wallet configured, it must be that wallet.
+    const acct = await account();
+    if (acct && acct.address.toLowerCase() !== from) return null;
+    return { validBefore, from };
+  } catch { return null; }
+}
+
+/**
+ * Whether a pull credential this wallet handed a seller moved money:
+ * { used: false, expired: true } only when the chain's head has reached the
+ * credential's validBefore and no USDC.e left its signer from before it was
+ * signed through that head; { used: true } when any did; null when that
+ * cannot be read inside `maxWaitMs` (an undecodable credential, an RPC
+ * failure, a head still short of the expiry, a window that does not reach
+ * back to the signing time). Exported for tests; `rpcFn` is injectable.
+ */
+export async function tempoCredentialVerdict(credential, { signedAtMs, maxWaitMs = 0, rpcFn = rpc, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  const deadline = Date.now() + Math.max(0, Number(maxWaitMs) || 0);
+  if (!(Number(maxWaitMs) > 0) || !Number.isFinite(Number(signedAtMs))) return null;
+  const exp = await credentialExpiry(credential);
+  if (!exp) return null;
+  try {
+    const block = async (tag) => {
+      const b = await rpcFn("eth_getBlockByNumber", [tag, false], { timeoutMs: 8000 });
+      const number = parseInt(b?.number, 16), timestamp = parseInt(b?.timestamp, 16);
+      if (!Number.isFinite(number) || !Number.isFinite(timestamp)) throw new Error("unreadable block");
+      return { number, timestamp };
+    };
+    let head = await block("latest");
+    while (head.timestamp < exp.validBefore) {
+      const left = deadline - Date.now();
+      if (left <= 0) return null;
+      await sleep(Math.min(1000, left));
+      head = await block("latest");
+    }
+    const startTs = Math.floor(Number(signedAtMs) / 1000) - SIGNED_LOOKBACK_S;
+    const back = Math.ceil(Math.max(0, head.timestamp - startTs) / MIN_BLOCK_S);
+    if (back > PROOF_BLOCKS) return null;
+    const fromN = Math.max(0, head.number - back);
+    const start = await block("0x" + fromN.toString(16));
+    if (fromN > 0 && start.timestamp > startTs) return null;
+    const topic = "0x" + exp.from.slice(2).padStart(64, "0");
+    const logs = await rpcFn("eth_getLogs", [{ fromBlock: "0x" + fromN.toString(16), toBlock: "0x" + head.number.toString(16), address: TEMPO_USDC, topics: [TRANSFER_TOPIC, topic, null] }], { timeoutMs: 15000 });
+    if (!Array.isArray(logs)) return null;
+    return logs.length ? { used: true } : { used: false, expired: true };
+  } catch { return null; }
+}
+
 // ---- spending wallet status (for /api/gateway-status + the heartbeat) ------
 let accountCache = null;
 async function account() {
@@ -201,6 +275,10 @@ export async function payTempo(url, {
   maxAtomic, method = "POST", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES,
   trusted = false, createCredential = null, proof = tempoInboundEvidence, minSettled = tempoMinSettled(), minPayers = tempoMinPayers(),
   memoizeDelivery = false, slug = null,
+  // After an error answer to the paid request, how long the chain may be
+  // waited on to prove the credential expired unused (0: not read, and the
+  // failure stays committed). route-execute passes its refusal budget.
+  refusalMaxWaitMs = 0, refusalProof = tempoCredentialVerdict,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
   if (maxAtomic == null) throw bad("payTempo requires maxAtomic (the margin-guard ceiling)", 500);
@@ -291,6 +369,7 @@ export async function payTempo(url, {
   //    unsent pull credential moves nothing, a sent one may.
   if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to pay the seller; nothing was signed", 504);
   const mint = createCredential || (await defaultCredentialFactory(recipient));
+  const signedAtMs = Date.now();
   let credential;
   try { credential = await withinDeadline(Promise.resolve().then(() => mint(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(ch) } }))), "credential signing"); }
   catch (e) {
@@ -306,7 +385,9 @@ export async function payTempo(url, {
   // this rail can prove afterwards that it was not broadcast: every failure
   // below is stamped `committed`, with the amount the credential carries
   // (`signedUsd`), so a caller keeps that spend booked against the wallet
-  // (route-execute) instead of treating it as nothing spent.
+  // (route-execute) instead of treating it as nothing spent. The one
+  // exception is an error answer the chain proves unpaid (below).
+  let committed = true;
   try {
     const sentAt = Date.now();
     const paid = await fetch(url, init({ Authorization: credential }));
@@ -315,6 +396,28 @@ export async function payTempo(url, {
     // already out, so the catch below stamps the throw committed.
     if (paid.status >= 300 && paid.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502);
     const receiptHdr = paid.headers.get("payment-receipt");
+    // AN ERROR ANSWER IS NOT PROOF EITHER WAY. A stock mppx seller settles
+    // before its handler runs, so a 4xx/5xx with no receipt may follow a
+    // payment; a seller that checks the body first answers the same status
+    // with nothing taken. Only the chain tells them apart: once its head has
+    // reached the credential's validBefore, no USDC.e Transfer from our
+    // signer since signing means the credential can never move money. Read
+    // only when the caller gave a wait budget; no verdict keeps the failure
+    // committed, exactly as before.
+    if (paid.status >= 400 && !receiptHdr && Number(refusalMaxWaitMs) > 0) {
+      let verdict = null;
+      try { verdict = await refusalProof(credential, { signedAtMs, maxWaitMs: refusalMaxWaitMs }); } catch { verdict = null; }
+      if (verdict && verdict.used === false && verdict.expired === true) {
+        committed = false;
+        const where = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
+        console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged`);
+        const e = bad(paid.status === 402 || paid.status === 401
+          ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`
+          : `Seller refused the request before taking payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
+        e.refused = true;
+        throw e;
+      }
+    }
     // DELIVERY MEMO, the payX402 rule on this rail (2026-09-28). Only the
     // router's own purchase writes it (memoizeDelivery, default false). Two
     // shapes are a failure to deliver: a 5xx with no receipt (the seller's
@@ -335,7 +438,9 @@ export async function payTempo(url, {
     if (chargedFailure) ledger("undelivered", null);
     if (memoizeDelivery && chargedFailure && sellerOrigin) noteSellerDeliveryFailure(sellerOrigin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
     if (paid.status === 402 || paid.status === 401) throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
-    if (paid.status >= 400) throw bad(`Seller failed after payment (HTTP ${paid.status})`, paid.status >= 500 ? 502 : 502);
+    // A receipt on the error is the seller saying it took the payment; with
+    // none, the chain read above could not rule a payment out.
+    if (paid.status >= 400) throw bad(receiptHdr ? `Seller failed after payment (HTTP ${paid.status})` : `Seller failed after the payment was sent (HTTP ${paid.status}); it may have been charged`, 502);
     let reference = null;
     if (receiptHdr) {
       try { const { Receipt } = await import("mppx"); reference = Receipt.deserialize(receiptHdr)?.reference || null; } catch { /* best-effort */ }
@@ -357,9 +462,9 @@ export async function payTempo(url, {
     };
   } catch (err) {
     const e = err && typeof err === "object" ? err : bad(String(err), 502);
-    e.committed = true;
+    e.committed = committed;
     // The credential carries the quote and nothing more: the most it moves.
-    e.signedUsd = Number(quotedAtomic) / 1e6;
+    if (committed) e.signedUsd = Number(quotedAtomic) / 1e6;
     throw e;
   }
 }
