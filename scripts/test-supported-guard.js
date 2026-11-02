@@ -33,6 +33,7 @@
 //
 // The stubs never see a verify/settle — this is a 402-negotiation test, so no
 // signature machinery is needed and the whole thing runs with no egress.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 

@@ -6,6 +6,7 @@
 // magnitude, because we key on ORIGIN and their 20 hosts were 20 unrelated crawl
 // targets. Separately three sellers in one week were refused by
 // /api/index/register's 30/hour GLOBAL cap and two gave up and emailed instead.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { execFileSync } from "node:child_process";

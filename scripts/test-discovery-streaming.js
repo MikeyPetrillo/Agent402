@@ -15,6 +15,7 @@
 //   3. measures peak live heap for both paths over a large registry in fresh
 //      processes and requires the streaming path to hold materially less.
 // Offline: the discovery fetcher is replaced through its test seam.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync } from "node:fs";

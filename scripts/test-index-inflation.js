@@ -16,6 +16,7 @@
 // instead of it, and this pins the arithmetic — especially that addresses
 // differing only in checksum case are one payee, since folding them wrongly
 // (or failing to) moves the headline number.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { loadPersistedIndexCache, indexSnapshot } from "../src/x402-index.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";

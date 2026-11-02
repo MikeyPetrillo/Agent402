@@ -18,6 +18,7 @@
 // `network_unknown`, 83 still serving a manifest, and 59 of those 83 declaring
 // a chain in one of these three shapes — 49 of them eip155:8453. The fixtures
 // below are the exact shapes of three of them, with addresses replaced.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { normaliseManifestTools } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;

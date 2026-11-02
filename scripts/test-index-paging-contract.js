@@ -9,6 +9,7 @@
 // numbers: 4,473 sellers, 250 a page, 18 pages, and a seller on page 15.
 //
 //   node scripts/test-index-paging-contract.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { pageSizeOf, pagingEnvelope, pagingNote } from "../src/index-paging.js";
 
 let pass = 0, fail = 0;

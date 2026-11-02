@@ -6,6 +6,7 @@
 // (attachBackgroundInitHandler in @x402/core/http). We drive the init ourselves
 // so a facilitator problem at boot degrades paid routes to 500 (the pre-2.25
 // contract) instead of crash-looping the container. Offline, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { createGuardedInit, withGuardedInit } from "../src/x402-boot-init.js";
 

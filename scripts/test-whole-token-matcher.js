@@ -3,6 +3,7 @@
 // regex and is now an indexOf scan with a boundary check, for speed. This pins
 // that the two agree, on hand-picked cases and on a seeded fuzz over ASCII,
 // accented Latin, CJK, combining marks and astral-plane characters. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 import assert from "node:assert/strict";
 const { wholeTokenMatcher } = await import("../src/x402-index.js");

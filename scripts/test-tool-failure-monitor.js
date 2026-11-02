@@ -7,6 +7,7 @@
 // rule. Booted (FREE_MODE, port 0): the public words carry only `status`, the
 // operator endpoint answers 404 without the token and the rows with it, and a
 // bespoke route's error answer is logged as a "[tool-error]" line.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

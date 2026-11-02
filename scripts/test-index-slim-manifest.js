@@ -18,6 +18,7 @@
 //     catalog;
 //   - the seller's own description is kept whole for the listing check.
 // Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");

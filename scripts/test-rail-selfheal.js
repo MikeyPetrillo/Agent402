@@ -11,6 +11,7 @@
 //
 // So the map is asserted against payments.js rather than trusted. A rail with a
 // dedicated facilitator there must appear here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

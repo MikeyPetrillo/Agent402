@@ -4,6 +4,7 @@
 //
 //   node scripts/test-decide-index.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { localToolRow, remoteToolRow, cleanText, embedText, schemaQuality, FIRST_PARTY_SELLER } from "../src/decide/tool-rows.js";
 import { decideTokenOk, fromPrivateNetwork, executableStep, unifiedRows, decideIndexExportHandler } from "../src/decide/index-export.js";
 import { VectorStore, quantize, toBytes, fromBytes, DIMS } from "../services/decide/vectors.js";

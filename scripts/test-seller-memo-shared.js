@@ -2,6 +2,7 @@
 // shared store (src/shared-limits.js). Two module instances of the buyer stand
 // in for two containers; in memory mode they share one store, exactly as two
 // containers share Redis. The local map stays the floor.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 const A = await import("../src/x402-buyer.js?replica=a");

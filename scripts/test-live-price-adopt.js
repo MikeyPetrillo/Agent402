@@ -6,6 +6,7 @@
 //   2. an explicit re-registration re-asks every route whose held price differs
 //      from the origin's declaration at all; the automatic crawl still waits for
 //      a 2x drift.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 process.env.X402_INDEX_CRAWL = "off";
 const { enrichLiveQuotes, adoptLivePrice, quoteProbeStatsSnapshot, probeFailureCode } = await import("../src/x402-index.js");

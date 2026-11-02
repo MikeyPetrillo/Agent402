@@ -8,6 +8,7 @@
 //
 // Offline: the purchase store on a temp file, the binding on hand-built
 // figures, the route-execute tool with a stub payer, no server, nothing spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

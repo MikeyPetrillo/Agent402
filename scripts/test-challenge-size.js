@@ -17,6 +17,7 @@
 // hardcoded, which is why it sweeps the whole catalog instead of sampling.
 // Common proxy limits sit at 8 KB per header and 16 KB total.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHmac } from "node:crypto";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";

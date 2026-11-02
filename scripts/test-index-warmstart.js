@@ -9,6 +9,7 @@
 // ten deploys that is most of the day — a visitor saw 569 sellers while the
 // index actually held 2,169. Warm-starting from /data is the same fix the
 // leaderboard already applies for the same reason.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

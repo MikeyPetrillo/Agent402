@@ -6,6 +6,7 @@
 // bug, so the config is asserted here rather than trusted.
 //
 // Run: node scripts/test-leaderboard-chains.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { chainScanConfig, rankableChains, baseUsdcPayToFromItem } from "../src/leaderboard.js";
 import { NETWORKS } from "../src/payments.js";
 import { EVM } from "../src/revenue-live.js";

@@ -10,6 +10,7 @@
 // /x402-economy 301s to /index#economy.
 //
 //   node scripts/test-x402-economy.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";

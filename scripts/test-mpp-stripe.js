@@ -9,6 +9,7 @@
 // methodDetails) is the shape `npx mppx validate --yes` accepted end to end
 // against Stripe sandbox on 2026-08-20 (Payment [stripe] successful). This
 // file proves OUR gate logic; the live sandbox run proved the Stripe API leg.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "sk_test_fakekey";
 process.env.STRIPE_PROFILE_ID = process.env.STRIPE_PROFILE_ID || "profile_test_fake";
 process.env.BASE_URL = "https://agent402.tools";

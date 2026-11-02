@@ -13,6 +13,7 @@
 //     free and boundedly when it is held;
 //   - a rejection still propagates.
 //   node scripts/test-loop-deadline.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";

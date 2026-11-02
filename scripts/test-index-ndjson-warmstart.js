@@ -8,6 +8,7 @@
 // (2) the incremental loader loads every seller, (3) no single turn holds the
 // loop for long while it does, and (4) the legacy loader still works when no
 // twin exists (first boot after this ships).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

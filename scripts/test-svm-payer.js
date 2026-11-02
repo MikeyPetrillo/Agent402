@@ -11,6 +11,7 @@
 // scheme client and solana-buyer.js use), never hand-assembled, so the walk is
 // proven against the real wire layout for BOTH message versions.
 //   node scripts/test-svm-payer.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
 import { svmRequiredSigners, svmPayerFromPayload, base58Encode, svmSignedTransfer, svmTransferAccounts } from "../src/svm-payer.js";
 

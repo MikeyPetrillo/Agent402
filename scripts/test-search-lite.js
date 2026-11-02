@@ -21,6 +21,7 @@
 // The crawler is switched off for the router import below. Static imports run
 // first, but none of them reads this variable and x402-index.js is imported
 // dynamically further down, after this line has run.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL ??= "off";
 import { SEARCH_TOOLS, braveCallMeter } from "../src/tools/search.js";
 import { isComputePayable } from "../src/pow.js";

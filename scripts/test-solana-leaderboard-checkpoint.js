@@ -19,6 +19,7 @@
 // boot instead of the file; the Postgres path has its own suite
 // (test-board-scan-once-pg.js). This one runs on the file backend whatever
 // the calling shell exports.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

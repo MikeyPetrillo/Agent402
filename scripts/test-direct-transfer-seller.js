@@ -4,6 +4,7 @@
 //   - its manifest routes are read under its prefix, not dropped;
 //   - its price is read from the USDC contract address;
 //   - its route is labelled unpayable by a stock buyer, never routed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { normaliseManifestTools } from "../src/x402-index.js";
 import { quoteFromAccepts } from "../src/x402-live-quote.js";
 import { usdcDomainVerdict, unsignableByStockBuyer, evmDomainsOfAccepts, unsupportedPaymentMethodOf } from "../src/evm-usdc-domain.js";

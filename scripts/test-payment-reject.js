@@ -10,6 +10,7 @@
 // (a wrong reason is worse than none, and the facilitator's own hint is the
 // better answer once a payment gets that far), and the wire behaviour through
 // the real server: a bare 402 is untouched, a refused one carries reason/hint.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { classifyPaymentRejection, unclassifiedPaymentShape, pendingSettleRefusal, withPendingSettleRefusal, PENDING_REFUSAL_MAX_TXS, REJECTION_REASONS } from "../src/payment-reject.js";

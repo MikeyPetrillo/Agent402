@@ -4,6 +4,7 @@
 // reported 39 endpoints indexed at price:null while every one of them returns a
 // textbook 402. If these assertions pass against anything less than that real
 // challenge, they are not testing what went wrong.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, isQuoteResponse } from "../src/x402-live-quote.js";
 
 let pass = 0, fail = 0;

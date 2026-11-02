@@ -11,6 +11,7 @@
 // and, from the source, that every raw 402 probe sends the crawler User-Agent
 // the page quotes, and that the robots token the page names is the crawler's.
 // Offline: no network, no server.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");

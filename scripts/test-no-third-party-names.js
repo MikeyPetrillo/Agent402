@@ -13,6 +13,7 @@
 // Allowed on purpose: the router seed (src/sor-seed-sellers.json), the index's
 // default seed list in src/x402-index.js (one seeded origin per line, with its
 // comment), and the paid canary's target origin.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";

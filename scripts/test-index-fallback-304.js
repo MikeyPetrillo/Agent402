@@ -11,6 +11,7 @@
 // them once and never pairs a 304 with nothing.
 // Offline: the real crawl pipeline through the
 // __setCrawlFetchForTest seam, with a stub that honors If-None-Match.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const { mkdtempSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");

@@ -11,6 +11,7 @@
 //     worse outcome than one extra request;
 //   - the parser is kit.js's, so the catastrophic-backtracking guard is not
 //     re-implemented (and mis-implemented) here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { robotsForbids, __resetRobotsCacheForTest } from "../src/x402-index.js";
 import { parseRobots, robotsAllows } from "../src/tools/kit.js";
 

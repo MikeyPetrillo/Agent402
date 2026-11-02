@@ -17,6 +17,7 @@
 // read from the booted server: each server gets stores of its own, so another
 // suite's server beside this one, or an exported MEMORY_DB_FILE or state
 // database, cannot add calls to the count or hold its SQLite write lock.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { spawn } from "node:child_process";

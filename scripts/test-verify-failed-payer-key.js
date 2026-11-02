@@ -15,6 +15,7 @@
 //
 // The rest of the file guards the boundary: posthog.js must never receive the
 // raw address, and a failure to derive the id must never break a payment.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";

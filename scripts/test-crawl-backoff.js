@@ -16,6 +16,7 @@
 //   * ANY success clears it immediately, so a seller who fixes their manifest
 //     is picked back up on the next crawl rather than punished for having been
 //     broken.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { manifestProbeDue, probeDue, noteProbeOutcome, crawlBackoffState, __noteCrawlOutcomeForTest as note } from "../src/x402-index.js";
 

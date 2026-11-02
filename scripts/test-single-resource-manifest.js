@@ -11,6 +11,7 @@
 //
 // Two independent halves, and the seller needed both: reading the shape at all,
 // and letting what it says reach a row an OpenAPI already reported.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { normaliseManifestTools, singleResourceManifestTool, mergeManifestIntoTools } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;

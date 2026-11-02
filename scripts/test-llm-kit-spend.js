@@ -14,6 +14,7 @@
 // state database a shell exports) takes other processes' spend too, and a
 // parallel run read their spend into this call's delta. A temp SQLite file,
 // set before src/stats.js is imported.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";

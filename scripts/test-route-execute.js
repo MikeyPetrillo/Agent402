@@ -1,5 +1,6 @@
 // Offline unit tests for the route-and-execute tool (src/tools/route-execute.js).
 // Uses a miniature catalog — no server boot, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
 import { USAGE_TOOLS } from "../src/tools/usage-kit.js";

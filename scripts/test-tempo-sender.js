@@ -28,6 +28,7 @@
 //      (plain key, an access key the stubbed RPC reports active, or a new
 //      access key carrying the account's authorization) reaches the relay; an
 //      ordinary route still reaches the relay.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import express from "express";

@@ -17,6 +17,7 @@
 // recoveries read "already held". The suite runs on in-process state whatever
 // the calling shell exports; the shared claim has its own Redis suite
 // (test-settle-onchain-proof.js).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { mkdtempSync } from "node:fs";

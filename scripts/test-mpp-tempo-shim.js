@@ -251,12 +251,18 @@ const paywallStub = (req, res, next) => (req.tempoSettling ? next() : res.status
 // transaction signed by a throwaway key, so the sender recovery the gate does
 // is exercised); `push: true` builds a PUSH credential (the hash of a transfer
 // the buyer already sent).
+// The challenge id is an HMAC over the challenge, whose only varying field
+// here is `expires` (millisecond precision): two credentials built in one
+// millisecond would share an id, and the replay guard would read the second
+// as the first. Each build gets its own millisecond; a case that means to
+// send one credential twice reuses the value it built.
+let credentialSeq = 0;
 function buildTempoCredential(o = {}) {
   const challenge = Challenge.from({
     realm: o.realm ?? REALM,
     method: "tempo",
     intent: "charge",
-    expires: o.expires ?? new Date(Date.now() + 60_000),
+    expires: o.expires ?? new Date(Date.now() + 60_000 + ++credentialSeq),
     request: { amount: o.amount ?? "50000", currency: o.currency ?? TEMPO_CURRENCY, decimals: 6, recipient: o.recipient ?? TREASURY, methodDetails: { chainId: o.chainId ?? 4217 } },
     secretKey: o.secretKey ?? GATE_SECRET,
   });

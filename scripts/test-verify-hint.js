@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // A rejected payment is answered in the buyer's language (src/verify-hint.js):
 // balance short vs stale authorization, on the 402, with a retry verb. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { unclassifiedPaymentHint } from "../src/payment-reject.js";
 import { encodeFunctionResult, decodeFunctionData } from "viem";
 import { hintFor, balanceBucket, noteVerifyFailure, hintForCredential, credentialKeyOf, credentialKeyFromHeader, verifyHintMiddleware, usdcBalanceOnBase, _testResetForTest, _inflightForTest, _queuedForTest, _limitsForTest, decodeBalanceMulticall, baseRpcUrls } from "../src/verify-hint.js";

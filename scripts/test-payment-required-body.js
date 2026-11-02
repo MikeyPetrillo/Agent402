@@ -27,6 +27,7 @@
 // Part 3 boots the same server with PAYMENT_REQUIRED_BODY=off and requires the
 // PAYMENT-REQUIRED header to be byte-identical for the same requests: the
 // mirror writes the body and never the header.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { decodeFunctionData, encodeFunctionResult, parseAbi } from "viem";
 import { createServer } from "node:http";

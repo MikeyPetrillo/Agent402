@@ -21,6 +21,7 @@
 //   - a CDN peer without the secret, or with a wrong one, keeps its own bucket;
 //   - a malformed CF-Connecting-IP from a CDN peer falls back to the peer;
 //   - the same holds for an IPv6 CDN peer.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";

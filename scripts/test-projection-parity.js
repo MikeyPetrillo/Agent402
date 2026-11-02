@@ -21,6 +21,7 @@
 //
 // A parity test is the only thing that catches it, because each surface is
 // individually correct.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";

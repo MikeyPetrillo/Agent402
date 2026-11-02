@@ -7,6 +7,7 @@
 // @x402/core's client. Also pins that the server reaches it (not the
 // removed package) and that the package is gone from package.json. Offline.
 //   node scripts/test-cdp-facilitator.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync, verify as edVerify, createVerify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { cdpFacilitatorConfig, cdpCorrelationHeader, CDP_FACILITATOR_URL } from "../src/cdp-facilitator.js";

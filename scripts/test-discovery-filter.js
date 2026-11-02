@@ -1,6 +1,7 @@
 // Offline unit test for the strict-source discovery filters (testnet + junk)
 // and network-id normalization, used when indexing open facilitator
 // registries like PayAI. No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { itemHasMainnetAccept, isJunkOrigin, bazaarItemToTool, isMppChallenge } from "../src/x402-index.js";
 

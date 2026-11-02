@@ -28,6 +28,7 @@
 // The booking checks are /api/stats deltas on the booted server: each server
 // gets stores of its own (and no state database or Redis), so a parallel
 // suite's calls never land in this one's counts.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { spawn } from "node:child_process";

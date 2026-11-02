@@ -12,6 +12,7 @@
 //   * it renders for a seller who IS on the spec path (noise, so it gets
 //     ignored, so the real signal is lost with it), or
 //   * it says nothing for a seller who is NOT (silence, which is the bug).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { discoveryNote, WELL_KNOWN_PATH } from "../src/discovery-note.js";
 import { readFileSync } from "node:fs";
 import { decodeTagCharacters, stripFormattingCarriers } from "../src/hidden-chars.js";

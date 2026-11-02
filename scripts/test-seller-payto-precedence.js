@@ -14,6 +14,7 @@
 //
 // Offline: the real crawl pipeline through the __setCrawlFetchForTest seam,
 // with the registry rows set through __testSetBazaarTools.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const {
   sellerDetail, sellerPayToByNetwork, payToSourceOf, bazaarItemToTool, mergeOpenapiIntoBazaar,

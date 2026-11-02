@@ -1,6 +1,7 @@
 // Unit tests for the WALLET_BLOCKLIST payer matcher — the pure function behind
 // the beforeSettle abort that refuses service to blocked wallets WITHOUT
 // charging them. Env is read at call time, so each case just sets the var.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { blockedPayerFromPayload, registerWalletBlocklistPayerEnrichment } from "../src/payments.js";
 
 let pass = 0, fail = 0;

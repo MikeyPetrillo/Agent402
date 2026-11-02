@@ -6,6 +6,7 @@
 // a fetch started after the abort rejects at once. Plus source pins for the
 // four seams in server.js, because the wrapper is only as good as what runs
 // inside the scope.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { runInAbortableScope, inAbortableScope, abortInFlightComposites, isDrainAbort, installDrainAwareFetch, activeAbortableScopes, clientGoneSignal, __resetDrainForTest } from "../src/drain-abort.js";
 import { createServer } from "node:http";

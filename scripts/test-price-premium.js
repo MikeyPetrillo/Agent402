@@ -7,6 +7,7 @@
 // buyer), float arithmetic inventing dust ($0.0020000000000000005 breaks
 // byte-exact quote matching), a malformed config quoting below cost, and the
 // dormant default not being byte-identical to the pre-engine behavior.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { parseNetworkPremiums, priceWithPremium, acceptsForItem } from "../src/payments.js";
 

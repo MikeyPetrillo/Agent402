@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // boundedSchema trims a JSON schema to a byte budget for the 402 challenge:
 // descriptions first, then nested detail, down to names and types. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { boundedSchema } from "../src/openapi-schema.js";
 import { boundDiscoveryBlock } from "../src/payments.js";
 let pass = 0, fail = 0;

@@ -8,6 +8,7 @@
 // restriction is scoped STRICTLY to identity routes. Every other tool keeps ALL
 // configured chains, so no rail loses the ability to sell the rest of the
 // catalog. Pure functions, no server boot, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { acceptsForItem, isIdentityBoundRoute, priceForNetwork } from "../src/payments.js";
 
 let pass = 0, fail = 0;

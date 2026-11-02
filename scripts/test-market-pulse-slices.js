@@ -4,6 +4,7 @@
 // turn, or in fixed counts of origins, a large catalogue held the loop for
 // seconds, on a paid call's first build and again on each stale rebuild.
 //   node scripts/test-market-pulse-slices.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PerformanceObserver } from "node:perf_hooks";
 process.env.X402_INDEX_CRAWL = "off";
 const X = await import("../src/x402-index.js");

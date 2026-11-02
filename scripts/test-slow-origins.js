@@ -1,6 +1,7 @@
 // Slow origins (their operator asked for less probing) are due every
 // SLOW_ORIGIN_EVERY_CYCLES cycles; every other origin keeps the normal cadence.
 //   node scripts/test-slow-origins.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 process.env.CRAWL_SLOW_ORIGINS = "https://slow-seller.test/";
 const { originsDueThisCycle } = await import("../src/x402-index.js");

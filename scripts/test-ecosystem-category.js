@@ -2,6 +2,7 @@
 // supply mix). Asserts the closed taxonomy: known descriptions land in the
 // right functional bucket, ordering resolves overlaps, and unmatched tools
 // fall to "other" instead of spawning singleton buckets. No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { classifyEcosystemCategory } from "../src/x402-index.js";
 

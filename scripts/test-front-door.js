@@ -13,6 +13,7 @@
 // Offline: no upstream is called; only free surfaces and unpaid 402s are read.
 //
 //   node scripts/test-front-door.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
