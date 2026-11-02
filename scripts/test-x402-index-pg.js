@@ -153,6 +153,26 @@ try {
     await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
     ok(stamp && (await stampOf(HUGE)) === stamp, "the pulled row is held as stored, so the next save does not write it back");
 
+    // The ranges travel as text (the bytea ranges came hex-encoded, twice the
+    // bytes), each ending on a character start.
+    const chunk = m1.__testPullChunkStats();
+    ok(chunk.parts > 1 && chunk.nonText === 0, `the large row was read in ${chunk.parts} ranges, every one a string (${chunk.nonText} not)`);
+    {
+      // One, two, three and four-byte characters in a cycle, so a range end
+      // falls on every offset inside each kind across the part sizes below.
+      const MIX = "https://seller-mix.example";
+      const cycle = "aé説😀";
+      await sdb.records.put(COLLECTION, MIX, entry("/mix", { fetchedAt: 1, tools: [{ route: "/m", name: cycle.repeat(40), description: `${cycle.repeat(7)}"\\` }] }));
+      const want = (await sdb.stateQuery(`SELECT body::text AS t FROM ${process.env.STATE_DB_SCHEMA}.records WHERE collection = $1 AND id = $2`, [COLLECTION, MIX])).rows[0].t;
+      const bad = [];
+      const s0 = m1.__testPullChunkStats();
+      for (const size of [4, 5, 6, 7, 8, 9, 10, 13, 64, 1 << 20]) if ((await m1.__testReadRowChunked(MIX, size)) !== want) bad.push(size);
+      const s1 = m1.__testPullChunkStats();
+      ok(bad.length === 0 && s1.nonText === s0.nonText, `ranges cut back to a character start rebuild the text exactly at every part size (mismatch at ${bad.join(", ") || "none"})`);
+      ok((await m1.__testReadRowChunked("https://seller-none.example", 8)) === null, "a row that is gone reads as null");
+      await sdb.records.del(COLLECTION, MIX);
+    }
+
     // A removal made on the other container reaches this one on its pull.
     const rm = m2.removeOrigin(HUGE, { note: "test" });
     ok(rm?.removed === true, "the other container removes the origin");
