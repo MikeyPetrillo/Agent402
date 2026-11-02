@@ -108,7 +108,7 @@ function assertAccess(label, text, powCount, wires) {
   ok(firstCallAllowanceEnabled() && FIRST_CALL_FREE_COPY.test(on), "unit: switch on, the access line offers the free first call");
   ok(on.includes(`to ${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG]} or ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.90)`), "unit: the clause names the eligible tools and the cap from the allowance config");
   ok([agentsMd(B, catOn), JSON.stringify(frontDoorJson(catOn, B)), JSON.stringify(frontDoor402Json(catOn, B))].every((s) => FIRST_CALL_FREE_COPY.test(s)), "unit: switch on, agents.md, the JSON block and the 402 part carry the clause (the JSON memo follows the switch)");
-  ok(agentsMd(B, catOn).includes("nor for a free first call (a re-send of its payment is refused and not charged)"), "unit: switch on, the replay line excludes a free first call");
+  ok(agentsMd(B, catOn).includes("nor for a free first call (a re-send of its payment inside the replay window is refused and not charged)"), "unit: switch on, the replay line excludes a free first call");
   process.env.FIRST_CALL_ALLOWANCE_MAX_USD = "0.6";
   const capped = frontDoorMarkdown(catOn, B);
   ok(capped.includes(`to ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.60)`) && !new RegExp(`call to [^(]*${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG].replace(".", "\\.")}`).test(capped), "unit: a tool over the cap is left out of the clause");
@@ -121,7 +121,7 @@ function assertAccess(label, text, powCount, wires) {
 // ---------------------------------------------------------------------------
 // Part 1b: the access line names coins and wires from the live config.
 {
-  const keys = ["MPP_SECRET_KEY", "TEMPO_API_KEY", "TEMPO_RECIPIENT_ADDRESS", "WALLET_ADDRESS", "TEMPO_RELAY", "STRIPE_SECRET_KEY", "NETWORK", "PAYMENT_NETWORKS"];
+  const keys = ["MPP_SECRET_KEY", "TEMPO_API_KEY", "TEMPO_RECIPIENT_ADDRESS", "WALLET_ADDRESS", "TEMPO_RELAY", "STRIPE_SECRET_KEY", "NETWORK", "PAYMENT_NETWORKS", "TEMPO_CURRENCY"];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   for (const k of keys) delete process.env[k];
   const B = "http://unit.test";
@@ -150,7 +150,9 @@ function assertAccess(label, text, powCount, wires) {
   {
     ok(paidWiresPhrase() === `${coins} over x402 or MPP (Tempo settles in its own stablecoins)`, "unit: Tempo on, the access line scopes Tempo's own coins");
     ok(/Tempo push payment/.test(tempoAgents), "unit: Tempo on, the recovery line names the Tempo push exception");
-    ok(/or Tempo \(USDC\.e or PathUSD, native\)/.test(llmsSummary()), "unit: Tempo on, the llms.txt summary names Tempo");
+    ok(/or Tempo \(PathUSD, native\)/.test(llmsSummary()), "unit: Tempo on (its default currency, PathUSD), the llms.txt summary names Tempo with PathUSD");
+    process.env.TEMPO_CURRENCY = "usdc,pathusd";
+    ok(/or Tempo \(USDC\.e or PathUSD, native\)/.test(llmsSummary()), "unit: Tempo on with USDC.e and PathUSD configured, the llms.txt summary names both");
   }
   ok(offAgents.includes(`When a call fails: [${AGENTS_MD_PATH}](${RECOVERY_ANCHOR})`) && RECOVERY_ANCHOR === "#when-a-call-fails", `unit: /agents.md links its own recovery heading by fragment (${RECOVERY_ANCHOR})`);
   ok(offAgents.includes(`## ${RECOVERY_HEADING}\n`), "unit: the fragment's heading is on the page");

@@ -116,6 +116,27 @@ try {
   const sectionCount = (txt.match(/^## /gm) || []).length;
   ok(sectionCount >= 3, `llms.txt has >= 3 '##' sections (got ${sectionCount}) — structure must remain navigable`);
 
+  // The MPP rails in the summary line name each rail's coin from the config
+  // (in process; the env is read per call): Base and Celo USDC with Tempo
+  // USDC.e and PathUSD reads as before, and a Tempo with PathUSD only names
+  // PathUSD only.
+  {
+    const keep = { ...process.env };
+    Object.assign(process.env, { MPP_SECRET_KEY: "x".repeat(40), TEMPO_API_KEY: "stub", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", TEMPO_CURRENCY: "usdc,pathusd", NETWORK: "base", PAYMENT_NETWORKS: "base,celo", MPP_CHALLENGE_NETWORKS: "", TEMPO_RELAY: "", CELO_USDC_ADDRESS: "" });
+    const { mppRailsProse } = await import("../src/seo.js");
+    const both = mppRailsProse();
+    ok(both === ", or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)", `the MPP rails read Base/Celo (USDC) and Tempo (USDC.e or PathUSD) from the config (${both})`);
+    process.env.TEMPO_CURRENCY = "pathusd";
+    const pathOnly = mppRailsProse();
+    ok(pathOnly === ", or MPP on Base/Celo (USDC) or Tempo (PathUSD, native)", `a Tempo configured with PathUSD only names PathUSD only (${pathOnly})`);
+    process.env.MPP_SECRET_KEY = ""; process.env.TEMPO_API_KEY = "";
+    ok(mppRailsProse() === "", "no MPP method offered: no MPP rails named");
+    const mixed = mppRailsProse({ evm: { rails: [{ chain: "Base", asset: "USDC" }, { chain: "Celo", asset: "USDT" }, { chain: "Polygon", asset: "USDC" }] }, tempo: null });
+    ok(mixed === ", or MPP on Base/Polygon (USDC) or Celo (USDT)", `each EVM rail is named with its own coin, chains sharing one grouped (${mixed})`);
+    for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
+    Object.assign(process.env, keep);
+  }
+
   console.log(`\n${pass} passed (${liveCount} tools, ${sectionCount} sections)`);
   proc.kill("SIGKILL");
   process.exit(0);

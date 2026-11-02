@@ -681,19 +681,25 @@ ${toolSections}
 `;
 }
 
-/** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
- *  summary line and sections are taken from the full text, so they never drift;
- *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
 // The MPP rails the llms.txt summary names, from the live MPP config: the EVM
-// rails by chain, then Tempo, and nothing while no MPP method is offered.
-function mppRailsProse() {
-  const m = mppMethodsSummary();
+// rails by chain with each rail's coin (chains sharing a coin grouped, e.g.
+// "Base/Celo (USDC)"), then Tempo with its configured currencies, and nothing
+// while no MPP method is offered. Takes the summary (tests pass their own).
+export function mppRailsProse(m = mppMethodsSummary()) {
+  const orList = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}`);
   const parts = [];
-  if (m.evm?.rails?.length) parts.push(`${m.evm.rails.map((r) => r.chain).join("/")} (USDC)`);
-  if (m.tempo) parts.push("Tempo (USDC.e or PathUSD, native)");
+  if (m.evm?.rails?.length) {
+    const byAsset = new Map();
+    for (const r of m.evm.rails) byAsset.set(r.asset, [...(byAsset.get(r.asset) || []), r.chain]);
+    for (const [asset, chains] of byAsset) parts.push(`${chains.join("/")} (${asset})`);
+  }
+  if (m.tempo?.currencies?.length) parts.push(`Tempo (${orList(m.tempo.currencies.map((c) => c.label))}, native)`);
   return parts.length ? `, or MPP on ${parts.join(" or ")}` : "";
 }
 
+/** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
+ *  summary line and sections are taken from the full text, so they never drift;
+ *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];

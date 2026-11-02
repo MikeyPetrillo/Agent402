@@ -209,7 +209,9 @@ try {
   const s1b = settles;
   const r1b = await payCall(B, "hash", wA, { ip: "10.2.0.1", cred: r1.cred });
   ok(r1b.headers.get("x-replayed-answer") !== "1" && r1b.headers.get("x-idempotent-replay") !== "true" && !granted(r1b), `the granted payment re-sent is not served from the idempotency store (status ${r1b.status})`);
-  ok(r1b.status !== 200 || settles === s1b + 1, `and is never a second free answer (status ${r1b.status}, settles +${settles - s1b})`);
+  // Inside the replay window the granted payment's nonce reads consumed: the
+  // re-send is refused 409 before any facilitator call, so nothing settles.
+  ok(r1b.status === 409 && settles === s1b && r1b.headers.get("x-payment-replay") === "consumed", `and is refused 409 as a consumed payment, not charged (status ${r1b.status}, settles +${settles - s1b}, x-payment-replay ${r1b.headers.get("x-payment-replay")})`);
   // 2. Second call from the same wallet settles normally.
   const s2 = settles;
   const r2 = await payCall(B, "hash", wA, { ip: "10.2.0.2" });
