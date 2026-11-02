@@ -41,6 +41,7 @@
 // A key is whatever the control counts under: a payer digest, a wallet, a
 // chain, "all". No value stored here is a credential.
 import { getSharedRedisClient, connectionState } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 
 export const SHARED_LIMITS_WORDS = ["on", "memory", "degraded"];
 
@@ -217,12 +218,11 @@ local v = redis.call('INCRBY', KEYS[1], ARGV[1])
 if tonumber(redis.call('PTTL', KEYS[1])) < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
 return v`;
 
+// Measured in loop time (src/loop-deadline.js): a command whose answer came
+// back while boot work held the loop is read, not booked as a store that did
+// not answer (which read the word degraded for a minute on a healthy Redis).
 function withTimeout(p, ms) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("shared-limits: command timed out")), ms);
-    t.unref?.();
-    Promise.resolve(p).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-  });
+  return withLoopTimeout(p, ms, () => new Error("shared-limits: command timed out"));
 }
 const parseSummary = (r) => {
   const count = Number(r?.[0]) || 0, sum = Number(r?.[1]) || 0;
