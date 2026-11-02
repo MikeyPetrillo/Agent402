@@ -255,9 +255,7 @@ export const META_OUTPUT_SCHEMAS = {
         properties: {
           firstCall: { type: "string" },
           access: { type: "string" },
-          useWhen: { type: "string" },
-          doNotUseWhen: { type: "string" },
-          recovery: { type: "array", items: { type: "string" } },
+          use: { type: "string" },
           guide: { type: "string" },
         },
         additionalProperties: true,

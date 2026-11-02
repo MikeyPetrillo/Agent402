@@ -4740,7 +4740,7 @@ jobs:
           t node scripts/test-x402-v1-accepts.js
           # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header (header keys win, our fields kept, settle-failure 402s untouched; stock x402 and mppx buys unchanged) - boots a paid server, offline
           t node scripts/test-payment-required-body.js
-          # The front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body: the first call at the catalog price, scoped recovery sentences, the header unchanged - boots a paid server, offline
+          # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body: the first call at the catalog price, the derived free-tier count, scoped recovery lines on /agents.md, the first-call allowance clause only while its switch is on, the header unchanged - boots two paid servers, offline
           t node scripts/test-front-door.js
           # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
           t node scripts/test-head-paywall.js

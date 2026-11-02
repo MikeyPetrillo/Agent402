@@ -8,12 +8,17 @@ carries its own version on npm.
 
 ### 2026-11-03 (agent front door)
 Surfaces:
-- /llms.txt, the MCP server.describe answer and the unpaid 402 body open
-  with the same front door: the first call (web.search) and its catalog
-  price, access with no account or API key, when to use the service and
-  when not to, and four recovery lines, each scoped to where it holds.
-  Rails and wire detail follow it unchanged.
-- New /agents.md (text/markdown, free): the front door, then how to
+- /llms.txt (under its title and summary), /agents.md and the MCP
+  server.describe answer open with the same three-line front door: the
+  first call (web.search, with web.answer beside it) at its catalog price;
+  access with no account or API key, led by the proof-of-work tools that
+  run free with no wallet (counted from the catalog, listed at /api/pow),
+  then pay per call in USDC over x402 or MPP; and when to use the service
+  and when not to, linked to /agents.md. The unpaid 402 body carries the
+  access line and the /agents.md link. Rails and wire detail follow
+  unchanged.
+- New /agents.md (text/markdown, free): the front door, then "When a call
+  fails" (four recovery lines, each scoped to where it holds), then how to
   connect, pay and find more tools. Linked from /llms.txt, listed in the
   sitemap and robots.txt.
 - The OpenAPI info description and the /.well-known/x402 summary lead with

@@ -702,14 +702,14 @@ export function llmsTxt(baseUrl, catalog) {
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
 - Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
-  // The front door leads: the first call and its price, access, when to use
-  // it, and the recovery contract (src/front-door.js); the summary, rails and
-  // wire detail follow it unchanged.
+  // The llms.txt order: the title, the summary blockquote, then the front
+  // door's three lines (src/front-door.js: the first call and its price,
+  // access, when to use it); rails and wire detail follow unchanged.
   return `${title}
 
-${frontDoorMarkdown(catalog, baseUrl)}
-
 ${summary}
+
+${frontDoorMarkdown(catalog, baseUrl)}
 
 Base URL: ${baseUrl}
 
