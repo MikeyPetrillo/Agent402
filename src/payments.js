@@ -35,7 +35,7 @@ import { x402EvmOnly, RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
-import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers } from "./pending-settle.js";
+import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers } from "./pending-settle.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -1036,10 +1036,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
     labelFacilitatorErrors(label, client);
-    // A pending 5xx settle answer is noted on its payload, so a transfer the
-    // chain then proves is not left counted as a facilitator failure
-    // (src/pending-settle.js).
-    notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url);
+    // Every pending settle answer is noted on its payload (its transaction,
+    // and whether it came as a 5xx), so each noted transaction is read and
+    // booked, and a transfer then proven, here or by the library's own retry,
+    // is not left counted as a facilitator failure (src/pending-settle.js).
+    notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url, {
+      onSettledAfterPending: (notes, payload) => forgivePendingAnswers(notes, { network: payload?.accepted?.network, outcome: "retrySettled" }),
+    });
     // Arc is Circle's alone. @x402 routes a network to the FIRST client whose
     // /supported lists it, and CDP/PayAI are registered before Circle, so a
     // general facilitator that starts listing Arc would take its payments past
@@ -2966,7 +2969,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // transfer it proves is this payment's is served like any recovered
     // settlement (claimed first). Otherwise the failure goes on exactly as
     // before: the late-settlement book reads the tx (src/pending-settle.js).
-    if (pendingSettleApplies(ctx)) {
+    if (!isBatchedCtx(ctx) && pendingSettleApplies(ctx)) {
       const o = await settleAfterPending(ctx);
       if (o) return o;
     }
@@ -3060,30 +3063,66 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
 }
 
 /**
- * After a pending settle answer that names a transaction: the receipt is read
- * (src/pending-settle.js), and a transfer proven to be this payment's is
- * claimed and served. The facilitator's pending 5xx answers for this payment
- * are then counted as ok upstream outcomes. Answers the hook result, or
- * undefined when the failure stands.
+ * After a pending settle answer that names a transaction: every noted
+ * transaction's receipt is read (src/pending-settle.js), and a transfer proven
+ * to be this payment's is claimed and served. The facilitator's pending 5xx
+ * answers for this payment are then counted as ok upstream outcomes, in the
+ * lane each was counted in. Each outcome is counted per network and
+ * facilitator on the failure monitor. Answers the hook result, or undefined
+ * when the failure stands (the late-settlement book then books every noted
+ * transaction).
  */
 async function settleAfterPending(ctx) {
   const network = ctx?.requirements?.network;
+  const notes = peekPendingAnswers(ctx?.paymentPayload);
+  const facilitator = pendingFacilitatorOf(notes, ctx, network);
+  const count = (outcome) => { try { toolFailureMonitor().notePendingSettle({ network, facilitator, outcome }); } catch { /* bookkeeping only */ } };
   let r;
-  try { r = await confirmPendingSettle(ctx); } catch (e) { r = { recovered: false, reason: `receipt read errored: ${String(e?.message || e).slice(0, 120)}` }; }
+  try { r = await confirmPendingSettle(ctx); } catch (e) { r = { recovered: false, code: "rpcError", reason: `receipt read errored: ${String(e?.message || e).slice(0, 120)}` }; }
   if (!r.recovered) {
-    console.warn(`[payments] ${network} pending settle not recovered: ${r.reason}; the transaction is booked until it is read on chain`);
+    if (r.code !== "notApplicable") count(r.code);
+    console.warn(`[payments] ${network} pending settle not recovered: ${r.reason}; each noted transaction is booked until it is read on chain`);
     return undefined;
   }
   if (await recoveredTxHeldElsewhere(ctx, r.result)) {
+    count("heldElsewhere");
     console.warn(`[payments] ${network} pending settle: tx ${r.result.transaction} already held by another request or booked owed; not served`);
     return undefined;
   }
-  for (const a of takePendingAnswers(ctx?.paymentPayload)) {
-    try { toolFailureMonitor().forgiveUpstream(a.host, "s5xx", { at: a.at }); } catch { /* bookkeeping only */ }
-  }
+  count("recovered");
+  forgivePendingAnswers(takePendingAnswers(ctx?.paymentPayload), { network, facilitator, outcome: null });
   releaseCoverOnSettled(ctx, r.result);
   console.warn(`[payments] recovered ${network} settlement after a pending answer: tx ${r.result.transaction} (read on chain)`);
   return { recovered: true, result: r.result };
+}
+
+/** The facilitator a payment's pending answers came from, as the failure
+ *  monitor names it. */
+function pendingFacilitatorOf(notes, ctx, network) {
+  const host = notes.find((n) => n?.host)?.host;
+  let name = null;
+  try { name = host ? toolFailureMonitor().upstreamNameOf(host) || host : null; } catch { name = host || null; }
+  return name || ctx?.error?.__a402Facilitator || facilitatorFirstTriedByNetwork.get(network) || "primary";
+}
+
+/**
+ * A payment whose pending answers proved good (recovered on chain, or settled
+ * by the library's own retry): each pending 5xx answer is moved back to ok in
+ * the upstream count, in the lane it was counted in, and counted as
+ * forgivenPending. `outcome` (when set) is counted once as well.
+ */
+function forgivePendingAnswers(notes, { network = null, facilitator = null, outcome = null } = {}) {
+  const list = Array.isArray(notes) ? notes : [];
+  const net = network || "unknown";
+  const fac = facilitator || pendingFacilitatorOf(list, null, net);
+  try {
+    const m = toolFailureMonitor();
+    if (outcome) m.notePendingSettle({ network: net, facilitator: fac, outcome });
+    for (const a of list) {
+      if (!a?.s5xx) continue;
+      if (m.forgiveUpstream(a.host, "s5xx", { at: a.at, origin: a.lane })) m.notePendingSettle({ network: net, facilitator: fac, outcome: "forgivenPending" });
+    }
+  } catch { /* bookkeeping only */ }
 }
 
 /** True for a hook context whose payment or requirement is the Circle

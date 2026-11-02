@@ -2,10 +2,10 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
-    date: "2026-11-03",
+    date: "2026-11-02",
     title: "Paid answers on a pending settle",
     items: [
-      "Payments: a payment whose transfer confirms moments after the facilitator stops waiting for it now receives its answer, instead of a refusal and a later refund: when a settle comes back pending with a transaction, the server reads that transaction on chain for a few seconds and serves the call once the transfer to us is proven.",
+      "Payments: an EVM payment whose transfer confirms moments after the facilitator stops waiting for it now receives its answer, instead of a refusal and a later refund: when a settle comes back pending with a transaction, the server reads that transaction on chain for a few seconds and serves the call once the transfer to us is proven.",
     ],
   },
   {

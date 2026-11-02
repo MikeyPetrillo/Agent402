@@ -24,6 +24,13 @@
 //   with a backoff; past MAX_AGE_MS it becomes `unresolved`: never dropped,
 //   listed on the operator view for a human, and logged.
 //
+// A pending settle whose answers named more than one transaction (the
+// library's single retry can broadcast again: src/pending-settle.js) books
+// every one of them, each carrying the authorization's nonce (`authNonce`):
+// such an entry is owed only when its receipt also carries the asset's
+// AuthorizationUsed(payer, nonce) log, and one EIP-3009 nonce is used once, so
+// one authorization is never owed twice, whichever of its transactions lands.
+//
 // Only EVM networks with a configured RPC (src/evm-rpcs.js) are booked; any
 // other network is skipped and the skip logged. Tempo is left to its own
 // confirm path (src/tempo-confirm.js); Arc's pending answers carry no hash and
@@ -41,6 +48,7 @@ import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
 import { ownFirstAttemptOf } from "./robinhood-order.js";
+import { pendingNotedTxsFor, takePendingAnswers, receiptUsesAuthorization } from "./pending-settle.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -133,6 +141,27 @@ export function lateSettleCandidate(ctx) {
     // its transaction as the primary's answer: the entry says whose it is.
     via: ctx?.__a402LateTx?.via || (ownFirstAttemptOf(ctx?.paymentPayload, req.network) ? "own relayer" : "primary"),
   };
+}
+
+/**
+ * Every entry a settle failure leaves: the one lateSettleCandidate names, and
+ * each other pending transaction noted for the payment (src/pending-settle.js).
+ * Entries from noted pending answers carry the authorization's nonce.
+ */
+export function lateSettleCandidates(ctx) {
+  const out = [];
+  const c = lateSettleCandidate(ctx);
+  let noted = [];
+  try { noted = ctx?.__a402LateAuth ? [] : pendingNotedTxsFor(ctx); } catch { noted = []; }
+  const nonce = String(ctx?.paymentPayload?.payload?.authorization?.nonce || "");
+  const pin = (e) => (noted.includes(String(e.tx || "").toLowerCase()) && NONCE.test(nonce) ? { ...e, authNonce: nonce.toLowerCase() } : e);
+  if (c) out.push(pin(c));
+  for (const tx of noted) {
+    if (out.some((e) => String(e.tx || "").toLowerCase() === tx)) continue;
+    const base = c || lateSettleCandidate({ ...ctx, error: { transaction: tx }, __a402LateTx: null });
+    if (base) out.push(pin({ ...base, tx }));
+  }
+  return out;
 }
 
 export function createLateSettleBook({
@@ -238,6 +267,7 @@ export function createLateSettleBook({
       const entry = {
         key, network, tx: byAuth ? null : String(c.tx).toLowerCase(), ...(byAuth ? { nonce: String(c.nonce).toLowerCase() } : {}), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
         amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
+        ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
       if (await write(entry)) {
@@ -344,6 +374,14 @@ export function createLateSettleBook({
           log(`[late-settle] ${e.network} tx ${e.tx} reverted on chain; nothing moved, nothing owed`);
           return;
         }
+        // One of several transactions noted for one authorization: only the
+        // one that used it can be this payment's transfer.
+        if (e.authNonce && !receiptUsesAuthorization(receipt, { asset: e.asset, payer: e.payer, nonce: e.authNonce })) {
+          await drop();
+          out.notOurs++;
+          log(`[late-settle] ${e.network} tx ${e.tx} mined without using this payment's authorization; nothing owed`);
+          return;
+        }
         const moved = evmTransferredInReceipt(receipt, { token: e.asset, from: e.payer, toSet: [e.payTo] });
         if (moved < BigInt(e.amount) || moved === 0n) {
           await drop();
@@ -411,10 +449,12 @@ export function createLateSettleBook({
 export function registerLateSettleHook(server, bookFor) {
   server.onSettleFailure(async (ctx) => {
     try {
-      const c = lateSettleCandidate(ctx);
-      if (!c) return;
+      const all = lateSettleCandidates(ctx);
+      if (!all.length) return;
       const b = await bookFor();
-      if (b) await b.book(c);
+      if (b) for (const c of all) await b.book(c);
+      // The notes have been booked: a later read of this payment starts clean.
+      takePendingAnswers(ctx?.paymentPayload);
     } catch { /* booking never breaks the settle path */ }
   });
   return server;

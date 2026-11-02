@@ -37,6 +37,14 @@
 //              payment, same nonce) or keyed (an Idempotency-Key or
 //              payment-identifier). Detail only, never a word; by slug,
 //              never by payer.
+//   pending settles  per network and facilitator, every settle answered
+//              pending with a transaction that src/pending-settle.js read on
+//              chain, by outcome (PENDING_OUTCOMES): recovered, settled
+//              by the library's own retry, or not recovered and why (not
+//              mined, reverted, wrong transfer, RPC error, buyer gone, no time,
+//              capped, rate limited, already sold, held elsewhere, ledger
+//              error), plus forgivenPending: each pending 5xx answer moved back
+//              to ok in the upstream count. Detail only, never a word.
 //   buyer refusals  a settle-breaker refusal (src/gateway-settle-breaker.js)
 //              of a key that had settled at least one call inside the
 //              breaker's window: a paying buyer was turned away. A count per
@@ -79,6 +87,8 @@ export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone"
 export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
 export const WORDS = ["ok", "degraded", "failing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
+/** Pending-settle outcomes (src/pending-settle.js), in count order. */
+export const PENDING_OUTCOMES = ["recovered", "retrySettled", "notMined", "reverted", "wrongTransfer", "rpcError", "buyerGone", "noTime", "capped", "rateLimited", "alreadySold", "heldElsewhere", "ledgerError", "forgivenPending"];
 // Rails whose outcomes count on the free lane: no payment was taken, so a free
 // caller's 5xx is shown, and pages only when nearly every free call to a tool
 // fails over many calls (freeFailRate over freeMinCalls), which is a broken
@@ -96,6 +106,7 @@ const MAX_PATHS = 64;
 const MAX_RAILS = 16;
 const MAX_UPSTREAMS = 200;
 const MAX_REFUSALS = 200;
+const MAX_PENDING_KEYS = 64;
 const REMOTE_MAX_AGE_MS = 30_000;
 
 export function thresholds(env = process.env) {
@@ -179,6 +190,7 @@ const emptyTool = () => TOOL_CLASSES.map(() => 0);
 const emptyUp = () => UPSTREAM_KINDS.map(() => 0);
 const emptyAns = () => ANSWER_CLASSES.map(() => 0);
 const emptyReplay = () => REPLAY_KINDS.map(() => 0);
+const emptyPending = () => PENDING_OUTCOMES.map(() => 0);
 const add = (a, b) => { for (let i = 0; i < a.length; i++) a[i] += Number(b?.[i]) || 0; return a; };
 
 /** The default cross-replica store: Redis through the shared client. */
@@ -219,6 +231,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const refusals = [];          // { at, network, facilitator, reason }
   const replays = new Map();    // slug -> Map(bucket -> [implicit, keyed])
   const buyerRefusals = new Map(); // bucket -> count (no slug, no key)
+  const pendingSettles = new Map(); // "network|facilitator" -> Map(bucket -> counts over PENDING_OUTCOMES)
   const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [], f: [] })
   const rails = new Map();      // payment rail -> Map(bucket -> { o: [], s: [], f: [] })
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
@@ -330,19 +343,33 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
    * Move one `kind` outcome counted for `host` at `at` back to ok: a call the
    * fetch observer counted as failed whose outcome later proved good (a
    * facilitator's pending 5xx whose transfer was then read mined,
-   * src/pending-settle.js). Takes from the outside lane first, then synthetic,
-   * then background. Answers whether a count was moved.
+   * src/pending-settle.js). `origin` is the lane the call was counted in
+   * (outside, synthetic, background), and only that lane is touched. Answers
+   * whether a count was moved.
    */
-  function forgiveUpstream(host, kind, { at = now() } = {}) {
+  function forgiveUpstream(host, kind, { at = now(), origin = "outside" } = {}) {
     const name = upstreamNameOf(host);
     const i = UPSTREAM_KINDS.indexOf(kind);
     if (!name || i < 0 || kind === "ok") return false;
     const row = upstreams.get(name)?.get(bucketOf(at));
     if (!row) return false;
-    for (const lane of ["o", "s", "b"]) {
-      if (row[lane]?.[i] > 0) { row[lane][i]--; row[lane][0]++; return true; }
-    }
+    const lane = origin === "synthetic" ? "s" : origin === "outside" ? "o" : "b";
+    if (row[lane]?.[i] > 0) { row[lane][i]--; row[lane][0]++; return true; }
     return false;
+  }
+
+  /** Count one pending-settle outcome (src/pending-settle.js PENDING_OUTCOMES). */
+  function notePendingSettle({ network, facilitator, outcome, at = now(), n = 1 } = {}) {
+    const i = PENDING_OUTCOMES.indexOf(outcome);
+    if (i < 0) return null;
+    const k = `${String(network || "unknown").slice(0, 64)}|${String(facilitator || "unknown").slice(0, 120)}`;
+    let m = pendingSettles.get(k);
+    if (!m) { if (pendingSettles.size >= MAX_PENDING_KEYS) return null; m = new Map(); pendingSettles.set(k, m); }
+    const b = bucketOf(at);
+    let row = m.get(b);
+    if (!row) { row = emptyPending(); m.set(b, row); prune(m, at); }
+    row[i] += Math.max(1, Math.floor(Number(n) || 1));
+    return outcome;
   }
 
   /** Observe one outbound fetch (the egress meter's observer). */
@@ -425,6 +452,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       paths: pack(paths),
       rails: pack(rails),
       buyerRefusals: Object.fromEntries([...buyerRefusals].filter(([b]) => b > floor)),
+      pendingSettles: pack(pendingSettles),
     };
   }
 
@@ -455,7 +483,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const toolsM = {}, upM = {}, lastT = {}, lastU = {}, ansM = {}, lastA = {};
     const refs = [];
     const gasM = {}; // newest reading per (network, facilitator, signer)
-    const repM = {}, brM = {}, pathM = {}, railM = {};
+    const repM = {}, brM = {}, pathM = {}, railM = {}, pendM = {};
     // A row from a replica that predates the free lane has no f; add reads it as zeros.
     const addLanes = (into, key, rows) => {
       const dst = (into[key] ||= {});
@@ -472,6 +500,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyReplay()), row);
       }
       for (const [b, n] of Object.entries(s.buyerRefusals || {})) brM[b] = (brM[b] || 0) + (Number(n) || 0);
+      for (const [k, rows] of Object.entries(s.pendingSettles || {})) {
+        const dst = (pendM[k] ||= {});
+        for (const [b, row] of Object.entries(rows)) add((dst[b] ||= emptyPending()), row);
+      }
       for (const [slug, rows] of Object.entries(s.tools || {})) addLanes(toolsM, slug, rows);
       for (const [name, rows] of Object.entries(s.upstreams || {})) {
         const dst = (upM[name] ||= {});
@@ -497,7 +529,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
     }
     for (const k of Object.keys(lastA)) lastA[k] = lastA[k].sort((a, b) => a.at - b.at).slice(-LAST_ANSWERS_PER_SLUG);
-    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM, rails: railM };
+    return { tools: toolsM, upstreams: upM, answers: ansM, lastAnswer: lastA, lastToolError: lastT, lastUpstream: lastU, refusals: refs.sort((a, b) => a.at - b.at), gas: Object.values(gasM), replays: repM, buyerRefusals: brM, paths: pathM, rails: railM, pendingSettles: pendM };
   }
 
   const sumWindow = (rows, lanes, size, sinceBucket) => {
@@ -618,6 +650,18 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       for (const k of REPLAY_KINDS) { replayTotals.hour[k] += named(REPLAY_KINDS, h)[k]; replayTotals.day[k] += named(REPLAY_KINDS, d)[k]; }
     }
     replayRows.sort((a, b) => (b.day.implicit + b.day.keyed) - (a.day.implicit + a.day.keyed) || a.slug.localeCompare(b.slug));
+    // Pending settles read on chain, by network and facilitator (detail only).
+    const pendingRows = [];
+    const pendingTotals = { hour: named(PENDING_OUTCOMES, emptyPending()), day: named(PENDING_OUTCOMES, emptyPending()) };
+    for (const [k, rows] of Object.entries(m.pendingSettles || {})) {
+      const h = emptyPending(), d = emptyPending();
+      for (const [b, row] of Object.entries(rows)) { if (Number(b) > hourFloor) add(h, row); if (Number(b) > dayFloor) add(d, row); }
+      if (!d.some(Boolean)) continue;
+      const cut = k.indexOf("|");
+      pendingRows.push({ network: k.slice(0, cut), facilitator: k.slice(cut + 1), hour: named(PENDING_OUTCOMES, h), day: named(PENDING_OUTCOMES, d) });
+      PENDING_OUTCOMES.forEach((o, i) => { pendingTotals.hour[o] += h[i]; pendingTotals.day[o] += d[i]; });
+    }
+    pendingRows.sort((a, b) => a.network.localeCompare(b.network) || a.facilitator.localeCompare(b.facilitator));
     // Catalog outcomes by arrival path (detail only, never a word).
     const laneRows = (src) => {
       const out = {};
@@ -643,6 +687,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
       replays: replayRows, replayTotals, byPath, byRail,
+      pendingSettles: { rows: pendingRows, totals: pendingTotals },
       thresholds: th, tools: toolRows, upstreams: upRows, answers: ansRows,
       answerTotals: Object.fromEntries(Object.entries(totals).map(([w, v]) => [w, { outside: named(ANSWER_CLASSES, v.o), synthetic: named(ANSWER_CLASSES, v.s) }])),
       facilitatorRefusals: recent.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
@@ -729,9 +774,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, forgiveUpstream, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
+    id, noteTool, noteAnswer, noteToolMessage, noteUpstream, forgiveUpstream, notePendingSettle, observeFetch, noteFacilitatorRefusal, noteRelayerGas, noteReplay, noteBuyerRefusal, registerUpstreamHost, upstreamNameOf,
     snapshot, publish, refreshRemote, merged, evaluate, status, report, start, stop,
-    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
+    _reset() { tools.clear(); upstreams.clear(); answers.clear(); lastAnswer.clear(); lastToolError.clear(); lastUpstream.clear(); refusals.length = 0; replays.clear(); paths.clear(); rails.clear(); buyerRefusals.clear(); pendingSettles.clear(); relayerGas = []; remote = { at: 0, snapshots: [], ok: false, merged: null }; cached = null; },
   };
 }
 
