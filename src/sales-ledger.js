@@ -794,9 +794,23 @@ const qExtBuyersBySlug = db.prepare(`
   FROM sales
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY slug ORDER BY buyers DESC, sales DESC LIMIT ?`);
+// Money is added across pages as integer nano-dollars (each row's price rounded
+// to 1e-9 USD, exact for any price the ledger records): a float sum's value
+// depends on the order its terms are added in, so per-page float sums added in
+// JS land a different last bit than one pass would, and a total sitting on a
+// rounding boundary moved by $0.0001. Integers add exactly in any order.
+const NANO_PER_USD = 1e9;
 const qTotalsPage = db.prepare(`
-  SELECT internal, rail, COUNT(*) AS n, SUM(price_usd) AS usd
+  SELECT internal, rail, COUNT(*) AS n, SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano
   ${WINDOW_PAGE} GROUP BY internal, rail`);
+// Exact nano-dollars to dollars at 4 decimals, half up, in integers (no float
+// rounding of the total itself). Exact while |nano| < 2^53 ($9M).
+function nanoToUsd4(nano) {
+  const unit = NANO_PER_USD / 1e4;
+  let q = Math.floor(nano / unit);
+  if ((nano - q * unit) * 2 >= unit) q += 1;
+  return q / 1e4;
+}
 const qFirstTs = db.prepare("SELECT MIN(ts) AS ts FROM sales");
 // Per-slug external paid aggregation over a half-open window [since, until) —
 // the bestsellers tool's data feed. COUNT(DISTINCT payer) skips NULLs, so
@@ -1418,12 +1432,14 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
     for (const r of qTotalsPage.all(a, b, since)) {
       const key = `${r.internal}\u0000${r.rail}`;
       const g = groups.get(key);
-      if (g) { g.n += r.n; g.usd += r.usd; } else groups.set(key, { internal: r.internal, rail: r.rail, n: r.n, usd: r.usd });
+      const nano = Number(r.nano) || 0;
+      if (g) { g.n += r.n; g.nano += nano; } else groups.set(key, { internal: r.internal, rail: r.rail, n: r.n, nano });
     }
     for (const p of qExtDistinctPayersPage.all(a, b, since)) extPayers.add(p);
     for (const s of qExtDistinctSlugsPage.all(a, b, since)) extSlugs.add(s);
   });
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
+  const nanoBySide = { external: 0, internal: 0 };
   const ordered = [...groups.values()].sort((x, y) => groupOrder(x.internal, y.internal) || groupOrder(x.rail, y.rail));
   for (const r of ordered) {
     const side = r.internal ? "internal" : "external";
@@ -1435,11 +1451,11 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
     // it — dropping a rail from the constant left this total still counting it.
     const paid = isPaidRail(r.rail);
     totals[side].sales += r.n;
-    if (paid) totals[side].revenueUsd += r.usd;
+    if (paid) nanoBySide[side] += r.nano;
     totals.byRail[`${side}:${r.rail}`] = r.n;
   }
-  totals.external.revenueUsd = +totals.external.revenueUsd.toFixed(4);
-  totals.internal.revenueUsd = +totals.internal.revenueUsd.toFixed(4);
+  totals.external.revenueUsd = nanoToUsd4(nanoBySide.external);
+  totals.internal.revenueUsd = nanoToUsd4(nanoBySide.internal);
   const recordingSince = qFirstTs.get()?.ts ?? null;
   // Counts, never rosters or rankings: enough to show the market is real
   // without naming a single buyer or ranking a single tool.
