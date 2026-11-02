@@ -1460,6 +1460,8 @@ jobs:
           t node scripts/test-hangup-forgiveness-redis.js
           # First-call allowance: a new wallet's first eligible call is served and its settle skipped, inside the per-wallet, per-address and daily caps claimed on REAL redis; nothing booked as a sale, debt or breaker outcome (stub facilitator, offline; records on this lane's Postgres).
           t node scripts/test-first-call-allowance.js
+          # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
+          t node scripts/test-first-call-allowance-hook.js
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js

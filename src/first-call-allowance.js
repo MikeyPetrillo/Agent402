@@ -56,7 +56,7 @@ import { isLongRunningSlug } from "./composite-spend-guard.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { wantsAsync, LOOPBACK_HEADER } from "./async-jobs.js";
 import { isGatewayBatchedRequest } from "./gateway-wire.js";
-import { payerFromRequest, paymentHeaderOf, paymentSchemeOf } from "./payer.js";
+import { payerFromRequest, paymentHeaderOf, paymentSchemeOf, paymentNonceIdentityOf } from "./payer.js";
 import { coverTermsOf, readTokenBalance } from "./inflight-cover.js";
 import { OUR_EVM_WALLETS } from "./revenue-live.js";
 import { getSharedRedisClient } from "./shared-limit.js";
@@ -203,6 +203,31 @@ function noteLifecycle(what, now) {
   lifecycleToday[what]++;
 }
 
+// Claimed grants by the payment that carries them: network, signed payer and
+// EIP-3009 nonce, the identity the settle hook can read from the payment
+// payload it is handed. The hook decides from this, not from finding the
+// request, so a vendor change to how the request reaches hooks can never
+// settle a call whose answer already says nothing was charged. One process
+// claims and settles one request, so the map is this process's own; an entry
+// leaves when its response ends, and a stale one (a response that never
+// ended) after CLAIM_TTL_MS.
+const CLAIM_TTL_MS = 30 * 60_000;
+const claimsByPayment = new Map();
+/** `network|payer|nonce`, lowercased, or null when the parts are not there. */
+export function allowancePaymentKey(network, from, nonce) {
+  const n = String(network || "").toLowerCase(), f = String(from || "").toLowerCase(), x = String(nonce || "").toLowerCase();
+  if (!n.startsWith("eip155:") || !/^0x[0-9a-f]{40}$/.test(f) || !/^0x[0-9a-f]{1,128}$/.test(x)) return null;
+  return `${n}|${f}|${x}`;
+}
+function paymentKeyOfCtx(ctx) {
+  const p = ctx?.paymentPayload;
+  const auth = p?.payload?.authorization;
+  return allowancePaymentKey(p?.accepted?.network ?? p?.network ?? ctx?.requirements?.network, auth?.from, auth?.nonce);
+}
+function pruneClaims(now) {
+  for (const [k, a] of claimsByPayment) if (now - a.claimedAt > CLAIM_TTL_MS) claimsByPayment.delete(k);
+}
+
 function store(req, a) {
   Object.defineProperty(req, STATE, { value: a, writable: true, configurable: true, enumerable: false });
   return a;
@@ -253,6 +278,11 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
   let balance = null;
   try { balance = await readBalance({ network: terms.network, asset: terms.asset, payer }); } catch { balance = null; }
   if (typeof balance !== "bigint" || balance < terms.atomic) return deny("balance");
+  // The settle hook finds the grant by this identity: a payment without one
+  // is never granted.
+  const ident = paymentNonceIdentityOf(req);
+  const paymentKey = ident && ident.from === payer ? allowancePaymentKey(ident.network, ident.from, ident.nonce) : null;
+  if (!paymentKey) return deny("rail");
   const micro = listMicroOf(def);
   const keys = keysFor(payer, ip, now);
   const token = `claim:${createHash("sha256").update(`${payer}:${now}:${Math.random()}`).digest("hex").slice(0, 16)}`;
@@ -260,8 +290,10 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
   if (!r.ok) { lastStoreError = r.error; return deny("store unavailable"); }
   lastStoreError = null;
   if (Number(r.value?.[0]) !== 1) return deny(String(r.value?.[1] || "refused"));
-  Object.assign(a, { granted: true, state: "claimed", payer, micro, keys, token, network });
+  Object.assign(a, { granted: true, state: "claimed", payer, micro, keys, token, network, res, paymentKey, claimedAt: now });
   store(req, a);
+  pruneClaims(now);
+  claimsByPayment.set(paymentKey, a);
   noteLifecycle("claimed", now);
   // No receipt on a served grant: nothing settled. Dropped at the source so
   // no reader of the header can mistake the call for a settlement.
@@ -284,21 +316,27 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
 
 /**
  * The x402 onBeforeSettle decision: the protocol's `skip` with an unsettled
- * result for a request holding a claimed grant whose answer is a 200, else
- * undefined (settle as usual). Same request path as the client-gone hook
- * (transportContext.request.adapter.req); if a vendor bump moves it, the
- * request is settled and the grant given back: never a silent free run.
+ * result for a payment holding a claimed grant whose answer is a 200, else
+ * undefined (settle as usual). The grant is found by the payment's own
+ * identity (network, signed payer, nonce) from the payload the hook is
+ * handed; only when the payload has no readable identity is the request
+ * looked up (transportContext.request.adapter.req), and a request found
+ * holding a claimed grant is then skipped too. Either way a call whose answer
+ * says nothing was charged is never settled.
  */
 export function allowanceSettleDecision(ctx) {
-  const req = ctx?.transportContext?.request?.adapter?.req;
-  const a = allowanceOf(req);
+  const key = paymentKeyOfCtx(ctx);
+  let a = key ? claimsByPayment.get(key) || null : null;
+  if (!a && !key) a = allowanceOf(ctx?.transportContext?.request?.adapter?.req);
   if (!a || a.state !== "claimed") return undefined;
-  const res = req.res;
+  // A different request carrying the same signed payment (refused upstream by
+  // the idempotency and replay claims, so not expected here) settles as usual:
+  // the grant belongs to the request that claimed it.
+  const seen = ctx?.transportContext?.request?.adapter?.req;
+  if (seen && typeof seen === "object" && allowanceOf(seen) !== a) return undefined;
+  const res = a.res;
   if (!res || res.statusCode !== 200) return undefined;
-  const network = String(ctx?.requirements?.network || "");
-  if (ctx?.requirements?.scheme !== "exact" || !network.startsWith("eip155:")) return undefined;
-  const from = ctx?.paymentPayload?.payload?.authorization?.from;
-  if (typeof from !== "string" || from.toLowerCase() !== a.payer) return undefined;
+  const network = String(ctx?.requirements?.network || a.network || "");
   a.state = "served";
   try { res.setHeader(ALLOWANCE_HEADER, ALLOWANCE_HEADER_VALUE); } catch { /* headers already out: the body field still says so */ }
   return { skip: true, result: { success: true, transaction: "", network, payer: a.payer } };
@@ -323,6 +361,8 @@ export async function finishFirstCallAllowance(req, { now = Date.now() } = {}) {
   const a = allowanceOf(req);
   if (!a || !a.granted || a.done) return false;
   a.done = true;
+  if (a.paymentKey && claimsByPayment.get(a.paymentKey) === a) claimsByPayment.delete(a.paymentKey);
+  a.res = null;
   const k = a.keys;
   if (a.state === "served") {
     await evalBounded(COMMIT, [k.wallet], [a.token, `granted:${now}`]);
@@ -373,5 +413,7 @@ export async function firstCallAllowanceStatus({ now = Date.now() } = {}) {
   return out;
 }
 
+/** Test seam: how many claimed payments this process holds. */
+export function _allowanceClaimsHeld() { return claimsByPayment.size; }
 /** Test seam. */
-export function _resetFirstCallAllowance() { lastStoreError = null; deniedToday = { day: "", byReason: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
+export function _resetFirstCallAllowance() { claimsByPayment.clear(); lastStoreError = null; deniedToday = { day: "", byReason: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
