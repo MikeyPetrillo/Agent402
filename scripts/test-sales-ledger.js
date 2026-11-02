@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { childJson } from "./lib/child-json.js";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-sales-"));
 process.env.SALES_LEDGER_DB = join(dir, "test-sales.db");
@@ -405,10 +406,10 @@ rmSync(dir, { recursive: true, force: true });
     const sub = mkdtempSync(join(tmpdir(), "a402-sales-pages-"));
     let got = null;
     try {
-      got = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", child], {
+      got = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], {
         env: { ...process.env, SALES_LEDGER_DB: join(sub, "pages.db"), STATE_DATABASE_URL: "", REDIS_URL: "", PRICES: JSON.stringify(prices) },
         encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
-      }).trim().split("\n").pop());
+      }));
     } catch (e) { ok(false, `page-walk child ran (${String(e?.message || e).slice(0, 120)})`); } finally { rmSync(sub, { recursive: true, force: true }); }
     if (!got) continue;
     const want = { sales: 3, usd: 0.1301, buyers: 3, tools: 3 };

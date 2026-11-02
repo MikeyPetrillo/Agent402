@@ -135,9 +135,13 @@ ok(offences.length === 0, `no count-named field is the length of a LIMITed query
 
 // The two that were wrong must stay right.
 const ledger = await readFile("src/sales-ledger.js", "utf8");
-for (const q of ["qExtDistinctSlugs", "qExtDistinctPayers"]) {
-  const decl = ledger.slice(ledger.indexOf(`const ${q} = `), ledger.indexOf(`const ${q} = `) + 260);
-  ok(/COUNT\(DISTINCT/i.test(decl) && !/\bLIMIT\b/i.test(decl), `${q} is an uncapped COUNT(DISTINCT ...)`);
+// They read the window one page of row ids at a time, so each is a paged
+// SELECT DISTINCT with no LIMIT, gathered into a set and counted once.
+for (const [q, set, field] of [["qExtDistinctSlugsPage", "extSlugs", "distinctToolsSoldExternal"], ["qExtDistinctPayersPage", "extPayers", "distinctExternalBuyers"]]) {
+  const at = ledger.indexOf(`const ${q} = `);
+  const decl = at < 0 ? "" : ledger.slice(at, ledger.indexOf(";", at));
+  ok(/SELECT DISTINCT/i.test(decl) && !/\bLIMIT\b/i.test(decl), `${q} is an uncapped paged SELECT DISTINCT`);
+  ok(new RegExp(`${q}\\.all\\([^)]*\\)\\) ${set}\\.add`).test(ledger) && new RegExp(`${field} = ${set}\\.size`).test(ledger), `...every page lands in ${set}, and ${field} is its size`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
