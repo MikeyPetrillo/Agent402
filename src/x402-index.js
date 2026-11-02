@@ -6897,7 +6897,12 @@ const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
 // Rows per statement and bytes per statement: an origin's entry can run to
 // hundreds of KB (tool arrays), so batches are cut by size as well as count.
 const PG_ROWS_PER_BATCH = 40;
-const PG_BYTES_PER_BATCH = 4 * 1_048_576;
+const PG_BYTES_PER_BATCH = 1_048_576;
+// A body this large travels alone, as a plain jsonb parameter. Inside a jsonb[]
+// the driver escapes every quote of every element into an array literal in one
+// synchronous pass: measured 0.85-1.2 s for one 82 MB entry, against 80 ms for
+// the same text as a scalar, and the stored row is the same either way.
+const PG_SINGLE_ROW_BYTES = 1_048_576;
 // origin -> hash of the line last written (null: held, hash unknown). The hash
 // lets an unchanged origin skip its write; the key set is what a persist
 // deletes against.
@@ -7004,6 +7009,11 @@ function* recordBatches(entries, bodyOf) {
   for (let i = 0; i < entries.length; i++) {
     const body = bodyOf(i);
     if (body === null) continue;
+    if (body.length >= PG_SINGLE_ROW_BYTES) {
+      if (ids.length) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
+      yield [[entries[i][0]], [body]];
+      continue;
+    }
     ids.push(entries[i][0]); bodies.push(body); bytes += body.length;
     if (ids.length >= PG_ROWS_PER_BATCH || bytes >= PG_BYTES_PER_BATCH) { yield [ids, bodies]; ids = []; bodies = []; bytes = 0; }
   }
@@ -7033,13 +7043,23 @@ async function persistIndexCacheToStateDb(entries, lines) {
       // copy of an origin than the row (the other crawled it since), and an
       // unconditional upsert wrote that copy back. A row is replaced only by
       // an entry fetched at least as recently as the one it holds.
-      await stateQuery(
-        `INSERT INTO ${recordsTable()} AS r (collection, id, body)
-         SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
-         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-         WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
-        [INDEX_RECORDS, ids, bodies],
-      );
+      if (ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES) {
+        // The same upsert and the same newer-wins rule, one row as a scalar.
+        await stateQuery(
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+          [INDEX_RECORDS, ids[0], bodies[0]],
+        );
+      } else {
+        await stateQuery(
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body)
+           SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
+           ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+          [INDEX_RECORDS, ids, bodies],
+        );
+      }
       for (const id of ids) pgOriginHashes.set(id, changed.get(id));
       written += ids.length;
       await new Promise((r) => setImmediate(r));
@@ -7098,11 +7118,12 @@ async function importIndexCacheFile() {
   let rows = 0, bytes = 0;
   const bodyOf = (i) => { const b = JSON.stringify(entries[i][1]); bytes += b.length; return b; };
   for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
-    await stateQuery(
-      `INSERT INTO ${recordsTable()} (collection, id, body)
+    await stateQuery(ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES
+      ? `INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`
+      : `INSERT INTO ${recordsTable()} (collection, id, body)
        SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
-      [INDEX_RECORDS, ids, bodies],
+    ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? [INDEX_RECORDS, ids[0], bodies[0]] : [INDEX_RECORDS, ids, bodies],
     );
     rows += ids.length;
     await new Promise((r) => setImmediate(r));
