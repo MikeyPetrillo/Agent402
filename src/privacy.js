@@ -12,7 +12,8 @@ import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followu
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
-import { SHARE_TTL_DAYS } from "./answer-share.js";
+import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled } from "./answer-share.js";
+import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -22,6 +23,10 @@ export function privacyPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
+  // Shared answers and the first-call allowance each ship behind a switch:
+  // their lines appear only while the switch is on.
+  const sharesOn = answerShareEnabled();
+  const allowanceOn = firstCallAllowanceEnabled();
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -46,7 +51,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-03.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-02.</p>
 </section>
 
 <section>
@@ -100,14 +105,20 @@ so every claim below is verifiable in code.</p>
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name
     and version, the first word of the User-Agent it sends), or as any other HTTP request;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
-    you write, is kept with that call's transaction id and is never published;</li>
+    you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
+    <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
+    charge, so each wallet gets one free first call) keeps the address of each wallet granted one,
+    without expiry, so the same wallet is never granted twice, and a daily count of grants per client
+    address, kept under a keyed hash of the address (never the address itself) and deleted after two days;</li>` : ""}${sharesOn ? `
     <li>a call to <code>/api/answer</code> (web.answer) made with <code>share=true</code>, and only
     such a call, publishes its question, its answer and the cited sources (URL and snippet) as a page at an
     unguessable address under <code>/answers/</code>, with a preview image. Sharing is off unless the
     caller asks for it, and the page is written only after the call is paid. We keep those fields and
     the dates it was made and expires, never the paying wallet, IP address or any other detail of the
     request. Anyone with the link can read the page; it asks search engines not to index it. It is
-    deleted ${SHARE_TTL_DAYS} days after it was made, and its address then answers that it has expired.</li>
+    deleted ${SHARE_TTL_DAYS} days after it was made, and its address then answers that it has expired
+    for ${TOMBSTONE_DAYS} days, and after that as an unknown address. We may remove a page sooner; its
+    address then answers that it was removed.</li>` : ""}
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
   code) for abuse prevention and debugging. Most rate-limit counters are kept in process memory for up

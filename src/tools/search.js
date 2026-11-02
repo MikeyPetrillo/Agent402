@@ -9,7 +9,9 @@
 // out — the handlers below only differ in path + result shape.
 
 import { markUntrusted } from "./provenance.js";
-import { wantsShare, assertShareAllowed, prepareShare, SHARE_TTL_DAYS } from "../answer-share.js";
+import { wantsShare, reserveShare, prepareShare, answerShareEnabled, SHARE_TTL_DAYS } from "../answer-share.js";
+// The share option is offered only while its switch is on (read at boot, as the catalog is built).
+const SHARE_OFFERED = answerShareEnabled();
 import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
@@ -656,7 +658,7 @@ export const SEARCH_TOOLS = [
     // if `answer` or either pack starts selling in volume.
     price: "$0.08",
     description:
-      `AI-generated answer to a natural-language question, grounded in live web search results with source citations. Returns clean prose plus a structured citations array (URL, snippet, favicon) - backed by an independent search index, not the model's training data. Useful when an agent needs a synthesized answer plus the receipts to verify or follow up. Pass share=true to also get share: { url, cardUrl, expiresAt }, a public page of the question, answer and sources with a link-preview card, kept ${SHARE_TTL_DAYS} days; the page exists only once the call settles, at the same price.`,
+      `AI-generated answer to a natural-language question, grounded in live web search results with source citations. Returns clean prose plus a structured citations array (URL, snippet, favicon) - backed by an independent search index, not the model's training data. Useful when an agent needs a synthesized answer plus the receipts to verify or follow up.${SHARE_OFFERED ? ` Pass share=true to also get share: { url, cardUrl, expiresAt }, a public page of the question, answer and sources with a link-preview card, kept ${SHARE_TTL_DAYS} days; the page exists only once the call settles, at the same price.` : ""}`,
     tags: ["search", "answer", "ai", "rag", "citations", "research", "fresh-data"],
     discovery: {
       input: { q: "what is the x402 payment protocol?" },
@@ -666,7 +668,7 @@ export const SEARCH_TOOLS = [
           country: { type: "string", description: "Optional 2-letter country code (default us)" },
           language: { type: "string", description: "Optional 2-letter language code (default en)" },
           max_tokens: { type: "integer", description: "Optional cap on the generated answer length in tokens (default 1024, min 64, max 4096). Lower for TL;DR; higher for research questions." },
-          share: { type: "boolean", description: `Optional (default false). true adds share: { url, cardUrl, expiresAt }: a public page on this origin with the question, the answer and its sources, plus a 1200x630 card image, kept ${SHARE_TTL_DAYS} days. Created only after the call settles; the price is the same.` },
+          ...(SHARE_OFFERED ? { share: { type: "boolean", description: `Optional (default false). true adds share: { url, cardUrl, expiresAt }: a public page on this origin with the question, the answer and its sources, plus a 1200x630 card image, kept ${SHARE_TTL_DAYS} days. Created only after the call settles; the price is the same.` } } : {}),
         },
         required: ["q"],
       },
@@ -689,11 +691,12 @@ export const SEARCH_TOOLS = [
     },
     handler: async (i, req) => {
       const q = takeQuery(i.q, { wordLimit: false });
-      // The share opt-in is checked before any paid work: a payer past its
-      // share budget is refused 429 (never charged) rather than served an
-      // answer whose link could not be kept.
-      const share = wantsShare(i.share);
-      if (share) assertShareAllowed(req);
+      // The share opt-in (only while ANSWER_SHARE is on; otherwise ignored) is
+      // claimed before any paid work: a payer past its share budget is refused
+      // 429 (never charged) rather than served an answer whose link could not
+      // be kept, and the claim is given back unless the call settles a 200.
+      const share = wantsShare(i.share) && answerShareEnabled();
+      if (share) reserveShare(req);
       const country = typeof i.country === "string" && /^[A-Za-z]{2}$/.test(i.country) ? i.country.toLowerCase() : undefined;
       const language = typeof i.language === "string" && /^[A-Za-z]{2}$/.test(i.language) ? i.language.toLowerCase() : undefined;
       // Clamp caller-supplied max_tokens into a sane range. 64 floor prevents
@@ -708,7 +711,8 @@ export const SEARCH_TOOLS = [
       const { answer, citations } = parseAnswer(raw);
       if (!answer) throw bad("Web answer upstream returned no content", 502);
       const out = { query: q, answer, citations, citationCount: citations.length };
-      // The link is reserved here and written only on a settled 200 (src/answer-share.js).
+      // The link is reserved here and written only on a settled 200 (src/answer-share.js);
+      // null when no link could be kept (no outcome to watch, an allowance grant).
       if (share) out.share = prepareShare(req, { query: q, answer, citations });
       return markUntrusted(out);
     },

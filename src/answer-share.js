@@ -1,5 +1,9 @@
 // Shared answer pages: the opt-in public link for a web.answer call.
 //
+// Off unless ANSWER_SHARE is exactly "on" (answerShareEnabled): off, share=true
+// is ignored and no surface offers it, while pages already made keep serving
+// until they expire.
+//
 // A caller of GET /api/answer that passes share=true gets, beside the answer,
 // `share: { url, cardUrl, expiresAt }`: a page on our origin that shows the
 // question, the answer and its cited sources, with a 1200x630 card for link
@@ -7,9 +11,9 @@
 //
 // SETTLEMENT ORDERING. The handler only reserves the link: an unguessable id
 // and the record to store. Nothing is written until the paid response's
-// settlement outcome is known (req.__onSettled, resolved by server.js through
-// src/hangup-settlement.js onSettleOutcome), and then only when the FINAL
-// status is 200. A handler success whose settlement fails ends 402, a 4xx or
+// outcome is known (src/hangup-settlement.js onResponseEnd on req.res), and
+// then only when the FINAL status is 200 and the call settled (not a charge
+// forgiven for a buyer who left, not a first-call allowance grant). A handler success whose settlement fails ends 402, a 4xx or
 // 5xx is never settled, and in each case no page exists. Between the answer
 // and the write the link answers 404, the same as an id that never existed.
 //
@@ -19,7 +23,9 @@
 // ANSWER_SHARE_DIR (default /data/answer-shares, or /tmp/answer-shares with
 // no volume). At expiry the page answers 410; the hourly sweep (under a lease)
 // replaces an expired record with a tombstone that holds only its expiry, so
-// the 410 outlives the content, and drops the tombstone TOMBSTONE_MS later.
+// the 410 outlives the content, and drops the tombstone TOMBSTONE_MS later;
+// from then the address reads as unknown (404), as /privacy says. The
+// operator's takedown (removeShare) writes a tombstone at once: 410 "removed".
 //
 // WHAT A PAGE SHOWS. The answer text passes through sanitizeReportProse
 // (src/report-grounding.js), the filter every report product's model prose
@@ -35,8 +41,12 @@ import { sanitizeReportProse } from "./report-grounding.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, records, leased } from "./state-db.js";
 import { payerFromRequest } from "./payer.js";
 import { createLimiter } from "./rate-limit.js";
+import { onResponseEnd } from "./hangup-settlement.js";
+import { allowanceOf } from "./first-call-allowance.js";
 
 const DAY_MS = 86_400_000;
+/** The switch: shares are created only while ANSWER_SHARE is exactly "on" (read per call). */
+export function answerShareEnabled() { return String(process.env.ANSWER_SHARE ?? "").trim() === "on"; }
 const intEnv = (name, dflt, lo, hi) => {
   const n = Number.parseInt(String(process.env[name] ?? ""), 10);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
@@ -45,7 +55,8 @@ const intEnv = (name, dflt, lo, hi) => {
 export const SHARE_TTL_DAYS = intEnv("ANSWER_SHARE_TTL_DAYS", 30, 1, 365);
 export const SHARE_TTL_MS = SHARE_TTL_DAYS * DAY_MS;
 /** How long an expired share keeps answering 410 before it reads as unknown. */
-export const TOMBSTONE_MS = 90 * DAY_MS;
+export const TOMBSTONE_DAYS = 90;
+export const TOMBSTONE_MS = TOMBSTONE_DAYS * DAY_MS;
 /** Shares one payer (signed wallet, Tempo sender, credits key, else IP) may create per hour. */
 export const SHARES_PER_HOUR = intEnv("ANSWER_SHARE_PER_HOUR", 60, 1, 10_000);
 export const COLLECTION = "answer-shares";
@@ -150,13 +161,34 @@ export function shareStore() { return (store ??= stateDbEnabled() ? createPgStor
 export function __setShareStore(s) { store = s; }
 export const __createFileStore = createFileStore;
 
-/** Read one share: { status: "ok", rec } | { status: "gone", expiresAt } | { status: "unknown" }. */
+/** Read one share: { status: "ok", rec } | { status: "gone" | "removed", expiresAt } | { status: "unknown" }. */
 export async function readShare(id, now = Date.now()) {
   if (!SHARE_ID_RE.test(String(id || ""))) return { status: "unknown" };
   const rec = await shareStore().get(String(id));
   if (!rec || rec.id !== id) return { status: "unknown" };
+  if (rec.removed) return { status: "removed", expiresAt: rec.expiresAt };
   if (rec.gone || !(rec.expiresAt > now)) return { status: "gone", expiresAt: rec.expiresAt };
   return { status: "ok", rec };
+}
+
+/**
+ * Operator takedown: replace a share with a tombstone that answers 410
+ * "removed" (kept, like an expiry's, until TOMBSTONE_MS past the original
+ * expiry). The note stays in the tombstone; the log line names the id's
+ * first characters only (the id is the page's bearer).
+ * Returns { status: "removed" | "already_removed" | "unknown" }.
+ */
+export async function removeShare(id, note = "", { now = Date.now(), log = console.log } = {}) {
+  const sid = String(id || "");
+  if (!SHARE_ID_RE.test(sid)) return { status: "unknown" };
+  const rec = await shareStore().get(sid);
+  if (!rec || rec.id !== sid) return { status: "unknown" };
+  if (rec.removed) return { status: "already_removed" };
+  const cleanNote = String(note ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 300);
+  await shareStore().put({ v: 1, id: sid, expiresAt: rec.expiresAt, gone: true, removed: true, removedAt: now, note: cleanNote });
+  htmlCache.delete(sid);
+  log(`[answer-share] removed ${sid.slice(0, 6)}... by operator${cleanNote ? `: ${cleanNote}` : ""}`);
+  return { status: "removed" };
 }
 
 // ---- creation (from the answer handler) ------------------------------------
@@ -166,31 +198,54 @@ const shareKeyOf = (req) => payerFromRequest(req)
   || (req?.creditsKeyId ? `credits:${req.creditsKeyId}` : null)
   || `ip:${req?.ip || "?"}`;
 
-/** Before the paid work: a payer over its share budget is refused (a 429 is never charged). */
-export function assertShareAllowed(req) {
-  if (!createLimit.peek(shareKeyOf(req)).limited) return;
-  const e = new Error(`Share limit reached (${SHARES_PER_HOUR} shared answers an hour per payer). Call again without share, or later. Not charged.`);
-  e.statusCode = 429;
-  throw e;
+const RESERVATION = Symbol("a402.answerShare");
+
+/**
+ * Before the paid work: claim one of the payer's shares for this call.
+ * Counted at claim time, so parallel calls cannot overshoot the budget; the
+ * claim is given back when the call does not end in a settled 200. A payer
+ * over its budget is refused 429 (a 429 is never charged). Returns the
+ * reservation, or null when no link can be kept: the switch is off, the
+ * request has no response whose outcome can be watched (a direct in-process
+ * call), or the call is a first-call allowance grant (never settled).
+ */
+export function reserveShare(req, { log = console.warn } = {}) {
+  if (!answerShareEnabled()) return null;
+  if (!req || typeof req !== "object") return null;
+  const res = req.res;
+  if (!res || typeof res.once !== "function") return null;
+  if (allowanceOf(req)?.granted) return null;
+  if (Object.hasOwn(req, RESERVATION)) return req[RESERVATION];
+  const key = shareKeyOf(req);
+  if (createLimit.check(key).limited) {
+    const e = new Error(`Share limit reached (${SHARES_PER_HOUR} shared answers an hour per payer). Call again without share, or later. Not charged.`);
+    e.statusCode = 429;
+    throw e;
+  }
+  const slot = { key, rec: null };
+  const watched = onResponseEnd(req, res, (info) => {
+    const settled = !info?.forgiven && !info?.allowance && res.statusCode === 200;
+    if (!settled || !slot.rec) { createLimit.refund(key); return; }
+    shareStore().put(slot.rec).catch((e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
+  });
+  if (!watched) { createLimit.refund(key); return null; }
+  Object.defineProperty(req, RESERVATION, { value: slot, enumerable: false });
+  return slot;
 }
 
 /**
- * Reserve a share for this answer and arrange its write for a settled 200.
- * Returns { url, cardUrl, expiresAt } for the answer body, or null when the
- * request carries no outcome hook (a direct in-process call): a link that
- * could never be written is never handed out.
+ * Fill this call's reservation with the answer. Returns { url, cardUrl,
+ * expiresAt } for the answer body, or null when the call holds no reservation
+ * (no outcome hook, a grant, the switch off): a link that could never be
+ * written is never handed out.
  */
-export function prepareShare(req, { query, answer, citations }, { now = Date.now(), log = console.warn } = {}) {
-  if (!req || typeof req !== "object") return null;
+export function prepareShare(req, { query, answer, citations }, { now = Date.now() } = {}) {
+  if (!req || typeof req !== "object" || !Object.hasOwn(req, RESERVATION)) return null;
+  const slot = req[RESERVATION];
+  if (slot.rec) return null;
   const id = newShareId();
-  const rec = shareRecord({ id, query, answer, citations, now });
-  const key = shareKeyOf(req);
-  (req.__onSettled ||= []).push((settledOk) => {
-    if (!settledOk) return;
-    createLimit.check(key);
-    shareStore().put(rec).catch((e) => log(`[answer-share] write failed: ${String(e?.message || e).slice(0, 160)}`));
-  });
-  return { url: shareUrlOf(id), cardUrl: cardUrlOf(id), expiresAt: new Date(rec.expiresAt).toISOString() };
+  slot.rec = shareRecord({ id, query, answer, citations, now });
+  return { url: shareUrlOf(id), cardUrl: cardUrlOf(id), expiresAt: new Date(slot.rec.expiresAt).toISOString() };
 }
 
 // ---- page ------------------------------------------------------------------
@@ -251,6 +306,7 @@ const PAGE_CSS = `
 .as-wrap{max-width:1180px;margin:0 auto;padding:44px 30px 56px}
 .as-crumb{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 18px}
 .as-crumb a{color:var(--muted);text-decoration:none}
+.as-asked{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 8px}
 .as-q{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:0;max-width:76ch;text-wrap:balance;overflow-wrap:break-word}
 .as-note{font-size:var(--fs-md);color:var(--muted);margin:14px 0 0;max-width:76ch}
 .as-answer{max-width:76ch;margin:30px 0 0;font-size:var(--fs-lg);line-height:1.6;color:var(--ink);overflow-wrap:break-word}
@@ -283,6 +339,7 @@ export function answerSharePage(rec, { baseUrl: origin = baseUrl, price = "" } =
   const body = `
 <div class="as-wrap">
   <nav class="as-crumb" aria-label="Breadcrumb"><a href="/">agent402</a> / <a href="/tools/answer">web.answer</a> / shared answer</nav>
+  <p class="as-asked">Asked by the caller</p>
   <h1 class="as-q">${esc(rec.question)}</h1>
   <p class="as-note">A model-backed answer from web.answer, grounded in a live web search and generated for the caller who shared it on ${esc(day(rec.createdAt))}. This page is kept until ${esc(day(rec.expiresAt))}.</p>
   <div class="as-answer">${renderAnswerHtml(rec.answer, cites)}</div>
@@ -297,18 +354,19 @@ export function answerSharePage(rec, { baseUrl: origin = baseUrl, price = "" } =
   });
 }
 
-/** The 410 page for an expired share. */
-export function answerShareGonePage({ baseUrl: origin = baseUrl } = {}) {
+/** The 410 page for an expired or removed share. */
+export function answerShareGonePage({ baseUrl: origin = baseUrl, removed = false } = {}) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">410</div>
-      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">This shared answer has expired</h1>
-      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">Shared answers are kept for ${SHARE_TTL_DAYS} days.</p>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${removed ? "This shared answer was removed" : "This shared answer has expired"}</h1>
+      ${removed ? "" : `<p style="color:var(--muted);margin:0 0 28px;font-weight:300;">Shared answers are kept for ${SHARE_TTL_DAYS} days.</p>`}
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
         <a class="btn btn-secondary" href="/tools/answer">web.answer</a>
         <a class="btn btn-secondary" href="/">Home</a>
       </div>
     </div>${ledgerFooterCompact()}`;
-  return ledgerShell({ title: "Shared answer expired - Agent402", description: "Shared answer expired", canonical: `${origin}/`, baseUrl: origin, activePath: "__none__", robots: "noindex, nofollow", body });
+  const what = removed ? "removed" : "expired";
+  return ledgerShell({ title: `Shared answer ${what} - Agent402`, description: `Shared answer ${what}`, canonical: `${origin}/`, baseUrl: origin, activePath: "__none__", robots: "noindex, nofollow", body });
 }
 
 // ---- card ------------------------------------------------------------------
@@ -348,6 +406,7 @@ export function answerShareCardSvg(rec, { BRAND, BRAND_DEFS = "", BRAND_FONT_STY
   <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">web.answer · ${x(day(rec.createdAt))}</text>
+  <text x="72" y="178" font-size="22" font-family=${mono} fill="${BRAND.faint}">Asked by the caller</text>
   ${lines}
   <line x1="72" y1="520" x2="1128" y2="520" stroke="${BRAND.hairline}" stroke-width="2"/>
   <text x="72" y="566" font-size="24" font-family=${mono} fill="${BRAND.accent}">${n} cited source${n === 1 ? "" : "s"}</text>
@@ -356,14 +415,29 @@ export function answerShareCardSvg(rec, { BRAND, BRAND_DEFS = "", BRAND_FONT_STY
 }
 
 // ---- routes ----------------------------------------------------------------
-const wantsJson = (req) => { const a = String(req.headers?.accept || "").toLowerCase(); return a.includes("application/json") && !a.includes("text/html"); };
+// Rendered pages by id. A record never changes once written, so a hostile
+// answer is sanitized once, not on every view. Bounded (oldest dropped); the
+// store is still read first on every view, so an expiry or a takedown is seen
+// at once, and a takedown also drops the entry here.
+const HTML_CACHE_MAX = 128;
+const htmlCache = new Map();
+function cachedPage(rec, render) {
+  let html = htmlCache.get(rec.id);
+  if (html !== undefined) { htmlCache.delete(rec.id); htmlCache.set(rec.id, html); return html; }
+  html = render();
+  htmlCache.set(rec.id, html);
+  if (htmlCache.size > HTML_CACHE_MAX) htmlCache.delete(htmlCache.keys().next().value);
+  return html;
+}
+/** Tests: the rendered-page cache. */
+export const __htmlCache = htmlCache;
 const secondsLeft = (rec, now) => Math.max(1, Math.floor((rec.expiresAt - now) / 1000));
 // Public, immutable content; the cache lifetime never outlasts the share.
 const cacheFor = (rec, now) => `public, max-age=${Math.min(86_400, secondsLeft(rec, now))}, immutable`;
 const NOINDEX = "noindex, nofollow";
 
 /**
- * Mount GET /answers/:id (page, or JSON for a client that asks for JSON),
+ * Mount GET /answers/:id (the page), /answers/:id.json (the record),
  * /answers/:id/card.png and /answers/:id/card.svg, and the hourly sweep.
  * deps: { baseUrl, notFoundPage(res, opts), rasterizeSvg(svg, size), brand: { BRAND, BRAND_DEFS, BRAND_FONT_STYLE }, priceOf() }
  */
@@ -381,29 +455,33 @@ export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasteriz
     res.set("Retry-After", "60").set("Cache-Control", "no-store").status(429).type("text/plain").send("Too many requests, please slow down.");
     return true;
   };
-  const lookup = async (req, res, kind) => {
+  const lookup = async (req, res, kind, id = String(req.params.id || "")) => {
     const t = now();
     let r;
-    try { r = await readShare(String(req.params.id || ""), t); }
+    try { r = await readShare(id, t); }
     catch { res.set("Cache-Control", "no-store").set("Retry-After", "30").status(503).type("text/plain").send("Shared answers are briefly unavailable."); return null; }
     res.set("X-Robots-Tag", NOINDEX);
     if (r.status === "ok") return { rec: r.rec, t };
     res.set("Cache-Control", "no-store");
-    const gone = r.status === "gone";
-    if (kind === "json") res.status(gone ? 410 : 404).json({ status: gone ? "expired" : "not_found" });
-    else if (kind === "card") res.status(gone ? 410 : 404).type("text/plain").send(gone ? "Expired" : "Not found");
-    else if (gone) res.status(410).type("html").send(answerShareGonePage({ baseUrl: origin }));
+    const removed = r.status === "removed";
+    const gone = removed || r.status === "gone";
+    if (kind === "json") res.status(gone ? 410 : 404).json({ status: removed ? "removed" : gone ? "expired" : "not_found" });
+    else if (kind === "card") res.status(gone ? 410 : 404).type("text/plain").send(removed ? "Removed" : gone ? "Expired" : "Not found");
+    else if (gone) res.status(410).type("html").send(answerShareGonePage({ baseUrl: origin, removed }));
     else notFoundPage(res, { what: "Shared answer", href: "/tools/answer", label: "web.answer" });
     return null;
   };
 
+  // One route for both forms: the JSON record lives at its own address
+  // (/answers/<id>.json), so a cache never has to choose by Accept.
   app.get("/answers/:id", async (req, res) => {
     if (limited(pageLimit, req, res)) return;
-    const json = wantsJson(req);
-    const hit = await lookup(req, res, json ? "json" : "page");
+    const raw = String(req.params.id || "");
+    const json = raw.endsWith(".json");
+    const hit = await lookup(req, res, json ? "json" : "page", json ? raw.slice(0, -5) : raw);
     if (!hit) return;
     const { rec, t } = hit;
-    res.set("Cache-Control", cacheFor(rec, t)).set("Vary", "Accept");
+    res.set("Cache-Control", cacheFor(rec, t));
     if (json) {
       return res.json({
         question: rec.question, answer: rec.answer, citations: rec.citations,
@@ -411,7 +489,7 @@ export function mountAnswerShares(app, { baseUrl: origin, notFoundPage, rasteriz
         modelBacked: true, tool: "web.answer", url: `${origin}/answers/${rec.id}`,
       });
     }
-    res.type("html").send(answerSharePage(rec, { baseUrl: origin, price: priceOf() }));
+    res.type("html").send(cachedPage(rec, () => answerSharePage(rec, { baseUrl: origin, price: priceOf() })));
   });
   app.get("/answers/:id/card.svg", async (req, res) => {
     if (limited(cardLimit, req, res)) return;
