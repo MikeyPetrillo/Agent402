@@ -175,6 +175,11 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   ok(threw instanceof SyntaxError, "a truncated large text throws a SyntaxError, as JSON.parse does");
   const dup = `{"tools": [${'{"a": 1}, '.repeat(120_000)}{"a": 2}], "tools": [3]}`;
   ok(JSON.stringify(await S.parseJsonSliced(dup, tick)) === JSON.stringify(JSON.parse(dup)), "a text with a repeated key is parsed by JSON.parse whole (last key wins)");
+  // An array then a scalar under one key: the array put back after the
+  // skeleton parse would overwrite the scalar that JSON.parse keeps.
+  const dupScalar = `{"tools": [${"1, ".repeat(600_000)}1], "tools": 5}`;
+  const dupScalarParsed = await S.parseJsonSliced(dupScalar, tick);
+  ok(dupScalar.length >= 1_048_576 && dupScalarParsed.tools === 5 && JSON.stringify(dupScalarParsed) === JSON.stringify(JSON.parse(dupScalar)), `a large array then a scalar under one key reads the scalar, as JSON.parse does (got ${Array.isArray(dupScalarParsed.tools) ? `an array of ${dupScalarParsed.tools.length}` : JSON.stringify(dupScalarParsed.tools)})`);
 
   // Bounded: each sliced step holds the loop for a slice, not for the whole entry.
   const sliceBound = Math.max(60, Math.min(BOUND_MS, oneProjectAndLine / 2, oneParse / 2));

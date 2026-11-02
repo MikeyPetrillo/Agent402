@@ -1261,6 +1261,7 @@ export function __testSeedCache(entries = []) { for (const [o, e] of entries) ca
 export function __testSlices() { return { parseJsonSliced, jsonPieces, linePieces, hashPieces, lineHash, persistedEntryOf, persistedEntryOfSliced, persistedHashOf, persistedHashSliced, sliceClock }; }
 /** Rows the pull has read whole (bodies), since boot. */
 export function __testPullBodyReads() { return pullBodyReads; }
+export function __testPullBatchStats() { return { ...pullBatchStats }; }
 export function __testPersistToStateDb(entries) { return persistIndexCacheToStateDb(entries, entries.map((e) => JSON.stringify(e))); }
 
 /** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
@@ -7203,20 +7204,55 @@ const PULL_BODIES_PER_QUERY = 50;
 // driver turning one 35 MB field into a string was a single 80 ms call.
 const PULL_CHUNKED_ROW_BYTES = 262_144;
 const PULL_PART_BYTES = 1_048_576;
+// Text bytes one statement of whole rows may return. A row's stored size is
+// compressed: index rows measured 18-22x smaller stored than as text, and a
+// repetitive catalogue 77x, so 50 rows under the chunked threshold could be
+// tens of MB in one result. The stored size times PULL_TEXT_PER_STORED_BYTE
+// only plans a statement; the statement itself measures each rendered text
+// and returns it only while its running total is within the budget (the
+// first row always, when under PULL_CHUNKED_ROW_BYTES). A row it holds back
+// goes to the next statement with its measured length, or is read in byte
+// ranges when that length is past the threshold.
+const PULL_TEXT_BYTES_PER_QUERY = 1_048_576;
+const PULL_TEXT_PER_STORED_BYTE = 24;
 let pullBodyReads = 0;
+const pullBatchStats = { statements: 0, maxBytes: 0 };
 async function indexRowTexts(rows) {
   const out = new Map();
-  const small = [];
+  const queue = [];
   pullBodyReads += rows.length;
   for (const row of rows) {
     out.set(row.id, null);
     if (Number(row.sz) >= PULL_CHUNKED_ROW_BYTES) out.set(row.id, await indexRowTextChunked(row.id));
-    else small.push(row.id);
+    else queue.push({ id: row.id, est: (Number(row.sz) || 0) * PULL_TEXT_PER_STORED_BYTE });
   }
-  for (let i = 0; i < small.length; i += PULL_BODIES_PER_QUERY) {
-    const chunk = small.slice(i, i + PULL_BODIES_PER_QUERY);
-    const r = await stateQuery(`SELECT id, body::text AS body FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [INDEX_RECORDS, chunk]);
-    for (const { id, body } of r.rows) out.set(id, body);
+  while (queue.length) {
+    const batch = [];
+    let est = 0;
+    while (queue.length && batch.length < PULL_BODIES_PER_QUERY && (!batch.length || est + queue[0].est <= PULL_TEXT_BYTES_PER_QUERY)) {
+      const q = queue.shift();
+      est += q.est;
+      batch.push(q.id);
+    }
+    // The text is rendered once (OFFSET 0 keeps the subquery from being
+    // inlined into each use), measured, and sent only when admitted.
+    const r = await stateQuery(
+      `SELECT id, len, CASE WHEN len < $3::int AND (n = 1 OR run <= $4::bigint) THEN t END AS body FROM (
+         SELECT id, t, octet_length(t) AS len, sum(octet_length(t)) OVER (ORDER BY ord) AS run, row_number() OVER (ORDER BY ord) AS n
+         FROM (SELECT r.id, r.body::text AS t, array_position($2::text[], r.id) AS ord FROM ${recordsTable()} r WHERE r.collection = $1 AND r.id = ANY($2::text[]) OFFSET 0) s
+       ) w`,
+      [INDEX_RECORDS, batch, PULL_CHUNKED_ROW_BYTES, PULL_TEXT_BYTES_PER_QUERY],
+    );
+    let bytes = 0;
+    const held = [];
+    for (const { id, len, body } of r.rows) {
+      if (body != null) { out.set(id, body); bytes += Number(len); continue; }
+      if (Number(len) >= PULL_CHUNKED_ROW_BYTES) out.set(id, await indexRowTextChunked(id));
+      else held.push({ id, est: Number(len) });
+    }
+    queue.unshift(...held);
+    pullBatchStats.statements++;
+    pullBatchStats.maxBytes = Math.max(pullBatchStats.maxBytes, bytes);
   }
   return out;
 }

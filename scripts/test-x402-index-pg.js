@@ -163,6 +163,45 @@ try {
     ok((await ids()).join() === [A, C].join(), "the large seller's row is removed again before the next boot");
   }
 
+  // ---- the pull: many compressible rows are read in size-bounded statements ----
+  // A row's stored size is compressed (index rows 18-22x smaller than as text,
+  // a repetitive one 77x), so rows each under the chunked threshold used to
+  // come back up to 50 per statement, tens of MB at once. Each statement now
+  // returns at most a budget of text, and what it holds back is read next.
+  {
+    const tool = (i) => ({ route: `/api/v1/tools/category-${i % 40}/endpoint-${i}`, slug: `endpoint-${i}`, name: `Endpoint ${i} lookup`, description: `Returns the current data for item ${i} from the upstream source, with pagination and filters.`, price: "$0.001", networks: ["eip155:8453"] });
+    const same = tool(1);
+    const many = [];
+    for (let k = 0; k < 24; k++) {
+      // The first rows read like a real catalogue; the rest repeat one tool,
+      // so their stored size understates their text the most (about 67x) and
+      // a statement planned from stored sizes would return several MB.
+      const tools = k >= 8 ? Array.from({ length: 800 }, () => ({ ...same, slug: `s${k}` })) : Array.from({ length: 600 }, (_, i) => tool(i + k * 1000));
+      many.push([`https://seller-many-${String(k).padStart(2, "0")}.example`, entry(`/many${k}`, { fetchedAt: 1700000000300 + k, tools })]);
+    }
+    for (const [o, e] of many) await sdb.records.put(COLLECTION, o, e);
+    const sizes = (await sdb.stateQuery(`SELECT pg_column_size(body) AS sz, octet_length(body::text) AS len FROM ${process.env.STATE_DB_SCHEMA}.records WHERE collection = $1 AND id LIKE 'https://seller-many-%'`, [COLLECTION])).rows;
+    const totalText = sizes.reduce((n, r) => n + Number(r.len), 0);
+    ok(sizes.length === many.length && sizes.every((r) => Number(r.sz) < 262_144 && Number(r.len) < 262_144) && totalText > 3 * 1_048_576,
+      `the rows are each under the chunked threshold stored and as text, ${(totalText / 1_048_576).toFixed(1)} MB of text in all (stored ${Math.max(...sizes.map((r) => Number(r.sz)))} bytes at most)`);
+    const s0 = m1.__testPullBatchStats();
+    const reads0 = m1.__testPullBodyReads();
+    const folded = await m1.pullIndexChanges();
+    const s1 = m1.__testPullBatchStats();
+    ok(folded === many.length && m1.__testPullBodyReads() === reads0 + many.length, `every row is folded, each read once (folded ${folded}, read ${m1.__testPullBodyReads() - reads0})`);
+    ok(s1.statements - s0.statements >= Math.ceil(totalText / 1_048_576) && s1.maxBytes <= 1_048_576,
+      `the rows are split across ${s1.statements - s0.statements} statements of at most 1 MB of text each (largest ${s1.maxBytes} bytes)`);
+    let same1 = 0;
+    for (const [o] of many) {
+      const held = { ...m1._cacheForTests().get(o) };
+      delete held.warmStarted;
+      if (JSON.stringify(held) === JSON.stringify(await sdb.records.get(COLLECTION, o))) same1++;
+    }
+    ok(same1 === many.length, `every folded entry equals its row as the driver parses it (${same1}/${many.length})`);
+    for (const [o] of many) { await sdb.records.del(COLLECTION, o); m1._cacheForTests().delete(o); }
+    ok((await ids()).join() === [A, C].join(), "the compressible rows are removed again before the next boot");
+  }
+
   // ---- boot 3: a fresh instance warm-starts from the rows, in pages ------------
   process.env.INDEX_WARM_START_BATCH = "1"; // one row per page, so the in-progress flag is observable across turns
   const m3 = await import("../src/x402-index.js?boot=3");
