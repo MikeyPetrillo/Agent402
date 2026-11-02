@@ -21,6 +21,11 @@ Surfaces:
 - The Bazaar listings of web search, web answer, news search and browser
   render say what one call returns; the search and news sample outputs
   show two results with a matching count.
+- web.answer takes `share=true` (off by default, same price): the answer
+  also carries `share: { url, cardUrl, expiresAt }`, a public page of the
+  question, the answer and its cited sources with a 1200x630 preview card,
+  written only once the call settles and kept 30 days (then 410). The page
+  is not indexed; /privacy describes what it keeps.
 
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:

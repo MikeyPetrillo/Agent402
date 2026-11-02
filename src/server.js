@@ -50,6 +50,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
+import { mountAnswerShares } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
@@ -2571,7 +2572,7 @@ const carriesPaidCredential = (req) => {
 // Bearer-style paths (a report or monitor id IS the credential for it) map to
 // a fixed key so the id never reaches a timing key, a stall line or the
 // operator read.
-const BEARER_PATH_KEYS = [[/^\/r\//, "/r/:session"], [/^\/api\/r\//, "/api/r/:session"], [/^\/m\//, "/m/:report"], [/^\/api\/m\//, "/api/m/:report"], [/^\/reports\/public\//, "/reports/public/:id"], [/^\/api\/reports\/public\//, "/api/reports/public/:id"]];
+const BEARER_PATH_KEYS = [[/^\/r\//, "/r/:session"], [/^\/api\/r\//, "/api/r/:session"], [/^\/m\//, "/m/:report"], [/^\/api\/m\//, "/api/m/:report"], [/^\/reports\/public\//, "/reports/public/:id"], [/^\/api\/reports\/public\//, "/api/reports/public/:id"], [/^\/answers\//, "/answers/:id"]];
 app.use(requestTimingMiddleware((req) => {
   const path = String(req.path || "/");
   const method = req.method === "HEAD" ? "GET" : req.method;
@@ -8878,6 +8879,13 @@ app.get("/card.png", async (_req, res) => {
   } catch {
     res.redirect(302, "/card.svg");
   }
+});
+// Shared answers (src/answer-share.js): the page, its card and the expiry
+// sweep for web.answer calls made with share=true. The id is the bearer.
+mountAnswerShares(app, {
+  baseUrl: BASE_URL, notFoundPage, rasterizeSvg,
+  brand: { BRAND, BRAND_DEFS, BRAND_FONT_STYLE },
+  priceOf: () => CATALOG["GET /api/answer"]?.price || "",
 });
 // GitHub repo social preview (Settings → Social preview) wants 1280×640.
 let cardGithubCache = null;

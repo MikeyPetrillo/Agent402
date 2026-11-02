@@ -9,6 +9,7 @@ const ENTRIES = [
       "Surfaces: new /agents.md (text/markdown, free): the front door, then how to connect, pay and find more tools. Linked from /llms.txt, listed in the sitemap and robots.txt.",
       "Surfaces: the OpenAPI info description and the /.well-known/x402 summary lead with what the first call returns for its price.",
       "Discovery: the Bazaar listings of web search, web answer, news search and browser render say what one call returns; the search and news sample outputs show two results with a matching count.",
+      "Tools: web.answer takes share=true (off by default, same price): the answer also carries share: { url, cardUrl, expiresAt }, a public page of the question, the answer and its cited sources with a 1200x630 preview card, written only once the call settles and kept 30 days (then 410). The page is not indexed; /privacy describes what it keeps.",
     ],
   },
   {
