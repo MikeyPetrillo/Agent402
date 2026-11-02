@@ -12,6 +12,11 @@
 // half drives the real registerFacilitatorFailureHooks against stub facilitator
 // clients; the last part boots a paid server against stub facilitators to
 // prove the caller path.
+// The booted servers settle fixed nonces and transaction hashes: a settle
+// claim or replay record that an earlier run left in Redis refuses the same
+// credential (409) or the same recovered transaction on the next run. Every
+// server here runs on in-process state whatever the calling shell exports.
+import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

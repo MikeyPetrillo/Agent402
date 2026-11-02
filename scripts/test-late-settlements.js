@@ -11,6 +11,13 @@
 // registerFacilitatorFailureHooks fallback chain and our relayer's
 // settlement_pending answer shape.
 
+// Settlement claims, refund rows and the late-settle book key on fixed
+// transaction hashes and nonces: Redis or a state database left by an earlier
+// run would already hold them (a claim lives past the run), so the next run's
+// recoveries read "already held". The suite runs on in-process state whatever
+// the calling shell exports; the shared claim has its own Redis suite
+// (test-settle-onchain-proof.js).
+import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +25,6 @@ import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-late-settle-"));
 process.env.REFUND_DB_DIR = dir;
-delete process.env.STATE_DATABASE_URL;
 process.env.PAYMENT_SETTLE_FALLBACK = "true";
 
 const { createLateSettleBook, registerLateSettleHook, lateSettleCandidate, WINDOW_MS, MAX_AGE_MS, SETTLED_AFTER_402 } = await import("../src/late-settlements.js");

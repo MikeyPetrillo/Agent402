@@ -10,6 +10,7 @@
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-registration-limits-redis.js
 // Deliberately does not skip without REDIS_URL (CI provides the service container).
 import { spawn } from "node:child_process";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { getFreePorts } from "./lib/free-port.js";
 
 if (!process.env.REDIS_URL) {
@@ -61,7 +62,7 @@ ok(sl.sharedLimitsMode() === "redis", "the shared store is Redis (not process me
   const [pa, pb] = await getFreePorts(2);
   const children = [];
   const boot = (port) => {
-    const c = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, SHARED_LIMITS_PREFIX: `${PREFIX}srv`, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "pipe", "pipe"] });
+    const c = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...ownStoreEnv("reg-limits"), SHARED_LIMITS_PREFIX: `${PREFIX}srv`, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "pipe", "pipe"] });
     c.log = ""; c.stdout.on("data", (d) => { c.log += d; }); c.stderr.on("data", (d) => { c.log += d; });
     children.push(c); return c;
   };

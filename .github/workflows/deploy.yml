@@ -2340,6 +2340,8 @@ jobs:
           t node scripts/test-stats-envelope.js
           # Shared trial counter (a cap of 1 must mean 1 across replicas)
           t node scripts/test-shared-limit.js
+          # Store deadlines count loop time: an answer that landed while the loop was held is read, not a timeout
+          t node scripts/test-loop-deadline.js
           # Tool pages backlink to the skill packs they belong to
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections

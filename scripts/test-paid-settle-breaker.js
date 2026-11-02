@@ -20,9 +20,15 @@
 // /v1/embeddings runs to a 200 with no key and nothing spent, then settlement
 // fails; GLOBAL_MAX of them across different wallets must pause every /v1 tier,
 // and one wallet's concurrent burst, however large, must not.
+// The breaker counts, replay claims and sales of one booted server: Redis or a
+// state database left over from an earlier run would answer this run's fixed
+// wallets and nonces (429/409 before any handler), so the child runs on its own
+// in-process state whatever the calling shell exports.
+import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePorts } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
@@ -60,13 +66,19 @@ await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
 proc = spawn("node", ["--import", "./scripts/lib/upstream-stub-preload.js", "src/server.js"], {
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
+    ...process.env, ...ownStoreEnv("settle-breaker"), PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     GATEWAY_SETTLE_BREAKER_MAX: String(MAX), GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP_TOKEN,
+    // /v1/embeddings prices its margin clamp from the upstream cost table and
+    // answers 503 before any settle when the table has no embeddings row. The
+    // server reads the committed placeholder table, never the private one from
+    // the caller's environment, so the /v1 half runs the same with or without
+    // the secret (a fork PR, a local shell) and never depends on a real rate.
+    UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: new URL("../docs/example-upstream-costs.json", import.meta.url).pathname,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -208,6 +220,16 @@ try {
   // must not pause every /v1 buyer (the global pause counts distinct buyers).
   {
     await acceptFor(V1(0));
+    // One settled /v1 call first: a 503 here means the route itself cannot
+    // serve (no cost row, no stubbed upstream), which would make every burst
+    // assertion below read 0 handlers for a reason that is not the breaker.
+    {
+      settleMode = "ok";
+      const r = await pay(V1(0), wallet(0x8f));
+      const body = await r.json().catch(() => ({}));
+      settleMode = "fail";
+      ok(r.status === 200, `/v1/embeddings serves a paid call to a 200 before the breaker checks (got ${r.status}${r.status === 200 ? "" : `: ${String(body.error || "").slice(0, 80)}`})`);
+    }
     const before = settles;
     const burst = await Promise.all(Array.from({ length: 10 }, (_, k) => pay(V1(100 + k), wallet(0x90))));
     const ran = settles - before;

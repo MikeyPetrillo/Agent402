@@ -41,17 +41,28 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // count it: a full mark-compact of this file's 150k-tool heap measured 75-96 ms
 // on a loaded host, landing in whichever slice was running, and no slicing of
 // ours shortens it.
+//
+// A gap is also capped at the main thread's CPU time inside it. On a host
+// whose cores are taken (a parallel suite, a background QoS class) the process
+// is descheduled for whole seconds inside one slice: 30 throttled runs measured
+// gaps of 3,095 and 4,657 ms whose main thread ran a fraction of that, while
+// every slice still yielded on time. That wait is the scheduler's, and no
+// slicing of ours shortens it either; a slice that really holds the loop runs
+// on the CPU for all of its gap and is counted whole (the control below burns
+// CPU, not wall time, for that reason). The cap would not see a hold spent in
+// a blocking call off the CPU; the work measured here makes none.
 const { PerformanceObserver } = await import("node:perf_hooks");
 const gcPauses = [];
 new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push([e.startTime, e.startTime + e.duration]); }).observe({ entryTypes: ["gc"] });
+// The main thread's own CPU when the runtime reports it (a helper thread's
+// parallel marking is not loop time); the process's otherwise.
+const threadCpu = typeof process.threadCpuUsage === "function" ? () => process.threadCpuUsage() : () => process.cpuUsage();
 async function longestGap(fn) {
   const gaps = [];
   let last = performance.now();
   gcPauses.length = 0;
-  // The process's CPU time in each gap rides along: a gap the process spent
-  // descheduled shows far less CPU than wall time, and the message says so.
-  let lastCpu = process.cpuUsage();
-  const cpuSince = () => { const c = process.cpuUsage(); const ms = (c.user + c.system - lastCpu.user - lastCpu.system) / 1000; lastCpu = c; return ms; };
+  let lastCpu = threadCpu();
+  const cpuSince = () => { const c = threadCpu(); const ms = (c.user + c.system - lastCpu.user - lastCpu.system) / 1000; lastCpu = c; return ms; };
   const iv = setInterval(() => { const now = performance.now(); gaps.push([last, now, cpuSince()]); last = now; }, 2);
   let out;
   // The gap still open when `fn` settles counts too: an `fn` that never
@@ -59,23 +70,29 @@ async function longestGap(fn) {
   try { out = await fn(); gaps.push([last, performance.now(), cpuSince()]); } finally { clearInterval(iv); }
   // The observer delivers a pause on a later task: wait for one that ended the window.
   await new Promise((r) => setTimeout(r, 50));
-  let worst = 0, raw = 0, gc = 0, cpu = 0;
+  let worst = 0, raw = 0, gc = 0, cpu = 0, worstWall = 0, worstWallCpu = 0;
   for (const [a, b, c] of gaps) {
     let inGc = 0;
     for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
-    if (b - a - inGc - 2 > worst) { worst = b - a - inGc - 2; raw = b - a - 2; gc = inGc; cpu = c; }
+    const held = Math.min(b - a - inGc, c) - 2;
+    if (held > worst) { worst = held; raw = b - a - 2; gc = inGc; cpu = c; }
+    if (b - a > worstWall) { worstWall = b - a; worstWallCpu = c; }
   }
-  return { out, worst: Math.round(worst), raw: Math.round(raw), gc: Math.round(gc), cpu: Math.round(cpu) };
+  const r = { out, worst: Math.round(worst), raw: Math.round(raw), gc: Math.round(gc), cpu: Math.round(cpu) };
+  r.desc = `wall ${r.raw} ms, collector ${r.gc} ms, main-thread CPU ${r.cpu} ms; longest wall gap ${Math.round(worstWall)} ms with ${Math.round(worstWallCpu)} ms CPU`;
+  return r;
 }
 const spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* a costly verdict */ } };
+// CPU, not wall time: a hold that is on the CPU for `ms` whatever the scheduler does.
+const spinCpu = (ms) => { const start = threadCpu(); const used = () => { const c = threadCpu(); return (c.user + c.system - start.user - start.system) / 1000; }; while (used() < ms) { /* a costly one-turn job */ } };
 const BOUND_MS = Number(process.env.LOOP_SLICE_BOUND_MS || 120);
 const PAY = "0x000000000000000000000000000000000000dEaD";
 
 // A deliberate regression: a one-turn hold of twice the bound fails the same
 // measurement, whatever the collector did around it.
 {
-  const r = await longestGap(async () => { await new Promise((ok) => setImmediate(ok)); spin(2 * BOUND_MS); });
-  ok(r.worst >= BOUND_MS, `a deliberate ${2 * BOUND_MS} ms hold measures past the ${BOUND_MS} ms bound (measured ${r.worst} ms, ${r.gc} ms of its gap the collector)`);
+  const r = await longestGap(async () => { await new Promise((ok) => setImmediate(ok)); spinCpu(2 * BOUND_MS); });
+  ok(r.worst >= BOUND_MS, `a deliberate ${2 * BOUND_MS} ms hold measures past the ${BOUND_MS} ms bound (measured ${r.worst} ms: ${r.desc})`);
 }
 
 // ---------------------------------------------------------------- (a) the export
@@ -94,14 +111,14 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
     const chunks = [];
     const res = { headersSent: false, destroyed: false, status() { return res; }, set() { return res; }, json(b) { chunks.push(JSON.stringify(b)); return res; }, write(c) { chunks.push(c); return true; }, end(c) { if (c) chunks.push(c); return res; }, on() { return res; }, once() { return res; }, off() { return res; }, destroy() {} };
     const req = { headers: { host: "agent402.railway.internal", authorization: "Bearer " + "t".repeat(32) } };
-    const { worst } = await longestGap(() => handler(req, res));
-    return { worst, body: chunks.join("") };
+    const { worst, desc } = await longestGap(() => handler(req, res));
+    return { worst, desc, body: chunks.join("") };
   };
   const base = { getCatalog: () => ({}), baseUrl: "https://agent402.tools", getNetworks: () => [], getReadiness: () => ({ ready: true }), remoteExecutable };
-  const { worst, body } = await run(ex.decideIndexExportHandler({ ...base, prepare: async () => { prepared++; } }));
+  const { worst, desc, body } = await run(ex.decideIndexExportHandler({ ...base, prepare: async () => { prepared++; } }));
   const rows = body.trim().split("\n");
   ok(prepared === 1 && verdicts === 1600 && rows.length === 1601 && JSON.parse(rows.at(-1)).rows === 1600, `the export streams every row once after its prepare step (${rows.length - 1} rows, ${verdicts} verdicts)`);
-  ok(worst < BOUND_MS, `with a 0.5 ms verdict per row the export never holds the loop past ${BOUND_MS} ms (longest ${worst} ms)`);
+  ok(worst < BOUND_MS, `with a 0.5 ms verdict per row the export never holds the loop past ${BOUND_MS} ms (longest ${worst} ms: ${desc})`);
   // The same bytes as the rows read in one turn.
   const all = [];
   for await (const r of ex.unifiedRows({ catalog: {}, baseUrl: "https://agent402.tools", remoteExecutable, sliceMs: Infinity })) all.push(JSON.stringify(r));
@@ -153,7 +170,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   const direct = idx.normaliseOpenapiTools(doc, origins[0]);
   const oneTurnMs = Math.round(performance.now() - t0);
   setImmediate(advance);
-  const { worst } = await longestGap(() => Promise.all(origins.map((o) => idx.__crawlSellerForTest(o))));
+  const { worst, desc: crawlDesc } = await longestGap(() => Promise.all(origins.map((o) => idx.__crawlSellerForTest(o))));
   counting = false;
   // The reads all complete in one timers phase here, as concurrent network
   // reads do; each document is parsed in a lane turn of its own.
@@ -167,7 +184,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   // for about two (all twelve parses). Through the lane an iteration holds at
   // most one parse or one slice.
   const crawlBound = Math.max(60, Math.round(1.5 * oneTurnMs));
-  ok(worst < crawlBound, `${origins.length} concurrent crawls of ${OPS}-operation documents (one normalise is ${oneTurnMs} ms in one turn) never hold the loop past ${crawlBound} ms (longest ${worst} ms)`);
+  ok(worst < crawlBound, `${origins.length} concurrent crawls of ${OPS}-operation documents (one normalise is ${oneTurnMs} ms in one turn) never hold the loop past ${crawlBound} ms (longest ${worst} ms: ${crawlDesc})`);
   // The rows the crawl derived are the rows the one-turn normaliser derives.
   const rowsOf = (tools) => JSON.stringify(tools.filter((t) => t.route !== "/api/op0").map(({ seller, method, route, slug, name, description, price, requestContract, responseContract }) => ({ seller, method, route, slug, name, description, price, requestContract, responseContract })));
   ok(rowsOf(crawled[0].tools) === rowsOf(direct), "the sliced normaliser's rows equal the one-turn normaliser's");
@@ -199,7 +216,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   const e1 = S.persistedEntryOf(v);
   const line1 = JSON.stringify([origin, e1]);
   const oneProjectAndLine = performance.now() - t0;
-  const { out: e2, worst: wProject, cpu: cProject } = await longestGap(() => S.persistedEntryOfSliced(v, tick));
+  const { out: e2, worst: wProject, cpu: cProject, desc: dProject } = await longestGap(() => S.persistedEntryOfSliced(v, tick));
   ok(JSON.stringify([origin, e2]) === line1, "the sliced projection of a large entry equals the one-call projection");
   const { out: pieces, worst: wPieces, cpu: cPieces } = await longestGap(() => S.linePieces(origin, e1, tick));
   ok(pieces.join("") === line1, `the line built in ${pieces.length} pieces is byte-identical to JSON.stringify([origin, entry]) (${(line1.length / 1048576).toFixed(0)} MB)`);
@@ -232,7 +249,7 @@ const PAY = "0x000000000000000000000000000000000000dEaD";
   // Bounded: each sliced step holds the loop for a slice, not for the whole entry.
   const sliceBound = Math.max(60, Math.min(BOUND_MS, oneProjectAndLine / 2, oneParse / 2));
   const worstAll = Math.max(wProject, wPieces, wHash, wParse);
-  ok(worstAll < sliceBound, `projection, line, hash and parse of the large entry never hold the loop past ${Math.round(sliceBound)} ms (one-call projection+line ${Math.round(oneProjectAndLine)} ms, parse ${Math.round(oneParse)} ms; longest ${worstAll} ms: ${wProject}/${wPieces}/${wHash}/${wParse}; process CPU in each longest gap ${cProject}/${cPieces}/${cHash}/${cParse} ms)`);
+  ok(worstAll < sliceBound, `projection, line, hash and parse of the large entry never hold the loop past ${Math.round(sliceBound)} ms (one-call projection+line ${Math.round(oneProjectAndLine)} ms, parse ${Math.round(oneParse)} ms; longest ${worstAll} ms: ${wProject}/${wPieces}/${wHash}/${wParse}; main-thread CPU in each longest gap ${cProject}/${cPieces}/${cHash}/${cParse} ms; projection ${dProject})`);
 }
 
 console.log(`\ntest-loop-slices: ${pass} passed, ${fail} failed`);

@@ -9,7 +9,17 @@
 // Offline: fetch is stubbed with an OpenAI-shaped body; the assertion on the
 // meter reads the stats DB's spend rows before and after, so a handler that
 // stopped calling the meter (or priced at zero) fails here.
+// The meter is read as a before/after delta of today's "gateway" spend, so the
+// stats store must be this process's alone: the shared default file (or the
+// state database a shell exports) takes other processes' spend too, and a
+// parallel run read their spend into this call's delta. A temp SQLite file,
+// set before src/stats.js is imported.
+import "./lib/file-mode.js";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+process.env.STATS_DB_DIR = mkdtempSync(join(tmpdir(), "llm-kit-spend-"));
 
 delete process.env.POSTHOG_API_KEY; // telemetry off; the METER must still run
 process.env.OPENAI_API_KEY = "sk-test-not-real";
@@ -58,10 +68,13 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   const out = await pro.handler({ model: "gpt-4o", messages: [{ role: "user", content: "hello" }] });
   ok(out.choices[0].message.content === "hi", "the buyer's answer is unchanged");
   ok(out.usage.prompt_tokens === 4000, "usage still rides to the buyer");
-  // The capture is a lazy import that resolves off the handler's own promise.
-  await new Promise((r) => setTimeout(r, 200));
+  // The capture is a lazy import that resolves off the handler's own promise:
+  // wait for the row to move (bounded), never a fixed sleep.
+  for (let i = 0; i < 100 && spendOf() === before; i++) await new Promise((r) => setTimeout(r, 50));
   const delta = spendOf() - before;
-  ok(delta === 13_000, `the meter recorded 13,000 micro-USD ($0.013) for the call under source "gateway" (got ${delta})`);
+  // Expected from the private table through the kit's own pricing, never typed.
+  const want = Math.round(openaiCostUsd("gpt-4o-2024-08-06", { prompt_tokens: 4000, completion_tokens: 300 }) * 1e6);
+  ok(want > 0 && delta === want, `the meter recorded the call's priced upstream cost under source "gateway" (got ${delta === want ? "the priced cost" : want > 0 ? `${(delta / want).toFixed(3)}x the priced cost` : "no priced cost"}; amounts are not printed)`);
 }
 
 // --- 2026-10-14: scheduled retirements and reasoning effort ---------------
