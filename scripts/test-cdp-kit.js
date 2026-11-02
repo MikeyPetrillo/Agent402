@@ -168,6 +168,26 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     ok(e?.statusCode === 502, "a faucet answer with no transaction hash is a 502, never a charged funded:false");
     reply = () => J(200, { transactionHash: "0xdef" });
     ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
+    // A SQL query whose 502 comes back slowly ran past the data API's time
+    // limit: answered once (502 with how to narrow it), never resent.
+    const { _setSlowQueryGatewayMsForTest } = await import("../src/tools/cdp-kit.js");
+    _setSlowQueryGatewayMsForTest(40);
+    const sqlRun = () => tool("onchain-sql").handler({ sql: "SELECT 1" });
+    calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
+    e = await sqlRun().catch((x) => x);
+    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && /Narrow the query/.test(e.message) && calls.length === 1,
+      `a slow 502 on a SQL query is one 502 with how to narrow it, not resent (attempts ${calls.length}, ${e?.statusCode})`);
+    calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(504, {})), 60));
+    e = await sqlRun().catch((x) => x);
+    ok(e?.statusCode === 502 && /Narrow the query/.test(e.message) && calls.length === 1, `a slow 504 on a SQL query is answered once too (attempts ${calls.length})`);
+    // Control: a fast 502 is a blip and is retried.
+    calls = []; reply = (n) => (n === 1 ? J(502, {}) : J(200, { result: [{ x: 1 }] }));
+    const q = await sqlRun();
+    ok(q.rowCount === 1 && calls.length === 2, `a fast 502 on a SQL query is retried (attempts ${calls.length})`);
+    // Control: a slow 502 on another read is still retried.
+    calls = []; reply = (n) => (n === 1 ? new Promise((r) => setTimeout(() => r(J(502, {})), 60)) : J(200, { balances: [] }));
+    ok((await bal()).count === 0 && calls.length === 2, "a slow 502 on a balances read is still retried");
+    _setSlowQueryGatewayMsForTest(8_000);
     // Control: a GET that timed out is still retried.
     calls = []; reply = (n) => (n === 1 ? timeout() : J(200, { balances: [] }));
     ok((await bal()).count === 0 && calls.length === 2, "a GET that timed out is retried");

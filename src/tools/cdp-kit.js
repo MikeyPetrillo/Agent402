@@ -106,6 +106,11 @@ function retryAfterMs(res) {
 // attributed upstream, never a 504. Outside a handler (a scheduled read) an
 // attempt keeps its own cap.
 const CDP_READ_MS = 15_000;
+// A 502 or 504 on a SQL query that took this long is the data API's answer
+// to a query that ran past its time limit: resending the same query fails
+// the same way, so it is answered once, with how to narrow it.
+let slowQueryGatewayMs = 8_000;
+export function _setSlowQueryGatewayMsForTest(ms) { slowQueryGatewayMs = ms; }
 function cdpStep(path) {
   if (/\/faucet$/.test(path)) return "faucet";
   if (/\/token-balances\//.test(path)) return "token balances";
@@ -137,6 +142,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET" } = 
       await new Promise((r) => setTimeout(r, backoff));
     }
     const jwt = await mintCdpJwt({ method, path });
+    const started = Date.now();
     let res;
     try {
       res = await upstreamFetch(`https://${CDP_HOST}${path}`, {
@@ -166,6 +172,12 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET" } = 
     // "key <id> not found"-style upstream message could otherwise reflect it.
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
     if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
+    const tookMs = Date.now() - started;
+    if ((res.status === 502 || res.status === 504) && /\/data\/query\/run$/.test(path) && tookMs >= slowQueryGatewayMs) {
+      const e = bad(`CDP's query service answered HTTP ${res.status} after ${Math.round(tookMs / 1000)} s, its answer to a query that runs past its time limit. Narrow the query (a block_timestamp or block_number range, an address filter, a LIMIT) or set cacheSeconds; resending it unchanged fails the same way. Nothing was charged.`, 502);
+      e.hint = "narrow-query";
+      throw e;
+    }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
     if (res.status < 500) throw lastErr; // other non-5xx - not retryable
     // 5xx — fall through to retry
