@@ -277,19 +277,32 @@ function recordHangupDebt(req, res) {
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
 // hook's onUndelivered). Either the rail settled it - no forgiveness ticket,
 // a Tempo push credential, or the residual window - and recordHangupDebt
-// books it as owed, or the charge was cancelled, which is NOT a refund-ledger
-// debt and writes no row. The bound on cancelled charges is the forgiveness
-// budget the ticket was drawn from (src/hangup-forgiveness.js): the run was
-// recorded there as abandoned under the buyer's wallet, IP and globally the
-// moment the socket closed, and a paid success never clears that record.
+// books it as owed, or no settlement receipt proves a charge, which is NOT a
+// refund-ledger debt here and writes no row. Two different things reach the
+// second branch, and the log names which:
+//   - SETTLE WITHHELD: no settlement point found the buyer connected, so this
+//     server sent no settlement for it (a forgiven hang-up: the forgiveness
+//     budget is its bound, src/hangup-forgiveness.js; or the call never
+//     reached settlement);
+//   - SETTLE UNCONFIRMED: a settlement point found the buyer connected and
+//     sent the charge, then the buyer left and the settle did not confirm.
+//     The transfer may still land; a settle failure that names one is read
+//     from the chain and booked as owed (src/late-settlements.js), so this
+//     never says "not charged", and the run spends no forgiveness budget
+//     (the dispatcher's ticket is released, not abandoned).
 function recordHangupOutcome(req, res) {
   if (recordHangupDebt(req, res)) return;
   if (!ownTrue(req, "__a402Dispatched")) return; // nothing was accepted, or not a catalog route
   const started = Object.hasOwn(req, "__a402HandlerStarted") ? Number(req.__a402HandlerStarted) : 0;
   const rail = railOf(req) || "x402";
   const work = started > 0 ? `after ${Math.max(0, Date.now() - started)} ms of work` : "before the handler ran";
-  const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "nothing was settled";
-  console.warn(`[hangup] NOT CHARGED: client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work}) - payment not settled; ${why}`);
+  const where = `client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work})`;
+  if (settleSentWhileConnected(req)) {
+    console.warn(`[hangup] SETTLE UNCONFIRMED: ${where} - settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; no forgiveness budget spent`);
+    return;
+  }
+  const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "the call never reached settlement";
+  console.warn(`[hangup] SETTLE WITHHELD: ${where} - no settlement sent; ${why}`);
 }
 // The keys a forgiveness ticket is counted under: the verified payer (signed
 // EIP-3009 payer, the Tempo sender the gate VERIFIED - see inspectTempoSender
@@ -331,7 +344,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKey, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -816,7 +829,7 @@ function trialClientKey(ip) {
 }
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
-import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
@@ -10469,11 +10482,15 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      // A long-running or composite route needs the shared claim: with the
-      // shared store configured but unreachable it is refused here, before
-      // any payment is taken, rather than claimed on this replica alone.
-      const replayDef = CATALOG[`${req.method} ${req.path}`];
-      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      // Every paid route needs the shared claim: with the shared store
+      // configured but unreachable the call is refused here, before any
+      // payment is verified or settled, rather than claimed on this replica
+      // alone. A per-process claim on two containers lets one signed payment
+      // run the handler on each and reach the facilitator twice; only the
+      // chain's nonce and the later settlement checks would then stand
+      // between the second run and a second answer. With no shared store
+      // configured (one process) the per-process claim is the guarantee.
+      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: true });
       if (verdict === "unavailable") {
         res.setHeader("Retry-After", "30");
         return res.status(503).json({
@@ -10497,7 +10514,9 @@ if (FREE_MODE) {
       const finishGuard = () => {
         if (resolved) return;
         resolved = true;
-        if (res.statusCode === 200) replayGuard.settle(replayKey).catch(() => {});
+        // Held until the authorization itself expires when that is later
+        // than the guard's TTL: a forgiven hang-up is granted unsettled.
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) }).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
@@ -10872,7 +10891,10 @@ if (!FREE_MODE) {
     // once it exists; otherwise the ticket would hold its share of the budget
     // in this process until restart.
     let closed = false, reserved = false;
-    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
+    // Abandoned (budget spent) only when the charge is withheld: a buyer who
+    // left after a settlement point already sent the charge (the residual
+    // window) is the refund ledger's, and its ticket is released.
+    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the

@@ -1681,7 +1681,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     assert.equal(sales(port).length, 1, "no new sale");
     const refunds = await (await fetch(`${base}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}` } })).json();
     assert.equal((refunds.refunds || []).length, 0, "nothing owed");
-    assert.match(log.text, /NOT CHARGED: client closed the connection/);
+    assert.match(log.text, /SETTLE WITHHELD: client closed the connection/);
     assert.ok(!leaks(log.text));
   } finally { proc.kill("SIGKILL"); st.gw = "ok"; st.gwVerifyDelayMs = 0; }
 });

@@ -88,7 +88,26 @@ export function clientGoneBeforeFirstByte(req) {
  * owed, so a hang-up is never a free run once the budget is spent.
  */
 export function chargeCancelledForClientGone(req) {
-  return clientGoneBeforeFirstByte(req) && hangupForgiven(req);
+  if (clientGoneBeforeFirstByte(req)) return hangupForgiven(req);
+  // Every settlement point (the x402 onBeforeSettle hook, the Tempo
+  // broadcast, the Stripe capture, the credits debit) asks this before it
+  // moves money. A "no" while the buyer was still connected means the charge
+  // was sent: a close after this (the residual window) did not withhold it.
+  // Recorded on the request, own property, first time only.
+  if (req && typeof req === "object" && !Object.hasOwn(req, SETTLE_SENT_CONNECTED)) {
+    try { Object.defineProperty(req, SETTLE_SENT_CONNECTED, { value: Date.now(), enumerable: false, configurable: true }); } catch { /* a frozen request records nothing */ }
+  }
+  return false;
+}
+const SETTLE_SENT_CONNECTED = "__a402SettleCheckedConnectedAt";
+
+/** True when a settlement point found the buyer connected and sent the
+ *  charge. A close after that (the residual window) did not withhold it: a
+ *  transfer may still land and be booked as owed, so the dispatcher releases
+ *  the forgiveness ticket instead of recording the run as abandoned, and the
+ *  hang-up log says the settle is unconfirmed, never "not charged". */
+export function settleSentWhileConnected(req) {
+  return !!req && typeof req === "object" && Object.hasOwn(req, SETTLE_SENT_CONNECTED);
 }
 
 /**
