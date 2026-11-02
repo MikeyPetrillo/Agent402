@@ -30,6 +30,7 @@ import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
 import { recordRouterPurchase } from "../router-purchases.js";
+import { adaptParamsToExample } from "../mpp-input-examples.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -494,6 +495,16 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const extMethod = (ext.method || "POST").toUpperCase();
           let extUrl = ext.url;
           let extBody = params;
+          // An MPP seller's index row has no input schema; when its llms.txt
+          // documents a request example, a scalar url/query/id it takes as a
+          // one-element plural list (or the reverse) is reshaped to it, and
+          // nothing else (src/mpp-input-examples.js). x402 rows never carry
+          // an example, so their bodies are the buyer's params as before.
+          let paramsAdapted = [];
+          if (extWire === "mpp" && ext.inputExample && extMethod !== "GET" && extMethod !== "HEAD") {
+            const shaped = adaptParamsToExample(params, ext.inputExample);
+            if (shaped.adapted.length) { extBody = shaped.params; paramsAdapted = shaped.adapted; }
+          }
           if (extMethod === "GET" || extMethod === "HEAD") {
             const qp = new URLSearchParams();
             for (const [k, v] of Object.entries(params || {})) {
@@ -722,6 +733,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               settleNetwork: chainCaip2,
               ...(servedUnpaid ? { sellerPaid: false } : {}),
               wire: extWire,
+              ...(paramsAdapted.length ? { paramsAdapted } : {}),
               resolvedBy: "task-external",
               ...(ext.selection ? { selection: ext.selection } : {}),
               // A buyer should know when the seller that served them had no

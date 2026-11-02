@@ -1678,6 +1678,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // candidate when it exceeds the cap.
         price: r.dynamic ? null : `$${r.priceUsd}`, priceUsd: r.dynamic ? null : r.priceUsd, dynamic: !!r.dynamic,
         networks: r.networks, wire: "mpp", settled: r.settled,
+        ...(r.inputExample ? { inputExample: r.inputExample } : {}),
         // The route's own text, for the category filter below.
         description: r.description, tags: r.tags,
       }));
@@ -2039,7 +2040,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.unproven ? { unproven: true } : {}), ...(r.judgedSelection ? { selection: r.judgedSelection } : {}) });
+      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.wire === "mpp" && r.inputExample ? { inputExample: r.inputExample } : {}), ...(r.unproven ? { unproven: true } : {}), ...(r.judgedSelection ? { selection: r.judgedSelection } : {}) });
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;

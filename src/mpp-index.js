@@ -33,6 +33,7 @@ import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
 
 export { validateOriginInput };
 
@@ -502,6 +503,11 @@ export async function verifyMppSeller(origin) {
   const prior = cache.get(origin);
   const history = [...(prior?.history || []), result.ok ? 1 : 0].slice(-HEALTH_WINDOW);
   const scan = svc ? null : mppScanByOrigin.get(origin) || null;
+  // Request-example key shapes from the seller's llms.txt, read only for a
+  // seller that just verified and lists endpoints (src/mpp-input-examples.js:
+  // guarded fetch, capped, cached an hour; key names and shapes only).
+  let endpoints = Array.isArray(svc?.endpoints) ? svc.endpoints : [];
+  if (result.ok && endpoints.length) endpoints = attachInputExamples(endpoints, await fetchLlmsExamples(origin, { timeoutMs: PROBE_TIMEOUT_MS }));
   const entry = {
     origin,
     name: svc?.name || scan?.name || origin.replace(/^https?:\/\//, ""),
@@ -514,7 +520,7 @@ export async function verifyMppSeller(origin) {
     icon: svc?.icon || scan?.logoUrl || null,
     realm: svc?.realm || null,
     provider: svc?.provider || null,
-    endpoints: Array.isArray(svc?.endpoints) ? svc.endpoints : [],
+    endpoints,
     probedUrl: target.url,
     // Live-observed payment offers (see parseOffers). Kept from the last
     // SUCCESSFUL probe so a transient probe failure does not blank the

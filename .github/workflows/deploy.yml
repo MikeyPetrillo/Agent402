@@ -1617,6 +1617,8 @@ jobs:
           t node scripts/test-nominatim-pace.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
           t node scripts/test-tempo-router.js
+          # MPP request bodies shaped from the seller's llms.txt example (bounded parse, lossless url/query/id cases only; x402 bodies untouched)
+          t node scripts/test-mpp-input-examples.js
           t node scripts/test-sor-resolver-scope.js
           # Seller sweep: the judgement half (grades a paid answer against the seller's OWN declared contract). The paying half is dispatch-only and never runs here.
           t node scripts/test-seller-verify.js
