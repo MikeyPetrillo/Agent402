@@ -15,7 +15,7 @@ Gateway:
   tier and price of the route called, the swap named in
   agent402_model_substituted.
 - gpt-5-codex and gpt-5-chat-latest, shut down upstream, are served on the
-  premium tier by gpt-5.6-sol, the swap named.
+  premium and metered tiers by gpt-5.6-sol, the swap named.
 - The metered tier's default model is Claude Haiku 5.5. A call that names no
   model but sends temperature, top_p, top_k, an assistant prefill or a fixed
   reasoning budget is served by Claude Haiku 4.5 instead of a 400; /v1/models

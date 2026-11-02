@@ -7,7 +7,7 @@ const ENTRIES = [
     items: [
       "Gateway: the pro tier serves openai/gpt-6.1-terra (and its -pro twin) and moonshotai/kimi-k3.1-pro, both with a 1M-token context and tools.",
       "Gateway: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro are served as themselves until 2026-12-11, then by their named gpt-5.6 successors at the tier and price of the route called, the swap named in agent402_model_substituted.",
-      "Gateway: gpt-5-codex and gpt-5-chat-latest, shut down upstream, are served on the premium tier by gpt-5.6-sol, the swap named.",
+      "Gateway: gpt-5-codex and gpt-5-chat-latest, shut down upstream, are served on the premium and metered tiers by gpt-5.6-sol, the swap named.",
       "Gateway: the metered tier's default model is Claude Haiku 5.5. A call that names no model but sends temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget is served by Claude Haiku 4.5 instead of a 400; /v1/models and the route descriptions name both.",
       "Gateway: the base tier falls back to gpt-6-luna, then deepseek-chat, when the requested model has no available host, as the nano tier does.",
       "Judgment routes run Jev 1.14.0.",

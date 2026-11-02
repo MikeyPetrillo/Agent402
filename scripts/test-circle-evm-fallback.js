@@ -396,6 +396,9 @@ await check("reconcile: one status client for Arc, Base and Polygon binds each a
   // An id booked on two networks cannot be bound to either.
   const reader = circlePendingStatusReader(status, () => [{ paymentId: uuid(5), network: BASE }, { paymentId: uuid(5), network: POLYGON }]);
   assert.equal(await reader(uuid(5)), null);
+  // Nor is an answer naming no network bound to the first of two bookings.
+  const reader3 = circlePendingStatusReader(status, () => [{ paymentId: uuid(3), network: BASE }, { paymentId: uuid(3), network: POLYGON }]);
+  assert.equal(await reader3(uuid(3)), null, "an id booked twice reads null even when the answer names no network");
   // A single-network client still accepts an answer that names no network.
   const arcOnly = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl: stubFetch({ [`/status/${uuid(6)}`]: () => json(200, { status: "completed", transaction: TX }) }) });
   assert.deepEqual(await arcOnly.paymentStatus(uuid(6), { network: ARC_CAIP2 }), { status: "completed", transaction: TX, network: ARC_CAIP2 });
