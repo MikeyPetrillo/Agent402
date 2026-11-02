@@ -6961,6 +6961,8 @@ async function parseJsonSliced(text, tick) {
   return out;
 }
 
+// The keys persistedEntryOf writes only when set.
+const ROW_OPTIONAL_KEYS = ["fallbackErrors", "redirectedTo", "updatedAt"];
 function persistedEntryOf(v, slimTools = null) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
@@ -6998,13 +7000,14 @@ export async function persistOriginToStateDb(origin) {
   if (!entry) return false;
   try {
     const line = JSON.stringify([origin, entry]);
+    const h = lineHash(line);
     await stateQuery(
       `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-       WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
-      [INDEX_RECORDS, origin, JSON.stringify(entry)],
+       WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+      [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
     );
-    pgOriginHashes.set(origin, lineHash(line));
+    pgOriginHashes.set(origin, h);
     return true;
   } catch (e) {
     console.warn(`[x402-index] state database write for one origin failed: ${String(e?.message || e).slice(0, 120)}`);
@@ -7114,6 +7117,24 @@ const FETCHED_AT_SQL = (col) => `(CASE WHEN (${col}->>'fetchedAt') ~ '^[0-9]+(\\
 const UPDATED_AT_SQL = (col) => `(CASE WHEN (${col}->>'updatedAt') ~ '^[0-9]+(\\.[0-9]+)?$' THEN (${col}->>'updatedAt')::numeric ELSE 0 END)`;
 // The revision in SQL (entryRev): newer wins on the later of the two stamps.
 const REV_SQL = (col) => `GREATEST(${FETCHED_AT_SQL(col)}, ${UPDATED_AT_SQL(col)})`;
+// Each row written carries ROW_HASH_KEY: the lineHash of `[origin, entry]`,
+// the same value pgOriginHashes holds for it. Two copies are ordered by
+// (revision, hash), in the upsert and in the pull alike, so two containers
+// holding different content at one revision (one stamp, or clocks skewed onto
+// one) converge on the same copy whichever writes last. A row with no hash
+// (written before rows carried one) orders below any hashed copy of its
+// revision. Byte order ("C"), as JavaScript compares the base64 text.
+const ROW_HASH_KEY = "contentHash";
+const ROW_HASH_SQL = (col) => `COALESCE(${col}->>'${ROW_HASH_KEY}', '') COLLATE "C"`;
+const NEWER_OR_SAME_SQL = (stored, incoming) => `(${REV_SQL(stored)}, ${ROW_HASH_SQL(stored)}) <= (${REV_SQL(incoming)}, ${ROW_HASH_SQL(incoming)})`;
+/** The stored body: the entry's JSON text with its line hash as the last key. */
+const bodyWithHash = (entryText, hash) => (hash && entryText.endsWith("}") && entryText !== "{}" ? `${entryText.slice(0, -1)},${JSON.stringify(ROW_HASH_KEY)}:${JSON.stringify(hash)}}` : entryText);
+/** Order two copies by (revision, hash): negative when a is older. */
+const compareCopies = (aRev, aHash, bRev, bHash) => {
+  if (aRev !== bRev) return aRev < bRev ? -1 : 1;
+  const x = typeof aHash === "string" ? aHash : "", y = typeof bHash === "string" ? bHash : "";
+  return x === y ? 0 : x < y ? -1 : 1;
+};
 
 // ---- two containers, one index (2026-10-15) --------------------------------
 // Each container holds the whole index in memory. A seller registered, or an
@@ -7159,17 +7180,31 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
     // A row's revision without its body: the same values the parsed body
     // would give entryRev (jsonb renders a field alone as it does in place).
     const rowRev = (row) => entryRev({ fetchedAt: row.f, updatedAt: row.u });
-    // A row is read whole only when this container does not already hold the
-    // origin at that revision or newer, which is every row it wrote itself.
-    const wanted = (row) => typeof row.id === "string" && !isRemovedOrigin(row.id) && !((h) => h && entryRev(h) >= rowRev(row))(cache.get(row.id));
+    // Whether a copy at (rev, hash) orders after the one held for this
+    // origin. Only a tie on revision needs the held copy's hash: the one this
+    // container last stored or folded answers when it equals the row's (every
+    // row it wrote itself), otherwise it is computed from the copy held now.
+    const newerThanHeld = async (id, rev, hash) => {
+      const held = cache.get(id);
+      if (!held) return true;
+      const heldRev = entryRev(held);
+      if (rev !== heldRev) return rev > heldRev;
+      if (typeof hash !== "string" || !hash || pgOriginHashes.get(id) === hash) return false;
+      return compareCopies(rev, hash, heldRev, await persistedHashSliced(id, held, tick)) > 0;
+    };
+    // A row is read whole only when it orders after the copy held, which no
+    // row this container wrote itself does.
+    const wanted = (row) => typeof row.id === "string" && !isRemovedOrigin(row.id) && newerThanHeld(row.id, rowRev(row), row.h);
     for (let page = 0; page < maxPages; page++) {
       const r = await stateQuery(
         // The stamp travels as text: a JS Date drops the microseconds, and the
         // last row of every pull would then be read again forever.
-        `SELECT id, updated_at::text AS stamp, body->'fetchedAt' AS f, body->'updatedAt' AS u, pg_column_size(body) AS sz FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
+        `SELECT id, updated_at::text AS stamp, body->'fetchedAt' AS f, body->'updatedAt' AS u, body->>'${ROW_HASH_KEY}' AS h, pg_column_size(body) AS sz FROM ${recordsTable()} WHERE collection = $1 AND (updated_at, id) > ($2::timestamptz, $3::text) ORDER BY updated_at, id LIMIT $4`,
         [INDEX_RECORDS, pullWatermark, pullWatermarkId, pageSize],
       );
-      const bodies = await indexRowTexts(r.rows.filter(wanted));
+      const want = [];
+      for (const row of r.rows) if (await wanted(row)) want.push(row);
+      const bodies = await indexRowTexts(want);
       for (const row of r.rows) {
         const { id, stamp } = row;
         // Each folded row is projected, stringified and hashed: a page of
@@ -7178,16 +7213,21 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         await tick();
         pullWatermark = stamp;
         pullWatermarkId = String(id);
-        if (!wanted(row)) continue;
+        if (!(await wanted(row))) continue;
         let text = bodies.get(id);
         if (text === undefined) text = (await indexRowTexts([row])).get(id);
         // As the database holds it now: a row changed since the page was read
         // is at least as new, and one deleted since is not folded back.
         const body = text == null ? null : await parseJsonSliced(text, tick);
         if (!body || typeof body !== "object" || isRemovedOrigin(id)) continue;
+        const bodyHash = body[ROW_HASH_KEY];
+        delete body[ROW_HASH_KEY];
+        if (!(await newerThanHeld(id, entryRev(body), bodyHash))) continue;
         const held = cache.get(id);
-        if (held && entryRev(held) >= entryRev(body)) continue;
         const next = held ? { ...held, ...body } : { ...body, warmStarted: true };
+        // The row is the whole persisted copy: a key it leaves out is not
+        // kept from the held one, so both containers hold the same content.
+        for (const k of ROW_OPTIONAL_KEYS) if (!(k in body)) delete next[k];
         cache.set(id, next);
         // Held as stored, so this container's next save does not write it back.
         pgOriginHashes.set(id, await persistedHashSliced(id, next, tick));
@@ -7337,18 +7377,19 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
     }
     // The body is the entry alone: the line is `[origin, entry]`, and the
     // entry starts after the origin string and its comma.
-    const bodyOf = (i) => (changed.has(entries[i][0]) ? lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1) : null);
+    const bodyOf = (i) => (changed.has(entries[i][0]) ? bodyWithHash(lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1), changed.get(entries[i][0])) : null);
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
       // NEWER WINS (2026-10-15). With two containers, one may hold an older
       // copy of an origin than the row (the other crawled it since), and an
       // unconditional upsert wrote that copy back. A row is replaced only by
-      // an entry fetched at least as recently as the one it holds.
+      // an entry fetched at least as recently as the one it holds, and at one
+      // revision only by the copy whose hash orders after it (ROW_HASH_KEY).
       if (ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES) {
         // The same upsert and the same newer-wins rule, one row as a scalar.
         await stateQuery(
           `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
            ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+           WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
           [INDEX_RECORDS, ids[0], bodies[0]],
         );
       } else {
@@ -7356,7 +7397,7 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
           `INSERT INTO ${recordsTable()} AS r (collection, id, body)
            SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
            ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-           WHERE ${REV_SQL("r.body")} <= ${REV_SQL("EXCLUDED.body")}`,
+           WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
           [INDEX_RECORDS, ids, bodies],
         );
       }
@@ -7455,6 +7496,7 @@ async function warmStartIndexOnce() {
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
+        if (body && typeof body === "object") delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
         // what this container changed, never every row over a peer's newer one.
         if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); }
