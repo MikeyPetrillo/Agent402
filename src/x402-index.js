@@ -30,7 +30,6 @@ import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
-import { StringDecoder } from "node:string_decoder";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
@@ -1262,6 +1261,9 @@ export function __testSlices() { return { parseJsonSliced, jsonPieces, linePiece
 /** Rows the pull has read whole (bodies), since boot. */
 export function __testPullBodyReads() { return pullBodyReads; }
 export function __testPullBatchStats() { return { ...pullBatchStats }; }
+/** Test hook: one row read in ranges of `partBytes`, and the range counters. */
+export function __testReadRowChunked(id, partBytes) { return indexRowTextChunked(id, partBytes); }
+export function __testPullChunkStats() { return { ...pullChunkStats }; }
 export function __testPersistToStateDb(entries) { return persistIndexCacheToStateDb(entries, entries.map((e) => JSON.stringify(e))); }
 
 /** Test hook: set (or, with no rows, clear) the registry rows held for one origin. */
@@ -7258,7 +7260,7 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
  *  35 MB row held the loop for over 300 ms that way). */
 const PULL_BODIES_PER_QUERY = 50;
 // A row stored larger than this (pg_column_size, after compression) is read
-// as UTF-8 byte ranges of PULL_PART_BYTES, each decoded on its own: the
+// in ranges of PULL_PART_BYTES UTF-8 bytes, each a string on its own: the
 // driver turning one 35 MB field into a string was a single 80 ms call.
 const PULL_CHUNKED_ROW_BYTES = 262_144;
 const PULL_PART_BYTES = 1_048_576;
@@ -7314,28 +7316,42 @@ async function indexRowTexts(rows) {
   }
   return out;
 }
-/** One row's body text, read in byte ranges (null when the row is gone). The
- *  text is rendered once per statement (OFFSET 0 keeps the subquery from
- *  being inlined into every range), and a character cut at a range boundary
- *  is completed by the decoder from the next range. */
-async function indexRowTextChunked(id) {
+/** One row's body text, read in ranges of at most `partBytes` UTF-8 bytes
+ *  (null when the row is gone). Each range ends on a character start (cut
+ *  back over at most three continuation bytes) and travels as text, so the
+ *  wire carries the text once: the earlier bytea ranges came hex-encoded,
+ *  twice the bytes. Measured on 40 MB rows (2026-11-02, local Postgres 16):
+ *  ASCII 272 ms against 358 ms for the bytea ranges and 233 ms for one
+ *  plain body::text read; multi-byte (73 MB) 540 ms against 801 ms and
+ *  532 ms. The plain read held the loop 161 ms on the multi-byte row where
+ *  the ranges held it 7 ms at most, which is why the ranges stay. The text
+ *  is rendered once per statement (OFFSET 0 keeps the subquery from being
+ *  inlined into every range). */
+async function indexRowTextChunked(id, partBytes = PULL_PART_BYTES) {
+  // The byte offset where range k ends (and k + 1 starts): k * partBytes, or
+  // the length, moved back to the lead byte of the character it falls in.
+  // CASE, not OR, so get_byte is never asked past the end.
+  const at = (k) => `LEAST((${k}) * $3::int, octet_length(x.b))`;
+  const cont = (pos) => `(get_byte(x.b, ${pos}) & 192) = 128`;
+  const cut = (k) => `(${at(k)} - CASE WHEN ${at(k)} >= octet_length(x.b) OR ${at(k)} <= 0 THEN 0 ELSE CASE WHEN NOT ${cont(at(k))} THEN 0 WHEN NOT ${cont(`${at(k)} - 1`)} THEN 1 WHEN NOT ${cont(`${at(k)} - 2`)} THEN 2 ELSE 3 END END)`;
   const r = await stateQuery(
-    `SELECT c.n, substring(x.b FROM (c.n - 1) * $3::int + 1 FOR $3::int) AS part FROM ${recordsTable()} r
+    `SELECT c.n, convert_from(substring(x.b FROM ${cut("c.n - 1")} + 1 FOR ${cut("c.n")} - ${cut("c.n - 1")}), 'UTF8') AS part FROM ${recordsTable()} r
      CROSS JOIN LATERAL (SELECT convert_to(r.body::text, 'UTF8') AS b OFFSET 0) x
      CROSS JOIN LATERAL generate_series(1, GREATEST(1, ceil(octet_length(x.b)::numeric / $3::int)::int)) AS c(n)
      WHERE r.collection = $1 AND r.id = $2 ORDER BY c.n`,
-    [INDEX_RECORDS, id, PULL_PART_BYTES],
+    [INDEX_RECORDS, id, Math.max(4, Math.floor(partBytes))],
   );
   if (!r.rows.length) return null;
-  const dec = new StringDecoder("utf8");
   const parts = [];
   for (const { part } of r.rows) {
-    parts.push(dec.write(part));
+    parts.push(part);
+    pullChunkStats.parts++;
+    if (typeof part !== "string") pullChunkStats.nonText++;
     await new Promise((res) => setImmediate(res));
   }
-  parts.push(dec.end());
   return parts.join("");
 }
+const pullChunkStats = { parts: 0, nonText: 0 };
 
 /** Read the removal list again from the database and purge what it names. */
 async function reloadRemovedOrigins() {
