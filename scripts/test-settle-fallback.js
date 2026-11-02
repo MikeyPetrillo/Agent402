@@ -16,6 +16,7 @@
 // claim or replay record that an earlier run left in Redis refuses the same
 // credential (409) or the same recovered transaction on the next run. Every
 // server here runs on in-process state whatever the calling shell exports.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";

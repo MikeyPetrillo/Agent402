@@ -15,6 +15,7 @@
 // our relayer; and a paid server with the key set settles a Robinhood payment
 // through it after the primary reverts, while one without the key does not.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";

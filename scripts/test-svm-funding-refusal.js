@@ -12,6 +12,7 @@
 // answers the two simulation failures in both shapes @x402/core has (a thrown
 // non-2xx verify and a graceful isValid:false).
 //   node scripts/test-svm-funding-refusal.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePort } from "./lib/free-port.js";

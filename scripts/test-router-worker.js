@@ -17,6 +17,7 @@
 //       worker before the next query.
 // Offline: the server boots warm-started from the fixture with the crawler's
 // first cycle deferred, so nothing leaves the machine.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 process.env.ROUTER_WORKERS = "1";
 process.env.ROUTER_WORKER_TEST_HOOKS = "1";

@@ -22,6 +22,7 @@
 // with fixed nonces: with a state database the ledger is a table that ignores
 // SALES_LEDGER_DB, and Redis from an earlier run replays or refuses the same
 // credentials. Both are off for this process and its child.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
