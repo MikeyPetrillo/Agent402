@@ -273,6 +273,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
   amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
   reads the premium and the floor and a refund repays what was paid.
+- **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
+  account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
+  and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in
+  `SVM_FUNDING_WINDOW_MS` (10 min), answers from a beforeVerify hold lasting the Retry-After, shared
+  through shared-limits; a valid verify clears it; `SVM_FUNDING_THROTTLE=off` disables the hold.
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
   sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is

@@ -20,7 +20,10 @@ header is authoritative. The JSON body carries the same PaymentRequired object (
 take proof-of-work, and `reason`, `hint` and `retry` when a payment was refused), so a reader of
 either finds the offer and the two never disagree. A refused payment's body leaves out the
 header's one-line `error`: its `hint` (or, for an MPP credential, the problem's `detail`) says
-what went wrong, and a client that reads `error` first reads that instead. Every route's challenge is
+what went wrong, and a client that reads `error` first reads that instead. `retry` says what kind of
+change helps; `fund-wallet` means the paying wallet holds too little of the asset (or, on Solana, has no
+USDC account yet), so a new signature alone is refused the same way: fund the wallet or pay on another
+listed network, and wait the `Retry-After` before trying the same wallet again. Every route's challenge is
 valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
 and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
 input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client

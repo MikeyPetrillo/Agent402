@@ -10,6 +10,7 @@ const ENTRIES = [
       "Surfaces: the OpenAPI info description and the /.well-known/x402 summary lead with what the first call returns for its price.",
       "Discovery: the Bazaar listings of web search, web answer, news search and browser render say what one call returns; the search and news sample outputs show two results with a matching count.",
       "Tools: web.answer takes share=true (off by default, same price): the answer also carries share: { url, cardUrl, expiresAt }, a public page of the question, the answer and its cited sources with a 1200x630 preview card, written only once the call settles and kept 30 days (then 410). The page is not indexed; /privacy describes what it keeps.",
+      "Payments: a Solana payment refused because the paying wallet has no USDC account or less USDC than the price now says so (reason no-token-account or insufficient-funds, retry fund-wallet, Retry-After 300) and asks for the wallet to be funded or another listed network, instead of asking for a fresh signature. A wallet refused this way three times in ten minutes gets the same answer without a new check until its Retry-After passes.",
     ],
   },
   {

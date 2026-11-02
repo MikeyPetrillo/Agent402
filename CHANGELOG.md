@@ -31,6 +31,13 @@ Surfaces:
   question, the answer and its cited sources with a 1200x630 preview card,
   written only once the call settles and kept 30 days (then 410). The page
   is not indexed; /privacy describes what it keeps.
+Payments:
+- A Solana payment refused because the paying wallet has no USDC account
+  or less USDC than the price now says so (reason no-token-account or
+  insufficient-funds, retry fund-wallet, Retry-After 300) and asks for the
+  wallet to be funded or another listed network, instead of asking for a
+  fresh signature. A wallet refused this way three times in ten minutes
+  gets the same answer without a new check until its Retry-After passes.
 
 ### 2026-11-02 (router on Tempo and MPP, CDP headers in-house)
 Router:
