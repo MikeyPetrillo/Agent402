@@ -386,11 +386,13 @@ await check("reconcile: one status client for Arc, Base and Polygon binds each a
   clock += 10 * 60_000;
   const r = await book.reconcile({ status: circlePendingStatusReader(status, () => book.list()) });
   assert.equal(r.checked, 5);
-  assert.equal(r.owed, 1, JSON.stringify(r));
-  assert.deepEqual(owed.map((o) => [o.network, o.tx]), [[POLYGON, `0x${"d4".repeat(32)}`]], "only the answer on the booked network counts");
+  assert.equal(r.owed, 2, JSON.stringify(r));
+  assert.deepEqual(owed.map((o) => [o.network, o.tx]).sort(), [[POLYGON, TX], [POLYGON, `0x${"d4".repeat(32)}`]].sort(), "an answer on the booked network counts; one naming no network is read as the booked one");
   assert.equal(r.failed, 0, "a failure named on another network does not drop the entry either");
-  assert.equal(r.unreadable, 4);
-  assert.deepEqual(book.list().map((e) => e.paymentId).sort(), [uuid(1), uuid(2), uuid(3), uuid(4)]);
+  assert.equal(r.unreadable, 3);
+  assert.deepEqual(book.list().map((e) => e.paymentId).sort(), [uuid(1), uuid(2), uuid(4)]);
+  // With no booked network to bind to, a multi-network client cannot read an answer naming none.
+  assert.equal(await status.paymentStatus(uuid(3)), null);
   // An id booked on two networks cannot be bound to either.
   const reader = circlePendingStatusReader(status, () => [{ paymentId: uuid(5), network: BASE }, { paymentId: uuid(5), network: POLYGON }]);
   assert.equal(await reader(uuid(5)), null);

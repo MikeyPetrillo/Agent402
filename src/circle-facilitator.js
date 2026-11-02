@@ -368,8 +368,9 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   /** Circle's final word on one payment: { status, transaction, network } with
    *  status "pending" | "completed" | "failed", or null when it cannot be read.
    *  With `network` (the one the payment was booked or settled on), an answer
-   *  naming any other network is null, never a settlement; so is an answer
-   *  naming none while this instance settles more than one network. */
+   *  naming any other network is null, never a settlement. An answer naming
+   *  none is read as `network`: the payment id is the one issued for the
+   *  settle we sent on that network (the caller refuses an id booked twice). */
   async paymentStatus(paymentId, { network: expected } = {}) {
     if (typeof paymentId !== "string" || !UUID.test(paymentId)) return null;
     if (expected !== undefined && !this._networks.has(expected)) return null;
@@ -378,7 +379,8 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     if (!r.ok || r.parseError || !isObj(r.data)) return null;
     const { status, transaction, network } = r.data;
     if (network !== undefined && !this._networks.has(network)) return null;
-    if (expected !== undefined && (network === undefined ? this._networks.size !== 1 : network !== expected)) return null;
+    if (expected !== undefined && network !== undefined && network !== expected) return null;
+    if (expected === undefined && network === undefined && this._networks.size !== 1) return null;
     const named = network === undefined ? expected : network;
     if (status === "completed") return TX.test(String(transaction || "")) ? { status, transaction, network: named } : null;
     if (status === "failed" || status === "pending") return { status, transaction: null, network: named };

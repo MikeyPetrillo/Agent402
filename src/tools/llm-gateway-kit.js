@@ -1211,11 +1211,6 @@ export function defaultModelCompatNote(tier) {
   return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget) is served by ${tier.defaultModelCompat}.`;
 }
 
-/** One refusal for the parameters a model does not take, shared by the chat,
- *  Messages and Responses wires: a knob the upstream would drop silently, or
- *  refuse with an unexplained upstream error, is named in a 400 before any
- *  upstream call (a 400 cancels settlement, so nothing is charged).
- *  `effortField` is how this wire spells the depth control. */
 /** The chat wire's refuseUnsupportedParams context, read once from the body. */
 function chatParamCtx(input) {
   const msgs = Array.isArray(input.messages) ? input.messages : [];
@@ -1226,6 +1221,11 @@ function chatParamCtx(input) {
   };
 }
 
+/** One refusal for the parameters a model does not take, shared by the chat,
+ *  Messages and Responses wires: a knob the upstream would drop silently, or
+ *  refuse with an unexplained upstream error, is named in a 400 before any
+ *  upstream call (a 400 cancels settlement, so nothing is charged).
+ *  `effortField` is how this wire spells the depth control. */
 export function refuseUnsupportedParams(model, { sampling = {}, endsWithAssistant = false, reasoningBudget = false, effortField = "reasoning.effort" } = {}) {
   if (noSamplingKnobs(model)) {
     for (const k of ["temperature", "top_p"]) {

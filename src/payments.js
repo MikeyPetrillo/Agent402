@@ -2505,14 +2505,6 @@ export function fallbackCandidatesFor(network, payAiClient, solvadorClient, over
 }
 
 /**
- * Settle-fallback overrides that append one settler AFTER a network's default
- * chain (fallbackCandidatesFor), on each of `networks`, while `confirmed`
- * (read at each settle) holds that network. It never replaces or reorders an
- * earlier candidate, and the hook reaches it only past the same double-settle
- * gate as every other fallback: each earlier settler must have refused
- * before broadcasting.
- */
-/**
  * Keeps `confirmed` (read at each settle by lastResortFallbackOverrides) equal
  * to the networks of `wanted` that the client's latest /supported lists exact
  * for. Each refresh recomputes the set in place, so a chain the facilitator
@@ -2577,6 +2569,14 @@ export function circlePendingStatusReader(client, listEntries) {
   };
 }
 
+/**
+ * Settle-fallback overrides that append one settler AFTER a network's default
+ * chain (fallbackCandidatesFor), on each of `networks`, while `confirmed`
+ * (read at each settle) holds that network. It never replaces or reorders an
+ * earlier candidate, and the hook reaches it only past the same double-settle
+ * gate as every other fallback: each earlier settler must have refused
+ * before broadcasting.
+ */
 export function lastResortFallbackOverrides({ networks, payAiClient, solvadorClient, last, confirmed }) {
   const out = {};
   for (const n of networks) {
