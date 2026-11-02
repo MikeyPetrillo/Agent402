@@ -27,6 +27,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { dbSsl } from "./db-ssl.js";
 import { runAsJob } from "./active-jobs.js";
 import { envPositive as envMs } from "./env-num.js";
+import { withLoopDeadline } from "./loop-deadline.js";
 
 const { Pool } = pg;
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,40}$/;
@@ -970,10 +971,9 @@ export async function releaseHeldLeases({ timeoutMs = 3_000 } = {}) {
       return releaseEntry(e);
     })());
   }
-  let timer;
-  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); timer.unref?.(); });
-  const r = await Promise.race([Promise.all(work), deadline]);
-  clearTimeout(timer);
+  // Loop time (src/loop-deadline.js): a release answered while the loop was
+  // held is counted, not left for the lease's own expiry.
+  const r = await withLoopDeadline(Promise.all(work), timeoutMs, null);
   return Array.isArray(r) ? r.reduce((a, b) => a + b, 0) : 0;
 }
 

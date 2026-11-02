@@ -17,9 +17,11 @@
 const LATE_MS = 20;
 
 /**
- * Call `onExpire` after `ms` of loop time. Returns cancel(). `now` is a test seam.
+ * Call `onExpire` after `ms` of loop time. Returns cancel(). `now` is a test
+ * seam. The timer is unref'd unless `ref` is true (a wait that must keep the
+ * process alive until it answers or expires).
  */
-export function loopDeadline(ms, onExpire, { now = () => performance.now() } = {}) {
+export function loopDeadline(ms, onExpire, { now = () => performance.now(), ref = false } = {}) {
   let done = false, timer = null, immediate = null, rearmed = false;
   let due = now() + ms;
   const expire = () => { immediate = setImmediate(() => { immediate = null; if (!done) { done = true; onExpire(); } }); };
@@ -37,16 +39,16 @@ export function loopDeadline(ms, onExpire, { now = () => performance.now() } = {
       }
       expire();
     }, Math.max(0, wait));
-    timer.unref?.();
+    if (!ref) timer.unref?.();
   };
   arm(ms);
   return () => { done = true; if (timer) clearTimeout(timer); if (immediate) clearImmediate(immediate); };
 }
 
 /** Resolve `p`, or reject with `error()` when it has not settled within `ms` of loop time. */
-export function withLoopTimeout(p, ms, error) {
+export function withLoopTimeout(p, ms, error, { ref = false } = {}) {
   return new Promise((resolve, reject) => {
-    const cancel = loopDeadline(ms, () => reject(error()));
+    const cancel = loopDeadline(ms, () => reject(error()), { ref });
     Promise.resolve(p).then((v) => { cancel(); resolve(v); }, (e) => { cancel(); reject(e); });
   });
 }

@@ -13,6 +13,7 @@
 // of queueing. Repeat queries are answered by the response cache
 // (src/cache.js), which the policy also asks for.
 import { getSharedRedisClient } from "../shared-limit.js";
+import { withLoopTimeout } from "../loop-deadline.js";
 import { sharedLimitsEnabled, keyOf, noteSharedLimitsDegraded } from "../shared-limits.js";
 
 const SLOT_MS = 1000;
@@ -25,12 +26,10 @@ const sharedDeadlineMs = () => envMs("NOMINATIM_SHARED_DEADLINE_MS", 250);
 const replicas = () => Math.max(1, Math.floor(Number(process.env.RATE_LIMIT_REPLICAS) || 1));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Loop time (src/loop-deadline.js): a slot answer that landed while the loop
+// was held is read, not taken for a store that did not answer.
 function within(p, ms) {
-  let timer;
-  return Promise.race([
-    p,
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms); timer.unref?.(); }),
-  ]).finally(() => clearTimeout(timer));
+  return withLoopTimeout(p, ms, () => new Error(`no answer in ${ms} ms`));
 }
 
 let localNextAt = 0;

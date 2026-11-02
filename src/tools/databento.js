@@ -30,6 +30,7 @@
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, isUpstreamFailure } from "../upstream-deadline.js";
 import { getSharedRedisClient } from "../shared-limit.js";
+import { withLoopTimeout } from "../loop-deadline.js";
 import { leased } from "../state-db.js";
 
 const HOST = "https://hist.databento.com/v0";
@@ -151,12 +152,10 @@ export const SHARED_BARS_TTL_S = 36 * 3600;
 const SHARED_RANGE_TTL_S = 2 * 3600;
 const sharedCounts = { hits: 0, misses: 0, writes: 0, errors: 0 };
 const sharedPending = new Set();
+// Loop time (src/loop-deadline.js): a shared answer that landed while the
+// loop was held is read, not counted as a miss.
 function within(p) {
-  let timer;
-  return Promise.race([
-    p,
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${SHARED_DEADLINE_MS} ms`)), SHARED_DEADLINE_MS); timer.unref?.(); }),
-  ]).finally(() => clearTimeout(timer));
+  return withLoopTimeout(p, SHARED_DEADLINE_MS, () => new Error(`no answer in ${SHARED_DEADLINE_MS} ms`));
 }
 async function sharedClient() {
   try { return await within(getSharedRedisClient()); } catch { return null; }

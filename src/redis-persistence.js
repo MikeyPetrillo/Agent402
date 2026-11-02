@@ -13,6 +13,7 @@
 // the operator view (`full`). A read that fails keeps the last parsed fields
 // for the operator and the word goes to unknown until a read succeeds.
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 
 /** How often persistence is re-read once a read has answered (REDIS_PERSISTENCE_CHECK_MS, default five minutes). */
 export const CHECK_MS = () => Math.max(1_000, Number(process.env.REDIS_PERSISTENCE_CHECK_MS) || 300_000);
@@ -63,12 +64,10 @@ export function persistenceWord(fields) {
   return fields.aofLastWriteStatus === "ok" && fields.aofLastBgrewriteStatus === "ok" ? "on" : "degraded";
 }
 
-/** Resolves `p`, or rejects once `ms` has passed (the command keeps running on its client). */
+/** Resolves `p`, or rejects once `ms` of loop time has passed (src/loop-deadline.js;
+ *  the command keeps running on its client). Ref'd, as the plain timer was. */
 function withTimeout(p, ms) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("redis persistence: read timed out")), ms);
-    Promise.resolve(p).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-  });
+  return withLoopTimeout(p, ms, () => new Error("redis persistence: read timed out"), { ref: true });
 }
 
 /**

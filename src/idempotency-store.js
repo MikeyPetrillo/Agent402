@@ -12,6 +12,7 @@
 // the credential itself. Bodies are capped as before (IDEM_MAX_BODY_BYTES per
 // entry; the local store also caps total bytes and entries).
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 
 // Ten minutes; IDEM_TTL_MS overrides it (a paid-mode test shortens it to prove
 // a replay past the window is not served from the store).
@@ -77,11 +78,9 @@ const RELEASE_RETRY_MS = 5_000;
 export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedRedisClient, local = createLocalIdempotencyStore({ ttlMs }), opTimeoutMs = REDIS_OP_MS, releaseRetryMs = RELEASE_RETRY_MS } = {}) {
   const client = async () => { try { return await redis(); } catch { return null; } };
   // A Redis command that neither answers nor fails must not park the request.
-  const op = (p) => new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("redis op timeout")), opTimeoutMs);
-    t.unref?.();
-    Promise.resolve(p).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-  });
+  // Loop time (src/loop-deadline.js): an answer that landed while the loop was
+  // held is read, not taken for a store that did not answer.
+  const op = (p) => withLoopTimeout(p, opTimeoutMs, () => new Error("redis op timeout"));
   // Keys this process released locally whose Redis claim could not be deleted.
   const pendingRelease = new Map(); // key -> deadline (ms)
   // Keys whose claim this process holds in Redis (only those need a Redis delete).

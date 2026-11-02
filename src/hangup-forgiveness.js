@@ -86,6 +86,7 @@ import { createJsonDocument } from "./json-document.js";
 import { stateDbEnabled, trackStoreReady } from "./state-db.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 
 const MICRO = 1_000_000;
 const MAX_KEYS = 20_000;
@@ -251,19 +252,19 @@ async function reserveSharedTicket(ticket, cfg, now) {
     else perWindow.push(cfg.keyMicro, inflightByKey.get(k) || 0, abandonedMicro(k, now, cfg.windowMs), firstEligible(ticket) ? 1 : 0);
   }
   const inMs = INFLIGHT_WINDOW_MS();
-  let timer = null;
   try {
-    const bound = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("shared-limits: command timed out")), OP_MS()); timer.unref?.(); });
-    const r = await Promise.race([c.eval(TICKET_RESERVE, {
+    // Loop time (src/loop-deadline.js): an answer that landed while the loop
+    // was held is read, not booked as a store that did not answer.
+    const r = await withLoopTimeout(c.eval(TICKET_RESERVE, {
       keys,
       arguments: [now - inMs, now - cfg.windowMs, Math.max(1, Math.round(inMs)), `${Math.trunc(ticket.micro)}|${ticket.id}`, now, ticket.micro, ...perWindow].map(String),
-    }), bound]);
+    }), OP_MS(), () => new Error("shared-limits: command timed out"));
     if (Number(r?.[0]) === 1) return { granted: true };
     return { granted: false, index: Math.max(0, (Number(r?.[1]) || 1) - 1) };
   } catch (e) {
     noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
     return null;
-  } finally { if (timer) clearTimeout(timer); }
+  }
 }
 function sharedGrant(ticket, now) {
   for (const k of [GLOBAL_KEY, ...ticket.keys]) void sharedWrite(CONTROL, shared.windowAdd("hf-in", k, { windowMs: INFLIGHT_WINDOW_MS(), member: ticket.id, weight: ticket.micro, now }));
