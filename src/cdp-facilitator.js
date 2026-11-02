@@ -5,8 +5,9 @@
 // so the facilitator path no longer installs @coinbase/cdp-sdk and its
 // nested zod 3 copies. Same URL, the same four header groups, the same
 // Correlation-Context string, and a fresh JWT per path and per call whose
-// claims match the SDK's generateJwt (sub, iss, uris, iat, nbf, exp + 120 s;
-// header alg, kid, typ, nonce). Only the auth headers are built here: the
+// claims match generateJwt in @coinbase/cdp-sdk 1.51.0 (sub, iss, uris, iat,
+// nbf, exp + 120 s, no aud; header alg, kid, typ, nonce). The 1.29.0 named in
+// the Correlation-Context below hard-coded aud ["cdp_service"]. Only the auth headers are built here: the
 // payment payloads are still validated by @x402/core. Pinned by
 // scripts/test-cdp-facilitator.js.
 import { mintCdpJwt } from "./tools/cdp-kit.js";

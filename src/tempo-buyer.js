@@ -454,7 +454,13 @@ export async function payTempo(url, {
       if (verdict && verdict.used === false && verdict.expired === true) {
         committed = false;
         const where = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
-        console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged`);
+        // A 5xx is still the seller's backend failing on the router's
+        // purchase, so it is a strike in the delivery memo (the router skips a
+        // seller there after two), as it was before the chain read. Nothing
+        // moved, so no outbound or spend row is written for it.
+        const struck = memoizeDelivery && paid.status >= 500;
+        if (struck) { try { noteSellerDeliveryFailure(new URL(url).origin, "tempo", { status: paid.status, ms: Date.now() - sentAt }); } catch { /* unparseable url: nothing to key */ } }
+        console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged${struck ? ", noted as failing to deliver on tempo" : ""}`);
         const e = bad(paid.status === 402 || paid.status === 401
           ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`
           : `Seller refused the request before taking payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);

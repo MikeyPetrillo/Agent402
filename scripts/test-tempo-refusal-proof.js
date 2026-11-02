@@ -15,9 +15,11 @@
 //   budget    the wait is what is left of the caller's bound after the
 //             purchase; an expiry past it is not polled for
 //   signBy    a buyer authorization past its signing bound signs nothing
-//   buyer     a proven-unused refusal says so, carries no committed stamp,
-//             records no outbound debt and no delivery strike; every other
-//             failure after the credential left is booked exactly as before
+//   buyer     a proven-unused refusal says so, carries no committed stamp
+//             and records no outbound debt; a proven-unused 5xx is still a
+//             delivery strike on the router's purchase (two skip the seller),
+//             a 4xx or 402 is not; every other failure after the credential
+//             left is booked exactly as before
 //   router    a Tempo candidate that spent nothing before its credential left
 //             falls through to the next candidate; a committed or waited-on
 //             failure does not
@@ -35,7 +37,7 @@ process.env.X402_INDEX_CRAWL = "off";
 
 (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const { payTempo, tempoCredentialVerdict, tempoHeadNumber, TEMPO_USDC, TEMPO_CAIP2 } = await import("../src/tempo-buyer.js");
-const { sellerDeliveryMemoEntries, __resetSellerDeliveryFailuresForTest } = await import("../src/x402-buyer.js");
+const { sellerDeliveryMemoEntries, sellerDeliveryFailingRecently, __resetSellerDeliveryFailuresForTest } = await import("../src/x402-buyer.js");
 const guard = await import("../src/external-spend-guard.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const { Challenge, Credential } = await import("mppx");
@@ -200,12 +202,26 @@ const origin = base;
   ok(e && /refused the request before taking payment \(HTTP 400\); the credential expired unused, nothing charged/.test(e.message) && !/after payment/.test(e.message), `a proven-unused 400 says the seller refused before payment (got "${e?.message}")`);
   ok(e.committed === false && e.signedUsd === undefined && e.refused === true, "...and carries no committed stamp and no signed amount");
   ok(outbound().length === before, "...and records no outbound payment");
-  mode = { status: 502, receipt: false };
-  const e5 = await buy("/bad5");
-  ok(e5 && e5.committed === false && /before taking payment \(HTTP 502\)/.test(e5.message) && sellerDeliveryMemoEntries().length === 0 && outbound().length === before, "a proven-unused 502 is a refusal: no delivery strike, no outbound row");
+  ok(sellerDeliveryMemoEntries().length === 0, "...and no delivery strike (a 4xx with no receipt is the seller answering the request)");
   mode = { status: 402, receipt: false };
   const e2 = await buy("/bad402");
   ok(e2 && e2.committed === false && /^Seller refused the payment \(HTTP 402\); the credential expired unused, nothing charged/.test(e2.message), "a proven-unused 402 reads as the payment refused, nothing charged");
+  ok(sellerDeliveryMemoEntries().length === 0 && outbound().length === before, "...with no delivery strike and no outbound row");
+  // A 5xx is the seller's backend failing on the router's purchase whether or
+  // not a payment was taken: a delivery strike (so the router stops choosing
+  // it), never an outbound or spend row (nothing moved).
+  mode = { status: 502, receipt: false };
+  const e5 = await buy("/bad5");
+  ok(e5 && e5.committed === false && e5.signedUsd === undefined && /before taking payment \(HTTP 502\)/.test(e5.message), "a proven-unused 502 says nothing was charged and carries no committed stamp");
+  const strikes = () => sellerDeliveryMemoEntries().filter((m) => m.chain === "tempo" && m.origin === origin);
+  ok(strikes().length === 1 && strikes()[0].strikes === 1 && strikes()[0].status === 502, `...and is a first delivery strike on tempo (got ${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  ok(outbound().length === before, "...and records no outbound payment");
+  await buy("/bad5");
+  ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx makes the router skip the seller");
+  ok(outbound().length === before, "...still with no outbound row");
+  __resetSellerDeliveryFailuresForTest();
+  const e5x = await buy("/bad5", { memoizeDelivery: false });
+  ok(e5x && e5x.committed === false && sellerDeliveryMemoEntries().length === 0, "a purchase that is not the router's own (no memoizeDelivery) strikes nothing");
 }
 // POSSIBLY PAID: booked exactly as before.
 for (const [label, setup] of [
