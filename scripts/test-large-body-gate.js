@@ -162,7 +162,7 @@ try {
 
   // 1. Compressed bodies are refused before they are read, paid or not.
   const gz = gzipSync(JSON.stringify({ prompt: "x", images: ["data:image/png;base64," + "A".repeat(4 * 1024 * 1024)] }));
-  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions"]) {
+  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions", "/api/onchain-sql"]) {
     const r = await post(path, gz, { "content-encoding": "gzip" });
     ok(r.status === 415, `${path}: a gzip body is refused 415 (got ${r.status})`);
   }
