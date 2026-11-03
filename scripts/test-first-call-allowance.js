@@ -35,7 +35,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -355,12 +355,20 @@ try {
   // ---------------- Boot C: a slow handler, no forgiveness ticket ----------------
   // A preload wraps the web answer stub with a delay, so a client can leave
   // while the handler runs (after the claim, before the answer).
-  const pre = join(mkdtempSync(join(tmpdir(), "fca-preload-")), "slow-answer.mjs");
+  // The preload marks a file when the handler reaches the upstream, so the
+  // client leaves once the handler is running, however long the gates took.
+  const preDir = mkdtempSync(join(tmpdir(), "fca-preload-"));
+  const pre = join(preDir, "slow-answer.mjs");
+  const handlerMark = join(preDir, "handler-started");
   writeFileSync(pre, `import ${JSON.stringify(join(ROOT, "scripts", "lib", "brave-answer-stub-preload.js"))};
+import { writeFileSync as markFile } from "node:fs";
 const stubbed = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input?.url || String(input);
-  if (url.startsWith("https://api.search.brave.com/res/v1/chat/completions")) await new Promise((r) => setTimeout(r, 800));
+  if (url.startsWith("https://api.search.brave.com/res/v1/chat/completions")) {
+    markFile(${JSON.stringify(handlerMark)}, "1");
+    await new Promise((r) => setTimeout(r, 800));
+  }
   return stubbed(input, init);
 };
 `);
@@ -375,9 +383,12 @@ globalThis.fetch = async (input, init) => {
     const accept = await acceptFor(C.B, path, "GET");
     const sC = settles;
     const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 300);
-    await fetch(`${C.B}${path}`, { headers: { "payment-signature": credential(accept, wallet(0x71)), "x-forwarded-for": "10.9.1.1" }, signal: ac.signal }).then((x) => x.text()).catch(() => null);
-    clearTimeout(t);
+    const call = fetch(`${C.B}${path}`, { headers: { "payment-signature": credential(accept, wallet(0x71)), "x-forwarded-for": "10.9.1.1" }, signal: ac.signal }).then((x) => x.text()).catch(() => null);
+    let started = false;
+    for (let i = 0; i < 200 && !started; i++) { started = existsSync(handlerMark); if (!started) await sleep(25); }
+    ok(started, "the slow handler reached its upstream (the client leaves only after that)");
+    ac.abort();
+    await call;
     let st = null;
     for (let i = 0; i < 40; i++) { st = await opJson(C.B, "/__operator/refunds.json"); if (st.firstCallAllowance?.processToday?.served >= 1 || st.firstCallAllowance?.processToday?.released >= 1) break; await sleep(100); }
     await sleep(200);

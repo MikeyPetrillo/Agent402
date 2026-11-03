@@ -137,6 +137,7 @@ const DEFAULTS = {
   "src/indexnow.js": { n: 2, cls: "fixed" },
   "src/late-settlements.js": { n: 1, cls: "fixed", note: "the configured chain RPC (evmRpcFor), through rpc() with its timeout" },
   "src/mcp-mpp.js": { n: 1, cls: "loopback" },
+  "src/model-catalog.js": { n: 1, cls: "fixed", note: "the upstream's public model list (MODEL_CATALOG_URL in tests), hourly, with its own timeout" },
   "src/pending-settle.js": { n: 1, cls: "fixed", note: "the configured chain RPC (evmRpcFor), through rpc() with its timeout" },
   "src/mpp-reconcile.js": { n: 1, cls: "fixed" },
   "src/mpp-stripe.js": { n: 1, cls: "fixed" },

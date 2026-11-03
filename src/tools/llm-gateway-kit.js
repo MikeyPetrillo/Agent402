@@ -57,6 +57,7 @@ import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
+import { unknownModelRefusal } from "../model-catalog.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -847,6 +848,19 @@ export function retiringModel(model) {
   const entry = RETIRING_MODELS[key];
   if (retirementPending(entry)) return null;
   return { id: raw, ...entry };
+}
+
+/** The pre-payment refusal for a metered model id the upstream's live list
+ *  does not carry (src/model-catalog.js), or null. Ids with no vendor ("auto",
+ *  "default") keep their own answers, and an id this gateway retires or can
+ *  serve through a successor is never refused here: its own fallback decides. */
+export function meteredModelRefusal(model) {
+  const id = String(model || "").toLowerCase();
+  if (!id.includes("/")) return null;
+  const base = id.split(":")[0];
+  if (Object.hasOwn(RETIRING_MODELS, base) || Object.hasOwn(RETIRING_MODELS, base.replace(/-\d{4}-\d{2}-\d{2}$/, ""))) return null;
+  if (successorsOf(base).length) return null;
+  return unknownModelRefusal(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
 }
 
 /** Same-family successors for models whose whole upstream can vanish at once
@@ -1884,6 +1898,12 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
         ? `Model "${model}" is served by the ${home} tier - call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call), or ${TIERS["v1-chat-metered"] ? `${TIERS["v1-chat-metered"].route.split(" ")[1]} (the same model, quoted per request from $${tierPriceLabel(TIERS["v1-chat-metered"].price)})` : "the metered route"} instead.`
         : `Model "${model}" is not in the gateway allowlist. GET /v1/models lists every supported model and its tier.`
     );
+  }
+  // The metered route takes any id under its vendor prefixes; one the live
+  // list does not carry is refused here (and before payment, server.js).
+  if (tier.metered) {
+    const unknown = meteredModelRefusal(model);
+    if (unknown) { const e = bad(unknown); e.code = "unknown_model"; throw e; }
   }
 
   const messages = input.messages;
