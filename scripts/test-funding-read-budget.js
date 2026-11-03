@@ -201,11 +201,15 @@ function getLogs(p) {
     return b >= lo && b <= hi && (!froms || froms.has(l.topics[1].toLowerCase())) && (!tos || tos.has(l.topics[2].toLowerCase()));
   });
 }
+// Connection: close on every reply, so no pooled socket is reused: the scan's
+// refreshes are seconds apart, and a socket the server's idle keep-alive timer
+// closes while the client still holds it is read as ECONNRESET on the next
+// request.
 const srv = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
-    const send = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+    const send = (o) => { res.writeHead(200, { "content-type": "application/json", connection: "close" }); res.end(JSON.stringify(o)); };
     if (req.url.startsWith("/bazaar")) return send(/offset=0/.test(req.url) ? { items: chain.items, pagination: { total: chain.items.length } } : { items: [] });
     const j = JSON.parse(body || "{}");
     if (j.method === "eth_blockNumber") return send({ jsonrpc: "2.0", id: j.id, result: hex(LATEST) });
