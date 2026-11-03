@@ -537,15 +537,16 @@ export function subqueryDepth(sql) {
   }
   return max;
 }
-/** Whether a keyword the pattern names stands outside every parenthesis of
- *  the clause mask. */
+/** Whether a clause the sticky pattern names stands outside every
+ *  parenthesis of the clause mask (the pattern is tried at each word start,
+ *  on the whole string, so a gap of any length inside it is read). */
 function outerClause(masked, re) {
   let depth = 0;
   for (let i = 0; i < masked.length; i++) {
     const c = masked[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`.]/.test(masked[i - 1])) && re.test(masked.slice(i, i + 16))) return true;
+    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`.]/.test(masked[i - 1]))) { re.lastIndex = i; if (re.test(masked)) return true; }
   }
   return false;
 }
@@ -623,7 +624,7 @@ export function cappedSql(sql, { wrap = null } = {}) {
   // and so is an outer OFFSET or FETCH with no LIMIT before it: a LIMIT
   // appended behind either would be a syntax error the buyer did not write.
   if (lim?.unreadable) return asWritten;
-  if (!lim && outerClause(masked, /^(?:offset\s+\d|fetch\s+(?:first|next)\b)/i)) return asWritten;
+  if (!lim && outerClause(masked, /(?:offset\s*(?:\d|\()|fetch\s+(?:first|next)\b)/iy)) return asWritten;
   const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
   return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
 }
