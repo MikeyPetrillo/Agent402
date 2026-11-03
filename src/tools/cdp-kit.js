@@ -25,6 +25,7 @@
 // the SDK's auth/utils/jwt.ts exactly.
 import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
 import { redactSecrets } from "./redact.js";
+import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
@@ -134,14 +135,25 @@ export function sqlShape(sql) {
   return `len=${s.length},tables=${tables.join("+") || "-"},where=${has(/\bwhere\b/i)},limit=${has(/\blimit\b/i)},groupby=${has(/\bgroup\s+by\b/i)},orderby=${has(/\border\s+by\b/i)},joins=${(s.match(/\bjoin\b/gi) || []).length},timefilter=${has(/\bblock_(?:timestamp|number)\b[^;]*?(?:>|<|between)/i)}`;
 }
 
-async function cdpFetch(method, path, body, { idempotent = method === "GET", slowGatewayFinal = false } = {}) {
+// A buyer's SQL query (onchain-sql): the query service answers a 5xx when a
+// result is too large to return (an instant 500; a wide table's slow 502),
+// and the same query fails the same way, so it is tried twice at most, a
+// slow 502/504 once, and the answer says how to narrow it.
+const QUERY_ATTEMPTS = 2;
+function narrowQueryError(status, tookMs) {
+  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a result is too large or too slow to send: select fewer columns, add a block_number range or an address filter, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, 502);
+  e.hint = "narrow-query";
+  return e;
+}
+
+async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false } = {}) {
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
   // Ride out a transient CDP-side blip (a 5xx from their indexer, a timeout)
   // rather than surfacing it to the caller: up to 5 attempts with exponential +
   // jittered backoff (~0.4s, 0.8s, 1.6s, 3.2s, capped 4s).
-  const ATTEMPTS = 5;
+  const ATTEMPTS = buyerQuery ? QUERY_ATTEMPTS : 5;
   let lastErr;
   let rateLimited = 0;
   let waitMs = null;
@@ -196,10 +208,11 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", slo
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
     if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
     const tookMs = Date.now() - started;
-    if (slowGatewayFinal && (res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
-      const e = bad(`CDP's query service answered HTTP ${res.status} after ${Math.round(tookMs / 1000)} s, its answer to a query that runs past its time limit. Narrow the query (a block_timestamp or block_number range, an address filter, a LIMIT) or set cacheSeconds; resending it unchanged fails the same way. Nothing was charged.`, 502);
-      e.hint = "narrow-query";
-      throw e;
+    if (buyerQuery && res.status >= 500) {
+      const final = attempt + 1 >= ATTEMPTS || ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs);
+      if (final) throw narrowQueryError(res.status, tookMs);
+      lastErr = narrowQueryError(res.status, tookMs);
+      continue;
     }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
     if (res.status < 500) throw lastErr; // other non-5xx - not retryable
@@ -226,6 +239,21 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
   const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
   const rows = res?.result ?? res?.rows ?? res?.data ?? res;
   return Array.isArray(rows) ? rows : [];
+}
+
+// Rows a buyer's query returns at most. The query service fails a result of
+// a few megabytes (measured 2026-11-03: 2,000 solana.instructions rows, about
+// 2 MB, returned; 5,000 failed; base.transactions failed from 5,000 to 10,000
+// rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
+// which also says whether the result was cut.
+export const SQL_MAX_ROWS = 1000;
+/** The query sent upstream: a plain SELECT wrapped with the row cap. A query
+ *  opening with WITH, or carrying SETTINGS or FORMAT, cannot sit inside a
+ *  subquery there and is sent as written. */
+export function cappedSql(sql) {
+  const s = String(sql || "").trim().replace(/;+\s*$/, "");
+  if (/^with\b/i.test(s) || /\b(settings|format)\b/i.test(s)) return { sql: s, capped: false };
+  return { sql: `SELECT * FROM (${s}) LIMIT ${SQL_MAX_ROWS + 1}`, capped: true };
 }
 
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -465,20 +493,20 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.020",
     description:
-      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions and hyperevm.events. ClickHouse-dialect SELECTs, server-side grammar validation, up to 50k rows / 30s / 12 joins. Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
+      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions. ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions, hyperevm.events" },
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions. Returns up to 1,000 rows; a larger result is cut and marked truncated." },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
       },
       output: {
-        example: { rows: [{ txs: 123456 }], rowCount: 1 },
+        example: { rows: [{ txs: 123456 }], rowCount: 1, maxRows: 1000, returned: 1, matched: 1, complete: true, truncated: false },
       },
     },
     handler: async (input) => {
@@ -491,10 +519,20 @@ export const CDP_TOOLS = [
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
         body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
       }
-      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, slowGatewayFinal: true });
+      const capped = cappedSql(sql);
+      body.sql = capped.sql;
+      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true });
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
-      const list = Array.isArray(rows) ? rows : [];
-      return { rows: list, rowCount: list.length, ...(Array.isArray(rows) ? {} : { raw: res }) };
+      const all = Array.isArray(rows) ? rows : [];
+      const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
+      const cut = all.length > list.length;
+      return {
+        rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
+        ...partialFields(all.length, list.length),
+        ...(cut ? { matchedIsLowerBound: true, note: `More than ${SQL_MAX_ROWS} rows matched; the first ${SQL_MAX_ROWS} are returned. Add ORDER BY with a LIMIT, a block_number range or an aggregate to get the rows you need.` } : {}),
+        ...(capped.capped ? {} : { rowCapApplied: false }),
+        ...(Array.isArray(rows) ? {} : { raw: res }),
+      };
     },
   },
   {
