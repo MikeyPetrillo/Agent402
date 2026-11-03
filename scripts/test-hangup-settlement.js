@@ -471,10 +471,18 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // Another request already holds the duplicate's authorization.
   const other = {};
   ok((await runChain(ctxFor(other, { nonce: DUP_NONCE }))).sent === true, "a stand-in request claims the duplicate's authorization first (every hook passes for it)");
-  for (const [mode, abortAfterMs] of [["sent", 350], ["allowance", 350], ["duplicate", 350], ["gone-first", 80], ["gone-between", 350]]) {
+  // The close is timed against the chain, not the clock: once the chain has
+  // decided (the handler then holds its answer 400 ms), or for gone-first
+  // inside the handler's first 200 ms, before the chain runs. A close on a
+  // fixed timer raced the chain's own duration: four hooks that took over
+  // 150 ms on a starved host put the close before the decision, and "sent"
+  // read as gone-first. The read then waits (bounded) for the response end,
+  // where the mark, the outcome and the end listeners run.
+  for (const mode of ["sent", "allowance", "duplicate", "gone-first", "gone-between"]) {
     const before = hangupForgivenessStatus().abandonedInWindow;
-    await hangUp(`${url}/${mode}`, { abortAfterMs });
-    await sleep(700);
+    await hangUp(`${url}/${mode}`, mode === "gone-first" ? { abortAfterMs: 80 } : { abortWhen: waitFor(() => decided[mode] !== undefined, 5000) });
+    await waitFor(() => seen.some((s) => s.mode === mode) && ended.some((e) => e.mode === mode), 5000);
+    await sleep(200);
     const req = seen.find((s) => s.mode === mode);
     const after = hangupForgivenessStatus().abandonedInWindow;
     if (mode === "sent") {
@@ -694,6 +702,20 @@ const logSince = (i) => serverLog.slice(i).join("\n");
 let opReads = 0;
 const refundsDoc = async () => (await fetch(`${B}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}`, "x-forwarded-for": `10.254.${Math.floor(++opReads / 250) % 250}.${opReads % 250}` } })).json();
 const refunds = async () => (await refundsDoc()).refunds || [];
+// A booking lands a moment after its settle, and a settle lands a moment
+// after the handler ends, so a count read after a fixed sleep races both
+// under a server that stalls while its lazy deps warm. A snapshot waits
+// (bounded) for the rows it expects and the assertion reads the list it
+// waited on: two reads of the ledger around one assertion can straddle a
+// landing row, and a slice of the first list then names the wrong row.
+// The bound on a wait for the server. On a starved host (three servers and a
+// gate beside this one) its loop stalled 8 to 32 s with no GC, and a settle
+// whose facilitator call hit a connect timeout inside such a stall landed
+// after the library's retry. A wait that outlasts the stall asserts nothing
+// less: a run that never settles or books still fails at the bound.
+const STALL_WAIT_MS = 30_000;
+const refundsUntil = async (pred, ms = STALL_WAIT_MS) => { const t0 = Date.now(); let all = await refunds(); while (!pred(all) && Date.now() - t0 < ms) { await sleep(100); all = await refunds(); } return all; };
+const refundsAtLeast = (n, ms) => refundsUntil((all) => all.length >= n, ms);
 
 // Crafted credentials: the stub facilitator is the only verifier, so a
 // credential names its payer in authorization.from and a fresh nonce makes it
@@ -727,7 +749,7 @@ const wallet = (n) => `0x${n.toString(16).padStart(40, "0")}`;
 // A hang-up once the upstream call has started (the handler is running).
 const hangUpMidRun = async (t, payer, ip, { counter = "images", delayMs = 150 } = {}) => {
   const c0 = or[counter];
-  const upstreamSeen = waitFor(() => or[counter] > c0, 8000);
+  const upstreamSeen = waitFor(() => or[counter] > c0, STALL_WAIT_MS);
   let abortedAt = 0;
   await hangUp(`${B}${t.path}`, { method: "POST", headers: await headersFor(t, payer, ip), body: t.body, abortWhen: upstreamSeen.then(() => sleep(delayMs)).then(() => { abortedAt = Date.now(); }) });
   return () => abortedAt;
@@ -786,10 +808,10 @@ try {
     const settlesBefore = fac.settle, logAt = serverLog.length;
     const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
     await hangUp(`${B}/api/uuid`, { headers: { [mintedHeader]: minted, "x-forwarded-for": "10.0.0.2" }, abortWhen: settleSeen.then(() => sleep(100)) });
-    await sleep(1_800);
+    const booked = await refundsUntil((all) => all.some((row) => row.slug === "uuid"));
     fac.settleDelayMs = 0;
     ok(fac.settle - settlesBefore === 1, `b. a close during the settle call itself: the payment settled (settles +${fac.settle - settlesBefore})`);
-    const rows = (await refunds()).filter((row) => row.slug === "uuid");
+    const rows = booked.filter((row) => row.slug === "uuid");
     ok(rows.length === 1, `b. exactly one debt is recorded for the charge the buyer never received (${rows.length})`);
     ok(rows[0].evidence === fac.lastTx && rows[0].wire === "x402" && rows[0].httpStatus === 499 && (rows[0].network === "base" || rows[0].network === "eip155:8453") && rows[0].status === "owed",
       `b. the debt carries the settle tx, rail and a 499 marker (${JSON.stringify(rows[0])})`);
@@ -843,9 +865,9 @@ try {
     const settlesBefore = fac.settle;
     const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
     await hangUp(`${B}/api/uuid`, { headers: { [mintedHeader]: minted, "x-forwarded-for": "10.0.0.22" }, abortWhen: settleSeen.then(() => sleep(100)) });
-    await sleep(1_800);
+    const owedRow = (all) => all.find((r) => r.slug === "uuid" && r.evidence === fac.lastTx && r.status === "owed");
+    const row = owedRow(await refundsUntil((all) => !!owedRow(all)));
     fac.settleDelayMs = 0;
-    const row = (await refunds()).find((r) => r.slug === "uuid" && r.evidence === fac.lastTx && r.status === "owed");
     ok(!!row, "b2. the charge the buyer never received is owed");
     const upd = await fetch(`${B}/__operator/refunds/update`, { method: "POST", headers: { Authorization: `Bearer ${OP}`, "Content-Type": "application/json", "x-forwarded-for": "10.253.1.2" }, body: JSON.stringify({ id: row.id, action: "paid", tx: "0x" + "ab".repeat(32), note: "repaid by hand" }) });
     ok(upd.status === 200, `b2. the owner marks the debt paid (${upd.status})`);
@@ -880,9 +902,13 @@ try {
     const settlesBefore = fac.settle, logAt = serverLog.length;
     const settleSeen = waitFor(() => fac.settle > settlesBefore, 5000);
     await hangUp(`${B}/api/uuid`, { headers: { [mintedHeader]: minted, "x-forwarded-for": "10.0.0.23" }, abortWhen: settleSeen.then(() => sleep(100)) });
-    await sleep(1_800);
+    // Wait for the server's own line (bounded), then a grace in which a
+    // debt row or a budget charge would still show.
+    const lineOf = () => logSince(logAt).split("\n").find((l) => /\[hangup\]/.test(l) && l.includes("GET /api/uuid ")) || "";
+    await waitFor(() => !!lineOf(), 10_000);
+    await sleep(1_000);
     fac.settleDelayMs = 0; fac.settleFails = false;
-    const line = logSince(logAt).split("\n").find((l) => /\[hangup\]/.test(l) && l.includes("GET /api/uuid ")) || "";
+    const line = lineOf();
     ok(fac.settle - settlesBefore === 1 && /\[hangup\] SETTLE UNCONFIRMED: [^\n]*settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; no forgiveness budget spent/.test(line), `b3. a sent settle that did not confirm is logged as unconfirmed, never as not charged (${line.slice(0, 160)})`);
     ok(!/NOT CHARGED|SETTLE WITHHELD/.test(line), "b3. the line claims nothing was withheld");
     const hfAfter = (await refundsDoc()).hangupForgiveness;
@@ -904,16 +930,20 @@ try {
     const W4 = wallet(0xb4);
     const hfBefore = (await refundsDoc()).hangupForgiveness;
     const c0 = or.chat, s0 = fac.settle, logAt = serverLog.length;
+    const unconfirmed = () => (logSince(logAt).match(/\[hangup\] SETTLE UNCONFIRMED: [^\n]*POST \/v1\/nano\/chat\/completions/g) || []).length;
     for (let i = 1; i <= 3; i++) {
       fac.settleDelayMs = 1_000; fac.settleFails = true;
       const sBefore = fac.settle;
       const settleSeen = waitFor(() => fac.settle > sBefore, 8000);
       await hangUp(`${B}${CHAT.path}`, { method: "POST", headers: await headersFor(CHAT, W4, "10.0.0.24"), body: CHAT.body, abortWhen: settleSeen.then(() => sleep(100)) });
-      await sleep(1_500);
+      // Wait for this run's own unconfirmed line (bounded) before the next
+      // hang-up, so each failed settle is on the breaker before the next run.
+      await waitFor(() => unconfirmed() >= i, 10_000);
+      await sleep(300);
     }
     fac.settleDelayMs = 0; fac.settleFails = false;
     ok(or.chat - c0 === 3 && fac.settle - s0 === 3, `b4. three residual-window failed settles from one wallet each ran upstream and were sent to settle (chat +${or.chat - c0}, settles +${fac.settle - s0})`);
-    ok((logSince(logAt).match(/\[hangup\] SETTLE UNCONFIRMED: [^\n]*POST \/v1\/nano\/chat\/completions/g) || []).length === 3, "b4. each is logged as unconfirmed");
+    ok(unconfirmed() === 3, "b4. each is logged as unconfirmed");
     const hfAfter = (await refundsDoc()).hangupForgiveness;
     ok(hfAfter.abandonedInWindow === hfBefore.abandonedInWindow && hfAfter.inflightUsd === 0, `b4. none spent forgiveness budget (abandoned ${hfBefore.abandonedInWindow} -> ${hfAfter.abandonedInWindow})`);
     const r = await pay(CHAT, W4, "10.0.0.24");
@@ -991,11 +1021,15 @@ try {
     or.imagesDelayMs = 1_500;
     const i0 = or.images, e0 = or.imagesClosedEarly, s0 = fac.settle, owed0 = (await refunds()).length, logAt = serverLog.length;
     await hangUpMidRun(PRO, WE, "10.0.1.3");
-    await sleep(2_500);
+    // Not forgiven, so the run works to its end and then settles and books:
+    // wait for that settlement and its row (a run that never settles still
+    // fails below).
+    await waitFor(() => fac.settle >= s0 + 1, STALL_WAIT_MS);
+    const all = await refundsAtLeast(owed0 + 1);
     ok(or.imagesClosedEarly === e0 && or.images - i0 === 1, `e3. past the wallet's budget: the run is NOT cut off, it finishes (closed early +${or.imagesClosedEarly - e0}, POSTs +${or.images - i0})`);
     ok(fac.settle === s0 + 1, `e3. ... and the payment SETTLES: a hang-up is not a free run once the budget is spent (settles +${fac.settle - s0})`);
-    const rows = (await refunds()).filter((row) => row.slug === "v1-images-pro");
-    ok((await refunds()).length === owed0 + 1 && rows.length === 1 && rows[0].httpStatus === 499 && rows[0].status === "owed" && rows[0].priceUsd === 0.05, `e3. ... and the undelivered charge is booked as owed once (${JSON.stringify(rows)})`);
+    const rows = all.filter((row) => row.slug === "v1-images-pro");
+    ok(all.length === owed0 + 1 && rows.length === 1 && rows[0].httpStatus === 499 && rows[0].status === "owed" && rows[0].priceUsd === 0.05, `e3. ... and the undelivered charge is booked as owed once (${JSON.stringify(rows)})`);
     ok(rows[0]?.hangupReason === "payer budget", `e3. ... and the debt records the wallet's spent budget as the reason (${rows[0]?.hangupReason})`);
     ok(/\[hangup\] CHARGED-BUT-NOT-SERVED: [^\n]*POST \/v1\/images\/pro/.test(logSince(logAt)), "e3. the log says CHARGED-BUT-NOT-SERVED");
     or.imagesDelayMs = 0;
@@ -1009,9 +1043,14 @@ try {
     or.imagesDelayMs = 1_500;
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly;
     for (let i = 1; i <= 3; i++) { await hangUpMidRun(PRO, wallet(0xf0 + i), "10.0.2.1"); await sleep(2_300); }
-    const newest = (await refunds()).slice(0, (await refunds()).length - owed0);
+    // The third is not forgiven: wait for its settlement and its row, and
+    // read the list ONCE (the newest rows are a slice of the list the count
+    // came from, so a row landing between two reads cannot shift the slice).
+    await waitFor(() => fac.settle >= s0 + 1, STALL_WAIT_MS);
+    const all = await refundsAtLeast(owed0 + 1);
+    const newest = all.slice(0, all.length - owed0);
     ok(newest.length === 1 && newest[0].hangupReason === "ip budget", `f. the owed run records the IP's spent budget as the reason (${newest.map((r) => r.hangupReason)})`);
-    ok(or.imagesClosedEarly - e0 === 2 && fac.settle - s0 === 1 && (await refunds()).length === owed0 + 1, `f. three wallets from one IP: two forgiven and cut off, the third settled and owed (cut +${or.imagesClosedEarly - e0}, settles +${fac.settle - s0}, owed +${(await refunds()).length - owed0})`);
+    ok(or.imagesClosedEarly - e0 === 2 && fac.settle - s0 === 1 && all.length === owed0 + 1, `f. three wallets from one IP: two forgiven and cut off, the third settled and owed (cut +${or.imagesClosedEarly - e0}, settles +${fac.settle - s0}, owed +${all.length - owed0})`);
     or.imagesDelayMs = 0;
   }
 
@@ -1024,7 +1063,7 @@ try {
     or.imagesDelayMs = 2_000;
     const i0 = or.images, e0 = or.imagesClosedEarly, s0 = fac.settle, owed0 = (await refunds()).length;
     const heads = await Promise.all(Array.from({ length: 10 }, (_, i) => headersFor(FAST, WC, `10.0.3.${i}`)));
-    const allUp = waitFor(() => or.images - i0 >= 10, 8000);
+    const allUp = waitFor(() => or.images - i0 >= 10, STALL_WAIT_MS);
     await Promise.all(heads.map((headers) => hangUp(`${B}${FAST.path}`, { method: "POST", headers, body: FAST.body, abortWhen: allUp.then(() => sleep(150)) })));
     // The five unforgiven runs finish their 2 s upstream call and then settle
     // behind the shared store's bounded calls (the authorization claim, the
@@ -1033,12 +1072,12 @@ try {
     // Redis or a starved runner reads "settles +0". Wait for the counts
     // (bounded, as case h does), then a grace in which a sixth settle or cut
     // would still show.
-    await waitFor(() => or.imagesClosedEarly - e0 >= 5 && fac.settle - s0 >= 5, 15_000);
+    await waitFor(() => or.imagesClosedEarly - e0 >= 5 && fac.settle - s0 >= 5, STALL_WAIT_MS);
     await sleep(1_000);
     ok(or.images - i0 === 10, `g. all ten runs started upstream (POSTs +${or.images - i0})`);
     ok(or.imagesClosedEarly - e0 === 5 && fac.settle - s0 === 5, `g. five forgiven (cut off, not settled), five settled (cut +${or.imagesClosedEarly - e0}, settles +${fac.settle - s0})`);
-    for (let i = 0; i < 100 && (await refunds()).length < owed0 + 5; i++) await sleep(100);
-    ok((await refunds()).length === owed0 + 5, `g. the five settled runs are booked as owed (+${(await refunds()).length - owed0})`);
+    const all = await refundsAtLeast(owed0 + 5);
+    ok(all.length === owed0 + 5, `g. the five settled runs are booked as owed (+${all.length - owed0})`);
     or.imagesDelayMs = 0;
   }
 
@@ -1087,7 +1126,7 @@ try {
       // Wait on the server's own line, not by polling the operator surface
       // (it is rate limited).
       const lineOf = () => logSince(logAt).split("\n").find((l) => /\[hangup\] (CHARGED-BUT-NOT-SERVED|SETTLE WITHHELD)/.test(l) && l.includes(`${t.method} ${t.path.split("?")[0]} `)) || "";
-      await waitFor(() => !!lineOf(), 6000);
+      await waitFor(() => !!lineOf(), STALL_WAIT_MS);
       await sleep(100);
       ok(fac.settle === s0 + 1, `${label}. ${slug}: the buyer left after the handler ran, with budget to spare, and the payment SETTLED (settles +${fac.settle - s0})`);
       const all = await refunds();
@@ -1148,15 +1187,16 @@ try {
     ok(Math.abs(st.abandonedUsdInWindow - 0.304) < 1e-9 && st.inflightUsd === 0 && st.perKeyBudgetUsd === 0.1 && st.globalBudgetUsd === 0.4, `h. the operator surface reports the budget in use (${JSON.stringify(st)})`);
     or.imagesDelayMs = 1_500;
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly;
-    await hangUpMidRun(PRO, wallet(0x71), "10.0.4.1"); await sleep(2_300);
+    // Forgiven, so the run is cut off: wait for the cut (bounded), then a
+    // grace in which a settlement would still show.
+    await hangUpMidRun(PRO, wallet(0x71), "10.0.4.1"); await waitFor(() => or.imagesClosedEarly - e0 >= 1, STALL_WAIT_MS); await sleep(1_000);
     ok(or.imagesClosedEarly - e0 === 1 && fac.settle === s0, "h. a fresh wallet on a fresh IP inside the global budget: forgiven");
     // Not forgiven, so this run works to the end and then settles: wait for
-    // that settlement (a run that never settles still fails below).
-    await hangUpMidRun(PRO, wallet(0x72), "10.0.4.2"); await waitFor(() => fac.settle >= s0 + 1, 10_000);
-    for (let i = 0; i < 50 && (await refunds()).length < owed0 + 1; i++) await sleep(100);
-    ok(or.imagesClosedEarly - e0 === 1 && fac.settle === s0 + 1 && (await refunds()).length === owed0 + 1, `h. the next fresh wallet on a fresh IP is past the global budget: settled and owed (settles +${fac.settle - s0})`);
+    // that settlement and its row (a run that never settles still fails below).
+    await hangUpMidRun(PRO, wallet(0x72), "10.0.4.2"); await waitFor(() => fac.settle >= s0 + 1, STALL_WAIT_MS);
+    const owedNow = await refundsAtLeast(owed0 + 1);
+    ok(or.imagesClosedEarly - e0 === 1 && fac.settle === s0 + 1 && owedNow.length === owed0 + 1, `h. the next fresh wallet on a fresh IP is past the global budget: settled and owed (settles +${fac.settle - s0}, owed +${owedNow.length - owed0})`);
     ok(serverLog.some((l) => /\[hangup\] forgiveness budget for the whole service is spent/.test(l)), "h. the server says the service-wide budget is spent");
-    const owedNow = await refunds();
     ok(owedNow[0]?.hangupReason === "global budget", `h. the owed run records the service's spent budget as the reason (${owedNow[0]?.hangupReason})`);
     // End to end: the refund planner reads these very rows. Every budget
     // denial is held for review; the in-flight race (b) is an ordinary debt.
@@ -1189,7 +1229,8 @@ try {
       await sleep(1_600);
     }
     fac.verifyDelayMs = 0;
-    ok(fac.settle === s0 && (await refunds()).length === owed0 && or.chat === c0, `k. gone during verify with the wallet's budget spent: nothing ran, nothing settled, nothing owed (settles +${fac.settle - s0}, owed +${(await refunds()).length - owed0}, chat stub +${or.chat - c0})`);
+    const owedK = (await refunds()).length;
+    ok(fac.settle === s0 && owedK === owed0 && or.chat === c0, `k. gone during verify with the wallet's budget spent: nothing ran, nothing settled, nothing owed (settles +${fac.settle - s0}, owed +${owedK - owed0}, chat stub +${or.chat - c0})`);
     const r = await pay(MEM, wallet(0xe1), "10.0.7.3");
     ok(r.status === 200 && fac.settle === s0 + 1, `k. control: the same memory write from a connected buyer is served and settles (${r.status})`);
   }
@@ -1247,9 +1288,11 @@ try {
     // book it as owed, because the restored record leaves less than $0.05.
     or.imagesDelayMs = 1_500;
     const s0 = fac.settle, owed0 = (await refunds()).length, e0 = or.imagesClosedEarly, at = serverLog.length;
-    await hangUpMidRun(PRO, wallet(0x91), "10.0.9.1"); await sleep(2_300);
+    // Not forgiven: wait for the settlement and its row (bounded).
+    await hangUpMidRun(PRO, wallet(0x91), "10.0.9.1"); await waitFor(() => fac.settle >= s0 + 1, STALL_WAIT_MS);
+    const owedM = await refundsAtLeast(owed0 + 1);
     or.imagesDelayMs = 0;
-    ok(or.imagesClosedEarly === e0 && fac.settle === s0 + 1 && (await refunds()).length === owed0 + 1, `m. after the restart a fresh wallet's hang-up is past the restored service budget: settled and owed (settles +${fac.settle - s0}, owed +${(await refunds()).length - owed0})`);
+    ok(or.imagesClosedEarly === e0 && fac.settle === s0 + 1 && owedM.length === owed0 + 1, `m. after the restart a fresh wallet's hang-up is past the restored service budget: settled and owed (settles +${fac.settle - s0}, owed +${owedM.length - owed0})`);
     ok(/not forgiven: global budget/.test(logSince(at)), "m. and the owed line names the service-wide budget");
   }
 
