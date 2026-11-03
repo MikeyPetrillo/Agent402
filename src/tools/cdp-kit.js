@@ -422,6 +422,13 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
 // rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
 // which also says whether the result was cut.
 export const SQL_MAX_ROWS = 1000;
+// Characters a buyer's SQL may run to. The query service took 48,000-character
+// queries without complaint (measured 2026-11-03: the buyer's 8 KB query
+// padded to 23, 28 and 48 KB all answered in 4 s), while this cap at 10,000
+// refused five of one buyer's queries (12 to 44 KB) in its last half hour.
+// The JSON body is bounded by the server's 100 KB parser, so the cap sits
+// under it with room for escaping; the masks that read a query are linear.
+export const SQL_MAX_CHARS = 60_000;
 // solana.instructions is pruned by block_time only: a query that filters,
 // groups, orders or aggregates it without a block_time bound scans its whole
 // history and never finishes inside the query service's ~10 s window
@@ -873,7 +880,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 60,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -885,7 +892,7 @@ export const CDP_TOOLS = [
     handler: async (input) => {
       const sql = String(input?.sql || "").trim();
       if (!sql) throw bad('"sql" is required');
-      if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
+      if (sql.length > SQL_MAX_CHARS) throw bad(`"sql" too long (${sql.length} chars, max ${SQL_MAX_CHARS.toLocaleString("en-US")})`);
       if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
       const unbounded = solanaRangeRefusal(sql);
       if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
