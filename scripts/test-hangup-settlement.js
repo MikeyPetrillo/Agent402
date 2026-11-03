@@ -532,10 +532,14 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     ok(!/server\.onBeforeSettle\(/.test(afterMark.slice(0, afterMark.indexOf("registerPhaseTimingHooks(server);"))), "nothing registers an onBeforeSettle between the mark hook and the timing hook");
     ok(/registerClientGoneSettleHook\(server\);\s*\n\s*registerInflightCoverSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerFirstCallAllowanceSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettlementClaimHooks\(server\);/.test(payments), "the client-gone hook, the allowance skip and the authorization claim keep their order");
   }
-  for (const [name, src, call] of [["mpp-tempo", tempo, "markSettleSent(req);\n      const tHandled = Date.now();"], ["mpp-stripe", stripeGate, "markSettleSent(req);\n      const b = await settle(auth);"]]) {
+  for (const [name, src, call] of [["mpp-tempo", tempo, "markSettleSent(req);\n        if (earlyConfirm) {"], ["mpp-stripe", stripeGate, "markSettleSent(req);\n      const b = await settle(auth);"]]) {
     const check = src.indexOf("if (chargeCancelledForClientGone(req)) {");
-    ok(check > 0 && src.indexOf(call) > check && src.indexOf(call) - check < 1200, `${name}: the charge is marked sent right before the ${name === "mpp-tempo" ? "broadcast" : "capture"}, after the cancelled-charge check`);
+    ok(check > 0 && src.indexOf(call) > check && src.indexOf(call) - check < 2200, `${name}: the charge is marked sent right before the ${name === "mpp-tempo" ? "broadcast" : "capture"}, after the cancelled-charge check`);
   }
+  // Direct mode's last party screen can still refuse with nothing broadcast,
+  // so the Tempo mark sits below it (scripts/test-mpp-tempo-direct.js drives
+  // the behavior; this pins the order).
+  { const screenAt = tempo.indexOf('screenTempoParties(auth, "before broadcast")'); const markAt = tempo.indexOf("markSettleSent(req);"); ok(screenAt > 0 && markAt > screenAt && markAt - screenAt < 900 && tempo.indexOf("markSettleSent(req);", markAt + 1) < 0, "mpp-tempo: the one settle-sent mark comes after the before-broadcast screen"); }
   {
     const credits = readFileSync(new URL("../src/credits.js", import.meta.url), "utf8");
     ok(/chargeCancelledForClientGone\(req\)\) \{ releaseHold\(\); return; \}\s*\n(\s*\/\/[^\n]*\n)*\s*markSettleSent\(req\);/.test(credits), "credits: the debit is marked sent right after the cancelled-charge check");

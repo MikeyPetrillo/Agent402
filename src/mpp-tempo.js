@@ -1722,8 +1722,6 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
         return;
       }
-      // The charge leaves from here: a close after this did not withhold it.
-      markSettleSent(req);
       const tHandled = Date.now();
       // EARLY CONFIRM. The relay answers a broadcast ~2 s after the payment is
       // in a block (measured 2026-10-08: broadcast p50 ~4.1 s, inclusion ~1.5 s
@@ -1742,22 +1740,30 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // that refusal into a sale.
       const screenedOut = tempoSettlementMode() === "direct" ? screenTempoParties(auth, "before broadcast") : null;
       if (screenedOut) {
+        // Refused with nothing broadcast: no charge left, so the request is
+        // not marked sent (a close here is a withheld charge, never an
+        // unconfirmed settlement, and the refusal feeds the breaker nothing).
         b = screenedOut;
-      } else if (earlyConfirm) {
-        let relayAnswered = false;
-        const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
-        const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
-          .then((c) => (c ? c : new Promise(() => {})));
-        const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
-        if (first.chain) {
-          early = true;
-          b = { ok: true, receipt: { method: "tempo", status: "success", reference: first.chain.txId, timestamp: new Date().toISOString() } };
-          // The relay finishes on its own; its verdict no longer decides
-          // anything, but a disagreement is worth seeing.
-          relayP.then((r) => { if (!r?.ok) console.warn(`[mpp-tempo] relay answered after the chain had confirmed ${req.method} ${req.path} tx=${first.chain.txId}: ${String(r?.error || "?").slice(0, 160)}`); }, () => {});
-        } else b = first.relay;
       } else {
-        b = await broadcast(auth);
+        // The charge leaves from here, after every check that can still
+        // withhold it: a close after this did not withhold it.
+        markSettleSent(req);
+        if (earlyConfirm) {
+          let relayAnswered = false;
+          const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
+          const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
+            .then((c) => (c ? c : new Promise(() => {})));
+          const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
+          if (first.chain) {
+            early = true;
+            b = { ok: true, receipt: { method: "tempo", status: "success", reference: first.chain.txId, timestamp: new Date().toISOString() } };
+            // The relay finishes on its own; its verdict no longer decides
+            // anything, but a disagreement is worth seeing.
+            relayP.then((r) => { if (!r?.ok) console.warn(`[mpp-tempo] relay answered after the chain had confirmed ${req.method} ${req.path} tx=${first.chain.txId}: ${String(r?.error || "?").slice(0, 160)}`); }, () => {});
+          } else b = first.relay;
+        } else {
+          b = await broadcast(auth);
+        }
       }
       const tBroadcast = Date.now();
       const watched = earlyConfirm && !early ? ` watch=reads:${watch.reads || 0}${watch.seenAt ? ` seen:+${watch.seenAt - tHandled}ms` : ""}${watch.finalizedLag != null ? ` lag:${watch.finalizedLag}` : ""}${watch.error ? ` err:${watch.error}` : ""}` : "";
