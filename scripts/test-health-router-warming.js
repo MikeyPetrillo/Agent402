@@ -25,11 +25,15 @@ async function boot(env) {
   let listenAt = 0;
   while (Date.now() - t0 < 90_000) {
     try {
+      // Read the log BEFORE the request: a sample is "loaded" only when the
+      // worker had loaded when the server answered it, never when it loaded
+      // between the answer and this read.
+      const loadedBefore = /worker \d+ loaded/.test(log);
       const r = await fetch(`http://127.0.0.1:${port}/health?ready=1`, { signal: AbortSignal.timeout(2000) });
       const live = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
       const path = await fetch(`http://127.0.0.1:${port}/health/ready`, { signal: AbortSignal.timeout(2000) });
       if (!listenAt) listenAt = Date.now();
-      seen.push({ at: Date.now() - listenAt, status: r.status, path: path.status, live: live.status, loaded: /worker \d+ loaded/.test(log) });
+      seen.push({ at: Date.now() - listenAt, status: r.status, path: path.status, live: live.status, loaded: loadedBefore, loadedAfter: /worker \d+ loaded/.test(log) });
       if (r.status === 200) break;
     } catch { /* not listening yet */ }
     await wait(150);
@@ -43,7 +47,7 @@ async function boot(env) {
   const { seen } = await boot({ ROUTER_WORKER_TEST_WARM_DELAY_MS: "4000", READY_ROUTER_WAIT_MS: "30000" });
   const first = seen[0], last = seen[seen.length - 1];
   ok(first?.status === 503 && first.loaded === false, `right after listen, with the worker still loading, /health is 503 (${JSON.stringify(first)})`);
-  ok(last?.status === 200 && last.loaded === true, `it turns 200 once the worker has loaded (${JSON.stringify(last)})`);
+  ok(last?.status === 200 && last.loadedAfter === true, `it turns 200 once the worker has loaded (${JSON.stringify(last)})`);
   ok(seen.filter((s) => s.status === 503).every((s) => !s.loaded || s.at < 1000), "it never stays 503 after the worker loaded");
   ok(seen.every((s) => s.live === 200), "plain /health (liveness, the monitors) answers 200 throughout");
   ok(seen[seen.length - 1].path === 200, "/health/ready turns 200 with /health?ready=1 (the path form Railway's setting accepts)");
