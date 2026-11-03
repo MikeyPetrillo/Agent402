@@ -850,6 +850,19 @@ export function retiringModel(model) {
   return { id: raw, ...entry };
 }
 
+/** The pre-payment refusal for a metered model id the upstream's live list
+ *  does not carry (src/model-catalog.js), or null. Ids with no vendor ("auto",
+ *  "default") keep their own answers, and an id this gateway retires or can
+ *  serve through a successor is never refused here: its own fallback decides. */
+export function meteredModelRefusal(model) {
+  const id = String(model || "").toLowerCase();
+  if (!id.includes("/")) return null;
+  const base = id.split(":")[0];
+  if (Object.hasOwn(RETIRING_MODELS, base) || Object.hasOwn(RETIRING_MODELS, base.replace(/-\d{4}-\d{2}-\d{2}$/, ""))) return null;
+  if (successorsOf(base).length) return null;
+  return unknownModelRefusal(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
+}
+
 /** Same-family successors for models whose whole upstream can vanish at once
  *  (a model with one or two hosts can lose all of them together). A successor
  *  is tried only AFTER the requested model failed upstream (502/503/504), costs
@@ -1889,7 +1902,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // The metered route takes any id under its vendor prefixes; one the live
   // list does not carry is refused here (and before payment, server.js).
   if (tier.metered) {
-    const unknown = unknownModelRefusal(model);
+    const unknown = meteredModelRefusal(model);
     if (unknown) { const e = bad(unknown); e.code = "unknown_model"; throw e; }
   }
 

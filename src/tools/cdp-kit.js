@@ -120,6 +120,12 @@ function cdpStep(path) {
   return "request";
 }
 
+/** An upstream body for a log line, with anything that may echo a buyer's
+ *  query literal (quoted strings, hex, long numbers) replaced. */
+export function redactLiterals(text) {
+  return String(text || "").replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.){24,}"/g, "'…'").replace(/\b0x[0-9a-f]{6,}\b/gi, "0x…").replace(/\b\d{6,}\b/g, "#");
+}
+
 /** A query's shape for a log line: length, tables, clauses. No literals. */
 export function sqlShape(sql) {
   const s = String(sql || "");
@@ -128,7 +134,7 @@ export function sqlShape(sql) {
   return `len=${s.length},tables=${tables.join("+") || "-"},where=${has(/\bwhere\b/i)},limit=${has(/\blimit\b/i)},groupby=${has(/\bgroup\s+by\b/i)},orderby=${has(/\border\s+by\b/i)},joins=${(s.match(/\bjoin\b/gi) || []).length},timefilter=${has(/\bblock_(?:timestamp|number)\b[^;]*?(?:>|<|between)/i)}`;
 }
 
-async function cdpFetch(method, path, body, { idempotent = method === "GET" } = {}) {
+async function cdpFetch(method, path, body, { idempotent = method === "GET", slowGatewayFinal = false } = {}) {
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
@@ -173,7 +179,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET" } = 
     // (tables and clauses, never its literals).
     if (res.status >= 500) {
       const rid = res.headers.get("x-request-id") || res.headers.get("x-correlation-id") || res.headers.get("cf-ray") || "-";
-      console.warn(`[cdp] ${cdpStep(path)} HTTP ${res.status} after ${Date.now() - started}ms (attempt ${attempt + 1}/${ATTEMPTS}) rid=${rid} body=${JSON.stringify(redactSecrets(text.replace(/\s+/g, " ").slice(0, 160)))}${body?.sql ? ` sql=${sqlShape(body.sql)}` : ""}`);
+      console.warn(`[cdp] ${cdpStep(path)} HTTP ${res.status} after ${Date.now() - started}ms (attempt ${attempt + 1}/${ATTEMPTS}) rid=${rid} body=${JSON.stringify(redactLiterals(redactSecrets(text.replace(/\s+/g, " "))).slice(0, 160))}${body?.sql ? ` sql=${sqlShape(body.sql)}` : ""}`);
     }
     if (res.status === 401 || res.status === 403) {
       throw bad("This tool is temporarily unavailable: Coinbase Developer Platform access is not configured on this deployment.", 503);
@@ -190,7 +196,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET" } = 
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
     if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
     const tookMs = Date.now() - started;
-    if ((res.status === 502 || res.status === 504) && /\/data\/query\/run$/.test(path) && tookMs >= slowQueryGatewayMs) {
+    if (slowGatewayFinal && (res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
       const e = bad(`CDP's query service answered HTTP ${res.status} after ${Math.round(tookMs / 1000)} s, its answer to a query that runs past its time limit. Narrow the query (a block_timestamp or block_number range, an address filter, a LIMIT) or set cacheSeconds; resending it unchanged fails the same way. Nothing was charged.`, 502);
       e.hint = "narrow-query";
       throw e;
@@ -485,7 +491,7 @@ export const CDP_TOOLS = [
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
         body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
       }
-      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
+      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, slowGatewayFinal: true });
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const list = Array.isArray(rows) ? rows : [];
       return { rows: list, rowCount: list.length, ...(Array.isArray(rows) ? {} : { raw: res }) };

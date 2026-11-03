@@ -16,11 +16,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 
-const LISTED = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-chat-v3.1", "openai/gpt-4o-mini", "anthropic/claude-opus-5"];
+const LISTED = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-chat-v3.1", "openai/gpt-4o-mini", "anthropic/claude-opus-5", "openai/gpt-3.5-turbo-0613", "openai/gpt-4"];
 for (let i = 0; i < 120; i++) LISTED.push(`filler/model-${i}`);
 const BAD = "deepseek/deepseek-v4-1-flash-1017-uncensored";
 
 // --- unit -------------------------------------------------------------------
+// Offline: a miss-triggered read goes to a closed local port unless stubbed.
+process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
 {
   _setModelCatalogForTest(null);
   ok(unknownModelRefusal(BAD) === null, "no list read yet: nothing is refused (fail open)");
@@ -33,8 +35,31 @@ const BAD = "deepseek/deepseek-v4-1-flash-1017-uncensored";
   ok(unknownModelRefusal("deepseek/deepseek-v4-flash") === null, "a listed id passes");
   ok(unknownModelRefusal("openai/gpt-4o-mini:nitro") === null, "a routing variant is judged by its base id");
   ok(unknownModelRefusal("OpenAI/GPT-4o-mini") === null, "ids compare without case");
+  ok(!/deepseek-chat-v3\.1/.test(unknownModelRefusal(BAD, { suggest: (x) => x !== "deepseek/deepseek-chat-v3.1" })), "suggestions keep only ids the route serves");
+  ok(/include: deepseek\/deepseek-v4-flash/.test(unknownModelRefusal(BAD)), `the closest id is named first (${unknownModelRefusal(BAD)})`);
+  // A miss starts a fresh read (at most once a minute), so a just-listed model is served soon.
+  {
+    let reads = 0;
+    await sleep(100); // any earlier miss-triggered read (to the closed port) has ended
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => { reads++; return new Response(JSON.stringify({ data: [...LISTED, "deepseek/deepseek-v5"].map((id) => ({ id })) }), { status: 200 }); };
+    try {
+      _setModelCatalogForTest(LISTED);
+      ok(unknownModelRefusal("deepseek/deepseek-v5") !== null, "a model newer than the last read is refused once");
+      await new Promise((r) => setTimeout(r, 50));
+      ok(reads === 1 && unknownModelRefusal("deepseek/deepseek-v5") === null, `the miss started a read and the new model passes after it (reads ${reads})`);
+      unknownModelRefusal("deepseek/never-listed"); unknownModelRefusal("deepseek/never-listed-2");
+      await new Promise((r) => setTimeout(r, 50));
+      ok(reads === 1, `two more misses inside the minute start no read (reads ${reads})`);
+    } finally { globalThis.fetch = realFetch; _setModelCatalogForTest(LISTED); }
+  }
   process.env.OPENROUTER_API_KEY ||= "test-key-never-used";
-  const { validateRequest } = await import("../src/tools/llm-gateway-kit.js");
+  const { validateRequest, meteredModelRefusal, RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  ok(meteredModelRefusal("auto") === null && meteredModelRefusal("default") === null, "ids with no vendor keep their own answers");
+  const retiring = Object.keys(RETIRING_MODELS || {})[0];
+  ok(!retiring || meteredModelRefusal(retiring) === null, `a retiring id is left to its own fallback even when unlisted (${retiring})`);
+  const sug = meteredModelRefusal("openai/gpt-not-a-model-xyz") || "";
+  ok(!/gpt-3\.5|gpt-4,|gpt-4\./.test(sug), `suggestions are ids the metered route serves (${sug.slice(0, 200)})`);
   const body = (model) => ({ model, messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
   let e = null; try { validateRequest(body(BAD), "v1-chat-metered", { clamp: false }); } catch (x) { e = x; }
   ok(e?.statusCode === 400 && e?.code === "unknown_model", "the metered handler's own validation refuses the unlisted id too (a request past the gate, e.g. a Tempo push)");
@@ -46,6 +71,7 @@ const BAD = "deepseek/deepseek-v4-1-flash-1017-uncensored";
   ok(down === false && unknownModelRefusal(BAD) !== null, "an unreadable list keeps the last good one while it is fresh");
 }
 
+delete process.env.MODEL_CATALOG_URL;
 // --- the route: refused before the payment gate -----------------------------
 const [FAC_PORT, CAT_PORT, PORT] = await getFreePorts(3);
 const fac = createServer((req, res) => {

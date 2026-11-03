@@ -181,7 +181,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // shape, never the query's literals.
     {
       const warned = []; const realWarn = console.warn; console.warn = (m) => warned.push(String(m));
-      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("<html>502 Bad Gateway</html>", { status: 502, headers: { "x-request-id": "rid-123" } })), 60));
+      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("<html>502 Bad Gateway near '0xSECRETLITERAL'</html>", { status: 502, headers: { "x-request-id": "rid-123" } })), 60));
       await tool("onchain-sql").handler({ sql: "SELECT to_address FROM base.transactions WHERE from_address = '0xSECRETLITERAL' LIMIT 5" }).catch(() => {});
       console.warn = realWarn;
       const line = warned.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
@@ -205,6 +205,19 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     calls = []; reply = (n) => (n === 1 ? J(502, {}) : J(200, { result: [{ x: 1 }] }));
     const q = await sqlRun();
     ok(q.rowCount === 1 && calls.length === 2, `a fast 502 on a SQL query is retried (attempts ${calls.length})`);
+    // Control: a slow 502 on a query another reader runs (cdpSql) is still retried.
+    {
+      const { cdpSql } = await import("../src/tools/cdp-kit.js");
+      calls = []; reply = (n) => (n === 1 ? new Promise((r) => setTimeout(() => r(J(502, {})), 60)) : J(200, { result: [{ x: 1 }] }));
+      const rows = await cdpSql("SELECT 1");
+      ok(rows.length === 1 && calls.length === 2, `a slow 502 on another reader's query is retried, not given the narrow-query answer (attempts ${calls.length})`);
+    }
+    // The body snippet in the log hides literals a 5xx body may echo.
+    {
+      const { redactLiterals } = await import("../src/tools/cdp-kit.js");
+      const out = redactLiterals(`error near 'buyer-secret-value' in WHERE from_address = 0xabcdef0123456789 AND block_number > 12345678`);
+      ok(!/buyer-secret-value|0xabcdef0123|12345678/.test(out) && /error near/.test(out), `5xx body literals are redacted in the log (${out})`);
+    }
     // Control: a slow 502 on another read is still retried.
     calls = []; reply = (n) => (n === 1 ? new Promise((r) => setTimeout(() => r(J(502, {})), 60)) : J(200, { balances: [] }));
     ok((await bal()).count === 0 && calls.length === 2, "a slow 502 on a balances read is still retried");
