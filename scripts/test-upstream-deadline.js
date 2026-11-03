@@ -280,8 +280,11 @@ ok(!stallCalls.some((c) => /\btest-(alchemy|brave|neynar|exa|hunter|openrouter|t
   const tiny = budgetOf(MIN_READ_MS - 2);
   const e1 = await upstreamFetch("https://stalled.test/tiny", {}, { label: "Tiny", step: "lookup", timeoutMs: 5000, tag: null, budget: tiny, fetchImpl: seam }).catch((x) => x);
   ok(e1?.upstreamFailure === "deadline" && left === 0 && /the lookup read within/.test(e1.message), `a budget with ${MIN_READ_MS - 2} ms left refuses the read before any egress (${left} read(s), "${e1?.message}")`);
-  const e2 = await workUnderDeadline(() => new Promise(() => {}), { label: "Tiny", step: "work", timeoutMs: 5000, budget: budgetOf(MIN_READ_MS - 2) }).catch((x) => x);
-  ok(e2?.upstreamFailure === "deadline", `work under a budget with ${MIN_READ_MS - 2} ms left is refused the same way`);
+  // The work is a promise (the function takes a promise, raced against the
+  // expiry); a refusal never arms the expiry, so onExpire is never called.
+  let expired = 0;
+  const e2 = await workUnderDeadline(new Promise(() => {}), { label: "Tiny", step: "work", timeoutMs: 5000, budget: budgetOf(MIN_READ_MS - 2), onExpire: () => { expired++; } }).catch((x) => x);
+  ok(e2?.upstreamFailure === "deadline" && expired === 0, `work under a budget with ${MIN_READ_MS - 2} ms left is refused before the expiry is armed (${expired} expiries)`);
   const t1 = Date.now();
   const e3 = await upstreamFetch("https://stalled.test/some", {}, { label: "Some", step: "read", timeoutMs: 5000, tag: null, budget: budgetOf(60), fetchImpl: seam }).catch((x) => x);
   ok(e3?.upstreamFailure === "deadline" && left === 1 && Date.now() - t1 < 60 + SLACK_MS, `a budget with 60 ms left still runs the read under that cap (${left} read(s), ${Date.now() - t1} ms)`);
