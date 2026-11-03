@@ -140,8 +140,9 @@ export function sqlShape(sql) {
 // and the same query fails the same way, so it is tried twice at most, a
 // slow 502/504 once, and the answer says how to narrow it.
 const QUERY_ATTEMPTS = 2;
-function narrowQueryError(status, tookMs) {
-  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a result is too large or too slow to send: select fewer columns, add a block_number range or an address filter, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, 502);
+function narrowQueryError(status, tookMs, sql = "") {
+  const range = /\bsolana\./i.test(sql) ? "a block_time range (WHERE block_time > now() - INTERVAL 1 DAY)" : "a block_number range or an address filter";
+  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a result is too large or too slow to send: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, 502);
   e.hint = "narrow-query";
   return e;
 }
@@ -210,8 +211,8 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     const tookMs = Date.now() - started;
     if (buyerQuery && res.status >= 500) {
       const final = attempt + 1 >= ATTEMPTS || ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs);
-      if (final) throw narrowQueryError(res.status, tookMs);
-      lastErr = narrowQueryError(res.status, tookMs);
+      if (final) throw narrowQueryError(res.status, tookMs, body?.sql);
+      lastErr = narrowQueryError(res.status, tookMs, body?.sql);
       continue;
     }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
@@ -247,6 +248,20 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
 // rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
 // which also says whether the result was cut.
 export const SQL_MAX_ROWS = 1000;
+// solana.instructions is partitioned by block_time: a query that filters,
+// groups, orders or aggregates it without a block_time bound scans its whole
+// history and never finishes inside the query service's ~10 s window
+// (measured 2026-11-03: every such query, even one filtered to a single
+// signer or account, a 502 at 10 s; the same query over one day, about 3 s).
+// It is refused before the call with what to add.
+export function solanaRangeRefusal(sql) {
+  const s = String(sql || "");
+  if (!/\bsolana\.instructions\b/i.test(s)) return null;
+  if (/\bblock_time\b/i.test(s)) return null;
+  if (!/\b(where|group\s+by|order\s+by|having|join|distinct|count|sum|avg|min|max|uniq\w*|any\w*)\b/i.test(s)) return null;
+  return 'A query on solana.instructions that filters, groups, orders or aggregates needs a block_time range: add, for example, WHERE block_time > now() - INTERVAL 1 DAY (a day answers in seconds; the full history does not finish within the query service\'s limit). Nothing was charged.';
+}
+
 /** The query sent upstream: a plain SELECT wrapped with the row cap. A query
  *  opening with WITH, or carrying SETTINGS or FORMAT, cannot sit inside a
  *  subquery there and is sent as written. */
@@ -493,14 +508,14 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.020",
     description:
-      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions. ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
+      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions. Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range, e.g. WHERE block_time > now() - INTERVAL 1 DAY). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -514,6 +529,8 @@ export const CDP_TOOLS = [
       if (!sql) throw bad('"sql" is required');
       if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
       if (!/^\s*(select|with)\b/i.test(sql)) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
+      const unbounded = solanaRangeRefusal(sql);
+      if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
       const body = { sql };
       const cacheSeconds = Number(input?.cacheSeconds);
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
