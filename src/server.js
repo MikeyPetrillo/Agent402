@@ -3232,6 +3232,9 @@ const LARGE_BODY_ROUTES = [
   ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
   ["/v1/judge/vision", 23 * MB], ["/v1/judge/locate", 6 * MB], ["/v1/judge/long", 2 * MB],
   ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
+  // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
+  // escaping can double on the wire past the global 100 KB parser.
+  ["/api/onchain-sql", 256 * 1024],
 ];
 const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
 app.use(createLargeBodyGate({
@@ -3268,6 +3271,9 @@ app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate:
 // handler) and, for a frame check, up to 8 MB of baseline PNG as base64
 // (the handler's cap); the limit leaves room for the JSON escaping.
 app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
+// onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
+// the handler's own cap (SQL_MAX_CHARS) checks the text again.
+app.use("/api/onchain-sql", unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
