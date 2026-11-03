@@ -282,7 +282,7 @@ function resultTooLargeError(status, tookMs) {
   return e;
 }
 
-async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null } = {}) {
+async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0 } = {}) {
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
@@ -345,10 +345,15 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // Redact any configured secret from the upstream error text before echoing
     // it — the request's JWT carries CDP_API_KEY_ID as its issuer/subject, so a
     // "key <id> not found"-style upstream message could otherwise reflect it.
-    const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
+    const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200)
+      // A position the service names by line is on the query it received; the
+      // row-cap wrapper puts the buyer's query one line down.
+      .replace(/\bline (\d+)\b/, (m, n) => `line ${Math.max(1, Number(n) - lineOffset)}`);
     if (res.status === 400 || res.status === 404 || res.status === 422) {
       if (buyerQuery) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
-      throw bad(`CDP rejected the request: ${detail}`, 422);
+      const e = bad(`CDP rejected the request: ${detail}`, 422);
+      if (/nesting too deep/i.test(detail)) e.nestingTooDeep = true;
+      throw e;
     }
     const tookMs = Date.now() - started;
     if (buyerQuery && res.status >= 500) {
@@ -495,10 +500,60 @@ export function hasOuterOrderBy(sql) {
   return false;
 }
 
-/** The query sent upstream: a plain SELECT wrapped with the row cap. A query
- *  opening with WITH, or carrying SETTINGS or FORMAT, cannot sit inside a
- *  subquery there and is sent as written. */
-export function cappedSql(sql) {
+// The query service allows two levels of subquery (measured 2026-11-03: a
+// query with two nested FROM (SELECT ...) levels answers; the same query
+// inside the row-cap wrapper is refused "subquery nesting too deep (max: 2)").
+export const SQL_NEST_MAX = 2;
+/** How deep a query nests subqueries: a parenthesis opening a SELECT or WITH,
+ *  read on the masked query (one inside a string or a comment is not a
+ *  subquery). */
+export function subqueryDepth(sql) {
+  const s = sqlCode(sql);
+  const opensSubquery = /\(\s*(?:select|with)\b/iy;
+  let depth = 0, max = 0;
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(") {
+      opensSubquery.lastIndex = i;
+      const sub = opensSubquery.test(s);
+      stack.push(sub);
+      if (sub) max = Math.max(max, ++depth);
+    } else if (c === ")" && stack.length && stack.pop()) depth--;
+  }
+  return max;
+}
+/** The query's own outer LIMIT (outside every parenthesis): where its row
+ *  count stands in the text and what it is, or null. `LIMIT n BY expr` is a
+ *  per-group cap, not a row cap, so it does not count. */
+function outerLimit(code) {
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (c === "l" || c === "L") && (i === 0 || /[^\w"`]/.test(code[i - 1]))) {
+      const m = /^limit\s+(\d+)(?:\s*,\s*(\d+))?(?![\w.])(?!\s+by\b)/i.exec(code.slice(i, i + 48));
+      if (!m) continue;
+      // LIMIT m, n: n is the count. The number's own position in the text.
+      const numText = m[2] ?? m[1];
+      const numStart = i + m[0].lastIndexOf(numText);
+      return { numStart, numEnd: numStart + numText.length, value: Number(numText) };
+    }
+  }
+  return null;
+}
+
+/** The query sent upstream with the row cap: a plain SELECT wrapped in an
+ *  outer LIMIT; a query already at the service's subquery depth gets the cap
+ *  in its own outer LIMIT instead (the number lowered, or a LIMIT appended),
+ *  since the wrapper would be one level too many. A query opening with WITH,
+ *  carrying SETTINGS or FORMAT, or with a UNION outside every parenthesis
+ *  cannot take either and is sent as written. `limitTo(n)` is the same query
+ *  under another cap, for the result-size recovery; `lineOffset` is how many
+ *  lines the wrapper adds before the query, so a syntax error the service
+ *  places by line can be named on the query as written. */
+export function cappedSql(sql, { wrap = null } = {}) {
   // A final `;` and any comments after it are dropped; the query sits on its
   // own lines inside the wrapper, so a trailing line comment ends before ")".
   const raw = String(sql || "").trim();
@@ -506,8 +561,25 @@ export function cappedSql(sql) {
   const tail = /;[\s;]*$/.exec(sqlCode(raw));
   const s = (tail ? raw.slice(0, tail.index) : raw).trim();
   const code = sqlNorm(s);
-  if (/^\s*with\b/i.test(code) || /\b(settings|format)\b/i.test(code)) return { sql: s, capped: false, inner: s };
-  return { sql: `SELECT * FROM (\n${s}\n) LIMIT ${SQL_MAX_ROWS + 1}`, capped: true, inner: s };
+  const asWritten = { sql: s, capped: false, inner: s, limitTo: null, lineOffset: 0 };
+  if (/^\s*with\b/i.test(code) || /\b(settings|format)\b/i.test(code)) return asWritten;
+  const wrapped = wrap ?? subqueryDepth(s) < SQL_NEST_MAX;
+  if (wrapped) {
+    const limitTo = (n) => `SELECT * FROM (\n${s}\n) LIMIT ${n}`;
+    return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 1 };
+  }
+  // At the depth limit: the cap goes in the query's own outer LIMIT. A UNION
+  // outside every parenthesis has no outer LIMIT of its own.
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(code.slice(i, i + 6)) && (i === 0 || /\W/.test(code[i - 1]))) return asWritten;
+  }
+  const lim = outerLimit(sqlCode(s));
+  const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
+  return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
 }
 
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -775,7 +847,7 @@ export const CDP_TOOLS = [
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
         body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
       }
-      const capped = cappedSql(sql);
+      let capped = cappedSql(sql);
       body.sql = capped.sql;
       if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
         const e = bad(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds. Nothing was charged.`, 429);
@@ -785,17 +857,27 @@ export const CDP_TOOLS = [
       buyerQueriesInflight++;
       let res;
       try {
-        try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true }); }
+        try {
+          try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset }); }
+          catch (e) {
+            // A subquery the depth reader did not see: the wrapper was one
+            // level too many, so the cap goes in the query's own LIMIT.
+            if (!(e?.nestingTooDeep && capped.lineOffset > 0)) throw e;
+            capped = cappedSql(sql, { wrap: false });
+            body.sql = capped.sql;
+            res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true });
+          }
+        }
         catch (e) {
           if (!(e?.resultTooLarge && capped.capped)) throw e;
           // The result was too large to send: the same query again with a
           // small outer row cap (two attempts, since a small result of this
           // kind still fails now and then), served marked truncated, with
           // the row size measured so the caller can pick a LIMIT.
-          const small = { ...body, sql: `SELECT * FROM (\n${capped.inner}\n) LIMIT ${SQL_RECOVER_ROWS}` };
+          const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
           let res2 = null;
           for (let tryN = 1; tryN <= SQL_RECOVER_ATTEMPTS; tryN++) {
-            try { res2 = await cdpFetch("POST", "/platform/v2/data/query/run", small, { idempotent: true, buyerQuery: true, attempts: 1 }); break; }
+            try { res2 = await cdpFetch("POST", "/platform/v2/data/query/run", small, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset }); break; }
             catch (e2) {
               if (!e2?.resultTooLarge) throw e2;
               if (tryN < SQL_RECOVER_ATTEMPTS) continue;

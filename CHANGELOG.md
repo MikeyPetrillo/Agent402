@@ -21,7 +21,11 @@ Tools:
   with an outer row cap, and a result cut at 1,000 says so in fields
   (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
   Queries opening with WITH, or carrying SETTINGS or FORMAT, are sent as
-  written. A query ending in a comment or a semicolon is accepted.
+  written. A query ending in a comment or a semicolon is accepted. A query
+  already two subqueries deep (the query service's limit) takes the cap in
+  its own outer LIMIT instead of the wrapper, which the service refused as
+  one level too many; a syntax error the service places by line is named
+  on the query as written.
 - onchain-sql: a query on solana.instructions that filters, groups, orders
   or aggregates needs a block_time range and is refused before the call
   (400, `hint: "add-block-time"`) with the clause to add; a bare sample or
