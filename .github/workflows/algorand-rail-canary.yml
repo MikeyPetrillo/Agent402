@@ -52,9 +52,12 @@ jobs:
       - name: Install x402 client
         # No wallet secrets are in scope for this step (they live on the run
         # step), and --ignore-scripts blocks dependency lifecycle scripts
-        # entirely (audit R-07). @x402/* pinned to the server's protocol version
+        # entirely (audit R-07), except better-sqlite3's own rebuild: the sweep
+        # imports src/payments.js, whose import chain reaches src/pow.js, which
+        # opens a SQLite file at load (the same step the other paid workflows
+        # run). @x402/* pinned to the server's protocol version
         # (src/payments.js runs 2.16), same posture as scripts/paid-canary.js.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.29.0 @x402/avm@2.29.0
+        run: npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm install --no-save --ignore-scripts @x402/core@2.29.0 @x402/avm@2.29.0
 
       - name: Sweep the catalog on the Algorand rail
         id: sweep
