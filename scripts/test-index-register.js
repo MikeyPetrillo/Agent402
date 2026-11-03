@@ -174,6 +174,9 @@ ok(r.listed === true, "cap: an already-known origin still returns its state norm
   ok(submissionSlotStatus().submitted === 3 && warned.some((w) => /3 submitted origins held, over the cap of 1/.test(w)), `every stored origin is loaded past the cap, with a warning (${submissionSlotStatus().submitted} held, ${warned.length} warning)`);
   r = await registerOrigin("https://cap-third.example", { crawl: capCrawl });
   ok(r.listed === false && /full/i.test(String(r.error)), "cap: the door stays shut while more are held than the cap");
+  const { __testAdoptSubmitted } = await import("../src/x402-index.js");
+  __testAdoptSubmitted("https://held-d.example");
+  ok(submissionSlotStatus().submitted === 4, `another container's addition is held past the cap too (${submissionSlotStatus().submitted} held)`);
 }
 
 __testSetSubmittedCap(); // restore default for any tests that run after this file

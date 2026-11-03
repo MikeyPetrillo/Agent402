@@ -545,7 +545,7 @@ function outerClause(masked, re) {
     const c = masked[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`]/.test(masked[i - 1])) && re.test(masked.slice(i, i + 8))) return true;
+    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`.]/.test(masked[i - 1])) && re.test(masked.slice(i, i + 16))) return true;
   }
   return false;
 }
@@ -562,7 +562,7 @@ function outerLimit(code) {
     const c = code[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (c === "l" || c === "L") && (i === 0 || /[^\w"`]/.test(code[i - 1])) && /^limit\b/i.test(code.slice(i, i + 6))) {
+    else if (depth === 0 && (c === "l" || c === "L") && (i === 0 || /[^\w"`.]/.test(code[i - 1])) && /^limit\b/i.test(code.slice(i, i + 6))) {
       count.lastIndex = i;
       const m = count.exec(code);
       if (!m) {
@@ -616,14 +616,14 @@ export function cappedSql(sql, { wrap = null } = {}) {
     const c = masked[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(masked.slice(i, i + 6)) && (i === 0 || /[^\w"`]/.test(masked[i - 1]))) return asWritten;
+    else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(masked.slice(i, i + 6)) && (i === 0 || /[^\w"`.]/.test(masked[i - 1]))) return asWritten;
   }
   const lim = outerLimit(masked);
   // An outer LIMIT this reader cannot lower (an expression) is left alone,
   // and so is an outer OFFSET or FETCH with no LIMIT before it: a LIMIT
   // appended behind either would be a syntax error the buyer did not write.
   if (lim?.unreadable) return asWritten;
-  if (!lim && outerClause(masked, /^(?:offset|fetch)\b/i)) return asWritten;
+  if (!lim && outerClause(masked, /^(?:offset\s+\d|fetch\s+(?:first|next)\b)/i)) return asWritten;
   const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
   return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
 }

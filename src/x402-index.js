@@ -676,6 +676,8 @@ export function applyStoredSubmissions(arr) {
   }
   if (submittedSeeds.size > submittedSeedsCap) console.warn(`[x402-index] ${submittedSeeds.size} submitted origins held, over the cap of ${submittedSeedsCap}: no new submission is accepted until releases bring it under`);
 }
+/** Test hook: adopt one origin as another container's addition would be. */
+export function __testAdoptSubmitted(o) { SUBMITTED_ADAPTER.set(o); }
 export function loadSubmittedSeeds() {
   const d = docFor(SUBMITTED_SEEDS_FILE);
   const apply = applyStoredSubmissions;
@@ -688,7 +690,9 @@ const SUBMITTED_ADAPTER = {
   entries: (b) => (Array.isArray(b) ? b.filter((o) => typeof o === "string").map((o) => [o, 1]) : []),
   body: (es) => es.map(([k]) => k),
   local: () => [...submittedSeeds].map((o) => [o, 1]),
-  set: (o) => { if (submittedSeeds.size < submittedSeedsCap && !isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
+  // Another container's addition is held past the cap too: a refused one
+  // would be recorded as agreed and written out of the row on the next merge.
+  set: (o) => { if (!isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
   del: (o) => { submittedSeeds.delete(o); },
 };
 function persistSubmittedSeeds() {
