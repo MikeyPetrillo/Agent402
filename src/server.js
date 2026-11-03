@@ -647,7 +647,7 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -4089,7 +4089,7 @@ const revenueWallets = () => ({
 // scanning while it is within SNAPSHOT_TTL, so this adds a scan only when the
 // cache has actually gone stale. Best-effort, unref'd; skipped when the crawler
 // is off (offline tests) to keep them from hitting live RPCs.
-if (process.env.X402_INDEX_CRAWL !== "off" && process.env.X402_SYNC_ON_START !== "false") {
+if (revenueWarmupEnabled()) {
   const revenueTick = () => { runAsJob("revenue-snapshot", () => revenueSnapshot(revenueWallets())).catch(() => {}); };
   setTimeout(revenueTick, 4_000).unref();
   setInterval(revenueTick, 5 * 60_000).unref();
@@ -10562,8 +10562,12 @@ if (FREE_MODE) {
       const finishGuard = () => {
         if (resolved) return;
         resolved = true;
-        // Held until the authorization itself expires when that is later
-        // than the guard's TTL: a forgiven hang-up is granted unsettled.
+        // A grant that was not settled (a forgiven hang-up, a first-call
+        // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
+        // authorization live on chain, so its mark is held until the
+        // authorization itself expires. A settled grant keeps the guard's
+        // default hold: its nonce is spent on chain, and a far validBefore
+        // held for every paid call would keep one long-lived key each.
         if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) }).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
@@ -11781,10 +11785,13 @@ if (process.env.LAZY_DEPS_WARM !== "off") {
 
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot is
 // stale-while-revalidate, but a COLD cache makes the first post-deploy visitor
-// await a full 9-rail scan. Pre-warming removes that one latency hole — a
+// await a full 9-rail scan. Pre-warming removes that one latency hole; a
 // failed warmup is harmless (the request path falls back to today's behavior).
-// Skipped in FREE_MODE/CI boots where no wallet is configured.
-if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
+// Skipped where no wallet is configured (FREE_MODE) and wherever the warm-up
+// is off (src/revenue-live.js revenueWarmupEnabled: X402_SYNC_ON_START=false,
+// X402_INDEX_CRAWL=off, REVENUE_WARMUP=off): a paid test boot configures a
+// wallet, and the scan used to reach every chain's public RPC from it.
+if (WALLET_ADDRESS && revenueWarmupEnabled()) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
 
 // All-time revenue ledger sync loop: self-gates on durable storage (the
 // production deployment) or REVENUE_LEDGER=true, so test/CI boots never touch
@@ -11969,8 +11976,10 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot serves
 // stale-while-revalidating, so the only request that could ever block on the
 // full seven-rail RPC scan is the very first one after a deploy — this warm
-// takes even that hit off buyers' pageviews.
-bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
+// takes even that hit off buyers' pageviews. Same switch as the warm-up above
+// (revenueWarmupEnabled): this step ran on every test boot and reached every
+// chain's public RPC from it.
+if (revenueWarmupEnabled()) bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
 // x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
