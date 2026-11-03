@@ -391,7 +391,9 @@ export async function runMissingMode({ sweep = false } = {}) {
         }
         // 402 = facilitator hiccup (settlement timeout); retry after a pause.
         // 502/503/504 = upstream flap; also worth retrying.
-        if ((res.status === 402 || res.status >= 502) && attempt < 2) {
+        // A failure that came through a job is not retried: a second try would
+        // open a second paid job for the same route.
+        if ((res.status === 402 || res.status >= 502) && attempt < 2 && !res.job && !res.note) {
           console.warn(`  RETRY ${key} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
           await new Promise((r) => setTimeout(r, 5000));
           continue;
@@ -523,7 +525,8 @@ export async function buyOnce(payFetch, url, init, { plainFetch = fetch, target 
     const g = await plainFetch(statusUrl.startsWith("http") ? statusUrl : `${target}${statusUrl}`);
     const d = await g.json().catch(() => ({}));
     if (d.state === "succeeded") return { status: Number(d.result?.httpStatus) || 200, text: "", job: d };
-    if (d.state === "failed") return { status: Number(d.result?.httpStatus) || 500, text: JSON.stringify(d.result?.body ?? d.stage ?? "").slice(0, 200), job: d, note: "the job failed" };
+    // A failed job carries its answer as `error` (status and body), not `result`.
+    if (d.state === "failed") return { status: Number(d.error?.httpStatus ?? d.result?.httpStatus) || 500, text: JSON.stringify(d.error?.body ?? d.message ?? d.stage ?? "").slice(0, 200), job: d, note: "the job failed" };
     wait = Math.max(1, Number(g.headers.get("retry-after")) || Number(d.pollIntervalSeconds) || wait);
   }
   return { status: 504, text: "", note: `the job did not finish within ${maxSeconds + 60} s` };
@@ -627,7 +630,7 @@ async function main() {
           results.ok++;
           break;
         }
-        if ((res.status === 402 || res.status >= 502) && attempt < 2) {
+        if ((res.status === 402 || res.status >= 502) && attempt < 2 && !res.job && !res.note) {
           console.warn(`  RETRY ${method} ${meta.path} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
           await new Promise((r) => setTimeout(r, 5000));
           continue;

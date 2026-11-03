@@ -96,9 +96,11 @@ const check = (name, cond) => {
   check("the job is polled at its status URL on the target until it succeeds, and the buy reads as the job's 200", polls.length === 3 && polls.every((u) => u === "https://t.example/api/jobs/j1") && out.status === 200 && out.job?.state === "succeeded");
   check("the poll waits the Retry-After the job names", waits.length === 3 && waits.every((ms) => ms === 1000));
   // A failed job is the route's failure, with its status.
-  const failFetch = async () => R(200, { state: "failed", status: "failed", stage: "failed", result: { httpStatus: 502, body: { error: "upstream" } } });
+  // The server's failed-job shape (src/async-jobs.js publicJob): `error`
+  // with the status and body, a `message`, and no `result`.
+  const failFetch = async () => R(200, { state: "failed", status: "failed", stage: "failed", message: "the route answered 502", error: { httpStatus: 502, body: { error: "upstream" } } });
   const bad = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: failFetch, target: "https://t.example", sleep: async () => {} });
-  check("a failed job reads as its own HTTP status, never as a settlement", bad.status === 502 && /job failed/.test(bad.note));
+  check("a failed job reads as its own HTTP status from its error, never as a settlement", bad.status === 502 && /job failed/.test(bad.note) && /upstream/.test(bad.text) && bad.job?.state === "failed");
   // A plain 200 and any other 400 pass through untouched (one call).
   const plain = []; const okFetch = async (url) => { plain.push(url); return R(200, { ok: true }); };
   const fine = await buyOnce(okFetch, "https://t.example/api/hash", { method: "GET", headers: {} });
