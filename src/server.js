@@ -11311,8 +11311,11 @@ for (const tool of ALL_KIT) {
           throw e;
         }
         // onSettleOutcome reports the final outcome whether or not the buyer
-        // stayed connected (src/hangup-settlement.js), so a settlement that
-        // fails after the buyer left counts here too.
+        // stayed connected (src/hangup-settlement.js): a settlement sent while
+        // the buyer was connected counts here when it fails after the buyer
+        // left, the same as one whose buyer stayed. What it skips is a charge
+        // the forgiveness budget cancelled, which was never sent; that budget
+        // is its bound.
         onSettleOutcome(req, res, () => {
           try {
             // A settled 200 is a settled outcome in the key's window (the

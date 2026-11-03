@@ -32,7 +32,7 @@ import { receiptHeader as stripeReceiptHeader, txFromReceiptHeader as stripeTxFr
 import { stripe as stripeMethods } from "mppx/server";
 import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
-import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 
 export const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
 const CHALLENGE_TIMEOUT_SECONDS = 300;
@@ -391,6 +391,8 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
         return;
       }
+      // The charge leaves from here: a close after this did not withhold it.
+      markSettleSent(req);
       const b = await settle(auth);
       if (!b.ok) {
         console.warn(`[mpp-stripe] settle failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged: ${b.error}`);

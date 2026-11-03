@@ -26,9 +26,10 @@
 //
 // The listener rides onSettleOutcome (src/hangup-settlement.js), which reports
 // the final outcome whether or not the buyer stayed connected: a settlement
-// that fails after the buyer left counts like one whose buyer stayed. A charge
-// cancelled for a buyer who left inside the forgiveness budget is not counted
-// here; that budget is its bound.
+// sent while the buyer was connected that fails after the buyer left counts
+// like one whose buyer stayed. A charge cancelled for a buyer who left inside
+// the forgiveness budget (never sent) is not counted here; that budget is its
+// bound.
 //
 // The finish listener reads the status AND the settle receipt (PAYMENT-RESPONSE
 // with success:false), so a graceful facilitator rejection is caught whatever

@@ -65,6 +65,17 @@ Tools:
 - The metered chat route refuses a model id missing from the upstream's
   live chat model list with a 400 before payment, naming the nearest ids it
   serves (a model with a same-family successor is still served).
+Payments:
+- A settlement sent while the buyer was connected is a settlement outcome
+  whether or not the buyer stays: one that fails after the buyer closes
+  counts toward the wallet's settle breaker and the composite guard like one
+  whose buyer stayed, and one that succeeds records the sale beside the owed
+  charge. Before, a close timed into the settle call left the run bounded by
+  neither the breaker nor the forgiveness budget. The "settlement sent" mark
+  is now set where the charge leaves: a settle the first-call allowance
+  skipped or the authorization claim refused is never read as sent, so that
+  hang-up spends forgiveness budget as an abandoned run and feeds the
+  breaker nothing.
 
 ### 2026-11-02 (agent front door)
 Surfaces:

@@ -45,7 +45,7 @@ import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
 import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
-import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
@@ -1702,6 +1702,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
         return;
       }
+      // The charge leaves from here: a close after this did not withhold it.
+      markSettleSent(req);
       const tHandled = Date.now();
       // EARLY CONFIRM. The relay answers a broadcast ~2 s after the payment is
       // in a block (measured 2026-10-08: broadcast p50 ~4.1 s, inclusion ~1.5 s
