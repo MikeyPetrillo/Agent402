@@ -244,6 +244,9 @@ export function installFacilitatorDiagnostics(urls = [], { log = console.error, 
     }
     try {
       if (!res || res.ok) return res;
+      // A read that marks itself as not an upstream outcome (a buyer's SQL
+      // query on the shared host) is described by its own caller.
+      if (init && init[Symbol.for("agent402.noOutcome")]) return res;
       const url = typeof input === "string" ? input : (input?.url || String(input));
       const host = (() => { try { return new URL(url).host; } catch { return null; } })();
       if (!host || !hosts.has(host)) return res;

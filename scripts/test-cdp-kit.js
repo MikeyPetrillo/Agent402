@@ -170,13 +170,14 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
     // A buyer's query (onchain-sql): a slow 502 is answered once, a fast 5xx
     // is tried twice, and the answer says how to narrow the query.
-    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL } = await import("../src/tools/cdp-kit.js");
+    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL, _setHealthTimeoutMsForTest, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, BUYER_QUERY_INFLIGHT_MAX, _buyerQueriesInflightForTest, _cdpLogThrottleSizeForTest } = await import("../src/tools/cdp-kit.js");
+    const isHealth = (sql) => Object.values(QUERY_HEALTH_SQL).includes(sql);
     _setSlowQueryGatewayMsForTest(40);
     _setQueryHealthForTest(true); // the service answers a known-good query (checked below)
     const sqlRun = (sql = "SELECT block_number FROM base.blocks") => tool("onchain-sql").handler({ sql });
     calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
     e = await sqlRun().catch((x) => x);
-    ok(e?.statusCode === 422 && e?.hint === "narrow-query" && /select fewer columns/.test(e.message) && calls.length === 1,
+    ok(e?.statusCode === 422 && e?.hint === "narrow-query" && /answer window of about 10 s, reads more than its 100 GB/.test(e.message) && /select fewer columns/.test(e.message) && calls.length === 1,
       `a slow 502 on a buyer's query is one 422 (a buyer outcome, not a tool failure) with how to narrow it, not resent (attempts ${calls.length}, ${e?.statusCode})`);
     // The 5xx is logged with CDP's request id, its body, and the query's
     // shape, never the query's literals.
@@ -216,8 +217,8 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       let healthOk = true;
       globalThis.fetch = async (url, init = {}) => {
         const sql = JSON.parse(init.body || "{}").sql;
-        seen.push({ health: sql === QUERY_HEALTH_SQL, marked: !!init[Symbol.for("agent402.noOutcome")] });
-        if (sql === QUERY_HEALTH_SQL) return healthOk ? J(200, { result: [{ block_number: 1 }] }) : J(502, {});
+        seen.push({ health: isHealth(sql), sql, marked: !!init[Symbol.for("agent402.noOutcome")] });
+        if (isHealth(sql)) return healthOk ? J(200, { result: [{ block_number: 1 }] }) : J(502, {});
         return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
       };
       try {
@@ -230,7 +231,67 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         healthOk = false; _setQueryHealthForTest(null); seen.length = 0;
         e = await sqlRun().catch((x) => x);
         ok(e?.statusCode === 502 && !e?.hint && /known-good query failed too/.test(e.message), `service failing: the slow failure is a 502 tool failure, not the buyer's (${e?.statusCode} ${String(e?.message).slice(0, 80)})`);
+        // The known-good query reads the buyer's table: a Base reading does
+        // not vouch for Solana.
+        healthOk = true; _setQueryHealthForTest(null); seen.length = 0;
+        e = await sqlRun("SELECT count() FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY").catch((x) => x);
+        ok(e?.statusCode === 422 && seen.find((s) => s.health)?.sql === QUERY_HEALTH_SQL.solana, `a Solana query's health read is on solana.instructions (${seen.find((s) => s.health)?.sql})`);
+        _setQueryHealthForTest(true, "base"); _setQueryHealthForTest(null, "solana"); seen.length = 0; healthOk = false;
+        e = await sqlRun("SELECT count() FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY").catch((x) => x);
+        ok(e?.statusCode === 502 && seen.filter((s) => s.health).length === 1, "a healthy Base reading does not vouch for Solana: the Solana table is read on its own and its failure is a 502");
+        // Slow failures that overlap share one health read (the read is held
+        // 80 ms here so the second failure lands while it is in flight).
+        healthOk = true; _setQueryHealthForTest(null); seen.length = 0;
+        globalThis.fetch = async (url, init = {}) => {
+          const sql = JSON.parse(init.body || "{}").sql;
+          seen.push({ health: isHealth(sql), sql, marked: !!init[Symbol.for("agent402.noOutcome")] });
+          if (isHealth(sql)) return new Promise((r) => setTimeout(() => r(J(200, { result: [{ block_number: 1 }] })), 80));
+          return new Promise((r) => setTimeout(() => r(J(502, {})), seen.length === 1 ? 60 : 100));
+        };
+        await Promise.all([sqlRun().catch((x) => x), sqlRun().catch((x) => x)]);
+        ok(seen.filter((s) => s.health).length === 1, `two overlapping slow failures share one health read (${seen.filter((s) => s.health).length})`);
+        // The health read has its own short timeout: a hung service answers "unhealthy" within it.
+        ok(HEALTH_TIMEOUT_MS === 5_000 && HEALTH_TTL_MS === 5 * 60_000, "the health read's timeout is 5 s and its reading is kept 5 minutes");
+        _setHealthTimeoutMsForTest(150); _setQueryHealthForTest(null);
+        globalThis.fetch = async (url, init = {}) => {
+          const sql = JSON.parse(init.body || "{}").sql;
+          if (isHealth(sql)) return new Promise((_, reject) => { init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true }); });
+          return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+        };
+        const tH = Date.now();
+        const keepH = setInterval(() => {}, 1000); // a timeout signal alone does not hold the loop
+        e = await sqlRun().catch((x) => x);
+        clearInterval(keepH);
+        ok(e?.statusCode === 502 && Date.now() - tH < 2000, `a hung health read ends at its own timeout and the failure stays a 502 (${Date.now() - tH} ms)`);
+        _setHealthTimeoutMsForTest(null);
       } finally { globalThis.fetch = realFetchH; _setQueryHealthForTest(true); }
+    }
+    // At most two buyer queries run at once per server; a third is refused
+    // at once, uncharged, with a retry time.
+    {
+      const realFetchC = globalThis.fetch;
+      let release; const gate = new Promise((r) => { release = r; });
+      globalThis.fetch = async () => { await gate; return J(200, { result: [{ x: 1 }] }); };
+      try {
+        const a = sqlRun(), b = sqlRun();
+        await new Promise((r) => setTimeout(r, 20));
+        ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX && BUYER_QUERY_INFLIGHT_MAX === 2, `two buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
+        const c = await Promise.race([sqlRun().catch((x) => x), new Promise((r) => setTimeout(() => r({ statusCode: "not refused" }), 500))]);
+        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy", `a third is refused 429 with Retry-After 5 (${c?.statusCode})`);
+        release();
+        const [ra, rb] = await Promise.all([a, b]);
+        ok(ra.rowCount === 1 && rb.rowCount === 1 && _buyerQueriesInflightForTest() === 0, "the two in flight answer and the count returns to zero");
+      } finally { globalThis.fetch = realFetchC; }
+    }
+    // The log throttle: one line per key a minute, and its map is bounded.
+    {
+      const { _resetCdpLogThrottleForTest, _cdpLogOnceForTest } = await import("../src/tools/cdp-kit.js");
+      _resetCdpLogThrottleForTest();
+      const t0 = 1_700_000_000_000;
+      ok(_cdpLogOnceForTest("k", t0) === true && _cdpLogOnceForTest("k", t0 + 59_000) === false && _cdpLogOnceForTest("k", t0 + 61_000) === true, "a key logs once a minute");
+      for (let i = 0; i < 520; i++) _cdpLogOnceForTest(`shape-${i}`, t0);
+      ok(_cdpLogThrottleSizeForTest() <= 501, `the throttle map stays bounded (${_cdpLogThrottleSizeForTest()})`);
+      _resetCdpLogThrottleForTest();
     }
     // A 503 is the service unavailable: retried, then a plain upstream error, never "narrow it".
     calls = []; reply = () => J(503, {});
@@ -285,6 +346,10 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions /* where */ LIMIT 3") === null, "a keyword inside a comment does not count");
       ok(solanaRangeRefusal("SELECT sum(stack_height) FROM solana.instructions") !== null, "an aggregate call other than a bare count is refused");
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions WHERE tx_signer = 'block_time'") !== null, "block_time inside a string is not a range");
+      ok(solanaRangeRefusal("SELECT block_time, tx_id FROM solana.instructions WHERE tx_signer = 'x'") !== null && solanaRangeRefusal("SELECT x AS block_time FROM solana.instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT a FROM solana.instructions WHERE a = 1 ORDER BY block_time") !== null, "block_time selected, aliased or ordered by is not a range");
+      ok(solanaRangeRefusal("SELECT a FROM solana.instructions PREWHERE tx_signer = 'a'") !== null && solanaRangeRefusal("SELECT countIf(a = 1) FROM solana.instructions") !== null && solanaRangeRefusal("SELECT a FROM solana.instructions LIMIT 1 BY a") !== null && solanaRangeRefusal("SELECT stddevPop(a) FROM solana.instructions") !== null, "PREWHERE, -If combinators, LIMIT BY and the stddev family are read as scans");
+      ok(solanaRangeRefusal("SELECT a FROM solana . instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT `a'b` FROM solana.instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT \"c--d\" FROM solana.instructions WHERE a = 1") !== null, "spaces around the dot and quotes inside identifiers do not hide the table or the clause");
+      ok(solanaRangeRefusal("SELECT a FROM solana.instructions WHERE block_time = '2026-11-01'") === null, "an equality on block_time is a bound");
       // The days a query covers are read from its block_time comparisons
       // only (never an INTERVAL elsewhere or a value in a comment) and named
       // in the narrow-query answer; the range itself is judged by the
@@ -301,8 +366,13 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= toDateTime('2026-10-01 00:00:00')", at) === 33 && blockTimeRangeDays("SELECT 1 WHERE block_time >= toDate('2026-10-31')", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE '2026-10-30' <= block_time", at) === 4, "toDateTime and toDate literals and a reversed comparison are read; one bound spans to now");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= '2026-10-08' AND block_time < '2026-10-01'", at) === null, "reversed bounds read no range (never a negative span)");
       { const t0 = Date.now(); for (let i = 0; i < 10; i++) blockTimeRangeDays("SELECT 1 WHERE block_time >= now ( ) - interval 1 " + "a".repeat(9_900), at); ok(Date.now() - t0 < 200, `the range reader stays fast on a 10 KB adversarial query (${Date.now() - t0} ms for 10 reads)`); }
+      { const { cappedSql: capQ } = await import("../src/tools/cdp-kit.js"); const bad10k = "SELECT '" + "\\'".repeat(4_995); const t0 = Date.now(); for (let i = 0; i < 10; i++) { capQ(bad10k); solanaRangeRefusal(bad10k); sqlNorm(bad10k); } ok(Date.now() - t0 < 100, `an unclosed string of escaped quotes stays linear through every mask (${Date.now() - t0} ms for 30 passes)`); }
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > subtractDays(now(), 3)", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE block_time > today() - 5", at) === 5, "subtractDays and today() - N are read");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > someFunc(x)", at) === null && blockTimeRangeDays("SELECT 1 WHERE tx_signer = 'x'", at) === null, "a bound this reader does not know, or no block_time, reads no range");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - toIntervalDay(7)", at) === null, "an expression that continues past a known bound (now() - toIntervalDay(7)) reads no range, never zero");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 1 DAY OR block_time > '2020-01-01'", at) === null, "bounds joined by OR read no range");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 3 DAY AND x = 1", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE (block_time > now() - INTERVAL 2 DAY)", at) === 2, "a bound followed by AND or a closing parenthesis still reads");
+      { calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, {})), 60)); const h = await tool("onchain-sql").handler({ sql: "SELECT count() FROM solana.instructions WHERE block_time > now() - INTERVAL 6 HOUR" }).catch((x) => x); ok(/covers about 6 hours/.test(h?.message || ""), `a sub-day span is named in hours (${String(h?.message).match(/covers about [^;]*/)?.[0]})`); }
       ok(sqlNorm("SELECT a FROM `solana`.`instructions` WHERE \"tx_signer\" = 'where'") === "SELECT a FROM solana.instructions WHERE tx_signer = '_____'", "sqlNorm keeps identifiers and masks strings");
       const wide = "SELECT instruction_name, COUNT(*) AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY AND tx_signer = 'x' GROUP BY instruction_name LIMIT 5";
       ok(solanaRangeRefusal(wide) === null && solanaRangeRefusal("SELECT a FROM `solana`.`instructions` WHERE tx_signer = 'x'") !== null, "a ranged query is sent whatever its length (the service judges what it reads); a backticked table with no range is still refused");
