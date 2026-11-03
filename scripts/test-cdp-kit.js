@@ -359,7 +359,13 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(SQL_RECOVER_ROWS === 10 && SQL_RECOVER_ATTEMPTS === 2 && SQL_SEND_LIMIT_BYTES === 500_000, "the recovery's cap, attempts and answer-size target are the measured ones");
       const sent = [];
       const realFetchR = globalThis.fetch;
-      globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return sent.length === 1 ? J(500, { errorMessage: "An internal server error occurred." }) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: `mint-${i}`, bals: "x".repeat(4000) })) }); };
+      // The row-size measure the recovery now makes first (one aggregate
+      // over the query) is answered here with no row over the limit, so these
+      // cases keep exercising the re-run path; the row-size path has its own
+      // cases below.
+      const isMeasure = (q) => /countIf\(length\(toString\(tuple\(\*\)\)\)/.test(String(q || ""));
+      const withMeasureShim = (stub) => async (url, init = {}) => (isMeasure(JSON.parse(init.body || "{}").sql) ? J(200, { result: [{ n: 0, big: 0, maxRow: 1 }] }) : stub(url, init));
+      globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return sent.length === 1 ? J(500, { errorMessage: "An internal server error occurred." }) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: `mint-${i}`, bals: "x".repeat(4000) })) }); });
       try {
         calls = [];
         const r = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m LIMIT 1000");
@@ -368,7 +374,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(r.rowBytes > 4000 && /about 4 KB/.test(r.note) && new RegExp(`a LIMIT of ${Math.floor(SQL_SEND_LIMIT_BYTES / r.rowBytes)} usually keeps`).test(r.note) && new RegExp(`an arbitrary ${SQL_RECOVER_ROWS} rows \\(it has no ORDER BY\\)`).test(r.note), `the note gives the row size, the LIMIT that fits and that the rows are arbitrary without ORDER BY (${r.note.slice(0, 160)})`);
         // With an ORDER BY the rows are the first ones; rowBytes counts UTF-8 bytes, not characters.
         sent.length = 0; calls = [];
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "\u{1F600}".repeat(10_000) })) }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "\u{1F600}".repeat(10_000) })) }); });
         const ro = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m ORDER BY m LIMIT 1000");
         const { hasOuterOrderBy } = await import("../src/tools/cdp-kit.js");
         ok(hasOuterOrderBy("SELECT a FROM t ORDER BY a") && !hasOuterOrderBy("SELECT * FROM (SELECT a FROM t ORDER BY a) WHERE 1") && hasOuterOrderBy("SELECT * FROM (SELECT a FROM t) ORDER BY a LIMIT 5") && !hasOuterOrderBy("SELECT a FROM t WHERE x = 'order by'"), "only an ORDER BY outside every parenthesis orders the result");
@@ -376,41 +382,41 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(new RegExp(`its first ${SQL_RECOVER_ROWS} rows\\.`).test(ro.note) && ro.rowBytes >= 40_000 && new RegExp(`a LIMIT of ${Math.floor(SQL_SEND_LIMIT_BYTES / ro.rowBytes)} usually keeps`).test(ro.note), `an ordered query's rows are its first rows; a 40 KB UTF-8 row counts as 40 KB (${ro.rowBytes})`);
         // Fewer rows back than the cap: the whole result, served complete (the 500 was not about size).
         sent.length = 0; calls = [];
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { result: [{ m: 1 }, { m: 2 }, { m: 3 }] }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { result: [{ m: 1 }, { m: 2 }, { m: 3 }] }); });
         const whole = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
         ok(whole.rowCount === 3 && whole.complete === true && whole.truncated === false && whole.recovered === undefined && !whole.note && sent.length === 2, `fewer than ${SQL_RECOVER_ROWS} rows back is the whole result, served complete (${whole.rowCount} rows, complete ${whole.complete})`);
         // Small rows: the 500 was a one-off, the original is sent once more and served whole.
         sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (sent.length === 1) return J(500, {}); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(200, { result: Array.from({ length: 400 }, (_, i) => ({ m: i })) }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (sent.length === 1) return J(500, {}); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(200, { result: Array.from({ length: 400 }, (_, i) => ({ m: i })) }); });
         const small = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
         ok(small.rowCount === 400 && small.complete === true && small.recovered === undefined && sent.length === 3 && /LIMIT 1001$/.test(sent[2]), `small rows: the original is sent once more and served whole (${small.rowCount} rows, ${sent.length} calls)`);
         sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(500, {}); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(500, {}); });
         const smallAgain = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
         ok(smallAgain.recovered === "result-size" && smallAgain.rowCount === SQL_RECOVER_ROWS && sent.length === 3, `small rows whose original fails again are served as the recovered 25 (${sent.length} calls)`);
         // The re-run gets one attempt: a 503 there is an upstream error, with no third query call.
         sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(503, {}); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(503, {}); });
         e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
         ok(e?.statusCode === 502 && !e?.hint && sent.length === 2, `a 503 on the re-run is an upstream error after exactly two query calls (${e?.statusCode}, ${sent.length} calls)`);
         // A re-run body with no result list is an upstream error, never a charged empty answer.
         sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { nope: true }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { nope: true }); });
         e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
         ok(e?.statusCode === 502 && /without a result list/.test(e.message), `a re-run answer with no result list is a 502 (${e?.statusCode})`);
         // Even the capped rows too large: 422 while the service answers a known-good query, else 502.
         sent.length = 0; calls = [];
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, { errorMessage: "An internal server error occurred." }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, { errorMessage: "An internal server error occurred." }); });
         _setQueryHealthForTest(null);
         e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
         ok(e?.statusCode === 422 && e?.hint === "narrow-query" && new RegExp(`Even ${SQL_RECOVER_ROWS} rows`).test(e.message) && sent.filter((q) => !isHealth(q)).length === 3, `when even ${SQL_RECOVER_ROWS} rows do not fit twice, a 422 says to select narrower columns (${e?.statusCode}, ${sent.filter((q) => !isHealth(q)).length} query calls: the original and two capped attempts)`);
         // The capped re-run gets a second attempt: a 500 then the capped rows is served.
         sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length <= 2 ? J(500, {}) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length <= 2 ? J(500, {}) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); });
         const second = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
         ok(second.recovered === "result-size" && second.rowCount === SQL_RECOVER_ROWS && sent.length === 3 && new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(sent[1]) && new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(sent[2]), `a capped re-run that fails once and answers on its second attempt is served (${sent.length} calls)`);
         _setQueryHealthForTest(false); sent.length = 0;
-        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, {}); };
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, {}); });
         e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
         ok(e?.statusCode === 502 && /known-good query/.test(e.message), `with the service failing a known-good query too, it is a 502 (${e?.statusCode})`);
         _setQueryHealthForTest(true);
@@ -418,6 +424,72 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         sent.length = 0; calls = [];
         e = await sqlRun("WITH t AS (SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY) SELECT * FROM t").catch((x) => x);
         ok(e?.statusCode === 502 && e?.hint === "narrow-query" && sent.length === 1, `a query sent unwrapped is answered once on an instant 500, not resent (${sent.length} call)`);
+        // The row-size path: a row over the service's per-row limit is the
+        // cause; the rows that fit are served with the omitted ones counted.
+        {
+          const { SQL_ROW_LIMIT_BYTES, SQL_ROW_FILTER_CHARS, SQL_MAX_ROWS } = await import("../src/tools/cdp-kit.js");
+          ok(SQL_ROW_LIMIT_BYTES === 65_536 && SQL_ROW_FILTER_CHARS === 64_000, "the per-row limit and the filter threshold are the measured ones");
+          const sentR = [];
+          const fitRows = Array.from({ length: 18 }, (_, i) => ({ ix: i + 2, sk: "x".repeat(100) }));
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, { errorMessage: "An internal server error occurred." }); if (isMeasure(q)) return J(200, { result: [{ n: 22, big: 4, maxRow: 65972 }] }); return J(200, { result: fitRows }); };
+          const r = await sqlRun("SELECT ix, sk FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY ix, sk");
+          ok(r.recovered === "row-size" && r.rowsOmitted === 4 && r.omittedReason === "row-size" && r.rowCount === 18 && r.complete === false && r.truncated === true && r.matched === 22 && r.rowLimitBytes === 65_536 && r.maxRowBytes === 65972 && /4 row\(s\).*64 KB per-row limit.*about 64 KB.*18 rows that fit/.test(r.note), `rows over the per-row limit are omitted and counted, the rest served (${r.rowCount} served, ${r.rowsOmitted} omitted, matched ${r.matched})`);
+          ok(sentR.length === 3 && isMeasure(sentR[1]) && /^SELECT count\(\) AS n, countIf/.test(sentR[1]) && /WHERE length\(toString\(tuple\(\*\)\)\) <= 64000 LIMIT 1001$/.test(sentR[2]) && /^SELECT \* FROM \(\n/.test(sentR[2]), `the measure is one aggregate and the rows that fit are one filtered run (${sentR.length} calls)`);
+          // A filtered result past the cap is cut and reads as a lower bound.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 5000, big: 2, maxRow: 70000 }] }); return J(200, { result: Array.from({ length: SQL_MAX_ROWS + 1 }, (_, i) => ({ i })) }); };
+          const c = await sqlRun("SELECT i FROM base.blocks");
+          ok(c.recovered === "row-size" && c.rowCount === SQL_MAX_ROWS && c.truncated === true && c.complete === false && c.cutAt === undefined && c.countsFromSeparateRun === undefined && c.matched === 5000 && c.rowsOmitted === 2 && /about 68 KB/.test(c.note), `a filtered result past the cap is cut at ${SQL_MAX_ROWS} and marked (${c.rowCount}, truncated ${c.truncated})`);
+          ok(r.truncated === true && r.complete === false && r.matched === 22 && r.returned === 18 && r.cutAt === undefined && r.countsFromSeparateRun === undefined && !/separate run/.test(r.note), "an answer with omitted rows reads incomplete and truncated by the shared rule, with the exact match count");
+          // The measure and the serving run disagree (a query with no ORDER BY):
+          // the match count is never below served plus omitted, and the answer
+          // says the counts came from a separate run.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 5, big: 4 }] }); return J(200, { result: fitRows }); };
+          const two = await sqlRun("SELECT ix, sk FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY");
+          ok(two.recovered === "row-size" && two.matched === 22 && two.returned === 18 && two.rowsOmitted === 4 && two.complete === false && two.truncated === true && two.countsFromSeparateRun === true && /separate run/.test(two.note) && two.maxRowBytes === null && !/about NaN/.test(two.note) && /limit \(array and map/.test(two.note), `a measure that disagrees with the serving run never reads complete, is marked, and a missing maxRow leaves the note whole (matched ${two.matched}, complete ${two.complete}, marked ${two.countsFromSeparateRun})`);
+          // A refusal of the rewritten measure or filter is never logged as
+          // the buyer's failed query; the buyer's own instant 500 still is.
+          sentR.length = 0;
+          { const warnedR = []; const realWarnR = console.warn; console.warn = (m) => warnedR.push(String(m));
+            globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(400, { errorMessage: "ROWSIZEMEASURE refused" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+            const lg = await sqlRun("SELECT i, 'ROWSIZEBUYER' AS t FROM base.blocks");
+            console.warn = realWarnR;
+            const fails = warnedR.filter((w) => w.includes("failed buyer query"));
+            ok(lg.recovered === "result-size" && fails.length === 1 && fails[0].includes("ROWSIZEBUYER") && !fails.some((w) => w.includes("countIf(")), `the rewritten measure's refusal is not logged as a failed buyer query, the buyer's own 500 is (${fails.length} line, rewritten logged ${fails.some((w) => w.includes("countIf("))})`);
+          }
+          // Every matching row over the limit: nothing to serve, so the re-run
+          // path and its uncharged 422, never an empty 200.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (isMeasure(q)) return J(200, { result: [{ n: 1, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(200, { result: [] }); return isHealth(q) ? J(200, { result: [{ block_number: 1 }] }) : J(500, {}); };
+          const empty = await sqlRun("SELECT * FROM base.transactions WHERE hash = '0xabc'").catch((x) => x);
+          ok(empty?.statusCode === 422 && empty?.hint === "narrow-query" && sentR.filter((q) => !isHealth(q)).length === 5, `every row over the limit is the uncharged narrow-query 422, not an empty 200 (${empty?.statusCode}, ${sentR.filter((q) => !isHealth(q)).length} query calls)`);
+          // A refusal of the rewritten filtered SQL is not the buyer's to read.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 9, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(400, { errorMessage: "unexpected '*' at line 1" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const rej = await sqlRun("SELECT i FROM base.blocks").catch((x) => x);
+          ok(!(rej instanceof Error) && rej.recovered === "result-size" && sentR.length === 4, `a 400 on the filtered run falls back to the small re-run, never surfaced as the buyer's SQL error (${rej instanceof Error ? rej.statusCode : rej.recovered}, ${sentR.length} calls)`);
+          // No row over the limit: the re-run path as before.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 400, big: 0, maxRow: 30000 }] }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const none = await sqlRun("SELECT i FROM base.blocks");
+          ok(none.recovered === "result-size" && sentR.length === 3 && new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(sentR[2]), `with no row over the limit the small re-run decides (${none.recovered}, ${sentR.length} calls)`);
+          // The measure refused (a query at the depth limit, or any 4xx): the re-run path.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(400, { errorMessage: "SQL validation failed: subquery nesting too deep (max: 2)" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const refused = await sqlRun("SELECT i FROM base.blocks");
+          ok(refused.recovered === "result-size" && sentR.length === 3, `a refused measure falls back to the small re-run (${sentR.length} calls)`);
+          // A query already at the depth limit skips the measure (one more level would be refused).
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) throw new Error("the measure must not be sent for a deep query"); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const deepR = await sqlRun("SELECT a FROM (SELECT b FROM (SELECT c FROM base.blocks)) LIMIT 60000");
+          ok(deepR.recovered === "result-size" && sentR.length === 2 && !sentR.some(isMeasure), `a query at the depth limit goes straight to the small re-run (${sentR.length} calls)`);
+          // The filtered run itself failing (a total too large) falls back too.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 9000, big: 3, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(500, {}); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const both = await sqlRun("SELECT i FROM base.blocks");
+          ok(both.recovered === "result-size" && sentR.length === 4, `a filtered run the service also refuses falls back to the small re-run (${sentR.length} calls)`);
+        }
       } finally { globalThis.fetch = realFetchR; _setQueryHealthForTest(true); }
     }
     // Control: a fast 502 that clears is served.
