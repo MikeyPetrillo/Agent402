@@ -223,6 +223,24 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(q1.length === 1 && q1[0].includes("HTTP 502") && q1[0].includes("\\n") && q2.length === 1 && q2[0].includes("HTTP 400"), `a failed buyer query's text is logged once per distinct query, on one line, for a slow cutoff and for the service's refusal (${q1.length}, ${q2.length})`);
         ok(!warned3.some((w) => w.includes("INTERNALQ")), "an internal reader's failed query is not logged as a buyer query");
         _resetCdpLogThrottleForTest();
+        // The lines are bounded by bytes a minute: distinct large queries
+        // past the budget log a head with the length and hash, whole again
+        // the next minute.
+        {
+          const { FAILED_QUERY_LOG_BYTES_PER_MIN, _resetFailedQueryLogBudgetForTest } = await import("../src/tools/cdp-kit.js");
+          _resetFailedQueryLogBudgetForTest(); _resetCdpLogThrottleForTest();
+          const warned4 = []; console.warn = (m) => warned4.push(String(m));
+          calls = []; reply = () => J(400, { errorMessage: "Query scanned more data than the per-query limit allows" });
+          const bigQ = (i) => "SELECT block_number FROM base.blocks WHERE block_time > 1 /* " + "p".repeat(50_000) + " */ -- " + i;
+          const n = Math.ceil(FAILED_QUERY_LOG_BYTES_PER_MIN / 50_000) + 2;
+          for (let i = 0; i < n; i++) await tool("onchain-sql").handler({ sql: bigQ(i) }).catch(() => {});
+          console.warn = realWarn;
+          const lines = warned4.filter((w) => w.startsWith("[cdp] failed buyer query"));
+          const whole = lines.filter((w) => !/head only/.test(w)), headOnly = lines.filter((w) => /head only/.test(w));
+          const bytes = whole.reduce((s, w) => s + w.length, 0);
+          ok(lines.length === n && whole.length >= 1 && headOnly.length >= 2 && bytes <= FAILED_QUERY_LOG_BYTES_PER_MIN + 4096 && headOnly.every((w) => w.length < 1500 && /50\d\d\d chars, sha256 [0-9a-f]{16}/.test(w)), `distinct large failed queries log whole until the minute's byte budget, then a head with length and hash (${whole.length} whole, ${headOnly.length} head-only, ${bytes} bytes)`);
+          _resetFailedQueryLogBudgetForTest(); _resetCdpLogThrottleForTest();
+        }
       }
       console.warn = (m) => warned.push(String(m));
       ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && /timefilter=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape (block_time read as a time filter), no literals (${line.slice(0, 220)})`);

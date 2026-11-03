@@ -244,12 +244,24 @@ export function _resetCdpLogThrottleForTest() { loggedAt.clear(); }
 // hand: the shape alone does not say what in it reads past the service's
 // limits. Once per distinct query a minute; the owner approved this on
 // 2026-11-03, and /privacy names it.
-function logFailedBuyerQuery(status, tookMs, sql) {
+// The lines are bounded by bytes a minute (FAILED_QUERY_LOG_BYTES_PER_MIN):
+// a buyer whose every query fails can send a distinct 60 KB query per call,
+// and "once per distinct query" alone would let it write that much log per
+// refusal. Past the budget the line keeps the query's head, length and hash.
+export const FAILED_QUERY_LOG_BYTES_PER_MIN = 256 * 1024;
+const FAILED_QUERY_LOG_HEAD = 1024;
+let failedQueryLogWindow = 0, failedQueryLogBytes = 0;
+export function _resetFailedQueryLogBudgetForTest() { failedQueryLogWindow = 0; failedQueryLogBytes = 0; }
+function logFailedBuyerQuery(status, tookMs, sql, now = Date.now()) {
   const text = String(sql || "");
   if (!text) return;
-  const key = `sql|${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-  if (!logOnce(key)) return;
-  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms): ${JSON.stringify(text)}`);
+  const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  if (!logOnce(`sql|${hash}`, now)) return;
+  const minute = Math.floor(now / 60_000);
+  if (minute !== failedQueryLogWindow) { failedQueryLogWindow = minute; failedQueryLogBytes = 0; }
+  const whole = failedQueryLogBytes + text.length <= FAILED_QUERY_LOG_BYTES_PER_MIN;
+  failedQueryLogBytes += whole ? text.length : FAILED_QUERY_LOG_HEAD;
+  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms${whole ? "" : `, ${text.length} chars, sha256 ${hash}, head only: the minute's log budget is spent`}): ${JSON.stringify(whole ? text : text.slice(0, FAILED_QUERY_LOG_HEAD))}`);
 }
 export function _cdpLogThrottleSizeForTest() { return loggedAt.size; }
 export function _cdpLogOnceForTest(key, now) { return logOnce(key, now); }
