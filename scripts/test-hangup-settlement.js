@@ -424,7 +424,15 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 //     call): no mark, abandoned, the settle listeners stay quiet, so the
 //     breaker is never fed a failure that did not happen;
 //   - gone-first: the buyer left before the decision: the client-gone hook
-//     aborts, no mark, abandoned, quiet.
+//     aborts, no mark, abandoned, quiet;
+//   - gone-between: the close lands AFTER the client-gone hook passed and
+//     BEFORE the mark hook (the claim hook awaits its store in between): the
+//     chain still reaches the facilitator call, so the mark is set whatever
+//     the socket says, the ticket is released, and the settle that then fails
+//     (the handler answers 402) is a settlement outcome: the settle listeners
+//     run, which is how the breaker is fed and a sale recorded. Unmarked,
+//     that charged run would spend budget as abandoned, feed nothing and be
+//     booked as owed with no sale behind it.
 {
   _resetHangupForgiveness();
   const [{ registerClientGoneSettleHook }, { registerFirstCallAllowanceSettleHook }, { registerSettlementClaimHooks, DUPLICATE_AUTHORIZATION }, { ALLOWANCE_STATE }] =
@@ -433,7 +441,9 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   registerClientGoneSettleHook(stand); registerFirstCallAllowanceSettleHook(stand); registerSettlementClaimHooks(stand); registerSettleSentHook(stand);
   ok(stand.hooks.length === 4, `the four settle-deciding hooks register one onBeforeSettle each (${stand.hooks.length})`);
   // The vendor's loop: the first abort or skip ends the chain.
-  const runChain = async (ctx) => { for (const hook of stand.hooks) { const r = await hook(ctx); if (r && r.abort) return { abort: r.reason }; if (r && r.skip) return { skip: true }; } return { sent: true }; };
+  // `goneAfterHook`: the hook's own close flag flipped after that hook
+  // returns, as a socket close during the next hook's store wait sets it.
+  const runChain = async (ctx, { goneAfterHook = null } = {}) => { for (let i = 0; i < stand.hooks.length; i++) { const r = await stand.hooks[i](ctx); if (r && r.abort) return { abort: r.reason }; if (r && r.skip) return { skip: true }; if (i === goneAfterHook) ctx.transportContext.request.adapter.req.__a402ClientGoneAt = Date.now(); } return { sent: true }; };
   const ctxFor = (req, { nonce = null } = {}) => ({ requirements: { network: "eip155:8453" }, paymentPayload: nonce ? { payload: { authorization: { nonce } } } : {}, transportContext: { request: { adapter: { req } } } });
   // The claim is written to the caller's Redis when one is configured (the
   // claims module reads REDIS_URL itself, not SHARED_LIMITS), so every nonce
@@ -448,19 +458,20 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     const mode = req.params.mode;
     reserveHangupForgiveness(req, { keys: [`0x${mode}`, `ip:${mode}`], priceUsd: 0.01 });
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) }));
-    onSettleOutcome(req, res, (info) => settled.push({ mode, ...info }));
+    onSettleOutcome(req, res, (info) => settled.push({ mode, status: res.statusCode, ...info }));
     onResponseEnd(req, res, (info) => ended.push({ mode, ...info }));
     if (mode === "allowance") Object.defineProperty(req, ALLOWANCE_STATE, { value: { state: "claimed", res, payer: "0xgranted", network: "eip155:8453" }, enumerable: false, configurable: true });
     await sleep(200);
-    decided[mode] = await runChain(ctxFor(req, { nonce: mode === "duplicate" ? DUP_NONCE : nonceFor(mode) }));
+    decided[mode] = await runChain(ctxFor(req, { nonce: mode === "duplicate" ? DUP_NONCE : nonceFor(mode) }), { goneAfterHook: mode === "gone-between" ? 0 : null });
     await sleep(400);
-    try { res.status(decided[mode].sent ? 200 : 402).json({}); } catch { /* gone */ }
+    // gone-between: the settle that was sent then fails (402 after the mark).
+    try { res.status(decided[mode].sent && mode !== "gone-between" ? 200 : 402).json({}); } catch { /* gone */ }
   });
   const { server, url } = await listen(app);
   // Another request already holds the duplicate's authorization.
   const other = {};
   ok((await runChain(ctxFor(other, { nonce: DUP_NONCE }))).sent === true, "a stand-in request claims the duplicate's authorization first (every hook passes for it)");
-  for (const [mode, abortAfterMs] of [["sent", 350], ["allowance", 350], ["duplicate", 350], ["gone-first", 80]]) {
+  for (const [mode, abortAfterMs] of [["sent", 350], ["allowance", 350], ["duplicate", 350], ["gone-first", 80], ["gone-between", 350]]) {
     const before = hangupForgivenessStatus().abandonedInWindow;
     await hangUp(`${url}/${mode}`, { abortAfterMs });
     await sleep(700);
@@ -469,6 +480,11 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     if (mode === "sent") {
       ok(decided[mode].sent === true && req?.sent === true, `${mode}: every hook passed, so the charge left while the buyer was connected and the mark says so`);
       ok(after === before && settled.some((s) => s.mode === mode && s.forgiven === false && s.via === "undelivered"), `${mode}: the ticket is released (abandoned ${before} -> ${after}) and the outcome is a settlement outcome: the settle listeners ran`);
+    } else if (mode === "gone-between") {
+      ok(decided[mode].sent === true && req?.sent === true, `${mode}: the close landed after the client-gone hook passed and before the mark hook, the chain still reached the facilitator call, and the mark says the charge left (${JSON.stringify(decided[mode])})`);
+      ok(after === before, `${mode}: the ticket is released, not abandoned (abandoned ${before} -> ${after}): no forgiveness budget spent on a charged run`);
+      const outcome = settled.find((s) => s.mode === mode);
+      ok(outcome && outcome.forgiven === false && outcome.via === "undelivered" && outcome.status === 402, `${mode}: the failed settle is a settlement outcome: the settle listeners ran on the 402 (the breaker's and the sale's path), not skipped as forgiven (${JSON.stringify(outcome)})`);
     } else {
       const how = mode === "allowance" ? decided[mode].skip === true : mode === "duplicate" ? decided[mode].abort === DUPLICATE_AUTHORIZATION : decided[mode].abort === "client_disconnected";
       ok(how && req?.sent === false, `${mode}: the chain ended before the mark hook (${JSON.stringify(decided[mode])}), so nothing says a settle was sent`);
@@ -478,7 +494,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // The predicate itself records nothing: only markSettleSent does, and only
   // for a connected buyer.
   { const connected = {}; ok(chargeCancelledForClientGone(connected) === false && settleSentWhileConnected(connected) === false, "reading the predicate on a connected buyer leaves no mark"); markSettleSent(connected); ok(settleSentWhileConnected(connected), "markSettleSent marks a connected buyer"); }
-  { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone); ok(settleSentWhileConnected(gone) === false, "markSettleSent records nothing for a buyer already gone (that charge is a no-ticket settle, booked as owed)"); }
+  { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone); ok(settleSentWhileConnected(gone) === false, "markSettleSent records nothing for a buyer already gone at a synchronous call site (that charge is a no-ticket settle, booked as owed)"); }
+  { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone, { evenIfGone: true }); ok(settleSentWhileConnected(gone) === true, "markSettleSent with evenIfGone (the x402 hook's form) marks a buyer whose close landed during the chain"); }
+  {
+    const hs = readFileSync(new URL("../src/hangup-settlement.js", import.meta.url), "utf8");
+    ok(/export function registerSettleSentHook\(server\) \{\s*\n\s*server\.onBeforeSettle\(\(ctx\) => \{ markSettleSent\(ctx\?\.transportContext\?\.request\?\.adapter\?\.req, \{ evenIfGone: true \}\); \}\);/.test(hs), "the x402 settle-sent hook marks unconditionally (pin; gone-between above runs the behavior)");
+  }
   server.close();
   _resetHangupForgiveness();
 }
@@ -552,7 +573,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // file runs before any handler and is covered by the tempoSettled rule.
   for (const [name, src, calls] of [["mpp-tempo", tempo, ["Promise.resolve(broadcast(auth))", "b = await broadcast(auth);"]], ["mpp-stripe", stripeGate, ["const b = await settle(auth);"]]]) {
     const check = src.indexOf("if (chargeCancelledForClientGone(req)) {");
-    ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 3200), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
+    ok(check > 0 && calls.every((c) => src.indexOf(c) > check && src.indexOf(c) - check < 3600), `${name}: the cancelled-charge check precedes the ${name === "mpp-tempo" ? "broadcast" : "capture"}`);
   }
   ok(/\} else if \(req\.creditsSettled && Number\(req\.creditsChargedOnClose\) > 0\) \{/.test(server), "the debt recorder books a credits hold settled on an abandoned run");
   ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,1400}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
@@ -654,6 +675,11 @@ const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-st
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "3",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_WINDOW_MS: "86400000",
     HANGUP_FORGIVE_FILE: HANGUP_FILE, HANGUP_FORGIVE_SALT: "hangup-test-salt",
+    // The leaderboard's boot scan (20 s after boot) blocked the loop for 2.6
+    // to 4.4 s on a loaded machine and landed inside e3 and f, whose fixed
+    // waits then ran out before the settle: kept past the run, as the other
+    // paid-boot suites keep it.
+    LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_TEST_HOLD_JSON: "1" },
   stdio: ["ignore", "pipe", "pipe"],

@@ -94,36 +94,45 @@ export function chargeCancelledForClientGone(req) {
 const SETTLE_SENT_CONNECTED = "__a402SettleCheckedConnectedAt";
 
 /**
- * Record that the charge is leaving while the buyer is still connected.
- * Called at the point where money actually moves, after every check that
- * can still withhold it: on x402 the last onBeforeSettle hook
- * (registerSettleSentHook, registered after the allowance skip and the
- * authorization claim, so a settle one of those ended never counts as sent);
- * on Tempo right before the broadcast, on Stripe right before the capture, on
- * credits right before the debit. A buyer already gone at this point records
- * nothing (that charge is a no-ticket settle, booked as owed). Own property,
+ * Record that the charge is leaving. Called at the point where money
+ * actually moves, after every check that can still withhold it: on x402 the
+ * last onBeforeSettle hook (registerSettleSentHook, registered after the
+ * allowance skip and the authorization claim, so a settle one of those ended
+ * never counts as sent); on Tempo right before the broadcast, on Stripe right
+ * before the capture, on credits right before the debit. At those three call
+ * sites the cancelled-charge check runs synchronously just before the mark,
+ * so a buyer already gone there records nothing (that charge is a no-ticket
+ * settle, booked as owed). The x402 hook passes `evenIfGone`: the client-gone
+ * hook ran earlier in the chain and the claim hook awaited its store in
+ * between, so a close that landed during that wait must still read as sent,
+ * because the facilitator call follows whatever the socket says; unmarked, a
+ * charged run would spend forgiveness budget as abandoned, skip the sale and
+ * the breaker, and be booked as owed with no sale behind it. Own property,
  * first time only.
  */
-export function markSettleSent(req) {
+export function markSettleSent(req, { evenIfGone = false } = {}) {
   if (!req || typeof req !== "object" || Object.hasOwn(req, SETTLE_SENT_CONNECTED)) return;
-  if (clientGoneBeforeFirstByte(req)) return;
+  if (!evenIfGone && clientGoneBeforeFirstByte(req)) return;
   try { Object.defineProperty(req, SETTLE_SENT_CONNECTED, { value: Date.now(), enumerable: false, configurable: true }); } catch { /* a frozen request records nothing */ }
 }
 
 /** The x402 settlement point: the last onBeforeSettle hook. Every hook that
  *  can abort (blocklist, client gone, duplicate authorization) or skip (the
  *  first-call allowance) runs before it and ends the chain, so this runs only
- *  when the facilitator call follows. Same request path as the client-gone
- *  hook (transportContext.request.adapter.req); if a vendor bump moves it,
- *  nothing is marked and a residual-window close reads as withheld, which
- *  spends forgiveness budget rather than granting a free run. */
+ *  when the facilitator call follows, and it marks unconditionally (see
+ *  markSettleSent: the socket may have closed during the claim hook's store
+ *  wait, after the client-gone hook passed). Same request path as the
+ *  client-gone hook (transportContext.request.adapter.req); if a vendor bump
+ *  moves it, nothing is marked and a residual-window close reads as withheld,
+ *  which spends forgiveness budget rather than granting a free run. */
 export function registerSettleSentHook(server) {
-  server.onBeforeSettle((ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req); });
+  server.onBeforeSettle((ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req, { evenIfGone: true }); });
   return server;
 }
 
-/** True when a settlement point found the buyer connected and sent the
- *  charge. A close after that (the residual window) did not withhold it: a
+/** True when a settlement point sent the charge (on x402, when the hook
+ *  chain reached the facilitator call; on the other rails, when the point
+ *  found the buyer connected). A close after that (the residual window) did not withhold it: a
  *  transfer may still land and be booked as owed, so the dispatcher releases
  *  the forgiveness ticket instead of recording the run as abandoned, the
  *  hang-up log says the settle is unconfirmed, never "not charged", and the
