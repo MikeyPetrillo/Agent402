@@ -110,6 +110,19 @@ export function settleSentWhileConnected(req) {
   return !!req && typeof req === "object" && Object.hasOwn(req, SETTLE_SENT_CONNECTED);
 }
 
+/** True when this request was granted (its final status is 200) without its
+ *  payment being settled: a forgiven hang-up (the buyer left before the first
+ *  byte, held a granted ticket, and no settlement point had sent the charge),
+ *  or a first-call allowance that skipped settlement. The signed authorization
+ *  is then still live on chain, so the replay guard's consumed mark for it is
+ *  held to the authorization's own validBefore (server.js); a settled grant
+ *  keeps the guard's default hold, since the chain refuses its nonce. Reads
+ *  only; never records a settlement check. */
+export function grantedUnsettled(req) {
+  if (allowanceServed(req)) return true;
+  return clientGoneBeforeFirstByte(req) && hangupForgiven(req) && !settleSentWhileConnected(req);
+}
+
 /**
  * @param {object} opts
  * @param {(req: any, res: any, kind: "end") => void} opts.onUndelivered

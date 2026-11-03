@@ -253,12 +253,28 @@ function memoryRedis() {
 }
 
 {
-  // The x402 call site passes the authorization's validBefore and requires
-  // the shared claim on every paid route (the booted two-container case is
-  // scripts/test-replay-store-outage.js).
+  // The x402 call site passes the authorization's validBefore only for a
+  // grant that was not settled (src/hangup-settlement.js grantedUnsettled:
+  // a forgiven hang-up, a served first-call allowance), so a settled 200
+  // keeps the guard's default hold; and it requires the shared claim on a
+  // long-running route and whenever another container may be serving (the
+  // booted cases are scripts/test-replay-store-outage.js; the hold read back
+  // from Redis is scripts/test-replay-consumed-hold.js).
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(server.includes("replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) })"), "server.js holds a granted x402 payment's consumed mark until its validBefore");
+  ok(server.includes("replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {})"), "server.js holds a granted x402 payment's consumed mark until its validBefore only when the grant was not settled");
+  const { grantedUnsettled } = await import("../src/hangup-settlement.js");
+  const ticket = (granted) => ({ value: { granted, reason: granted ? null : "payer budget" }, enumerable: false });
+  const settled = {}; // a connected buyer, settled
+  const forgiven = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(true));
+  const residual = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(true));
+  Object.defineProperty(residual, "__a402SettleCheckedConnectedAt", { value: 2, enumerable: false }); // the charge was sent before the close
+  const unforgiven = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(false));
+  const allowance = { __a402Allowance: { state: "served" } };
+  const inherited = Object.create({ __a402ClientGoneAt: 1, __a402Allowance: { state: "served" } });
+  ok(grantedUnsettled(settled) === false && grantedUnsettled(residual) === false && grantedUnsettled(unforgiven) === false, "a settled grant, a residual-window hang-up (charge sent) and an unforgiven hang-up keep the default hold");
+  ok(grantedUnsettled(forgiven) === true && grantedUnsettled(allowance) === true, "a forgiven hang-up and a served first-call allowance are held to validBefore");
+  ok(grantedUnsettled(inherited) === false && grantedUnsettled(null) === false, "own properties only: an inherited flag never makes a grant read as unsettled");
   ok(/requireShared: sharedClaimRequired\(\{ longRunning: !!replayDef && isLongRunningSlug\(replayDef\.slug\), draining: drainSignal\(\)\.aborted \}\)/.test(server), "server.js requires the shared claim on a long-running route and whenever another container may serve (src/replay-topology.js)");
 }
 

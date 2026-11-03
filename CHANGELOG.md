@@ -7,6 +7,30 @@ carries its own version on npm.
 ## Unreleased
 
 ### 2026-11-03 (onchain-sql, metered chat, seller registration)
+Payments:
+- The Tempo gate and the card gate require the shared replay claim on the
+  same rule as the x402 dispatcher: on a long-running route always, and on
+  every route while another container may be serving (more than one
+  replica, a deploy's overlap window, a drain). With the shared store
+  configured but unreachable, a Tempo pull or push credential or a card
+  credential is then refused 503 with `Retry-After` before the handler
+  runs, before a push transfer is claimed and before a card is captured;
+  past the window a lone container serves on its per-process claim. Before,
+  both gates took a per-process claim on a store failure, so one credential
+  sent to two containers could run twice (a push transfer is already
+  final).
+- A settled payment's consumed mark in the replay guard keeps the guard's
+  default hold (one hour). Only a grant that was not settled (a hang-up
+  the forgiveness budget forgave, a first-call allowance) is held to the
+  authorization's own `validBefore` plus a margin, since that
+  authorization is still live on chain. Before, every settled call was
+  held to its `validBefore`, one long-lived key per paid call for a client
+  signing long validity windows.
+Operations:
+- The revenue snapshot's boot warm-ups (a scan of every rail over public
+  chain RPCs) are off under `X402_INDEX_CRAWL=off`, `X402_SYNC_ON_START=false`
+  or `REVENUE_WARMUP=off`; before, two of them ran on every boot that
+  configured a wallet, test boots included.
 Router and index:
 - Self-serve seller registration holds 4,000 submission slots (was 2,000,
   which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A

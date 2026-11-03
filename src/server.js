@@ -832,7 +832,7 @@ function trialClientKey(ip) {
 }
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
-import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
@@ -10568,7 +10568,7 @@ if (FREE_MODE) {
         // authorization itself expires. A settled grant keeps the guard's
         // default hold: its nonce is spent on chain, and a far validBefore
         // held for every paid call would keep one long-lived key each.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) }).catch(() => {});
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {}).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
