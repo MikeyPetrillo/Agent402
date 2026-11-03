@@ -1336,10 +1336,20 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // one that paid a served call (consumed) or is mid-claim on another
       // request (in flight) is never booked as owed for a call it paid. The
       // shared claim is required when another container may serve (see the
-      // paid path below); with the store out the plain refusal stands and
-      // nothing is booked, so the transfer still pays on a retry.
+      // paid path below); with the store out the answer is the paid path's
+      // 503 with Retry-After: the transfer is final on chain and nothing was
+      // checked, claimed or booked, so the same credential sent again once
+      // the store answers is confirmed and booked as owed then (a plain 402
+      // here would read as a verdict on the credential, which none was
+      // given).
       if (replayGuard && replayKey) {
         const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning === true, draining: drainSignal().aborted }) });
+        if (verdict === "unavailable") {
+          logTempoRefusal(req, { cls: "replay-store", amountAtomic: amount, timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, shared replay store did not answer; refused before the claim, nothing checked, claimed or booked` });
+          res.setHeader("Retry-After", "30");
+          res.setHeader("Cache-Control", "no-store");
+          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. That transfer is final on chain. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
+        }
         if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
       }
       try {

@@ -311,10 +311,17 @@ try {
     const pb = await r.clone().json().catch(() => ({}));
     d = delta(t0, snap());
     ok(await refused(r) && pb.transferClaimed === false && pb.charged === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `tempo push credential, store out, inside the window: refused 503 before the transfer is claimed or finalized, nothing booked (${r.status}; ${JSON.stringify(d)})`);
+    // A push credential the ROUTE refuses (long-running: the owed-booking
+    // path) meets the same store state before its claim: the same 503, so
+    // the buyer does not read a verdict on a transfer nothing checked. The
+    // transfer is final on chain, so the body never says "not charged"; it
+    // says the transfer is booked as owed once the credential returns.
     t0 = snap();
     r = await quiet(() => tempoPost("/long", pushCred("0x" + "b2".repeat(32))));
+    const rb = await r.clone().json().catch(() => ({}));
     d = delta(t0, snap());
-    ok(r.status === 402 && d.runs === 0 && d.broadcasts === 0 && d.booked === 0 && d.validates === 0, `tempo push credential on a route that refuses it, store out: the plain refusal, no relay call, nothing booked as owed (${r.status}; ${JSON.stringify(d)})`);
+    ok(await refused(r) && rb.transferClaimed === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0 && d.validates === 0, `tempo push credential on a route that refuses it, store out, inside the window: refused 503 with Retry-After before the claim, no relay call, no handler, nothing booked as owed (${r.status}; ${JSON.stringify(d)})`);
+    ok(typeof rb.error === "string" && /final on chain/.test(rb.error) && /recorded as owed/.test(rb.error) && !/not charged|nothing was charged|no run was started/i.test(rb.error) && !("charged" in rb), `its body says the transfer is final and will be booked as owed when the credential returns, never that nothing was charged (${JSON.stringify(rb).slice(0, 200)})`);
     const c0 = { ...card };
     r = await quiet(() => cardPost());
     ok(await refused(r) && card.runs === c0.runs && card.captures === c0.captures, `card credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing captured (${r.status}; runs +${card.runs - c0.runs}, captures +${card.captures - c0.captures})`);
