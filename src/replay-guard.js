@@ -122,6 +122,16 @@ function namesOf(key) {
 }
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
+// A settled payment's consumed mark is kept this long (the chain refuses its
+// nonce after that, so the mark need not outlive it). /privacy and the
+// dataHandling list on /.well-known/x402 quote it.
+export const SETTLED_HOLD_MS = 60 * 60_000;
+/** The settled hold in words for those surfaces ("an hour", "2 hours", "30 minutes"). */
+export function settledHoldText() {
+  const hours = SETTLED_HOLD_MS / 3_600_000;
+  if (Number.isInteger(hours) && hours >= 1) return hours === 1 ? "an hour" : `${hours} hours`;
+  return `${Math.round(SETTLED_HOLD_MS / 60_000)} minutes`;
+}
 // A consumed mark is kept at least this long past the authorization's own
 // validBefore (clock skew between us, the facilitator and the chain).
 export const CONSUMED_VALIDITY_MARGIN_MS = 10 * 60_000;
@@ -176,7 +186,7 @@ async function delIfTagged(c, name, tag) {
   if ((await c.get(REDIS_PREFIX + name)) === tag) await c.del(REDIS_PREFIX + name);
 }
 
-export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
+export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
   // Local (per-process) fallback state — used whenever Redis is unset or a
   // call to it fails (unless the caller requires the shared store), so a
   // single replica keeps its full guarantee and a Redis outage degrades to a
