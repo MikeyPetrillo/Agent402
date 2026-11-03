@@ -60,7 +60,7 @@ export const PACK_PRICES = {
   "weather-brief": 0.006, // 3 tools, parts $0.006
   "price-monitor": 0.021, // 5 tools, parts $0.023
   "wallet-readiness": 0.008, // 3 tools, parts $0.008
-  "onchain-analyst": 0.03, // 3 tools, parts $0.033
+  "onchain-analyst": 0.039, // 3 tools, parts $0.043
   "seo-audit": 0.009, // 6 tools, parts $0.01
   "cheapest-rail": 0.009, // 4 tools, parts $0.009
   "company-dossier": 0.037, // 5 tools, parts $0.041

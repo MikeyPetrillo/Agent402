@@ -104,7 +104,7 @@ Router and index:
   released); other origins after 30 days as before. A released seller's
   registration and tenure survive, and it re-registers into a free slot.
 Tools:
-- onchain-sql is $0.030 a call (was $0.020), and a call sends the query
+- onchain-sql is $0.040 a call (was $0.020), and a call sends the query
   service at most 3 queries: the query itself and up to 2 recovery runs (the
   row-size measure, then the filtered run or a small re-run). A call that
   reaches the cap without an answer is the uncharged 422 with
