@@ -330,10 +330,36 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     calls = []; reply = () => J(503, {});
     e = await sqlRun().catch((x) => x);
     ok(e?.statusCode === 502 && !e?.hint && /retry shortly/.test(e.message) && !/narrow/i.test(e.message) && calls.length === 2, `a 503 is retried and answered as an upstream error to retry (attempts ${calls.length}, hint ${e?.hint})`);
-    // A fast 500 (a result too large to return) is tried twice, then answered the same way.
-    calls = []; reply = () => J(500, { errorMessage: "An internal server error occurred." });
-    e = await sqlRun().catch((x) => x);
-    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && calls.length === 2, `a fast 500 on a buyer's query is tried twice, then narrow-query (attempts ${calls.length})`);
+    // A fast 500 is the result too large to send: the query is run once more
+    // with LIMIT 25 and those rows are served marked truncated, with the row
+    // size and the LIMIT that fits.
+    {
+      const { SQL_RECOVER_ROWS, SQL_SEND_LIMIT_BYTES } = await import("../src/tools/cdp-kit.js");
+      const sent = [];
+      const realFetchR = globalThis.fetch;
+      globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return sent.length === 1 ? J(500, { errorMessage: "An internal server error occurred." }) : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: `mint-${i}`, bals: "x".repeat(4000) })) }); };
+      try {
+        calls = [];
+        const r = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m LIMIT 1000");
+        ok(sent.length === 2 && /\) LIMIT 25$/.test(sent[1]) && /GROUP BY m LIMIT 1000\n\) LIMIT 25$/.test(sent[1]), `the query is run once more with an outer LIMIT ${SQL_RECOVER_ROWS} (${sent[1]?.slice(-40)})`);
+        ok(r.recovered === "result-size" && r.rowCount === SQL_RECOVER_ROWS && r.truncated === true && r.complete === false && r.matchedIsLowerBound === true && r.maxRows === SQL_RECOVER_ROWS, `the rows are served marked truncated and recovered (${r.rowCount} rows, recovered ${r.recovered})`);
+        ok(r.rowBytes > 4000 && /about 4 KB/.test(r.note) && new RegExp(`set LIMIT ${Math.floor(SQL_SEND_LIMIT_BYTES / r.rowBytes)}\\b`).test(r.note), `the note gives the row size and the LIMIT that fits (${r.note.slice(0, 160)})`);
+        // Even 25 rows too large: 422 while the service answers a known-good query, else 502.
+        sent.length = 0; calls = [];
+        globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); calls.push({ url: String(url) }); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, { errorMessage: "An internal server error occurred." }); };
+        _setQueryHealthForTest(null);
+        e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
+        ok(e?.statusCode === 422 && e?.hint === "narrow-query" && /Even 25 rows/.test(e.message) && sent.filter((q) => !isHealth(q)).length === 2, `when even 25 rows do not fit, a 422 says to select narrower columns (${e?.statusCode}, ${sent.filter((q) => !isHealth(q)).length} query calls)`);
+        _setQueryHealthForTest(false); sent.length = 0;
+        e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
+        ok(e?.statusCode === 502 && /known-good query/.test(e.message), `with the service failing a known-good query too, it is a 502 (${e?.statusCode})`);
+        _setQueryHealthForTest(true);
+        // An unwrapped query (WITH) cannot take an outer cap: answered once, no resend.
+        sent.length = 0; calls = [];
+        e = await sqlRun("WITH t AS (SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY) SELECT * FROM t").catch((x) => x);
+        ok(e?.statusCode === 502 && e?.hint === "narrow-query" && sent.length === 1, `a query sent unwrapped is answered once on an instant 500, not resent (${sent.length} call)`);
+      } finally { globalThis.fetch = realFetchR; _setQueryHealthForTest(true); }
+    }
     // Control: a fast 502 that clears is served.
     calls = []; reply = (n) => (n === 1 ? J(502, {}) : J(200, { result: [{ x: 1 }] }));
     const q = await sqlRun();
