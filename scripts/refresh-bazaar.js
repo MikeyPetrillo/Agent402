@@ -377,7 +377,7 @@ export async function runMissingMode({ sweep = false } = {}) {
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await payFetch(url, {
+        const res = await buyOnce(payFetch, url, {
           method: t.method,
           headers: { ...heartbeatHeaders(), ...(isGet ? {} : { "Content-Type": "application/json" }) },
           body: isGet ? undefined : JSON.stringify(example),
@@ -386,7 +386,7 @@ export async function runMissingMode({ sweep = false } = {}) {
         if (res.status === 200) {
           results.ok++;
           results.bought.add(t.path);
-          if (i % 50 === 0 || i === missing.length - 1) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})`);
+          if (i % 50 === 0 || i === missing.length - 1 || res.job) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})${res.job ? " as a job" : ""}`);
           break;
         }
         // 402 = facilitator hiccup (settlement timeout); retry after a pause.
@@ -396,8 +396,8 @@ export async function runMissingMode({ sweep = false } = {}) {
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
-        const body = await res.text().catch(() => "");
-        console.warn(`  FAIL ${key} → HTTP ${res.status} ${body.slice(0, 120)}`);
+        const body = res.text ?? (await res.res?.text().catch(() => "")) ?? "";
+        console.warn(`  FAIL ${key} → HTTP ${res.status} ${res.note ? res.note + " " : ""}${body.slice(0, 120)}`);
         results.fail++;
         results.errors.push(`${t.path}: HTTP ${res.status}`);
         break;
@@ -493,6 +493,42 @@ export function missingModeVerdict({ failCount, okCount, stillMissingPaths, boug
   };
 }
 
+/** One paid call, as the sweep needs it: the route's own answer, or, for a
+ *  slow route that refuses a synchronous paid call (400 respond_async_required,
+ *  before any payment), the same call again with Prefer: respond-async and
+ *  its job followed to the end. The job settles the payment only on its final
+ *  200, so a succeeded job is a settlement like any other. Returns the final
+ *  status and the body text when it was read. Pure over the fetches it is
+ *  given, so scripts/test-bazaar-verdict.js can run it without paying.
+ *  Measured 2026-11-03: the keep-alive's one stale route, decide-execute,
+ *  answered 400 respond_async_required and the pass failed; the route would
+ *  have aged out of the Bazaar after 30 days without a settlement. */
+export async function buyOnce(payFetch, url, init, { plainFetch = fetch, target = TARGET, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+  const res = await payFetch(url, init);
+  if (res.status !== 400) return { status: res.status, res };
+  const text = await res.text().catch(() => "");
+  let refusal = null;
+  try { refusal = JSON.parse(text); } catch { refusal = null; }
+  if (refusal?.error !== "respond_async_required") return { status: 400, text };
+  const maxSeconds = Math.max(30, Number(refusal.maxSeconds) || 180);
+  const r2 = await payFetch(url, { ...init, headers: { ...(init.headers || {}), Prefer: "respond-async" } });
+  if (r2.status !== 202) return { status: r2.status, text: await r2.text().catch(() => ""), note: "the async call did not answer 202" };
+  const job = await r2.json().catch(() => ({}));
+  const statusUrl = job.statusUrl || r2.headers.get("location");
+  if (!statusUrl) return { status: 502, text: "", note: "the 202 named no job" };
+  const deadline = now() + (maxSeconds + 60) * 1000;
+  let wait = Math.max(1, Number(r2.headers.get("retry-after")) || Number(job.pollIntervalSeconds) || 3);
+  while (now() < deadline) {
+    await sleep(wait * 1000);
+    const g = await plainFetch(statusUrl.startsWith("http") ? statusUrl : `${target}${statusUrl}`);
+    const d = await g.json().catch(() => ({}));
+    if (d.state === "succeeded") return { status: Number(d.result?.httpStatus) || 200, text: "", job: d };
+    if (d.state === "failed") return { status: Number(d.result?.httpStatus) || 500, text: JSON.stringify(d.result?.body ?? d.stage ?? "").slice(0, 200), job: d, note: "the job failed" };
+    wait = Math.max(1, Number(g.headers.get("retry-after")) || Number(d.pollIntervalSeconds) || wait);
+  }
+  return { status: 504, text: "", note: `the job did not finish within ${maxSeconds + 60} s` };
+}
+
 // One pay-capable fetch for whichever chain PAY_NETWORK selects.
 async function buildPayFetch() {
   const { x402Client } = await import("@x402/core/client");
@@ -580,14 +616,14 @@ async function main() {
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await payFetch(url, {
+        const res = await buyOnce(payFetch, url, {
           method,
           headers: { ...heartbeatHeaders(), ...(isGet ? {} : { "Content-Type": "application/json" }) },
           body: isGet ? undefined : JSON.stringify(meta.example),
         });
         lastStatus = res.status;
         if (res.status === 200) {
-          console.log(`  OK   ${method} ${meta.path} (${meta.price})`);
+          console.log(`  OK   ${method} ${meta.path} (${meta.price})${res.job ? " as a job" : ""}`);
           results.ok++;
           break;
         }
@@ -596,8 +632,8 @@ async function main() {
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
-        const body = await res.text().catch(() => "");
-        console.warn(`  FAIL ${method} ${meta.path} → HTTP ${res.status} ${body.slice(0, 120)}`);
+        const body = res.text ?? (await res.res?.text().catch(() => "")) ?? "";
+        console.warn(`  FAIL ${method} ${meta.path} → HTTP ${res.status} ${res.note ? res.note + " " : ""}${body.slice(0, 120)}`);
         results.fail++;
         results.errors.push(`${meta.path}: HTTP ${res.status}`);
         break;
