@@ -335,12 +335,13 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
 // rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
 // which also says whether the result was cut.
 export const SQL_MAX_ROWS = 1000;
-// solana.instructions is partitioned by block_time: a query that filters,
+// solana.instructions is pruned by block_time only: a query that filters,
 // groups, orders or aggregates it without a block_time bound scans its whole
 // history and never finishes inside the query service's ~10 s window
-// (measured 2026-11-03: every such query, even one filtered to a single
-// signer or account, a 502 at 10 s; the same query over one day, about 3 s).
-// It is refused before the call with what to add.
+// (measured 2026-11-03: every such query, filtered to a single signer or
+// account, to one block_slot, to a slot range or to one tx_id, a 502 at 10 s
+// or the service's own scan-limit refusal; the same query over one day,
+// seconds). It is refused before the call with what to add.
 export function solanaRangeRefusal(sql) {
   const s = sqlNorm(sql);
   if (!/\bsolana\.instructions\b/i.test(s)) return null;
@@ -388,14 +389,16 @@ function timeBoundMs(expr, now) {
 export function blockTimeRangeDays(sql, now = Date.now()) {
   const q = sqlNoComments(sql).replace(/[`"]/g, "");
   if (!/\bblock_time\b/i.test(q)) return null;
-  const OPERAND = String.raw`('(?:[^'\\]|\\.)*'|[^'()\s,]+(?:\s*\(\s*\)\s*-\s*interval\s+'?\d+'?\s*[a-z]+|\s*\((?:[^()]|\([^()]*\))*\))?(?:\s*-\s*\d+)?|\((?:[^()]|\([^()]*\))*\))`;
+  // Each piece is bounded in length, so the reads stay linear on a 10 KB query.
+  const OPERAND = String.raw`('(?:[^'\\]|\\.){0,80}'|[^'()\s,]{1,60}(?:\s*\(\s*\)\s*-\s*interval\s+'?\d{1,9}'?\s*[a-z]{1,10}|\s{0,8}\((?:[^()]|\([^()]{0,80}\)){0,120}\))?(?:\s*-\s*\d{1,9})?|\((?:[^()]|\([^()]{0,80}\)){0,160}\))`;
   let lo = null, hi = null;
   const take = (which, v) => { if (v === null) return; if (which === "lo") lo = lo === null ? v : Math.max(lo, v); else hi = hi === null ? v : Math.min(hi, v); };
   for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s*(>=|<=|>|<)\s*` + OPERAND, "gi"))) take(m[1].startsWith(">") ? "lo" : "hi", timeBoundMs(m[2], now));
   for (const m of q.matchAll(new RegExp(OPERAND + String.raw`\s*(>=|<=|>|<)\s*block_time\b`, "gi"))) take(m[2].startsWith(">") ? "hi" : "lo", timeBoundMs(m[1], now));
   for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s+between\s+` + OPERAND + String.raw`\s+and\s+` + OPERAND, "gi"))) { take("lo", timeBoundMs(m[1], now)); take("hi", timeBoundMs(m[2], now)); }
   if (lo === null) return null;
-  return ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
+  const days = ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
+  return days >= 0 ? days : null; // reversed bounds: no readable range
 }
 
 /** The query sent upstream: a plain SELECT wrapped with the row cap. A query
