@@ -130,15 +130,26 @@ export function redactLiterals(text) {
 /** A query with every string literal's inside and every comment blanked,
  *  the same length as the query, so a keyword check reads only code and a
  *  position in it is a position in the query. One pass, so a quote inside a
- *  comment or a comment marker inside a string is read as what it is. */
+ *  comment or a comment marker inside a string is read as what it is. In
+ *  this dialect a string is single-quoted; double quotes and backticks quote
+ *  identifiers and are kept. */
 export function sqlCode(sql) {
-  return String(sql || "").replace(/('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)|(\/\*[\s\S]*?\*\/|--[^\n]*|#[^\n]*)/g,
-    (m, str) => (str ? m[0] + "_".repeat(Math.max(0, m.length - 2)) + m[m.length - 1] : m.replace(/[^\n]/g, " ")));
+  return String(sql || "").replace(/('(?:[^'\\]|\\.)*')|(\/\*[\s\S]*?\*\/|--[^\n]*|#[^\n]*)/g,
+    (m, str) => (str ? "'" + "_".repeat(Math.max(0, m.length - 2)) + "'" : m.replace(/[^\n]/g, " ")));
+}
+/** sqlCode with identifier quotes removed, for keyword and table checks
+ *  (`solana`.`instructions` and "block_time" read as the plain names). */
+export function sqlNorm(sql) {
+  return sqlCode(sql).replace(/[`"]/g, "");
+}
+/** The query with comments blanked and strings kept, for reading values. */
+function sqlNoComments(sql) {
+  return String(sql || "").replace(/('(?:[^'\\]|\\.)*')|(\/\*[\s\S]*?\*\/|--[^\n]*|#[^\n]*)/g, (m, str) => (str ? m : m.replace(/[^\n]/g, " ")));
 }
 
 /** A query's shape for a log line: length, tables, clauses. No literals. */
 export function sqlShape(sql) {
-  const s = sqlCode(sql);
+  const s = sqlNorm(sql);
   const tables = [...new Set([...s.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)/gi)].map((m) => m[1].toLowerCase()))].slice(0, 6);
   const has = (re) => (re.test(s) ? 1 : 0);
   return `len=${s.length},tables=${tables.join("+") || "-"},where=${has(/\bwhere\b/i)},limit=${has(/\blimit\b/i)},groupby=${has(/\bgroup\s+by\b/i)},orderby=${has(/\border\s+by\b/i)},joins=${(s.match(/\bjoin\b/gi) || []).length},timefilter=${has(/\bblock_(?:timestamp|number|time|slot)\b[^;]*?(?:>|<|between)/i)}`;
@@ -201,10 +212,11 @@ const QUERY_ATTEMPTS = 2;
 // the known-good query failing too, or an instant 500 (twice), it stays a
 // 502, so an outage of the service still reads as one.
 function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
-  // Measured 2026-11-03 on solana.instructions aggregates: a week answers
-  // in under 2 s; 30 days, even filtered to one signer, does not finish.
-  const range = /\bsolana\./i.test(sql) ? "a shorter block_time range (a week or less, e.g. WHERE block_time > now() - INTERVAL 7 DAY; query a longer period a week at a time)" : "a block_number range or an address filter";
-  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a query reads more than its 100 GB per-query limit or a result is too large to send: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, answerStatus);
+  const solana = /\bsolana\./i.test(sql);
+  const days = solana ? blockTimeRangeDays(sql) : null;
+  const covered = days !== null ? ` This query covers about ${Math.round(days)} days of solana.instructions; what it reads depends on its columns and filters (measured: a day answers in seconds, a week does for some filters and not others).` : "";
+  const range = solana ? "a shorter block_time range (start at a day, e.g. WHERE block_time > now() - INTERVAL 1 DAY, and cover a longer period in steps)" : "a block_number range or an address filter";
+  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a query reads more than its 100 GB per-query limit or a result is too large to send.${covered} Narrow it: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, answerStatus);
   e.hint = "narrow-query";
   return e;
 }
@@ -330,51 +342,60 @@ export const SQL_MAX_ROWS = 1000;
 // signer or account, a 502 at 10 s; the same query over one day, about 3 s).
 // It is refused before the call with what to add.
 export function solanaRangeRefusal(sql) {
-  const s = sqlCode(sql);
+  const s = sqlNorm(sql);
   if (!/\bsolana\.instructions\b/i.test(s)) return null;
   // A clause that makes it scan, or an aggregate call other than count
   // (a bare count is answered from metadata at once, measured 0.2 s).
   const clause = /\b(where|group\s+by|order\s+by|having|join|distinct)\b/i.test(s);
   const aggregate = /\b(sum|avg|min|max|uniq\w*|any\w*|arg(?:min|max)\w*|group_?array\w*|quantile\w*|median\w*|top_?k\w*)\s*\(/i.test(s);
   if (!clause && !aggregate) return null;
-  if (/\bblock_time\b/i.test(s)) {
-    const days = blockTimeRangeDays(sql);
-    if (days !== null && days > SOLANA_MAX_RANGE_DAYS) {
-      return `This query covers about ${Math.round(days)} days of solana.instructions. The query service reads at most 100 GB per query, which on this table is about a week of a filtered or grouped query (a week answers in about 2 s; two weeks or a month is refused after 10 s). Use a block_time range of ${SOLANA_MAX_RANGE_DAYS} days or less, and query a longer period a week at a time. Nothing was charged.`;
-    }
-    return null;
-  }
+  if (/\bblock_time\b/i.test(s)) return null;
   return 'A query on solana.instructions that filters, groups, orders or aggregates needs a block_time range: add, for example, WHERE block_time > now() - INTERVAL 1 DAY (a day answers in seconds; the full history does not finish within the query service\'s limit). Nothing was charged.';
 }
 
 // The query service reads at most 100 GB per query (its documented limit;
-// its own refusal names about 93 GiB). On solana.instructions a filtered or
-// grouped query over a week reads under that and answers in about 2 s; over
-// two weeks or a month it does not (measured 2026-11-03, even filtered to one
-// signer: 7 days 1.6 s, 14 and 30 days refused at the edge after 10 s). A
-// range past SOLANA_MAX_RANGE_DAYS is refused before the call with the range
-// that works, instead of after the 10 s wait.
-export const SOLANA_MAX_RANGE_DAYS = 7;
+// its own refusal names about 93 GiB). What a solana.instructions query
+// reads depends on its columns and filters, not its range alone (measured
+// 2026-11-03: a week answered for an executing_account filter and was
+// refused for a tx_signer filter; 14 and 30 days were refused; a day
+// answered in seconds every time). So a ranged query is sent and judged by
+// the service, and the answer to a refusal names the days it covered and a
+// day as the range to start from.
 const UNIT_DAYS = { second: 1 / 86400, minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 30, quarter: 91, year: 365 };
-/** The block_time span a query covers in days, or null when it cannot be read. */
+const RANGE_DAY_MS = 86_400_000;
+// One side of a block_time comparison, as a time in ms, or null when it is a
+// form this reader does not know (then no range is read: the safe direction).
+function timeBoundMs(expr, now) {
+  let e = String(expr || "").trim();
+  // Drop only an outer pair of parentheses that wraps the whole expression.
+  while (e.startsWith("(") && e.endsWith(")")) {
+    let depth = 0, wraps = true;
+    for (let i = 0; i < e.length - 1; i++) { if (e[i] === "(") depth++; else if (e[i] === ")") depth--; if (depth === 0) { wraps = false; break; } }
+    if (!wraps) break;
+    e = e.slice(1, -1).trim();
+  }
+  let m;
+  if ((m = /^(?:now|today)\s*\(\s*\)$/i.exec(e))) return now;
+  if ((m = /^(?:now|today)\s*\(\s*\)\s*-\s*interval\s+'?(\d+)'?\s*(second|minute|hour|day|week|month|quarter|year)s?$/i.exec(e))) return now - Number(m[1]) * UNIT_DAYS[m[2].toLowerCase()] * RANGE_DAY_MS;
+  if ((m = /^today\s*\(\s*\)\s*-\s*(\d+)$/i.exec(e))) return now - Number(m[1]) * RANGE_DAY_MS;
+  if ((m = /^subtract(seconds|minutes|hours|days|weeks|months|quarters|years)\s*\(\s*(?:now|today)\s*\(\s*\)\s*,\s*(\d+)\s*\)$/i.exec(e))) return now - Number(m[2]) * UNIT_DAYS[m[1].toLowerCase().replace(/s$/, "")] * RANGE_DAY_MS;
+  if ((m = /^(?:to(?:date|datetime|datetime64)\s*\(\s*)?'(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?'/i.exec(e))) { const t = Date.parse(`${m[1]}T00:00:00Z`); return Number.isFinite(t) ? t : null; }
+  return null;
+}
+/** The block_time span a query covers in days (named in a refusal), read from its block_time
+ *  comparisons only (an INTERVAL elsewhere, a subquery on another table or a
+ *  value in a comment is not a range), or null when it cannot be read. */
 export function blockTimeRangeDays(sql, now = Date.now()) {
-  const code = sqlCode(sql);
-  if (!/\bblock_time\b/i.test(code)) return null;
-  let days = null;
-  for (const m of code.matchAll(/\binterval\s+(\d+)\s*(second|minute|hour|day|week|month|quarter|year)s?\b/gi)) {
-    const d = Number(m[1]) * UNIT_DAYS[m[2].toLowerCase()];
-    days = days === null ? d : Math.max(days, d);
-  }
-  // Absolute bounds read from the query itself (literals are masked in code).
-  const raw = String(sql || "");
-  const lower = /\bblock_time\s*(?:>=?|between)\s*'(\d{4}-\d{2}-\d{2})/i.exec(raw);
-  if (lower) {
-    const upper = /\bblock_time\s*(?:<=?)\s*'(\d{4}-\d{2}-\d{2})/i.exec(raw) || /\bblock_time\s*between\s*'[^']*'\s*and\s*'(\d{4}-\d{2}-\d{2})/i.exec(raw);
-    const from = Date.parse(`${lower[1]}T00:00:00Z`);
-    const to = upper ? Date.parse(`${upper[1]}T00:00:00Z`) : now;
-    if (Number.isFinite(from) && Number.isFinite(to)) { const d = (to - from) / 86_400_000; days = days === null ? d : Math.max(days, d); }
-  }
-  return days;
+  const q = sqlNoComments(sql).replace(/[`"]/g, "");
+  if (!/\bblock_time\b/i.test(q)) return null;
+  const OPERAND = String.raw`('(?:[^'\\]|\\.)*'|[^'()\s,]+(?:\s*\(\s*\)\s*-\s*interval\s+'?\d+'?\s*[a-z]+|\s*\((?:[^()]|\([^()]*\))*\))?(?:\s*-\s*\d+)?|\((?:[^()]|\([^()]*\))*\))`;
+  let lo = null, hi = null;
+  const take = (which, v) => { if (v === null) return; if (which === "lo") lo = lo === null ? v : Math.max(lo, v); else hi = hi === null ? v : Math.min(hi, v); };
+  for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s*(>=|<=|>|<)\s*` + OPERAND, "gi"))) take(m[1].startsWith(">") ? "lo" : "hi", timeBoundMs(m[2], now));
+  for (const m of q.matchAll(new RegExp(OPERAND + String.raw`\s*(>=|<=|>|<)\s*block_time\b`, "gi"))) take(m[2].startsWith(">") ? "hi" : "lo", timeBoundMs(m[1], now));
+  for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s+between\s+` + OPERAND + String.raw`\s+and\s+` + OPERAND, "gi"))) { take("lo", timeBoundMs(m[1], now)); take("hi", timeBoundMs(m[2], now)); }
+  if (lo === null) return null;
+  return ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
 }
 
 /** The query sent upstream: a plain SELECT wrapped with the row cap. A query
@@ -387,7 +408,7 @@ export function cappedSql(sql) {
   // Read on the masked query (a `;` inside a string is not the end).
   const tail = /;[\s;]*$/.exec(sqlCode(raw));
   const s = (tail ? raw.slice(0, tail.index) : raw).trim();
-  const code = sqlCode(s);
+  const code = sqlNorm(s);
   if (/^\s*with\b/i.test(code) || /\b(settings|format)\b/i.test(code)) return { sql: s, capped: false };
   return { sql: `SELECT * FROM (\n${s}\n) LIMIT ${SQL_MAX_ROWS + 1}`, capped: true };
 }
@@ -636,7 +657,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range, e.g. WHERE block_time > now() - INTERVAL 1 DAY). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -649,9 +670,9 @@ export const CDP_TOOLS = [
       const sql = String(input?.sql || "").trim();
       if (!sql) throw bad('"sql" is required');
       if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
-      if (!/^\s*(select|with)\b/i.test(sqlCode(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
+      if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
       const unbounded = solanaRangeRefusal(sql);
-      if (unbounded) { const e = bad(unbounded); e.hint = /covers about/.test(unbounded) ? "narrow-block-time" : "add-block-time"; throw e; }
+      if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
       const body = { sql };
       const cacheSeconds = Number(input?.cacheSeconds);
       if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
