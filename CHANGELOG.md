@@ -20,7 +20,8 @@ Tools:
 - onchain-sql: a result the query service cannot return is answered with
   how to narrow the query (`hint: "narrow-query"`): a 422 when the service
   answers a known-good query, a 502 when it does not. A buyer's query is
-  tried twice at most. The description no longer lists hyperevm.events.
+  tried twice at most; for Solana it names a block_time range of a week or
+  less. The description no longer lists hyperevm.events.
 - Tool error answers carry a short `hint` code when the tool sets one.
 - The metered chat route refuses a model id missing from the upstream's
   live chat model list with a 400 before payment, naming the nearest ids it

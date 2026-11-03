@@ -201,7 +201,9 @@ const QUERY_ATTEMPTS = 2;
 // the known-good query failing too, or an instant 500 (twice), it stays a
 // 502, so an outage of the service still reads as one.
 function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
-  const range = /\bsolana\./i.test(sql) ? "a block_time range (WHERE block_time > now() - INTERVAL 1 DAY)" : "a block_number range or an address filter";
+  // Measured 2026-11-03 on solana.instructions aggregates: a week answers
+  // in under 2 s; 30 days, even filtered to one signer, does not finish.
+  const range = /\bsolana\./i.test(sql) ? "a shorter block_time range (a week or less, e.g. WHERE block_time > now() - INTERVAL 7 DAY; query a longer period a week at a time)" : "a block_number range or an address filter";
   const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a result is too large or too slow to send: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, answerStatus);
   e.hint = "narrow-query";
   return e;

@@ -290,7 +290,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(r?.statusCode === 400 && r?.hint === "add-block-time" && /block_time > now\(\) - INTERVAL 1 DAY/.test(r.message) && calls.length === 0, `the handler refuses it before calling the query service (${r?.statusCode}, calls ${calls.length})`);
       calls = []; reply = () => new Promise((res) => setTimeout(() => res(J(502, {})), 60));
       const s5 = await tool("onchain-sql").handler({ sql: "SELECT * FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY" }).catch((x) => x);
-      ok(s5?.hint === "narrow-query" && /block_time range/.test(s5.message), `a Solana narrow-query answer names block_time (${String(s5?.message).slice(0, 120)})`);
+      ok(s5?.hint === "narrow-query" && /block_time range \(a week or less/.test(s5.message), `a Solana narrow-query answer names block_time (${String(s5?.message).slice(0, 120)})`);
     }
     // Control: a slow 502 on a query another reader runs (cdpSql) is still retried.
     {
