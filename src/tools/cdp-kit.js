@@ -12,7 +12,7 @@
 //                            a shared per-account CDP budget)
 //   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
 //                            fund an agent's wallet with a card / Apple Pay
-//   onchain-sql      $0.050  read-only ClickHouse-dialect SQL over Coinbase's
+//   onchain-sql      $0.030  read-only ClickHouse-dialect SQL over Coinbase's
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
@@ -310,7 +310,7 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // spent the recovery answers the uncharged narrow-query 422. The health
 // probe (queryServiceHealthy) is not counted: it runs at most once per table
 // every HEALTH_TTL_MS across every call, under its own memo and timeout.
-export const SQL_QUERY_BUDGET = 4;
+export const SQL_QUERY_BUDGET = 3;
 function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { return this.max - this.sent; } }; }
 let maxQueriesPerCall = 0;
 export function _maxQueriesPerCallForTest() { return maxQueriesPerCall; }
@@ -971,7 +971,7 @@ export const CDP_TOOLS = [
     name: "Onchain SQL (query Base with SQL)",
     slug: "onchain-sql",
     category: "wallet",
-    price: "$0.050",
+    price: "$0.030",
     description:
       "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
@@ -1081,7 +1081,7 @@ export const CDP_TOOLS = [
             if (!resent || refusedAgain) {
               const kb = Math.round(SQL_SEND_LIMIT_BYTES / 1e3);
               const sizeText = rowsSmall
-                ? `so the whole answer fits under about ${kb} KB${refusedAgain ? `, yet the query service refused the full result twice (it answered its internal error both times): set a LIMIT and page with an ORDER BY and OFFSET, or send the query again later.` : `, and the call's query budget of ${SQL_QUERY_BUDGET} queries left no room to send the full query again: send the query again as written, or set a LIMIT and page with an ORDER BY and OFFSET.`}`
+                ? `so the whole answer fits under about ${kb} KB${refusedAgain ? `, yet the query service refused the full result twice (it answered its internal error both times): set a LIMIT and page with an ORDER BY and OFFSET, or send the query again later.` : `, and the call's query budget of ${SQL_QUERY_BUDGET} queries left no room to send the full query again: set a LIMIT and page with an ORDER BY and OFFSET.`}`
                 : `so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${kb} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`;
               return {
                 rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,

@@ -302,6 +302,8 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 //     price is held to the same bound. Figures stay in the process: the rate
 //     is private, and only PASS/FAIL/SKIP is printed.
 console.log("\n# onchain-sql: the call's query budget vs price");
+// onchain-sql's worst case is held to break-even (owner decision, 2026-11-03).
+const SQL_WORST_CASE_BOUND = 1;
 {
   const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
   const { PACK_PRICES, SKILL_PACKS } = await import("../src/skills.js");
@@ -316,8 +318,12 @@ console.log("\n# onchain-sql: the call's query budget vs price");
     const priceOf = (s) => Number(String(CDP_TOOLS.find((t) => t.slug === s)?.price ?? "").replace(/[^0-9.]/g, ""));
     const cost = SQL_QUERY_BUDGET * rate + settle;
     const sqlPrice = priceOf("onchain-sql");
-    ok(SQL_QUERY_BUDGET >= 4 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
-    ok(cost <= MARGIN * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement sit within the margin bound of the list price: ${cost <= MARGIN * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
+    ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
+    // Owner decision (2026-11-03): onchain-sql is held to break-even at its
+    // worst case (every query of its budget spent) rather than the shared
+    // MARGIN bound; its typical call is one query, far inside MARGIN. The
+    // bound is SQL_WORST_CASE_BOUND, never a rate.
+    ok(cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement never cost more than the list price: ${cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
     table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
     // The only other route that sends a buyer's query to the query service is
     // the onchain-analyst pack (skill-runner.js runs onchain-sql once); the
@@ -326,7 +332,7 @@ console.log("\n# onchain-sql: the call's query budget vs price");
     ok(packs.length === 1 && packs[0].slug === "onchain-analyst", `one skill pack runs onchain-sql (${packs.map((p) => p.slug).join(", ") || "none"})`);
     for (const p of packs) {
       const packPrice = Number(PACK_PRICES[p.slug]);
-      ok(cost <= MARGIN * packPrice + 1e-12, `${p.slug} pack: ${SQL_QUERY_BUDGET} queries plus a settlement sit within the margin bound of its bundle price: ${cost <= MARGIN * packPrice + 1e-12 ? "PASS" : "FAIL"}`);
+      ok(cost <= SQL_WORST_CASE_BOUND * packPrice + 1e-12, `${p.slug} pack: ${SQL_QUERY_BUDGET} queries plus a settlement never cost more than its bundle price: ${cost <= SQL_WORST_CASE_BOUND * packPrice + 1e-12 ? "PASS" : "FAIL"}`);
       table.push({ tier: p.slug, price: packPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (one onchain-sql step)` });
     }
   }
