@@ -46,17 +46,21 @@ ok(run({ registrations: [row("https://paid3.example", { last_routable_seen: NOW 
   "a settled origin dark for 91 days was not released");
 ok(run({ registrations: [row("https://paid4.example", { last_routable_seen: NOW - 91 * DAY })], hasSettled: () => true, settledMaxIdleMs: 365 * DAY }).length === 0,
   "the settled window is the caller's (365 days here)");
-// The settled window is never shorter than the plain one: with the plain
-// window set past it, a settled seller still holds its slot at least as long.
+// The windows from the variables: the settled one is never shorter than the
+// plain one, and a zero, negative or unreadable value reads as the default
+// (a zero window would release every live seller).
 {
   const { execFileSync } = await import("node:child_process");
-  const out = execFileSync(process.execPath, ["--input-type=module", "-e", `
+  const inChild = (env, rows) => execFileSync(process.execPath, ["--input-type=module", "-e", `
     const { selectReleasableOrigins } = await import(${JSON.stringify(new URL("../src/x402-index.js", import.meta.url).href)});
-    const NOW = ${NOW}, DAY = ${DAY};
-    const rows = [{ origin: "https://paid.example", first_seen: NOW - 200 * DAY, last_routable_seen: NOW - 95 * DAY, last_settled_seen: NOW - 100 * DAY }];
-    console.log(JSON.stringify(selectReleasableOrigins({ registrations: rows, isSubmitted: () => true, cycleOkFraction: 1, now: NOW })));
-  `], { env: { ...process.env, INDEX_RELEASE_AFTER_DAYS: "100", INDEX_SETTLED_RELEASE_AFTER_DAYS: "90", MEMORY_DB_FILE: process.env.MEMORY_DB_FILE || "/tmp/claude-501/mem-release-child.db" }, encoding: "utf8", timeout: 60_000 });
-  ok(out.trim().split("\n").pop() === "[]", `a settled seller holds its slot at least the plain window when that is the longer one (${out.trim().split("\n").pop()})`);
+    console.log(JSON.stringify(selectReleasableOrigins({ registrations: ${JSON.stringify(rows)}, isSubmitted: () => true, cycleOkFraction: 1, now: ${NOW} })));
+  `], { env: { ...process.env, ...env, MEMORY_DB_FILE: process.env.MEMORY_DB_FILE || "/tmp/claude-501/mem-release-child.db" }, encoding: "utf8", timeout: 60_000 }).trim().split("\n").pop();
+  const settled95 = [row("https://paid.example", { last_routable_seen: NOW - 95 * DAY, last_settled_seen: NOW - 100 * DAY })];
+  const settled60 = [row("https://paid.example", { last_routable_seen: NOW - 60 * DAY, last_settled_seen: NOW - 70 * DAY })];
+  const plain10 = [row("https://gone.example", { last_routable_seen: NOW - 10 * DAY })];
+  ok(inChild({ INDEX_RELEASE_AFTER_DAYS: "100", INDEX_SETTLED_RELEASE_AFTER_DAYS: "90" }, settled95) === "[]", "a settled seller holds its slot at least the plain window when that is the longer one");
+  ok(inChild({ INDEX_SETTLED_RELEASE_AFTER_DAYS: "0" }, settled60) === "[]" && inChild({ INDEX_SETTLED_RELEASE_AFTER_DAYS: "abc" }, settled60) === "[]" && inChild({ INDEX_SETTLED_RELEASE_AFTER_DAYS: "-5" }, settled60) === "[]", "a zero, unreadable or negative settled window reads as the default");
+  ok(inChild({ INDEX_RELEASE_AFTER_DAYS: "0" }, plain10) === "[]" && inChild({ INDEX_RELEASE_AFTER_DAYS: "7" }, plain10) === JSON.stringify(["https://gone.example"]), "a zero plain window reads as the default; a real one is honored");
 }
 // The ceiling: 4,000 slots unless the variable says otherwise, a quarter of
 // them for quick tunnels.
