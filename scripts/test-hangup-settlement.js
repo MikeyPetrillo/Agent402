@@ -20,7 +20,10 @@
 // spend upstream), sends real HTTP requests and destroys the socket at chosen
 // moments:
 //   a. connected control: settled, nothing owed;
-//   b. close during a slow /settle (the residual window): settled once, owed once;
+//   b. close during a slow /settle (the residual window): settled once, owed
+//      once, and the sale recorded (b3: the same close with a settle that
+//      fails is logged unconfirmed; b4: three of those from one wallet feed
+//      the settle breaker, which refuses the wallet's next connected call);
 //   c. close during verify: the handler never runs, nothing settles, no budget spent;
 //   d. close mid-handler inside the budget: nothing settles, nothing owed,
 //      the spent credential cannot buy a second run;
@@ -69,7 +72,7 @@ process.env.SHARED_LIMITS = "off";
 // reads, so it is removed here; the Postgres store has its own suite
 // (scripts/test-hangup-forgiveness-pg.js).
 delete process.env.STATE_DATABASE_URL;
-const { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } = await import("../src/hangup-settlement.js");
+const { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, markSettleSent, registerSettleSentHook, onSettleOutcome, onResponseEnd, clientGoneError, isClientGoneAbort, CLIENT_GONE_TEXT } = await import("../src/hangup-settlement.js");
 const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupForgivenessConfig, hangupTicketDenial, hasLastingEffect, LASTING_EFFECT_SLUG_LIST, _resetHangupForgiveness, hangupKeyDigest, persistPath, persistNow, flushHangupForgiveness, loadHangupForgiveness, _hangupForgivenessShared } = await import("../src/hangup-forgiveness.js");
 const { createCredits } = await import("../src/credits.js");
 const { planRefunds, REPEAT_HANGUP_HOLD } = await import("./refund-run.js");
@@ -404,6 +407,82 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   _resetHangupForgiveness();
 }
 
+// 1h. The "settle sent" mark is set where the charge leaves, not where the
+// client-gone hook passes. On x402 the onBeforeSettle chain runs in
+// registration order and ends at the first abort or skip (@x402/core), so the
+// mark hook registered last runs only when the facilitator call follows. The
+// REAL hooks are registered on a stand-in server in payments.js's order and run
+// the way the vendor runs them, inside a handler that mirrors the dispatcher
+// (ticket reserved at start, settled on close). The buyer leaves after the
+// settle decision and before the first byte:
+//   - sent: no hook ended the chain: the mark is set, the ticket is released
+//     (no budget spent), and the outcome IS a settlement outcome (the settle
+//     listeners run: the breaker, the composite guard, the sale);
+//   - allowance: the first-call allowance skipped the settle: no mark, the
+//     ticket is abandoned (budget spent), the settle listeners stay quiet;
+//   - duplicate: the authorization claim aborted the settle (no facilitator
+//     call): no mark, abandoned, the settle listeners stay quiet, so the
+//     breaker is never fed a failure that did not happen;
+//   - gone-first: the buyer left before the decision: the client-gone hook
+//     aborts, no mark, abandoned, quiet.
+{
+  _resetHangupForgiveness();
+  const [{ registerClientGoneSettleHook }, { registerFirstCallAllowanceSettleHook }, { registerSettlementClaimHooks, DUPLICATE_AUTHORIZATION }, { ALLOWANCE_STATE }] =
+    await Promise.all([import("../src/payments.js"), import("../src/first-call-allowance.js"), import("../src/settlement-claims.js"), import("../src/allowance-state.js")]);
+  const stand = { hooks: [], onBeforeSettle(h) { this.hooks.push(h); }, onBeforeVerify() {}, onAfterVerify() {}, onVerifyFailure() {}, onAfterSettle() {}, onSettleFailure() {} };
+  registerClientGoneSettleHook(stand); registerFirstCallAllowanceSettleHook(stand); registerSettlementClaimHooks(stand); registerSettleSentHook(stand);
+  ok(stand.hooks.length === 4, `the four settle-deciding hooks register one onBeforeSettle each (${stand.hooks.length})`);
+  // The vendor's loop: the first abort or skip ends the chain.
+  const runChain = async (ctx) => { for (const hook of stand.hooks) { const r = await hook(ctx); if (r && r.abort) return { abort: r.reason }; if (r && r.skip) return { skip: true }; } return { sent: true }; };
+  const ctxFor = (req, { nonce = null } = {}) => ({ requirements: { network: "eip155:8453" }, paymentPayload: nonce ? { payload: { authorization: { nonce } } } : {}, transportContext: { request: { adapter: { req } } } });
+  // The claim is written to the caller's Redis when one is configured (the
+  // claims module reads REDIS_URL itself, not SHARED_LIMITS), so every nonce
+  // here is this run's own, or the next run would find the duplicate's
+  // authorization held by the last run.
+  const nonceFor = (mode) => `0x${Buffer.from(mode).toString("hex")}${randomBytes(12).toString("hex")}`;
+  const DUP_NONCE = nonceFor("duplicate");
+  const seen = [], settled = [], ended = [], decided = {};
+  const app = express();
+  app.use(createHangupSettlementHook({ onUndelivered: (req) => seen.push({ mode: req.params.mode, sent: settleSentWhileConnected(req) }) }));
+  app.get("/:mode", async (req, res) => {
+    const mode = req.params.mode;
+    reserveHangupForgiveness(req, { keys: [`0x${mode}`, `ip:${mode}`], priceUsd: 0.01 });
+    res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) }));
+    onSettleOutcome(req, res, (info) => settled.push({ mode, ...info }));
+    onResponseEnd(req, res, (info) => ended.push({ mode, ...info }));
+    if (mode === "allowance") Object.defineProperty(req, ALLOWANCE_STATE, { value: { state: "claimed", res, payer: "0xgranted", network: "eip155:8453" }, enumerable: false, configurable: true });
+    await sleep(200);
+    decided[mode] = await runChain(ctxFor(req, { nonce: mode === "duplicate" ? DUP_NONCE : nonceFor(mode) }));
+    await sleep(400);
+    try { res.status(decided[mode].sent ? 200 : 402).json({}); } catch { /* gone */ }
+  });
+  const { server, url } = await listen(app);
+  // Another request already holds the duplicate's authorization.
+  const other = {};
+  ok((await runChain(ctxFor(other, { nonce: DUP_NONCE }))).sent === true, "a stand-in request claims the duplicate's authorization first (every hook passes for it)");
+  for (const [mode, abortAfterMs] of [["sent", 350], ["allowance", 350], ["duplicate", 350], ["gone-first", 80]]) {
+    const before = hangupForgivenessStatus().abandonedInWindow;
+    await hangUp(`${url}/${mode}`, { abortAfterMs });
+    await sleep(700);
+    const req = seen.find((s) => s.mode === mode);
+    const after = hangupForgivenessStatus().abandonedInWindow;
+    if (mode === "sent") {
+      ok(decided[mode].sent === true && req?.sent === true, `${mode}: every hook passed, so the charge left while the buyer was connected and the mark says so`);
+      ok(after === before && settled.some((s) => s.mode === mode && s.forgiven === false && s.via === "undelivered"), `${mode}: the ticket is released (abandoned ${before} -> ${after}) and the outcome is a settlement outcome: the settle listeners ran`);
+    } else {
+      const how = mode === "allowance" ? decided[mode].skip === true : mode === "duplicate" ? decided[mode].abort === DUPLICATE_AUTHORIZATION : decided[mode].abort === "client_disconnected";
+      ok(how && req?.sent === false, `${mode}: the chain ended before the mark hook (${JSON.stringify(decided[mode])}), so nothing says a settle was sent`);
+      ok(after === before + 1 && !settled.some((s) => s.mode === mode) && ended.some((e) => e.mode === mode && e.via === "undelivered"), `${mode}: the ticket is abandoned (budget ${before} -> ${after}), the settle listeners stay quiet (no breaker failure, no sale), the end listener ran`);
+    }
+  }
+  // The predicate itself records nothing: only markSettleSent does, and only
+  // for a connected buyer.
+  { const connected = {}; ok(chargeCancelledForClientGone(connected) === false && settleSentWhileConnected(connected) === false, "reading the predicate on a connected buyer leaves no mark"); markSettleSent(connected); ok(settleSentWhileConnected(connected), "markSettleSent marks a connected buyer"); }
+  { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone); ok(settleSentWhileConnected(gone) === false, "markSettleSent records nothing for a buyer already gone (that charge is a no-ticket settle, booked as owed)"); }
+  server.close();
+  _resetHangupForgiveness();
+}
+
 // 1f. Source pins for the seams the booted test cannot isolate, and for the
 // vendor shape the x402 hook depends on.
 {
@@ -440,7 +519,26 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 2000, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
     ok(closeAt > tempoAt && closeAt < awaitAt, "the close listener is registered before the shared budget read, so a socket that closes during it is not missed");
     const tail = server.slice(awaitAt, awaitAt + 900);
-    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && !settleSentWhileConnected\(req\) \}\);/.test(server.slice(tempoAt, awaitAt)) && /reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close (abandoned when gone before the first byte and no settlement was sent), including a close during the read");
+    ok(/reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close, including a close during the read");
+    // What `settle()` passes as `abandoned` is pinned AFTER the booted cases
+    // (b, b3, b4 drive the behavior), so a mutation there fails on behavior
+    // first and the pin stays an extra.
+  }
+  ok(/registerSettlementClaimHooks\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettleSentHook\(server\);/.test(payments), "payments.js registers the settle-sent mark hook right after the authorization claim, the last hook that can end the chain");
+  {
+    const order = ["registerWalletBlocklistHook(server);", "registerClientGoneSettleHook(server);", "registerFirstCallAllowanceSettleHook(server);", "registerSettlementClaimHooks(server);", "registerSettleSentHook(server);", "registerPhaseTimingHooks(server);"].map((s) => payments.indexOf(s));
+    ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `every hook that can abort or skip a settle is registered before the mark hook, and only the timing hook after it (${JSON.stringify(order)})`);
+    const afterMark = payments.slice(payments.indexOf("registerSettleSentHook(server);"));
+    ok(!/server\.onBeforeSettle\(/.test(afterMark.slice(0, afterMark.indexOf("registerPhaseTimingHooks(server);"))), "nothing registers an onBeforeSettle between the mark hook and the timing hook");
+    ok(/registerClientGoneSettleHook\(server\);\s*\n\s*registerInflightCoverSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerFirstCallAllowanceSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettlementClaimHooks\(server\);/.test(payments), "the client-gone hook, the allowance skip and the authorization claim keep their order");
+  }
+  for (const [name, src, call] of [["mpp-tempo", tempo, "markSettleSent(req);\n      const tHandled = Date.now();"], ["mpp-stripe", stripeGate, "markSettleSent(req);\n      const b = await settle(auth);"]]) {
+    const check = src.indexOf("if (chargeCancelledForClientGone(req)) {");
+    ok(check > 0 && src.indexOf(call) > check && src.indexOf(call) - check < 1200, `${name}: the charge is marked sent right before the ${name === "mpp-tempo" ? "broadcast" : "capture"}, after the cancelled-charge check`);
+  }
+  {
+    const credits = readFileSync(new URL("../src/credits.js", import.meta.url), "utf8");
+    ok(/chargeCancelledForClientGone\(req\)\) \{ releaseHold\(\); return; \}\s*\n(\s*\/\/[^\n]*\n)*\s*markSettleSent\(req\);/.test(credits), "credits: the debit is marked sent right after the cancelled-charge check");
   }
   ok(/const who = payer \|\| \(req\.mppTempoSender \? `tempo:\$\{req\.mppTempoSender\}` : req\.creditsKeyId \? `credits:\$\{req\.creditsKeyId\}` : null\);\s*\n\s*return \[who, `ip:\$\{clientIp\(req\)\}`\];/.test(server), "ticket keys: the verified payer (never the Tempo source hint) AND always the client IP");
   ok(!/mppTempoPayer/.test(server.slice(server.indexOf("function hangupForgivenessKeys("), server.indexOf("function hangupForgivenessKeys(") + 600)), "the ticket keys never read the client-supplied Tempo payer hint");
@@ -667,6 +765,18 @@ try {
       `b. the debt carries the settle tx, rail and a 499 marker (${JSON.stringify(rows[0])})`);
     ok(rows[0].hangupReason === "settled in flight", `b. the debt records that a granted ticket lost the race to the settle (${rows[0].hangupReason})`);
     ok(/\[hangup\] CHARGED-BUT-NOT-SERVED/.test(logSince(logAt)), "b. the log says CHARGED-BUT-NOT-SERVED");
+    // The settle was sent while the buyer was connected, so it is a
+    // settlement outcome whether or not the buyer stayed: the sale is on the
+    // ledger beside the owed debt (before this rule the released ticket still
+    // read as forgiven and the sale listener never ran).
+    {
+      const Database = (await import("better-sqlite3")).default;
+      const sales = new Database(join(TMP, "sales.db"), { readonly: true });
+      let sale = null;
+      for (let i = 0; i < 60 && !sale; i++) { sale = sales.prepare("SELECT slug, tx FROM sales WHERE tx = ?").get(fac.lastTx) || null; if (!sale) await sleep(100); }
+      sales.close();
+      ok(sale?.slug === "uuid", `b. a settle sent while the buyer was connected that succeeds records the sale beside the debt (${JSON.stringify(sale)})`);
+    }
     // The charge went out before the close: it is the refund ledger's, so
     // the run spends no forgiveness budget (its ticket is released).
     const hfAfter = (await refundsDoc()).hangupForgiveness;
@@ -748,6 +858,39 @@ try {
     const hfAfter = (await refundsDoc()).hangupForgiveness;
     ok(hfAfter.abandonedInWindow === hfBefore.abandonedInWindow && hfAfter.inflightUsd === 0, `b3. and it spends no forgiveness budget (abandoned ${hfBefore.abandonedInWindow} -> ${hfAfter.abandonedInWindow})`);
     ok((await refunds()).length === rowsBefore, "b3. no receipt proves a charge: no debt row from the hang-up itself");
+  }
+
+  // b4. The settle sent while the buyer was connected is a settlement outcome
+  // whether or not the buyer stayed. A buyer who can make the settle fail at
+  // will (drain the wallet between verify and settle) and times the close at
+  // the end of the handler spends no forgiveness budget (the ticket is
+  // released, by design), so the settle breaker must be what bounds the
+  // repeat: three such runs from one wallet on a wallet-only route (breaker
+  // max 3) ran upstream three times, and the wallet's next CONNECTED call is
+  // refused 429 before any upstream call. Before this rule the released
+  // ticket still read as forgiven, every settle listener was skipped, and
+  // the fourth call was served.
+  {
+    const W4 = wallet(0xb4);
+    const hfBefore = (await refundsDoc()).hangupForgiveness;
+    const c0 = or.chat, s0 = fac.settle, logAt = serverLog.length;
+    for (let i = 1; i <= 3; i++) {
+      fac.settleDelayMs = 1_000; fac.settleFails = true;
+      const sBefore = fac.settle;
+      const settleSeen = waitFor(() => fac.settle > sBefore, 8000);
+      await hangUp(`${B}${CHAT.path}`, { method: "POST", headers: await headersFor(CHAT, W4, "10.0.0.24"), body: CHAT.body, abortWhen: settleSeen.then(() => sleep(100)) });
+      await sleep(1_500);
+    }
+    fac.settleDelayMs = 0; fac.settleFails = false;
+    ok(or.chat - c0 === 3 && fac.settle - s0 === 3, `b4. three residual-window failed settles from one wallet each ran upstream and were sent to settle (chat +${or.chat - c0}, settles +${fac.settle - s0})`);
+    ok((logSince(logAt).match(/\[hangup\] SETTLE UNCONFIRMED: [^\n]*POST \/v1\/nano\/chat\/completions/g) || []).length === 3, "b4. each is logged as unconfirmed");
+    const hfAfter = (await refundsDoc()).hangupForgiveness;
+    ok(hfAfter.abandonedInWindow === hfBefore.abandonedInWindow && hfAfter.inflightUsd === 0, `b4. none spent forgiveness budget (abandoned ${hfBefore.abandonedInWindow} -> ${hfAfter.abandonedInWindow})`);
+    const r = await pay(CHAT, W4, "10.0.0.24");
+    const body = await r.json().catch(() => null);
+    ok(r.status === 429 && or.chat - c0 === 3 && fac.settle - s0 === 3, `b4. the wallet's next connected call is refused by the settle breaker before any upstream call (${r.status} ${JSON.stringify(body).slice(0, 120)}; chat +${or.chat - c0}, settles +${fac.settle - s0})`);
+    const ctl = await pay(CHAT, wallet(0xb5), "10.0.0.25");
+    ok(ctl.status === 200, `b4. control: another wallet on the same route is served (${ctl.status})`);
   }
 
   // c. The buyer leaves while the payment is being verified: the handler never
@@ -853,9 +996,18 @@ try {
     const heads = await Promise.all(Array.from({ length: 10 }, (_, i) => headersFor(FAST, WC, `10.0.3.${i}`)));
     const allUp = waitFor(() => or.images - i0 >= 10, 8000);
     await Promise.all(heads.map((headers) => hangUp(`${B}${FAST.path}`, { method: "POST", headers, body: FAST.body, abortWhen: allUp.then(() => sleep(150)) })));
-    await sleep(3_000);
+    // The five unforgiven runs finish their 2 s upstream call and then settle
+    // behind the shared store's bounded calls (the authorization claim, the
+    // replay guard, the breaker write), so with a Redis the settles land with
+    // about a second to spare before a fixed 3 s snapshot, and a busy shared
+    // Redis or a starved runner reads "settles +0". Wait for the counts
+    // (bounded, as case h does), then a grace in which a sixth settle or cut
+    // would still show.
+    await waitFor(() => or.imagesClosedEarly - e0 >= 5 && fac.settle - s0 >= 5, 15_000);
+    await sleep(1_000);
     ok(or.images - i0 === 10, `g. all ten runs started upstream (POSTs +${or.images - i0})`);
     ok(or.imagesClosedEarly - e0 === 5 && fac.settle - s0 === 5, `g. five forgiven (cut off, not settled), five settled (cut +${or.imagesClosedEarly - e0}, settles +${fac.settle - s0})`);
+    for (let i = 0; i < 100 && (await refunds()).length < owed0 + 5; i++) await sleep(100);
     ok((await refunds()).length === owed0 + 5, `g. the five settled runs are booked as owed (+${(await refunds()).length - owed0})`);
     or.imagesDelayMs = 0;
   }
@@ -1069,6 +1221,14 @@ try {
     or.imagesDelayMs = 0;
     ok(or.imagesClosedEarly === e0 && fac.settle === s0 + 1 && (await refunds()).length === owed0 + 1, `m. after the restart a fresh wallet's hang-up is past the restored service budget: settled and owed (settles +${fac.settle - s0}, owed +${(await refunds()).length - owed0})`);
     ok(/not forgiven: global budget/.test(logSince(at)), "m. and the owed line names the service-wide budget");
+  }
+
+  // Source pin, after the behavior it describes (b, b3, b4): the dispatcher
+  // abandons a ticket only when the buyer left before the first byte AND no
+  // settlement was sent; a residual-window close releases it.
+  {
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && !settleSentWhileConnected\(req\) \}\);/.test(server), "the ticket is abandoned when gone before the first byte and no settlement was sent (pin; the behavior ran above)");
   }
 
   if (process.env.HANGUP_TEST_SHOW_LOG) console.log(serverLog.filter((l) => /\[hangup\]/.test(l)).join("\n"));

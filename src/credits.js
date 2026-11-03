@@ -41,7 +41,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
 import { creditsTopupFields, creditsDailyMaxCents, TERMS_VERSION } from "./credits-sales.js";
 import { limiterKey } from "./rate-limit.js";
-import { chargeCancelledForClientGone } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { getSharedRedisClient } from "./shared-limit.js";
@@ -936,6 +936,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         if (done) return; done = true;
         const cacheHit = servedWithoutRun(req, res);
         if (res.statusCode >= 400 || cacheHit || chargeCancelledForClientGone(req)) { releaseHold(); return; }
+        // The debit leaves from here (a buyer already gone records nothing).
+        markSettleSent(req);
         if (usePg) {
           // The hang-up hook reads the owed amount as the response ends, before
           // the row is written: the hold is what this debit takes.

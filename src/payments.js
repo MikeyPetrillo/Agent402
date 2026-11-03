@@ -39,7 +39,7 @@ import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, t
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
-import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
@@ -2003,6 +2003,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // the authorization; the release runs after the failure hooks, so it fires
   // only when nothing recovered the payment.
   registerSettlementClaimHooks(server);
+  // The charge leaves here: the last hook that can abort or skip a settle is
+  // the claim above, so a request this hook sees is one whose facilitator
+  // call follows (src/hangup-settlement.js markSettleSent). Nothing that can
+  // end the chain may be registered after it.
+  registerSettleSentHook(server);
   registerSettlementClaimRelease(server);
   // A settle failure that names a transaction may still land: booked and
   // read from the chain, and owed if it did (src/late-settlements.js).

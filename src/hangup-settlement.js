@@ -89,23 +89,46 @@ export function clientGoneBeforeFirstByte(req) {
  */
 export function chargeCancelledForClientGone(req) {
   if (clientGoneBeforeFirstByte(req)) return hangupForgiven(req);
-  // Every settlement point (the x402 onBeforeSettle hook, the Tempo
-  // broadcast, the Stripe capture, the credits debit) asks this before it
-  // moves money. A "no" while the buyer was still connected means the charge
-  // was sent: a close after this (the residual window) did not withhold it.
-  // Recorded on the request, own property, first time only.
-  if (req && typeof req === "object" && !Object.hasOwn(req, SETTLE_SENT_CONNECTED)) {
-    try { Object.defineProperty(req, SETTLE_SENT_CONNECTED, { value: Date.now(), enumerable: false, configurable: true }); } catch { /* a frozen request records nothing */ }
-  }
   return false;
 }
 const SETTLE_SENT_CONNECTED = "__a402SettleCheckedConnectedAt";
 
+/**
+ * Record that the charge is leaving while the buyer is still connected.
+ * Called at the point where money actually moves, after every check that
+ * can still withhold it: on x402 the last onBeforeSettle hook
+ * (registerSettleSentHook, registered after the allowance skip and the
+ * authorization claim, so a settle one of those ended never counts as sent);
+ * on Tempo right before the broadcast, on Stripe right before the capture, on
+ * credits right before the debit. A buyer already gone at this point records
+ * nothing (that charge is a no-ticket settle, booked as owed). Own property,
+ * first time only.
+ */
+export function markSettleSent(req) {
+  if (!req || typeof req !== "object" || Object.hasOwn(req, SETTLE_SENT_CONNECTED)) return;
+  if (clientGoneBeforeFirstByte(req)) return;
+  try { Object.defineProperty(req, SETTLE_SENT_CONNECTED, { value: Date.now(), enumerable: false, configurable: true }); } catch { /* a frozen request records nothing */ }
+}
+
+/** The x402 settlement point: the last onBeforeSettle hook. Every hook that
+ *  can abort (blocklist, client gone, duplicate authorization) or skip (the
+ *  first-call allowance) runs before it and ends the chain, so this runs only
+ *  when the facilitator call follows. Same request path as the client-gone
+ *  hook (transportContext.request.adapter.req); if a vendor bump moves it,
+ *  nothing is marked and a residual-window close reads as withheld, which
+ *  spends forgiveness budget rather than granting a free run. */
+export function registerSettleSentHook(server) {
+  server.onBeforeSettle((ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req); });
+  return server;
+}
+
 /** True when a settlement point found the buyer connected and sent the
  *  charge. A close after that (the residual window) did not withhold it: a
  *  transfer may still land and be booked as owed, so the dispatcher releases
- *  the forgiveness ticket instead of recording the run as abandoned, and the
- *  hang-up log says the settle is unconfirmed, never "not charged". */
+ *  the forgiveness ticket instead of recording the run as abandoned, the
+ *  hang-up log says the settle is unconfirmed, never "not charged", and the
+ *  outcome is a settlement outcome (runOutcome below): its failure feeds the
+ *  settle breaker and the composite guard, its success records the sale. */
 export function settleSentWhileConnected(req) {
   return !!req && typeof req === "object" && Object.hasOwn(req, SETTLE_SENT_CONNECTED);
 }
@@ -160,9 +183,16 @@ export function createHangupSettlementHook({ onUndelivered }) {
 //   - "close" after headers went out: a stream or body cut part way, which was
 //     settled before its first byte.
 // A charge cancelled because the buyer left (a granted forgiveness ticket,
-// src/hangup-forgiveness.js) is not a settlement outcome: onSettleOutcome
-// skips it, so the forgiveness rule and its own budget stay the only bound on
-// it. onResponseEnd runs for it too, for bookkeeping that must always close.
+// src/hangup-forgiveness.js, and no settlement sent) is not a settlement
+// outcome: onSettleOutcome skips it, so the forgiveness rule and its own
+// budget stay the only bound on it. A settlement SENT while the buyer was
+// connected is a settlement outcome whether or not the buyer stayed: the
+// ticket still reads granted after the dispatcher released it, so without the
+// settleSentWhileConnected check a settle that failed after the close would
+// feed neither the breaker nor the budget, and a buyer who can make the settle
+// fail at will would run the handler free on repeat.
+// onResponseEnd runs for a cancelled charge too, for bookkeeping that must
+// always close.
 // The same holds for a first-call allowance grant whose settle was skipped
 // (src/first-call-allowance.js): its bound is that module's caps.
 const OUTCOME = Symbol("a402.responseOutcome");
@@ -182,7 +212,7 @@ function runOutcome(res, via) {
   const state = res[OUTCOME];
   if (state.done) return;
   state.done = true;
-  const forgiven = via === "undelivered" && chargeCancelledForClientGone(state.req);
+  const forgiven = via === "undelivered" && !settleSentWhileConnected(state.req) && chargeCancelledForClientGone(state.req);
   // A first-call allowance grant whose settle was skipped is not a
   // settlement outcome either: no sale, no breaker or composite outcome.
   const allowance = allowanceServed(state.req);
