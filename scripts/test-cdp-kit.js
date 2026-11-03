@@ -192,6 +192,17 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       console.warn = realWarn;
       const lines = warned.filter((w) => w.startsWith("[cdp] query HTTP 502"));
       const line = lines[0] || "";
+      // A configured secret is redacted on the whole body before the 4 KB
+      // slice: a body whose first 4 KB is one long string that then holds the
+      // key would otherwise print the key's start after the string collapses.
+      _resetCdpLogThrottleForTest();
+      const warned2 = []; console.warn = (m) => warned2.push(String(m));
+      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("'" + "x".repeat(3_980) + "' " + process.env.CDP_API_KEY_ID + " tail", { status: 502 })), 60));
+      await tool("onchain-sql").handler({ sql: "SELECT block_number FROM base.blocks LIMIT 1" }).catch(() => {});
+      console.warn = realWarn;
+      const line2 = warned2.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
+      ok(line2 && !/organiz|apiKeys/.test(line2), `a secret past the slice point is redacted whole, never printed in part (${line2.slice(0, 120)})`);
+      console.warn = (m) => warned.push(String(m));
       ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && /timefilter=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape (block_time read as a time filter), no literals (${line.slice(0, 220)})`);
       ok(lines.length === 1, `the same failure again within a minute is not logged again (${lines.length} lines)`);
     }
@@ -277,7 +288,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         await new Promise((r) => setTimeout(r, 20));
         ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX && BUYER_QUERY_INFLIGHT_MAX === 2, `two buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
         const c = await Promise.race([sqlRun().catch((x) => x), new Promise((r) => setTimeout(() => r({ statusCode: "not refused" }), 500))]);
-        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy", `a third is refused 429 with Retry-After 5 (${c?.statusCode})`);
+        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy" && c?.shed === true, `a third is refused 429 with Retry-After 5, marked as shed load (${c?.statusCode})`);
         release();
         const [ra, rb] = await Promise.all([a, b]);
         ok(ra.rowCount === 1 && rb.rowCount === 1 && _buyerQueriesInflightForTest() === 0, "the two in flight answer and the count returns to zero");
@@ -347,6 +358,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(solanaRangeRefusal("SELECT sum(stack_height) FROM solana.instructions") !== null, "an aggregate call other than a bare count is refused");
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions WHERE tx_signer = 'block_time'") !== null, "block_time inside a string is not a range");
       ok(solanaRangeRefusal("SELECT block_time, tx_id FROM solana.instructions WHERE tx_signer = 'x'") !== null && solanaRangeRefusal("SELECT x AS block_time FROM solana.instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT a FROM solana.instructions WHERE a = 1 ORDER BY block_time") !== null, "block_time selected, aliased or ordered by is not a range");
+      ok(solanaRangeRefusal("SELECT multiIf(a = 1, 'x', 'y'), nullIf(a, 0) FROM solana.instructions LIMIT 10") === null, "a scalar conditional (multiIf, nullIf) is not an aggregate");
       ok(solanaRangeRefusal("SELECT a FROM solana.instructions PREWHERE tx_signer = 'a'") !== null && solanaRangeRefusal("SELECT countIf(a = 1) FROM solana.instructions") !== null && solanaRangeRefusal("SELECT a FROM solana.instructions LIMIT 1 BY a") !== null && solanaRangeRefusal("SELECT stddevPop(a) FROM solana.instructions") !== null, "PREWHERE, -If combinators, LIMIT BY and the stddev family are read as scans");
       ok(solanaRangeRefusal("SELECT a FROM solana . instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT `a'b` FROM solana.instructions WHERE a = 1") !== null && solanaRangeRefusal("SELECT \"c--d\" FROM solana.instructions WHERE a = 1") !== null, "spaces around the dot and quotes inside identifiers do not hide the table or the clause");
       ok(solanaRangeRefusal("SELECT a FROM solana.instructions WHERE block_time = '2026-11-01'") === null, "an equality on block_time is a bound");
@@ -370,7 +382,8 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > subtractDays(now(), 3)", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE block_time > today() - 5", at) === 5, "subtractDays and today() - N are read");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > someFunc(x)", at) === null && blockTimeRangeDays("SELECT 1 WHERE tx_signer = 'x'", at) === null, "a bound this reader does not know, or no block_time, reads no range");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - toIntervalDay(7)", at) === null, "an expression that continues past a known bound (now() - toIntervalDay(7)) reads no range, never zero");
-      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 1 DAY OR block_time > '2020-01-01'", at) === null, "bounds joined by OR read no range");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 1 DAY OR block_time > '2020-01-01'", at) === null && blockTimeRangeDays("SELECT 1 WHERE a = 1 OR block_time > '2026-10-01'", at) === null && blockTimeRangeDays("SELECT 1 WHERE '2026-10-01' <= block_time OR a = 1", at) === null && blockTimeRangeDays("SELECT 1 WHERE block_time BETWEEN '2026-10-01' AND '2026-10-08' OR a = 1", at) === null && blockTimeRangeDays("SELECT 1 WHERE block_time >= '2026-10-01' AND block_time < '2026-10-03' OR a = 1", at) === null, "an OR anywhere reads no range, whichever reader found the bound");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 1 DAY AND tx_signer = 'x or y' -- or not", at) === 1, "an OR inside a string or a comment is not an OR");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 3 DAY AND x = 1", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE (block_time > now() - INTERVAL 2 DAY)", at) === 2, "a bound followed by AND or a closing parenthesis still reads");
       { calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, {})), 60)); const h = await tool("onchain-sql").handler({ sql: "SELECT count() FROM solana.instructions WHERE block_time > now() - INTERVAL 6 HOUR" }).catch((x) => x); ok(/covers about 6 hours/.test(h?.message || ""), `a sub-day span is named in hours (${String(h?.message).match(/covers about [^;]*/)?.[0]})`); }
       ok(sqlNorm("SELECT a FROM `solana`.`instructions` WHERE \"tx_signer\" = 'where'") === "SELECT a FROM solana.instructions WHERE tx_signer = '_____'", "sqlNorm keeps identifiers and masks strings");

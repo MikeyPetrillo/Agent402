@@ -204,7 +204,8 @@ async function queryServiceHealthy(sql = "", now = Date.now()) {
   return healthInflight.get(table);
 }
 export function _setQueryHealthForTest(ok, table = null) {
-  if (ok === null) queryHealth.clear(); else for (const t of table ? [table] : Object.keys(QUERY_HEALTH_SQL)) queryHealth.set(t, { ok, at: Date.now() });
+  const tables = table ? [table] : Object.keys(QUERY_HEALTH_SQL);
+  for (const t of tables) { if (ok === null) queryHealth.delete(t); else queryHealth.set(t, { ok, at: Date.now() }); }
 }
 export function _setHealthTimeoutMsForTest(ms) { healthTimeoutMs = ms || HEALTH_TIMEOUT_MS; }
 
@@ -379,7 +380,7 @@ export function solanaRangeRefusal(sql) {
   // count (answered from metadata at once, measured 0.2 s); countIf and the
   // other -If combinators read rows.
   const clause = /\b(where|prewhere|group\s+by|order\s+by|having|join|distinct|sample|limit\s+\d+\s+by)\b/i.test(s);
-  const aggregate = /\b(\w+if|sum|avg|min|max|uniq\w*|any\w*|arg(?:min|max)\w*|group\w*array\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|corr\w*|covar\w*)\s*\(/i.test(s);
+  const aggregate = /\b(?:countif|(?:sum|avg|min|max|uniq\w*|any\w*|arg(?:min|max)\w*|group\w*array\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|corr\w*|covar\w*)(?:if)?)\s*\(/i.test(s);
   if (!clause && !aggregate) return null;
   // A range is block_time in a comparison or BETWEEN, not the column named
   // elsewhere (selected, ordered by, or an alias).
@@ -422,6 +423,8 @@ function timeBoundMs(expr, now) {
 export function blockTimeRangeDays(sql, now = Date.now()) {
   const q = sqlNoComments(sql).replace(/[`"]/g, "");
   if (!/\bblock_time\b/i.test(q)) return null;
+  // Any OR in the query: a bound may not narrow it, so no range is read.
+  if (/\bor\b/i.test(sqlCode(sql))) return null;
   // Each piece is bounded in length, so the reads stay linear on a 10 KB query.
   const OPERAND = String.raw`('(?:[^'\\]|\\.){0,80}'|[^'()\s,]{1,60}(?:\s*\(\s*\)\s*-\s*interval\s+'?\d{1,9}'?\s*[a-z]{1,10}|\s{0,8}\((?:[^()]|\([^()]{0,80}\)){0,120}\))?(?:\s*-\s*\d{1,9})?|\((?:[^()]|\([^()]{0,80}\)){0,160}\))`;
   let lo = null, hi = null;
@@ -725,7 +728,7 @@ export const CDP_TOOLS = [
       body.sql = capped.sql;
       if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
         const e = bad(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds. Nothing was charged.`, 429);
-        e.retryAfter = 5; e.hint = "busy";
+        e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
         throw e;
       }
       buyerQueriesInflight++;
