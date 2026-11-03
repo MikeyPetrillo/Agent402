@@ -28,7 +28,8 @@ ok(rel([row("https://t1.lhr.life", { last_routable_seen: NOW - 4 * DAY })]).some
 ok(rel([row("https://t2.lhr.life", { last_routable_seen: NOW - 1 * DAY })]).length === 0, "a tunnel seen yesterday keeps its slot");
 ok(rel([row("https://t3.lhr.life", { last_routable_seen: NOW - 4 * DAY, last_settled_seen: NOW - 5 * DAY })], () => true).some((o) => o === "https://t3.lhr.life"), "a settled tunnel silent 4 days is released: the hostname cannot return");
 ok(rel([row("https://stable.example", { last_routable_seen: NOW - 4 * DAY })]).length === 0, "a stable hostname silent 4 days keeps its slot (30-day rule)");
-ok(rel([row("https://paid.example", { last_routable_seen: NOW - 90 * DAY })], () => true).length === 0, "a settled stable seller is never released");
+ok(rel([row("https://paid.example", { last_routable_seen: NOW - 60 * DAY })], () => true).length === 0, "a settled stable seller silent 60 days keeps its slot (90-day rule)");
+ok(rel([row("https://paid.example", { last_routable_seen: NOW - 91 * DAY })], () => true).some((o) => o === "https://paid.example"), "a settled stable seller silent 91 days is released");
 ok(selectReleasableOrigins({ now: NOW, isSubmitted: () => true, registrations: [row("https://t4.lhr.life", { last_routable_seen: NOW - 9 * DAY })], cycleOkFraction: 0.1 }).length === 0, "the outage guard still holds for tunnels");
 
 // --- the register door ---

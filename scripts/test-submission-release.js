@@ -34,12 +34,26 @@ ok(run({ registrations: [row("https://alive.example")] }).length === 0,
 ok(run({ registrations: [row("https://recent.example", { last_routable_seen: NOW - 29 * DAY })] }).length === 0,
   "released at 29 days - the window is 30");
 
-// Money outranks liveness. Releasing a seller who has been PAID through us
-// drops a real counterparty over an outage we cannot see the end of.
-ok(run({ registrations: [row("https://paid.example", { last_routable_seen: NOW - 400 * DAY, last_settled_seen: NOW - 300 * DAY })] }).length === 0,
-  "released an origin that had settled a payment");
-ok(run({ registrations: [row("https://paid2.example", { last_routable_seen: NOW - 400 * DAY })], hasSettled: (o) => o === "https://paid2.example" }).length === 0,
-  "released an origin the ledger says has settled");
+// Money outranks liveness. A seller who has been PAID through us holds its
+// slot three times as long (90 days), by its own row or by the ledger, and
+// gives it back after that: a dead address serves nobody, and the
+// registration row keeps its tenure for a return.
+ok(run({ registrations: [row("https://paid.example", { last_routable_seen: NOW - 60 * DAY, last_settled_seen: NOW - 70 * DAY })] }).length === 0,
+  "released a settled origin at 60 days - its window is 90");
+ok(run({ registrations: [row("https://paid2.example", { last_routable_seen: NOW - 89 * DAY })], hasSettled: (o) => o === "https://paid2.example" }).length === 0,
+  "released at 89 days an origin the ledger says has settled");
+ok(run({ registrations: [row("https://paid3.example", { last_routable_seen: NOW - 91 * DAY, last_settled_seen: NOW - 100 * DAY })] }).join() === "https://paid3.example",
+  "a settled origin dark for 91 days was not released");
+ok(run({ registrations: [row("https://paid4.example", { last_routable_seen: NOW - 91 * DAY })], hasSettled: () => true, settledMaxIdleMs: 365 * DAY }).length === 0,
+  "the settled window is the caller's (365 days here)");
+// The ceiling: 4,000 slots unless the variable says otherwise, a quarter of
+// them for quick tunnels.
+{
+  const { submissionSlotStatus, __testSetSubmittedCap } = await import("../src/x402-index.js");
+  __testSetSubmittedCap();
+  const s = submissionSlotStatus();
+  ok(s.cap === 4000 && s.tunnelCap === 1000, `the default submission ceiling is 4,000 with 1,000 tunnel slots (${s.cap}, ${s.tunnelCap})`);
+}
 
 // Not ours to release: a registry-discovered or operator-seeded origin holds no
 // submission slot, so releasing one would just delete a listing for nothing.

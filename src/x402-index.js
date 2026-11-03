@@ -652,8 +652,11 @@ const submittedSeeds = new GuardedSet();
 // and a seller who comes back re-registers into a free slot. An origin that
 // has ever settled a payment is never released, however long it has been down.
 // If this fills with LIVE sellers, raise CRAWL_INTERVAL_MS first (it is the
-// multiplier), then this (it is linear).
-const DEFAULT_MAX_SUBMITTED_SEEDS = 2000;
+// multiplier), then this (it is linear). It filled with live sellers at 2,000
+// (2026-11-03: 1,985 held, 1,489 of them seen routable within the day, half
+// settled, none past the idle window), so the ceiling is 4,000 and a
+// variable (INDEX_MAX_SUBMITTED_SEEDS): at most ~15 GB/day if every slot fills.
+const DEFAULT_MAX_SUBMITTED_SEEDS = Math.max(0, Math.floor(Number(process.env.INDEX_MAX_SUBMITTED_SEEDS))) || 4000;
 let submittedSeedsCap = DEFAULT_MAX_SUBMITTED_SEEDS;
 
 /** Test hook: set (or, with no arg, reset) the submission cap. */
@@ -6455,6 +6458,12 @@ export function tunnelSubmissionCap(cap) { return Math.floor(cap * (TUNNEL_SUBMI
 // seller could be having: it is not a health signal, it is "this address has
 // been gone for a month".
 const RELEASE_AFTER_MS = Number(process.env.INDEX_RELEASE_AFTER_DAYS || 30) * 86_400_000;
+// A seller who has been paid through us keeps its slot three times as long
+// (it is a real counterparty, and a month is inside a long migration), but
+// not forever: the 20 oldest slots on 2026-11-03 were settled sellers dark
+// past 30 days, and a slot held by a dead address serves nobody. The
+// registration row, and its tenure, survive the release either way.
+const SETTLED_RELEASE_AFTER_MS = Number(process.env.INDEX_SETTLED_RELEASE_AFTER_DAYS || 90) * 86_400_000;
 
 // The submission ceiling used to be a lifetime bucket: an origin entered and
 // nothing ever took it out, so the front door filled once and stayed full, and
@@ -6477,6 +6486,7 @@ const RELEASE_AFTER_MS = Number(process.env.INDEX_RELEASE_AFTER_DAYS || 30) * 86
 // @param registrations  rows from getSellerRegistrations()
 // @param isSubmitted    is this origin still holding a submission slot?
 // @param hasSettled     has this origin ever settled a payment through us?
+// @param settledMaxIdleMs  the idle window of a seller who has settled
 // @param cycleOkFraction  share of THIS cycle's crawls that succeeded, or null
 export function selectReleasableOrigins({
   registrations = [],
@@ -6484,6 +6494,7 @@ export function selectReleasableOrigins({
   hasSettled = () => false,
   now = Date.now(),
   maxIdleMs = RELEASE_AFTER_MS,
+  settledMaxIdleMs = SETTLED_RELEASE_AFTER_MS,
   tunnelMaxIdleMs = TUNNEL_RELEASE_AFTER_MS,
   cycleOkFraction = null,
   minCycleOkFraction = 0.5,
@@ -6499,16 +6510,16 @@ export function selectReleasableOrigins({
     const origin = row?.origin;
     if (typeof origin !== "string" || !origin) continue;
     if (!isSubmitted(origin)) continue;
-    // A seller who has ever been PAID through us is not a stale submission,
-    // however long they have been down. Money is a stronger claim on a slot
-    // than liveness, and releasing one would quietly drop a real counterparty.
+    // A seller who has been PAID through us is a real counterparty: money is
+    // a stronger claim on a slot than liveness, so it holds the slot through
+    // the longer window before a dead address gives it back.
     const tunnel = isEphemeralTunnelOrigin(origin);
-    if (!tunnel && (row.last_settled_seen || hasSettled(origin))) continue;
+    const settled = !tunnel && !!(row.last_settled_seen || hasSettled(origin));
     // No successful probe ever recorded falls back to first_seen, so a row
     // that predates this column cannot be immortal.
     const lastOk = Number(row.last_routable_seen || row.first_seen || 0);
     if (!lastOk) continue;
-    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : maxIdleMs)) continue;
+    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : settled ? settledMaxIdleMs : maxIdleMs)) continue;
     out.push(origin);
   }
   return out;

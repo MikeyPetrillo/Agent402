@@ -30,6 +30,11 @@ LLC: credit the entity, never a personal name.
   report products and recurring monitors.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
+  Self-serve submissions (`POST /api/index/register`) hold at most `INDEX_MAX_SUBMITTED_SEEDS`
+  slots (default 4000, a quarter for quick tunnels); a slot is released after
+  `INDEX_RELEASE_AFTER_DAYS` (30) with no successful probe, `INDEX_SETTLED_RELEASE_AFTER_DAYS`
+  (90) for a seller that has settled, 3 days for a tunnel. The operator seeds past the cap with
+  `POST /__operator/index/seed`.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).

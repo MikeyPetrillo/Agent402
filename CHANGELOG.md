@@ -7,6 +7,13 @@ carries its own version on npm.
 ## Unreleased
 
 ### 2026-11-03 (onchain-sql and metered chat)
+Index:
+- Self-serve seller registration holds 4,000 submission slots (was 2,000,
+  which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A
+  seller that has settled payments gives its slot back after 90 days with
+  no successful probe (`INDEX_SETTLED_RELEASE_AFTER_DAYS`; it was never
+  released); other origins after 30 days as before. A released seller's
+  registration and tenure survive, and it re-registers into a free slot.
 Tools:
 - onchain-sql: a query whose result is too large for the query service to
   send (its instant internal error) is run again with LIMIT 10 (two
