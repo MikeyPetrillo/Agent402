@@ -11,13 +11,19 @@
 //     store's command deadline, the connect wait, the CoinGecko budget's);
 //   - a store that never answers still times out, promptly when the loop is
 //     free and boundedly when it is held;
-//   - a rejection still propagates.
+//   - a rejection still propagates;
+//   - the shared store's connect wait, through its own module in a child
+//     process (the connect, from the redis package, completes during a hold);
+//   - a ref'd deadline keeps a process alive until it expires, an unref'd one
+//     does not (a child process with nothing else pending).
 //   node scripts/test-loop-deadline.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loopDeadline, withLoopTimeout, withLoopDeadline } from "../src/loop-deadline.js";
 import { createRedisLimits } from "../src/shared-limits.js";
 import { cgWithin } from "../src/tools/coingecko-rate.js";
@@ -40,6 +46,17 @@ writeFileSync(file, "x".repeat(64));
 const fh = await open(file, "r");
 // One threadpool request, issued now: its completion is read in a poll phase.
 const answerSoon = (value) => fh.read(Buffer.alloc(8), 0, 8, 0).then(() => value);
+// A case that needs its own process: `code` is an ES module body run with
+// SRC (the src/ directory URL), FILE (the answer file) and the spin helper in
+// scope; it prints one JSON line, parsed here.
+const SRC = new URL("../src/", import.meta.url).href;
+function inChild(code, env = {}) {
+  const prelude = `const SRC = ${JSON.stringify(SRC)}; const FILE = ${JSON.stringify(file)};\nconst spin = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* the loop is held */ } };\n`;
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + code], { env: { ...process.env, ...env }, encoding: "utf8", timeout: 30_000 });
+  const line = String(r.stdout || "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{")).pop() || "";
+  let out = null; try { out = JSON.parse(line); } catch { /* reported below */ }
+  return { out, status: r.status, stderr: String(r.stderr || "").trim().slice(-400) };
+}
 
 // 1. The shared store's command deadline, through the real Redis-backed limits.
 {
@@ -86,6 +103,35 @@ const answerSoon = (value) => fh.read(Buffer.alloc(8), 0, 8, 0).then(() => value
   try { await withLoopTimeout(new Promise(() => {}), 50, () => new Error("late")); } catch (e) { threw = e; }
   ok(threw?.message === "late", "withLoopTimeout rejects with the given error");
 }
+// 2a. The same wait through the module itself: getSharedRedisClient() opens
+//     its client through the redis package, and that connect completes while
+//     the loop is held past the 1 s request wait. In a child, since the
+//     module reads REDIS_URL at import and this process pins it unset; the
+//     package is replaced at the module boundary by a stub whose connect is
+//     the threadpool read, so nothing connects.
+{
+  const stub = "data:text/javascript," + encodeURIComponent("export function createClient() { return globalThis.__client; }\nexport default { createClient };");
+  const { out, status, stderr } = inChild(`
+    import { register } from "node:module";
+    import { open } from "node:fs/promises";
+    register("data:text/javascript," + encodeURIComponent('export async function resolve(s, c, n) { if (s === "redis") return { url: ${JSON.stringify(stub)}, shortCircuit: true }; return n(s, c); }'));
+    const fh = await open(FILE, "r");
+    let connects = 0;
+    globalThis.__client = { isReady: true, on() {}, connect: () => { connects++; return fh.read(Buffer.alloc(8), 0, 8, 0).then(() => {}); } };
+    const { loadRedis } = await import(SRC + "lazy-redis.js");
+    await loadRedis(); // cached, so the connect is sent within the microtasks below
+    const { getSharedRedisClient } = await import(SRC + "shared-limit.js");
+    await new Promise((r) => setImmediate(r));
+    const t0 = performance.now();
+    const p = getSharedRedisClient();
+    for (let i = 0; i < 40; i++) await null;
+    const sent = connects;
+    spin(1300);
+    const c = await p;
+    console.log(JSON.stringify({ sent, got: c === globalThis.__client, took: Math.round(performance.now() - t0) }));
+  `, { REDIS_URL: "redis://127.0.0.1:1/0" });
+  ok(status === 0 && out?.sent === 1 && out.got === true, `the shared store's connect wait, through its module: a connect that completed while the loop was held is the client, not null (${out ? JSON.stringify(out) : `exit ${status}: ${stderr}`})`);
+}
 // 2b. The CoinGecko budget's own deadline (src/tools/coingecko-rate.js), same rule.
 {
   await checkPhase();
@@ -117,6 +163,23 @@ const answerSoon = (value) => fh.read(Buffer.alloc(8), 0, 8, 0).then(() => value
     loopDeadline(10, () => { fired++; resolve(); }, { now: () => { t += 1000; return now(); } });
   });
   ok(fired === 1, "a clock that always reads late re-arms once and then expires");
+}
+// 5. The `ref` option: a deadline that must keep the process alive (a wait
+//    whose answer the process exists for) does so until it expires; the
+//    default does not hold a process open. Each is the only thing pending in
+//    a child, which reports how long its loop ran after the deadline was set.
+{
+  const child = (ref) => inChild(`
+    import { writeSync } from "node:fs";
+    const { loopDeadline } = await import(SRC + "loop-deadline.js");
+    const t0 = performance.now();
+    let expired = false;
+    process.on("exit", () => writeSync(1, JSON.stringify({ alive: Math.round(performance.now() - t0), expired }) + "\\n"));
+    loopDeadline(300, () => { expired = true; }, { ref: ${ref} });
+  `);
+  const kept = child(true), dropped = child(false);
+  ok(kept.status === 0 && kept.out?.expired === true && kept.out.alive >= 280 && kept.out.alive < 3000, `a ref'd deadline keeps the process alive until it expires (${kept.out ? JSON.stringify(kept.out) : `exit ${kept.status}: ${kept.stderr}`})`);
+  ok(dropped.status === 0 && dropped.out?.expired === false && dropped.out.alive < 150, `an unref'd deadline (the default) lets the process exit at once (${dropped.out ? JSON.stringify(dropped.out) : `exit ${dropped.status}: ${dropped.stderr}`})`);
 }
 await fh.close();
 clearInterval(keepAlive);

@@ -168,6 +168,22 @@ if (REDIS_URL) {
   block(claims.COMMAND_DEADLINE_MS * 3);
   const a = await pending;
   ok(!a.claimed && a.holder === "replica-B", `claims: a loop blocked past the deadline while the claim was in flight never claims a key another replica holds (${JSON.stringify(a)})`);
+  // A SHORT block (late by less than half the deadline, so the timer does not
+  // re-arm): the only thing between the late timer and the reply already in
+  // the socket is the poll-phase wait. The client writes the command in an
+  // immediate, so the microtasks drain first and the block is queued behind
+  // that write; the reply lands during the block.
+  for (const factor of [1.3, 1.1, 1.4]) {
+    k = key();
+    ok((await claims.claimSettlementKey(k, "replica-B")).claimed, `claims: replica B holds a key in Redis (short stall x${factor})`);
+    claims.__resetSettlementClaims();
+    const p = claims.claimSettlementKey(k, "replica-A");
+    for (let i = 0; i < 20; i++) await null;
+    await new Promise((r) => setImmediate(r));
+    block(claims.COMMAND_DEADLINE_MS * factor);
+    const s = await p;
+    ok(!s.claimed && s.holder === "replica-B", `claims: a loop blocked just past the deadline (x${factor}) reads the reply that landed during the block, never a local claim (${JSON.stringify(s)})`);
+  }
   await shared.closeSharedRedis();
   // Redis not answering yet (a connection still opening, a command past its
   // deadline): the claim is made in this process.

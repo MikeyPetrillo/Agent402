@@ -13,11 +13,17 @@
 //   - an idempotency store read (src/idempotency-store.js),
 //   - the first-call allowance's day read (src/first-call-allowance.js),
 //   - the Nominatim shared slot (src/tools/nominatim-pace.js),
-//   - a database status ping (src/db-status.js).
-// Each one also still times out on a store that never answers.
+//   - a database status ping (src/db-status.js),
+//   - the tool response cache read (src/cache.js),
+//   - the shared market-data copy (src/tools/databento.js),
+//   - the lease release at shutdown (src/state-db.js).
+// Each one also still times out on a store that never answers (the market
+// data miss on the caller path is scripts/test-databento-shared-cache.js c).
 //   node scripts/test-loop-deadline-sites.js
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
+import dnsPromises from "node:dns/promises";
+import { register, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +40,24 @@ process.env.NOMINATIM_SHARED_DEADLINE_MS = "200";
 process.env.HANGUP_FORGIVE_FILE = join(dir, "hangup.json");
 process.env.WALLET_DAILY_LEDGER_FILE = join(dir, "wallet-daily.json");
 process.env.FIRST_CALL_ALLOWANCE = "on";
+process.env.DATABENTO_SHARED_DEADLINE_MS = "200";
+process.env.DATABENTO_API_KEY = "db-test-key-not-real";
+
+// Two sites have no client seam: the cache opens its own client through the
+// redis package, and the lease release runs on the state database's pg.Pool.
+// Each package is replaced at the module boundary (before any src/ import
+// below resolves it) by a stub that hands back what the suite set on
+// globalThis; every module above the package runs as shipped.
+const dataUrl = (src) => `data:text/javascript,${encodeURIComponent(src)}`;
+const stubs = {
+  redis: dataUrl("export function createClient(o) { return globalThis.__loopDeadlineRedis(o); }\nexport default { createClient };"),
+  pg: dataUrl("export class Pool { constructor(o) { return globalThis.__loopDeadlinePg(o); } }\nexport default { Pool };"),
+};
+register(dataUrl(`const stubs = ${JSON.stringify(stubs)};
+export async function resolve(specifier, context, next) {
+  if (Object.hasOwn(stubs, specifier)) return { url: stubs[specifier], shortCircuit: true };
+  return next(specifier, context);
+}`));
 
 const { __setTestClient } = await import("../src/shared-limit.js");
 const { _resetSharedLimitsState } = await import("../src/shared-limits.js");
@@ -168,6 +192,101 @@ if (firstCallAllowanceConfig().enabled) {
   resetDatabasesStatusCache();
   const v2 = await databasesStatus({ pings: { leads: hung, analytics: () => null }, timeoutMs: 100, log: () => {} });
   ok(v2.leads.status === "unreachable", `database status: a ping that never answers still reads unreachable (${v2.leads.status})`);
+}
+// 9. The tool response cache: a hit that landed while the loop was held is
+//    served, not dropped for a fresh upstream call. The cache's own client
+//    comes from the stubbed redis package; the first read opens it (an
+//    import and a connect, not a command), so the held read is the second.
+{
+  const client = { isReady: true, on() {}, async connect() {}, get: (k) => answerSoon(JSON.stringify({ hit: k })) };
+  globalThis.__loopDeadlineRedis = () => client;
+  const { cacheGet, cacheEnabled } = await import("../src/cache.js");
+  const warm = await cacheGet("a402:/api/probe|warm");
+  ok(warm?.hit === "a402:/api/probe|warm" && cacheEnabled(), "cache: the read opens the cache's own client through the redis package");
+  const got = await held(() => cacheGet("a402:/api/probe|held"));
+  ok(got?.hit === "a402:/api/probe|held", `cache: a hit that landed while the loop was held is served (${JSON.stringify(got)})`);
+  client.get = hung;
+  const t0 = performance.now();
+  const miss = await cacheGet("a402:/api/probe|never");
+  ok(miss === null && performance.now() - t0 < 1000 && cacheEnabled(), `cache: a read that never answers is a miss at the read deadline and the cache stays on (${Math.round(performance.now() - t0)} ms)`);
+}
+// 10. Market data: the shared bars copy another replica wrote, read while the
+//     loop was held, serves the read with no upstream call. The upstream is
+//     refused here (its fetch rejects, its host resolves locally for the SSRF
+//     guard), so a miss is visible as a failed read and never leaves the box.
+{
+  const HOST = "hist.databento.com";
+  const realLookup = dnsPromises.lookup;
+  dnsPromises.lookup = function stubLookup(hostname, options) {
+    if (hostname === HOST) return Promise.resolve(options?.all ? [{ address: "1.1.1.1", family: 4 }] : { address: "1.1.1.1", family: 4 });
+    return realLookup.call(this, hostname, options);
+  };
+  syncBuiltinESMExports();
+  const realFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  globalThis.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;
+    if (typeof url === "string" && new URL(url).hostname === HOST) { upstreamCalls++; return Promise.reject(new Error("offline suite: no upstream")); }
+    return realFetch(input, init);
+  };
+  const db = await import("../src/tools/databento.js");
+  const copy = { fetchedAt: new Date().toISOString(), bars: [{ day: "2026-10-30", open: 10, high: 12, low: 9, close: 11 }] };
+  __setTestClient({ get: () => answerSoon(JSON.stringify(copy)) });
+  const r = await held(() => db.dailyBarsRead({ symbol: "probe", start: "2026-10-20", end: "2026-10-30" }).catch((e) => e));
+  ok(r?.cached === true && r.bars?.[0]?.close === 11 && upstreamCalls === 0 && db.sharedCacheCounts().hits === 1, `market data: a shared copy read while the loop was held serves the read with no upstream call (${r instanceof Error ? r.message : JSON.stringify({ cached: r?.cached, upstreamCalls, counts: db.sharedCacheCounts() })})`);
+  __setTestClient({ get: hung });
+  const t0 = performance.now();
+  const e = await db.dailyBarsRead({ symbol: "probe2", start: "2026-10-20", end: "2026-10-30" }).catch((x) => x);
+  ok(e instanceof Error && db.sharedCacheCounts().errors >= 1 && upstreamCalls >= 1 && performance.now() - t0 < 2000, `market data: a shared read that never answers is a miss at its deadline and the local path runs (${Math.round(performance.now() - t0)} ms, ${JSON.stringify(db.sharedCacheCounts())})`);
+  __setTestClient(null);
+  globalThis.fetch = realFetch;
+  dnsPromises.lookup = realLookup;
+  syncBuiltinESMExports();
+}
+// 11. The lease release at shutdown, on the stubbed pool. Two leases: one
+//     whose DELETE never answers, so the first shutdown wait ends at its
+//     deadline, and one whose first DELETE fails, so the row is kept and
+//     re-sent by the next wait; that re-sent DELETE answers while the loop is
+//     held, and the wait counts it.
+{
+  process.env.STATE_DATABASE_URL = "postgres://127.0.0.1:1/state";
+  process.env.LEASE_RELEASE_RETRY_MS = "60000";
+  const deletes = { hangs: 0, kept: 0 };
+  let answerKept = null, keptAnswer = null;
+  const client = {
+    on() {}, removeListener() {}, release() {},
+    query: (text, values) => {
+      const sql = String(text).trimStart();
+      if (/^INSERT INTO \S+leases/.test(sql)) return Promise.resolve({ rowCount: 1, rows: [{ owner: values[1] }] });
+      if (/^DELETE FROM \S+leases/.test(sql)) {
+        if (values[0] === "loop-deadline-hangs") { deletes.hangs++; return hung(); }
+        deletes.kept++;
+        if (deletes.kept === 1) return Promise.reject(new Error("release lost"));
+        return new Promise((r) => { if (keptAnswer) r(keptAnswer); else answerKept = r; });
+      }
+      return Promise.resolve({ rowCount: 0, rows: [] });
+    },
+  };
+  globalThis.__loopDeadlinePg = () => ({ on() {}, idleCount: 0, async connect() { return client; }, async end() {} });
+  const sdb = await import("../src/state-db.js");
+  let started = 0;
+  const run = (ctx) => new Promise((r) => { started++; ctx.signal.addEventListener("abort", () => r("stopped")); });
+  const ticks = Promise.all([sdb.withLease("loop-deadline-hangs", { ttlMs: 5000, log: () => {} }, run), sdb.withLease("loop-deadline-kept", { ttlMs: 5000, log: () => {} }, run)]);
+  for (let i = 0; i < 400 && started < 2; i++) await new Promise((r) => setTimeout(r, 5));
+  ok(started === 2, "lease release: both leases are acquired on the state database's pool");
+  const t0 = performance.now();
+  const n0 = await sdb.releaseHeldLeases({ timeoutMs: 100 });
+  ok(n0 === 0 && deletes.hangs === 1 && deletes.kept === 1 && performance.now() - t0 < 700, `lease release: a release that never answers still ends at the deadline, and a failed one is kept (${n0} released, ${Math.round(performance.now() - t0)} ms)`);
+  ok((await ticks).every((t) => t.ran === true), "lease release: both ticks end");
+  await checkPhase();
+  const p = sdb.releaseHeldLeases({ timeoutMs: 200 });
+  answerSoon({ rowCount: 1, rows: [] }).then((v) => { keptAnswer = v; answerKept?.(v); });
+  await inFlight();
+  ok(deletes.kept === 2, "lease release: the kept row's DELETE is re-sent before the hold");
+  spin(500);
+  const n = await p;
+  ok(n === 1, `lease release: a release answered while the loop was held is counted (${n} released)`);
+  await sdb.closeStateDb();
 }
 
 console.warn = realWarn;
