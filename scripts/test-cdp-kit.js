@@ -352,11 +352,11 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // with the small row cap and those rows are served marked truncated, with the row
     // size and the LIMIT that fits.
     {
-      const { SQL_RECOVER_ROWS, SQL_SEND_LIMIT_BYTES, SQL_RECOVER_ATTEMPTS } = await import("../src/tools/cdp-kit.js");
+      const { SQL_RECOVER_ROWS, SQL_SEND_LIMIT_BYTES, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
       // Measured 2026-11-03 against the query service on a 40 KB-per-row result: 25 rows (about 1 MB)
-      // answered three runs in four, 10 rows every time in five; so the re-run asks for 10, twice at most,
-      // and the suggested LIMIT keeps an answer under 500 KB.
-      ok(SQL_RECOVER_ROWS === 10 && SQL_RECOVER_ATTEMPTS === 2 && SQL_SEND_LIMIT_BYTES === 500_000, "the recovery's cap, attempts and answer-size target are the measured ones");
+      // answered three runs in four, 10 rows every time in five; so the re-run asks for 10, again while
+      // the call's query budget holds, and the suggested LIMIT keeps an answer under 500 KB.
+      ok(SQL_RECOVER_ROWS === 10 && SQL_QUERY_BUDGET === 4 && SQL_SEND_LIMIT_BYTES === 500_000, "the recovery's cap, the call's query budget and the answer-size target are the measured ones");
       const sent = [];
       const realFetchR = globalThis.fetch;
       // The row-size measure the recovery now makes first (one aggregate
@@ -385,15 +385,13 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(200, { result: [{ m: 1 }, { m: 2 }, { m: 3 }] }); });
         const whole = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
         ok(whole.rowCount === 3 && whole.complete === true && whole.truncated === false && whole.recovered === undefined && !whole.note && sent.length === 2, `fewer than ${SQL_RECOVER_ROWS} rows back is the whole result, served complete (${whole.rowCount} rows, complete ${whole.complete})`);
-        // Small rows: the 500 was a one-off, the original is sent once more and served whole.
+        // Small rows: the 500 was a one-off. The original is never resent (a
+        // metered query that fails the same way): the small rows are served
+        // recovered and the note says to send the query again as written.
         sent.length = 0;
-        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (sent.length === 1) return J(500, {}); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(200, { result: Array.from({ length: 400 }, (_, i) => ({ m: i })) }); });
+        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (sent.length === 1) return J(500, {}); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); throw new Error("the original must not be resent"); });
         const small = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
-        ok(small.rowCount === 400 && small.complete === true && small.recovered === undefined && sent.length === 3 && /LIMIT 1001$/.test(sent[2]), `small rows: the original is sent once more and served whole (${small.rowCount} rows, ${sent.length} calls)`);
-        sent.length = 0;
-        globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)) return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i })) }); return J(500, {}); });
-        const smallAgain = await sqlRun("SELECT m FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m");
-        ok(smallAgain.recovered === "result-size" && smallAgain.rowCount === SQL_RECOVER_ROWS && sent.length === 3, `small rows whose original fails again are served as the recovered 25 (${sent.length} calls)`);
+        ok(small.recovered === "result-size" && small.rowCount === SQL_RECOVER_ROWS && small.truncated === true && sent.length === 2 && /the error was a one-off: send the query again as written/.test(small.note) && !/a LIMIT of/.test(small.note), `small rows: the original is not resent; the small rows are served recovered with a note to send the query again (${small.rowCount} rows, ${sent.length} calls)`);
         // The re-run gets one attempt: a 503 there is an upstream error, with no third query call.
         sent.length = 0;
         globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return sent.length === 1 ? J(500, {}) : J(503, {}); });
@@ -463,7 +461,57 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           sentR.length = 0;
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (isMeasure(q)) return J(200, { result: [{ n: 1, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(200, { result: [] }); return isHealth(q) ? J(200, { result: [{ block_number: 1 }] }) : J(500, {}); };
           const empty = await sqlRun("SELECT * FROM base.transactions WHERE hash = '0xabc'").catch((x) => x);
-          ok(empty?.statusCode === 422 && empty?.hint === "narrow-query" && sentR.filter((q) => !isHealth(q)).length === 5, `every row over the limit is the uncharged narrow-query 422, not an empty 200 (${empty?.statusCode}, ${sentR.filter((q) => !isHealth(q)).length} query calls)`);
+          ok(empty?.statusCode === 422 && empty?.hint === "narrow-query" && sentR.filter((q) => !isHealth(q)).length === SQL_QUERY_BUDGET, `every row over the limit is the uncharged narrow-query 422, not an empty 200 (${empty?.statusCode}, ${sentR.filter((q) => !isHealth(q)).length} query calls)`);
+          // The call's query budget: the worst path (the query, the measure
+          // finding big rows, the filtered run failing, one small re-run
+          // failing) is exactly SQL_QUERY_BUDGET queries and the uncharged
+          // narrow-query 422; a fifth query is never sent.
+          {
+            const { _maxQueriesPerCallForTest } = await import("../src/tools/cdp-kit.js");
+            const budgeted = (answer) => async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; if (isHealth(q)) return J(200, { result: [{ block_number: 1 }] }); sentR.push(q); if (sentR.length > SQL_QUERY_BUDGET) throw new Error(`query ${sentR.length} sent past the budget`); return answer(q, sentR.length); };
+            sentR.length = 0;
+            globalThis.fetch = budgeted((q) => (isMeasure(q) ? J(200, { result: [{ n: 50, big: 3, maxRow: 70000 }] }) : J(500, { errorMessage: "An internal server error occurred." })));
+            const worst = await sqlRun("SELECT i FROM base.blocks").catch((x) => x);
+            ok(worst?.statusCode === 422 && worst?.hint === "narrow-query" && worst?.queryBudgetSpent === true && new RegExp(`^Even ${SQL_RECOVER_ROWS} rows of this query could not be sent`).test(worst.message) && !/times/.test(worst.message) && sentR.length === SQL_QUERY_BUDGET && sentR.length === 4 && isMeasure(sentR[1]) && /WHERE length\(toString/.test(sentR[2]) && new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(sentR[3]),
+              `worst path: the query, the measure, the filtered run and one small re-run are exactly ${SQL_QUERY_BUDGET} queries, then the uncharged 422 (${worst?.statusCode}, ${sentR.length} queries: ${sentR.map((q) => (isMeasure(q) ? "measure" : /WHERE length\(toString/.test(q) ? "filter" : /LIMIT 10$/.test(q) ? "small" : "query")).join(", ")})`);
+            // A fast 5xx on the query is retried once and that retry is a
+            // query: the measure and the filtered run then spend the budget,
+            // and the small re-run is not sent at all.
+            sentR.length = 0;
+            globalThis.fetch = budgeted((q, n) => (n === 1 ? J(502, {}) : isMeasure(q) ? J(200, { result: [{ n: 50, big: 3, maxRow: 70000 }] }) : J(500, {})));
+            const retried = await sqlRun("SELECT i FROM base.blocks").catch((x) => x);
+            ok(retried?.statusCode === 422 && retried?.queryBudgetSpent === true && /inside the 4 queries a call may send/.test(retried.message) && sentR.length === SQL_QUERY_BUDGET && !sentR.some((q) => new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(q)),
+              `a retried query spends the budget too: no small re-run past it, and the 422 names the budget (${retried?.statusCode}, ${sentR.length} queries)`);
+            // The row-size path stays three queries: the query, the measure, the filtered run.
+            sentR.length = 0;
+            globalThis.fetch = budgeted((q, n) => (n === 1 ? J(500, {}) : isMeasure(q) ? J(200, { result: [{ n: 22, big: 4, maxRow: 65972 }] }) : J(200, { result: fitRows })));
+            const rowSize = await sqlRun("SELECT ix, sk FROM base.blocks");
+            ok(rowSize.recovered === "row-size" && rowSize.rowCount === 18 && sentR.length === 3, `the row-size path is three queries (${sentR.length})`);
+            // The result-size path stays three: the query, a measure finding
+            // no big row (or refused), the small re-run; the original is not resent.
+            for (const [label, measure] of [["no big row", J(200, { result: [{ n: 400, big: 0, maxRow: 3000 }] })], ["measure refused", J(400, { errorMessage: "refused" })]]) {
+              sentR.length = 0;
+              globalThis.fetch = budgeted((q, n) => (n === 1 ? J(500, {}) : isMeasure(q) ? measure : J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) })));
+              const rs = await sqlRun("SELECT i FROM base.blocks");
+              ok(rs.recovered === "result-size" && rs.rowCount === SQL_RECOVER_ROWS && sentR.length === 3 && new RegExp(`LIMIT ${SQL_RECOVER_ROWS}$`).test(sentR[2]), `the result-size path (${label}) is three queries with no resend (${sentR.length})`);
+            }
+            // With the measure finding no big row the budget leaves the small
+            // re-run a second try, and the 422 after it counts the tries.
+            sentR.length = 0;
+            globalThis.fetch = budgeted((q) => (isMeasure(q) ? J(200, { result: [{ n: 400, big: 0, maxRow: 3000 }] }) : J(500, {})));
+            const twice = await sqlRun("SELECT i FROM base.blocks").catch((x) => x);
+            ok(twice?.statusCode === 422 && /, 2 times/.test(twice.message) && sentR.length === SQL_QUERY_BUDGET, `a small re-run that fails twice inside the budget is the 422 naming two tries (${sentR.length} queries)`);
+            // Every shape the handler can send, failing at every step, stays inside the budget.
+            for (const shape of ["SELECT i FROM base.blocks", "SELECT a FROM (SELECT b FROM (SELECT c FROM base.blocks)) LIMIT 60000", "WITH t AS (SELECT i FROM base.blocks) SELECT * FROM t", "SELECT a FROM (SELECT b FROM base.blocks) LIMIT 50"]) {
+              for (const measure of [J(200, { result: [{ n: 50, big: 3, maxRow: 70000 }] }), J(200, { result: [{ n: 50, big: 0, maxRow: 100 }] }), J(400, { errorMessage: "SQL validation failed: subquery nesting too deep (max: 2)" })]) {
+                sentR.length = 0;
+                globalThis.fetch = budgeted((q, n) => (isMeasure(q) ? measure : /^SELECT \* FROM \(/.test(q) && n === 1 ? J(400, { errorMessage: "SQL validation failed: subquery nesting too deep (max: 2)" }) : J(500, {})));
+                const r = await sqlRun(shape).catch((x) => x);
+                ok(r instanceof Error && sentR.length <= SQL_QUERY_BUDGET, `a call failing at every step sends at most ${SQL_QUERY_BUDGET} queries (${sentR.length} for "${shape.slice(0, 30)}")`);
+              }
+            }
+            ok(_maxQueriesPerCallForTest() === SQL_QUERY_BUDGET, `no call in this suite sent more than the budget (most sent: ${_maxQueriesPerCallForTest()})`);
+          }
           // A refusal of the rewritten filtered SQL is not the buyer's to read.
           sentR.length = 0;
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 9, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(400, { errorMessage: "unexpected '*' at line 1" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };

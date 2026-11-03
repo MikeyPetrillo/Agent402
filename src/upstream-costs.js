@@ -11,14 +11,15 @@
 //       tier before it; a row whose tiers break any of that is dropped (a gap),
 //       because keeping its base rate would underprice a long prompt.
 //     speech: { modelId: usdPerChar },                       the speech wire models and the direct speech fallbacks
-//     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit },
+//     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit, settlementPerCall? },   settlementPerCall (optional): one facilitator settlement, read by the margin test
 //     embeddings: { model: usdPer1MInputTokens },
 //     openai: { model: { prompt, cached, completion } },     USD per 1M tokens; the image model's completion rate is per image token
 //     sttPerMinute: { model: usdPerMinute },
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
-//               decisions: { luna, decisionOne, jev, maxShare } } }   luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
+//               decisions: { luna, decisionOne, jev, maxShare },      luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
+//               cdp: { sqlQuery } } }                                 USD per query sent to the SQL query service
 //
 // docs/example-upstream-costs.json shows the format with placeholder numbers.
 //
@@ -50,6 +51,11 @@ const REQUIRED = [
   ["openai", "gpt-image-2"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
+  // The SQL query service, USD per query: every query cdp-kit.js's query run
+  // sends for onchain-sql (the buyer's query and its recovery runs, at most
+  // SQL_QUERY_BUDGET per call), which the margin test prices against the
+  // tool's list price.
+  ["vendor", "cdp", "sqlQuery"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 // Model rows a serving path needs by their own prefix: a model admitted on a
@@ -156,6 +162,9 @@ function load() {
 }
 
 export function upstreamCosts() { return load(); }
+/** One vendor rate (`vendor.<vendor>.<key>`), or null without it: the
+ *  caller takes its safe path (a refusal, a skipped check), never a guess. */
+export function vendorRate(vendor, key) { return load().vendor?.[vendor]?.[key] ?? null; }
 /** Row count and a short fingerprint of the parsed table: lets production's
  *  copy be compared with CI's without printing a value. */
 export function upstreamCostsSummary() {
