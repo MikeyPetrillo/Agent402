@@ -302,13 +302,74 @@ function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
 export const SQL_RECOVER_ROWS = 10;
 export const SQL_RECOVER_ATTEMPTS = 2;
 export const SQL_SEND_LIMIT_BYTES = 500_000;
+// The query service refuses to send a result that holds a row over 64 KB
+// (measured 2026-11-03: a 65,520-byte row is sent, a 65,540-byte row answers
+// its internal error; ten 30 KB rows, 300 KB in all, are sent). The rows are
+// measured in SQL (length(toString(tuple(*))), close to the JSON size) and
+// the rows that fit are served with the omitted ones counted. The filter
+// threshold sits under the limit for the difference between the two forms.
+export const SQL_ROW_LIMIT_BYTES = 65_536;
+export const SQL_ROW_FILTER_CHARS = 64_000;
+const ROW_SIZE = "length(toString(tuple(*)))";
+/** On the service's internal error for a wrapped query: the rows under the
+ *  per-row limit, served with the count of those over it; null when the
+ *  measure cannot be made or finds no row over the limit (then the re-run
+ *  with a small cap decides). One extra subquery level, so only a query
+ *  under the depth limit (wrapped) takes it. */
+async function rowsThatFit(body, inner) {
+  let agg;
+  try {
+    // The rewritten SQL is ours, so a refusal of it is never logged as the
+    // buyer's failed query.
+    agg = await cdpFetch("POST", "/platform/v2/data/query/run", { ...body, sql: `SELECT count() AS n, countIf(${ROW_SIZE} > ${SQL_ROW_FILTER_CHARS}) AS big, max(${ROW_SIZE}) AS maxRow FROM (\n${inner}\n)` }, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: 1, rewritten: true });
+  } catch { return null; }
+  const row = (agg?.result ?? agg?.rows ?? agg?.data ?? [])[0];
+  const big = Number(row?.big), n = Number(row?.n), maxRow = Number(row?.maxRow);
+  if (!(big > 0)) return null;
+  let res;
+  try {
+    res = await cdpFetch("POST", "/platform/v2/data/query/run", { ...body, sql: `SELECT * FROM (\n${inner}\n) WHERE ${ROW_SIZE} <= ${SQL_ROW_FILTER_CHARS} LIMIT ${SQL_MAX_ROWS + 1}` }, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: 1, rewritten: true });
+  } catch { return null; } // any refusal of the rewritten SQL is not the buyer's to read: the re-run decides
+  const all = res?.result ?? res?.rows ?? res?.data ?? res;
+  if (!Array.isArray(all)) return null;
+  // Every matching row over the limit: nothing to serve, so no 200 (the
+  // re-run ends in the uncharged answer that says to narrow the columns).
+  if (!all.length) return null;
+  const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
+  const cut = all.length > list.length;
+  const kb = (v) => Math.max(1, Math.round(v / 1024));
+  // `matched` counts every row, the omitted ones too, so the answer reads
+  // incomplete; `truncated` follows the shared rule (src/partial-answer.js).
+  // The counts come from the measure and the rows from a second run: a
+  // query with no fixed order can show the two a different set, so the
+  // match count is never below what was served plus what was omitted, and
+  // an answer whose two runs disagree says so.
+  const counted = Number.isFinite(n) ? n : 0;
+  const matched = Math.max(counted, list.length + big);
+  const twoRuns = !cut && Number.isFinite(n) && n !== list.length + big;
+  return {
+    rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS, recovered: "row-size",
+    rowsOmitted: big, omittedReason: "row-size", rowLimitBytes: SQL_ROW_LIMIT_BYTES, maxRowBytes: Number.isFinite(maxRow) ? maxRow : null,
+    ...partialFields(matched, list.length), ...(twoRuns ? { countsFromSeparateRun: true } : {}),
+    note: `${big} row(s) of this result are over the query service's ${kb(SQL_ROW_LIMIT_BYTES)} KB per-row limit (${Number.isFinite(maxRow) ? `the largest is about ${kb(maxRow)} KB; ` : ""}array and map columns are the usual cause) and are omitted; the ${list.length} rows that fit are served${cut ? ` (cut at ${SQL_MAX_ROWS})` : ""}.${twoRuns ? ` The counts come from a separate run of the query, which saw a different set of rows (add an ORDER BY for a fixed one).` : ""} To get the omitted rows, select fewer or narrower columns or arraySlice the long arrays.`,
+  };
+}
+/** The rule the query service applies, for the texts that explain its instant
+ *  internal error: a row over the per-row limit is never sent, and a whole
+ *  answer under the send limit usually is. */
+function sendRuleText() {
+  return `a row over ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB is never sent, and a whole answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB usually is`;
+}
 function resultTooLargeError(status, tookMs) {
-  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result is too large to send (an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result cannot be sent (${sendRuleText()}): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
   e.hint = "narrow-query"; e.resultTooLarge = true; e.cdpStatus = status; e.tookMs = tookMs;
   return e;
 }
 
-async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0 } = {}) {
+async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0, rewritten = false } = {}) {
+  // A query the handler rewrote (the row-size measure and filter) is ours:
+  // its failure is never logged as the buyer's query.
+  const logFailed = (status, tookMs) => { if (!rewritten) logFailedBuyerQuery(status, tookMs, body?.sql); };
   if (!keyId() || !keySecret()) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
@@ -380,7 +441,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       const nestingTooDeep = /nesting too deep/i.test(detail);
       // The wrapper's own depth refusal is the handler's to recover, not a
       // failed buyer query.
-      if (buyerQuery && !(nestingTooDeep && lineOffset > 0)) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
+      if (buyerQuery && !(nestingTooDeep && lineOffset > 0)) logFailed(res.status, Date.now() - started);
       const e = bad(`CDP rejected the request: ${detail}`, 422);
       if (nestingTooDeep) e.nestingTooDeep = true;
       throw e;
@@ -388,7 +449,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     const tookMs = Date.now() - started;
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
-        logFailedBuyerQuery(res.status, tookMs, body?.sql);
+        logFailed(res.status, tookMs);
         // The query, or the service? Only a service that answers a
         // known-good query makes this the buyer's to narrow.
         if (await queryServiceHealthy(body?.sql)) throw narrowQueryError(res.status, tookMs, body?.sql, 422);
@@ -396,13 +457,13 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       }
       // An instant 500 is the result too large to send: never resent as is
       // (the handler re-runs it with a small row cap instead).
-      if (res.status === 500) { logFailedBuyerQuery(res.status, tookMs, body?.sql); throw resultTooLargeError(res.status, tookMs); }
+      if (res.status === 500) { logFailed(res.status, tookMs); throw resultTooLargeError(res.status, tookMs); }
       // A 503 is the service being unavailable, not the query: retried, and
       // answered as an upstream error to retry, never "narrow it".
       lastErr = res.status === 503
         ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
         : narrowQueryError(res.status, tookMs, body?.sql);
-      if (attempt + 1 >= ATTEMPTS) { logFailedBuyerQuery(res.status, tookMs, body?.sql); throw lastErr; }
+      if (attempt + 1 >= ATTEMPTS) { logFailed(res.status, tookMs); throw lastErr; }
       continue;
     }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
@@ -896,7 +957,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated.` },
+          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -940,10 +1001,18 @@ export const CDP_TOOLS = [
         }
         catch (e) {
           if (!(e?.resultTooLarge && capped.capped)) throw e;
-          // The result was too large to send: the same query again with a
-          // small outer row cap (two attempts, since a small result of this
-          // kind still fails now and then), served marked truncated, with
-          // the row size measured so the caller can pick a LIMIT.
+          // A row over the service's per-row limit is the usual cause: the
+          // rows that fit are served with the rest counted. A query at the
+          // subquery depth limit cannot take the measure's extra level.
+          if (capped.lineOffset > 0) {
+            const fit = await rowsThatFit(body, capped.inner);
+            if (fit) return fit;
+          }
+          // Otherwise the result was too large to send: the same query
+          // again with a small outer row cap (two attempts, since a small
+          // result of this kind still fails now and then), served marked
+          // truncated, with the row size measured so the caller can pick a
+          // LIMIT.
           const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
           let res2 = null;
           for (let tryN = 1; tryN <= SQL_RECOVER_ATTEMPTS; tryN++) {
@@ -951,7 +1020,7 @@ export const CDP_TOOLS = [
             catch (e2) {
               if (!e2?.resultTooLarge) throw e2;
               if (tryN < SQL_RECOVER_ATTEMPTS) continue;
-              const text = `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service, ${SQL_RECOVER_ATTEMPTS} times (it answers its internal error, HTTP ${e2.cdpStatus}; an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`;
+              const text = `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service, ${SQL_RECOVER_ATTEMPTS} times (it answers its internal error, HTTP ${e2.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`;
               if (await queryServiceHealthy(sql)) { const e3 = bad(text, 422); e3.hint = "narrow-query"; throw e3; }
               throw bad(`CDP's query service is failing (HTTP ${e2.cdpStatus} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
             }
@@ -976,7 +1045,7 @@ export const CDP_TOOLS = [
               return {
                 rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
                 ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
-                note: `The full result was too large for the query service to send (it answers its internal error; an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`,
+                note: `The full result was too large for the query service to send (it answers its internal error; ${sendRuleText()}), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`,
               };
             }
           }

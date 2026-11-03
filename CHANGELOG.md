@@ -24,6 +24,19 @@ Tools:
   "result-size"`, `rowBytes`), with a note giving the row size and the
   LIMIT that keeps an answer under about 500 KB. When even 10 rows do not
   fit, the answer says to select fewer or narrower columns.
+- onchain-sql: the query service refuses to send a result that holds a row
+  over 64 KB (measured: a 65,520-byte row is sent, a 65,540-byte row is
+  not, while ten 30 KB rows are). On that refusal the tool now measures the
+  rows in SQL, serves up to 1,000 of the rows under the limit and says how
+  many were omitted and why (`recovered: "row-size"`, `rowsOmitted`,
+  `omittedReason`, `rowLimitBytes`, `maxRowBytes`, `note`), instead of
+  blaming the result's size; a query already at the service's subquery
+  depth limit keeps the small re-run. The match count is never below the
+  rows served plus the rows omitted, and an answer whose measure saw a
+  different set of rows than the run that served them (a query with no
+  ORDER BY) says so (`countsFromSeparateRun`). The texts that explain the
+  service's instant internal error state its rule: a row over 64 KB is
+  never sent, and a whole answer under about 500 KB usually is.
 - onchain-sql takes SQL up to 60,000 characters (was 10,000; the query
   service answered 48,000-character queries when measured, and the old cap
   refused real queries).
