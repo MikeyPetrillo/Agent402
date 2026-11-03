@@ -168,20 +168,20 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     ok(e?.statusCode === 502, "a faucet answer with no transaction hash is a 502, never a charged funded:false");
     reply = () => J(200, { transactionHash: "0xdef" });
     ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
-    // A SQL query whose 502 comes back slowly ran past the data API's time
-    // limit: answered once (502 with how to narrow it), never resent.
+    // A buyer's query (onchain-sql): a slow 502 is answered once, a fast 5xx
+    // is tried twice, and the answer says how to narrow the query.
     const { _setSlowQueryGatewayMsForTest } = await import("../src/tools/cdp-kit.js");
     _setSlowQueryGatewayMsForTest(40);
-    const sqlRun = () => tool("onchain-sql").handler({ sql: "SELECT 1" });
+    const sqlRun = (sql = "SELECT block_number FROM base.blocks") => tool("onchain-sql").handler({ sql });
     calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
     e = await sqlRun().catch((x) => x);
-    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && /Narrow the query/.test(e.message) && calls.length === 1,
-      `a slow 502 on a SQL query is one 502 with how to narrow it, not resent (attempts ${calls.length}, ${e?.statusCode})`);
+    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && /select fewer columns/.test(e.message) && calls.length === 1,
+      `a slow 502 on a buyer's query is one 502 with how to narrow it, not resent (attempts ${calls.length}, ${e?.statusCode})`);
     // The 5xx is logged with CDP's request id, its body, and the query's
     // shape, never the query's literals.
     {
       const warned = []; const realWarn = console.warn; console.warn = (m) => warned.push(String(m));
-      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("<html>502 Bad Gateway near '0xSECRETLITERAL'</html>", { status: 502, headers: { "x-request-id": "rid-123" } })), 60));
+      calls = []; reply = () => new Promise((r) => setTimeout(() => r(new Response("<html>502 Bad Gateway near '0xSECRETLITERAL'</html>", { status: 502, headers: { "cf-ray": "rid-123" } })), 60));
       await tool("onchain-sql").handler({ sql: "SELECT to_address FROM base.transactions WHERE from_address = '0xSECRETLITERAL' LIMIT 5" }).catch(() => {});
       console.warn = realWarn;
       const line = warned.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
@@ -200,11 +200,32 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     }
     calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(504, {})), 60));
     e = await sqlRun().catch((x) => x);
-    ok(e?.statusCode === 502 && /Narrow the query/.test(e.message) && calls.length === 1, `a slow 504 on a SQL query is answered once too (attempts ${calls.length})`);
-    // Control: a fast 502 is a blip and is retried.
+    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && calls.length === 1, `a slow 504 on a buyer's query is answered once too (attempts ${calls.length})`);
+    // A fast 500 (a result too large to return) is tried twice, then answered the same way.
+    calls = []; reply = () => J(500, { errorMessage: "An internal server error occurred." });
+    e = await sqlRun().catch((x) => x);
+    ok(e?.statusCode === 502 && e?.hint === "narrow-query" && calls.length === 2, `a fast 500 on a buyer's query is tried twice, then narrow-query (attempts ${calls.length})`);
+    // Control: a fast 502 that clears is served.
     calls = []; reply = (n) => (n === 1 ? J(502, {}) : J(200, { result: [{ x: 1 }] }));
     const q = await sqlRun();
-    ok(q.rowCount === 1 && calls.length === 2, `a fast 502 on a SQL query is retried (attempts ${calls.length})`);
+    ok(q.rowCount === 1 && calls.length === 2, `a fast 502 then a 200 is served (attempts ${calls.length})`);
+    // The row cap: a plain SELECT is wrapped with LIMIT 1001; 1,001 rows back
+    // means the result was cut, and the answer says so in fields.
+    {
+      const { cappedSql, SQL_MAX_ROWS } = await import("../src/tools/cdp-kit.js");
+      ok(cappedSql("SELECT a FROM base.blocks;").sql === `SELECT * FROM (SELECT a FROM base.blocks) LIMIT ${SQL_MAX_ROWS + 1}`, "a plain SELECT is wrapped with the row cap (trailing semicolon dropped)");
+      ok(cappedSql("WITH t AS (SELECT 1) SELECT * FROM t").capped === false && cappedSql("SELECT a FROM t SETTINGS max_threads = 1").capped === false, "WITH, SETTINGS and FORMAT queries are sent as written");
+      let sent = null;
+      calls = []; reply = () => J(200, { result: Array.from({ length: SQL_MAX_ROWS + 1 }, (_, i) => ({ i })) });
+      const realFetchCap = globalThis.fetch;
+      globalThis.fetch = async (url, init = {}) => { sent = JSON.parse(init.body || "{}").sql; return realFetchCap(url, init); };
+      const big = await sqlRun("SELECT i FROM base.blocks");
+      ok(/LIMIT 1001$/.test(sent) && big.rows.length === SQL_MAX_ROWS && big.truncated === true && big.complete === false && big.matchedIsLowerBound === true && /More than 1000 rows/.test(big.note), `a result past the cap is cut at ${SQL_MAX_ROWS} and marked truncated (${big.rows.length}, truncated ${big.truncated})`);
+      reply = () => J(200, { result: [{ i: 1 }] });
+      const small = await sqlRun("SELECT i FROM base.blocks");
+      ok(small.truncated === false && small.complete === true && small.rowCount === 1 && small.maxRows === SQL_MAX_ROWS, "a result under the cap is marked complete");
+      globalThis.fetch = realFetchCap;
+    }
     // Control: a slow 502 on a query another reader runs (cdpSql) is still retried.
     {
       const { cdpSql } = await import("../src/tools/cdp-kit.js");
