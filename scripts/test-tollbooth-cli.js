@@ -92,7 +92,16 @@ ok((await buildCliX402Middleware({ TOLLBOOTH_PAYTO: PAYTO })) === null, "PAYTO w
   if (!installError) {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "tollbooth-cdp-check", private: true, type: "module" }));
     const peers = ["@x402/express", "@x402/core", "@x402/evm"].map((n) => `${n}@${readJson(join(ROOT, "node_modules", n, "package.json")).version}`);
-    const inst = npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", `./${tarball}`, `@coinbase/x402@${range}`, ...peers], dir);
+    // A live registry install: packages already in the runner's npm cache are
+    // read from it (--prefer-offline), and an attempt the spawn timeout kills
+    // (status null, ETIMEDOUT: twice on CI on 2026-11-03, each at exactly the
+    // cap) is tried once more. Any other refusal is the install's own answer.
+    const installArgs = ["install", "--prefer-offline", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", `./${tarball}`, `@coinbase/x402@${range}`, ...peers];
+    let inst = npm(installArgs, dir);
+    if (inst.status === null && inst.error?.code === "ETIMEDOUT") {
+      console.warn("tollbooth CDP path: npm install hit the spawn timeout; trying once more");
+      inst = npm(installArgs, dir);
+    }
     if (inst.status !== 0) installError = fault("npm install", inst);
   }
   if (installError && process.env.CI) fail(`tollbooth CDP path: ${installError} (a missing dependency is a failure under CI)`);

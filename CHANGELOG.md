@@ -104,20 +104,22 @@ Router and index:
   released); other origins after 30 days as before. A released seller's
   registration and tenure survive, and it re-registers into a free slot.
 Tools:
-- onchain-sql is $0.050 a call (was $0.020), and a call sends the query
-  service at most 4 queries: the query itself and up to 3 recovery runs (the
-  row-size measure, the filtered run, a small re-run). A call that reaches
-  the cap without an answer is the uncharged 422 with `hint: "narrow-query"`;
-  the original query is resent only once, and only when the measured rows
-  show its size was not the cause. The onchain-analyst pack follows the
-  tool's price.
+- onchain-sql is $0.040 a call (was $0.020), and a call sends the query
+  service at most 3 queries: the query itself and up to 2 recovery runs (the
+  row-size measure, then the filtered run or a small re-run). A call that
+  reaches the cap without an answer is the uncharged 422 with
+  `hint: "narrow-query"`; the original query is never resent, and small rows
+  served from the re-run are marked truncated with a note naming the cap.
+  The onchain-analyst pack follows the tool's price.
 - onchain-sql: a query whose result is too large for the query service to
   send (its instant internal error) is run again with LIMIT 10, again while
   the call's query budget holds (a small result of this kind still fails now
   and then). Fewer than 10 rows back is the whole result and is served
   complete. Rows so small the whole result could not have been too large
-  mean the original is sent once more inside the budget and served whole;
-  refused again, or with no query left, the 10 rows are served marked
+  mean the original is sent once more when the budget still holds a query
+  (a query at the subquery depth limit, which skips the row-size measure)
+  and served whole; refused again, or with no query left, the 10 rows are
+  served marked
   truncated (`recovered: "result-size"`, `rowBytes`, `resent` and
   `refusedAgain` after a second refusal) with a note saying which.
   Otherwise the 10 rows are served marked truncated with a note giving the

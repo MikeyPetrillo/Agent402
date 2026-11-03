@@ -316,7 +316,7 @@ console.log("\n# onchain-sql: the call's query budget vs price");
     const priceOf = (s) => Number(String(CDP_TOOLS.find((t) => t.slug === s)?.price ?? "").replace(/[^0-9.]/g, ""));
     const cost = SQL_QUERY_BUDGET * rate + settle;
     const sqlPrice = priceOf("onchain-sql");
-    ok(SQL_QUERY_BUDGET >= 4 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
+    ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
     ok(cost <= MARGIN * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement sit within the margin bound of the list price: ${cost <= MARGIN * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
     table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
     // The only other route that sends a buyer's query to the query service is
