@@ -6,6 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (onchain-sql and metered chat)
+Tools:
+- onchain-sql returns at most 1,000 rows per call: a plain SELECT is sent
+  with an outer row cap, and a result cut at 1,000 says so in fields
+  (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
+  Queries opening with WITH, or carrying SETTINGS or FORMAT, are sent as
+  written. A query ending in a comment or a semicolon is accepted.
+- onchain-sql: a query on solana.instructions that filters, groups, orders
+  or aggregates needs a block_time range and is refused before the call
+  (400, `hint: "add-block-time"`) with the clause to add; a bare sample or
+  count is sent.
+- onchain-sql: a result the query service cannot return is answered with
+  how to narrow the query (`hint: "narrow-query"`): a 422 when the service
+  answers a known-good query, a 502 when it does not. A buyer's query is
+  tried twice at most. The description no longer lists hyperevm.events.
+- Tool error answers carry a short `hint` code when the tool sets one.
+- The metered chat route refuses a model id missing from the upstream's
+  live chat model list with a 400 before payment, naming the nearest ids it
+  serves (a model with a same-family successor is still served).
+
 ### 2026-11-02 (agent front door)
 Surfaces:
 - /llms.txt (after its title, summary, base URL and full-text link),

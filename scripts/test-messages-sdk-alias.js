@@ -147,9 +147,12 @@ try {
     ["/v1/metered/responses", (m) => ({ ...(m === undefined ? {} : { model: m }), input: "hi", max_output_tokens: 4000 })],
   ]) {
     const omitted = amountOf(decode402(await post(path, mk(undefined))));
-    const floor = amountOf(decode402(await post(path, mk("not-a-model/x"))));
+    // An id with no vendor prefix: no model list judges it, so it quotes the
+    // floor on every boot (a vendor-prefixed unknown id may be refused before
+    // payment by the live model list).
+    const floor = amountOf(decode402(await post(path, mk("not-a-model"))));
     const named = amountOf(decode402(await post(path, mk("default"))));
-    ok(omitted !== null && Number(omitted) > Number(floor), `${path}: an omitted model quotes above the floor (${omitted} > ${floor})`);
+    ok(omitted !== null && floor !== null && Number(omitted) > Number(floor), `${path}: an omitted model quotes above the floor (${omitted} > ${floor})`);
     ok(named === omitted, `${path}: model "default" quotes the same as an omitted model (${named} = ${omitted})`);
   }
 
